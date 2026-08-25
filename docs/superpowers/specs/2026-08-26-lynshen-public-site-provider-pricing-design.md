@@ -96,6 +96,8 @@ Do not connect these artifacts to production startup or production routes. The M
 
 Do not merge or deploy the destructive migration prototype. Require separate product-implementation approval after Gates B-E produce evidence.
 
+Treat Phase 1 as an independent release milestone. Its estimate must separately include fixture generation, both database runs, Marketplace read and source-write benchmarks, pricing snapshots, five-node status load, fault injection, recovery measurement, result review, and reruns after a failed gate. Do not include Phase 1 effort inside an ordinary UI feature estimate. Approving this design or Phase 0 does not allocate hardware or authorize Phase 1 execution.
+
 ### Phase 2: Product Implementation
 
 After separate product-implementation approval, implement schema migration, runtime contracts, public surfaces, documentation, and management UI as one release candidate.
@@ -622,7 +624,7 @@ Use the zero-based position in the complete canonical Group order as `group_ordi
 
 Add `GET /api/public/marketplace/offers`. Require `group` to resolve to one normalized public Group name and `model` to equal the exact logical model ID from a list row. Accept `cursor` and `limit` with the same validation rules. Use a default limit of 20 and a maximum of 50.
 
-Normalize and resolve the offer `group` through `public_name_key` by the list rule. Validate `model` with the logical-model byte and control constraints in section 7.2, but do not trim or normalize it. Derive `model_name_key` from the exact accepted model bytes for lookup.
+Normalize and resolve the offer `group` through `public_name_key` by the list rule. For `model`, compute the Unicode White_Space-trimmed value only for validation. Return HTTP 400 with `invalid_request` when the trimmed value differs from the supplied value, when the value is empty, exceeds 256 UTF-8 bytes, or contains C0 controls, DEL, CR, LF, or tab. Do not Unicode-normalize or otherwise rewrite an accepted value. Derive `model_name_key` from the exact accepted model bytes for lookup. Return HTTP 404 with `marketplace_model_not_found` only after both inputs pass validation and no visible exact model row exists.
 
 Return this allow-listed offer response:
 
@@ -672,23 +674,34 @@ Create the row with revision one and the current database UTC time during migrat
 
 Add a database trigger on `marketplace_generation` updates. Permit an update only when `singleton_id` remains one, `revision = OLD.revision + 1`, and `generated_at_unix_us > OLD.generated_at_unix_us`. Reject every rollback, repeated value, skipped revision, primary-key change, and timestamp that does not increase. An exact direct increment that satisfies these rules may cause a harmless extra cache invalidation but cannot reuse an earlier cursor generation.
 
-Install database triggers for `INSERT`, `UPDATE OF <marketplace columns>`, and `DELETE` on each of these tables:
+Install database triggers for `INSERT`, relevant-column `UPDATE`, and `DELETE` on each of these tables:
 
 - `monoize_groups`;
 - `monoize_providers`;
 - `monoize_provider_models`;
 - `billing_rate_records`;
-- `model_metadata_records`.
+- `model_metadata_records`;
+- `system_settings`.
 
-For each table, define the exact column allow-list that can affect public Marketplace serialization, ordering, visibility, capability, or effective pricing. The update trigger must fire when any allow-listed column appears in the update target list, even when the new value equals the old value. Exclude audit-only columns that cannot change a public response. Record both included and excluded columns with a reason in the generation-source manifest.
+Treat the first five tables as full Marketplace source tables. For each full source table, define the exact column allow-list that can affect public Marketplace serialization, ordering, visibility, capability, or effective pricing. Generate its `UPDATE OF` trigger column list from that manifest. The update trigger must fire when any allow-listed column appears in the update target list, even when the new value equals the old value. Exclude audit-only columns that cannot change a public response.
 
-Create one trigger per operation and source table. Each database therefore has exactly 15 row-operation triggers. Create one PostgreSQL statement-level `TRUNCATE` trigger for each source table, for five additional PostgreSQL triggers. Product code and maintenance tooling must not disable these triggers or truncate a source table on SQLite.
+Treat `system_settings` as a filtered Marketplace source table. Its only included logical row has `key = 'reasoning_suffix_map'`. Include `key` and `value`; exclude `updated_at`. A change that inserts or deletes this row, changes its key into or out of this value, or changes its value can change pricing-model normalization and therefore public visibility or price. Marketplace snapshot construction must read this persisted row inside the same generation-checked database read as the other Marketplace sources. Decode a missing row with `default_reasoning_suffix_map()`, exactly as the billing settings loader does. Return HTTP 503 with `marketplace_source_invalid` when the row exists but its JSON does not decode to the required map. Do not fall back from invalid persisted JSON, and do not derive Marketplace output from a separately refreshed runtime settings snapshot.
 
-Each triggered row mutation must atomically increment `revision` and set `generated_at_unix_us` inside the source transaction. Let `clock_us` be the database UTC clock in integer Unix microseconds. Set the new timestamp to `max(clock_us, previous_generated_at_unix_us + 1)`. SQLite derives `clock_us` from integer Unix seconds and the three millisecond digits returned by `strftime('%f', 'now')`. PostgreSQL derives it from `clock_timestamp()`. The stored value is therefore strictly increasing even when several mutations share one clock tick. A transaction that mutates several source rows may advance the revision several times. Only strict generation change is an invariant; consecutive committed generations need not differ by one.
+Record every included and excluded source column with a reason in the generation-source manifest. Fail artifact generation when a source column lacks one classification.
+
+On PostgreSQL, use one statement-level trigger per operation and source table. For a full source table, a plain `INSERT`, relevant-column `UPDATE`, or `DELETE` statement advances the generation once, including a statement that affects zero rows. An `INSERT ... ON CONFLICT DO UPDATE` statement advances once for its statement-level `INSERT` event and once for its statement-level relevant-column `UPDATE` event. An `INSERT ... ON CONFLICT DO NOTHING` statement advances once for its `INSERT` event. No PostgreSQL full-source statement advances once per affected row.
+
+For PostgreSQL `system_settings`, use transition tables. Compare the filtered old and new projections whose key equals `reasoning_suffix_map`. Advance once when an `INSERT`, `UPDATE`, or `DELETE` statement makes those projections byte-different in `key` or `value`. Do not advance when a statement changes only `updated_at`, writes byte-identical `key` and `value`, or touches only another setting. An upsert advances according to each statement-level operation that PostgreSQL emits only when that operation changes the filtered projection. Do not use an `UPDATE OF` column list on this transition-table trigger.
+
+Create one PostgreSQL statement-level `TRUNCATE` trigger for each source table. A truncate of `system_settings` advances because it can remove `reasoning_suffix_map`, including when the table is empty. PostgreSQL therefore has 18 source-operation triggers plus six source-table `TRUNCATE` triggers.
+
+On SQLite, use one row-level trigger per operation and source table because SQLite has no statement-level trigger. One affected full-source row advances the generation exactly once. A full-source statement that affects zero rows does not advance it. Apply `WHEN` predicates to the three `system_settings` triggers: insert only when the new key matches, delete only when the old key matches, and update only when an old or new key matches and `key` or `value` changes byte-for-byte. SQLite therefore has 18 source-operation triggers. Product code and maintenance tooling must not disable these triggers or emulate `TRUNCATE` by bypassing them.
+
+Each trigger invocation must atomically increment `revision` and set `generated_at_unix_us` inside the source transaction. Let `clock_us` be the database UTC clock in integer Unix microseconds. Set the new timestamp to `max(clock_us, previous_generated_at_unix_us + 1)`. SQLite derives `clock_us` from integer Unix seconds and the three millisecond digits returned by `strftime('%f', 'now')`. PostgreSQL derives it from `clock_timestamp()`. The stored value is therefore strictly increasing even when several invocations share one clock tick. One transaction may advance the revision several times. Only strict generation change is an invariant; consecutive committed generations need not differ by one.
 
 The table primary key and singleton CHECK make a duplicate singleton impossible. The trigger must abort the complete source transaction when the singleton row is missing, outside its allowed revision or timestamp range, or cannot advance either value without overflow. Schema checks define malformed stored values as out of range. The update guard must also abort the complete source transaction when its exact increment or timestamp condition fails. A failed or rolled-back source transaction changes neither the source state nor the committed generation.
 
-Keep a machine-readable generation-source manifest in the migration rehearsal artifacts. List the five source tables, every included and excluded source column with a reason, every trigger name, every management writer, every background or catalog-sync writer, every seed or maintenance writer, and every direct-SQL test writer. Compare the manifest with database metadata during rehearsal and deployment preflight. Fail the check for a missing or disabled trigger, an unlisted source table, an unclassified source column, or an unlisted writer.
+Keep a machine-readable generation-source manifest in the migration rehearsal artifacts. List the six source tables, the filtered `system_settings` row rule, every included and excluded source column with a reason, every trigger name, every management writer, every background or catalog-sync writer, every seed or maintenance writer, and every direct-SQL test writer. Compare the manifest with database metadata during rehearsal and deployment preflight. Fail the check for a missing or disabled trigger, an unlisted source table, an unclassified source column, an unlisted filtered-row rule, or an unlisted writer.
 
 The initial audited writer inventory is:
 
@@ -699,6 +712,7 @@ The initial audited writer inventory is:
 | `monoize_provider_models` | target Provider/model store derived from `src/monoize_routing.rs`; migration prototype and direct-SQL fixtures |
 | `billing_rate_records` | `src/billing_rate_store.rs`; `src/model_registry_store.rs`; billing migrations and direct-SQL fixtures |
 | `model_metadata_records` | `src/model_registry_store.rs`; metadata migrations and direct-SQL fixtures |
+| `system_settings` filtered to `reasoning_suffix_map` | `src/settings.rs`; `src/dashboard_handlers/settings.rs`; settings migrations and direct-SQL fixtures |
 
 Regenerate this inventory with repository search in Gate B. Do not treat the listed paths as permanently exhaustive. Trigger coverage is table-wide and therefore also covers a newly added writer, but Gate B fails until the manifest names that writer.
 
@@ -715,6 +729,16 @@ Limit each uncompressed encoded JSON response body to 1048576 bytes. Return no m
 On a list cache miss, select at most `limit + 1` distinct Group and logical-model rows strictly after the cursor keyset. Apply `q` before the keyset limit. Load visible offers for all selected rows in one set-based Provider and model-mapping query. Load applicable billing-rate and model-metadata rows in set-based batches. Do not issue one database query per Group, model, Provider, offer, or rate.
 
 On an offer cache miss, select at most `limit + 1` visible offers strictly after the cursor keyset. Load their applicable billing-rate and model-metadata rows in set-based batches. Query count may increase only with the existing bounded SQLite bind-parameter chunking. It must not increase once per returned row.
+
+Benchmark Marketplace source-write invalidation separately from public reads. Use the same maximum-envelope host. Restore a fresh operation-specific fixture before each scenario. Keep every unrelated source table at its envelope maximum. For insert scenarios, seed the tested table at its envelope maximum minus 100,000 rows and reserve 100,000 absent IDs. For update, delete, and conflict scenarios, seed the tested table at its envelope maximum and reserve 100,000 present disposable IDs. No scenario may exceed the envelope.
+
+For `billing_rate_records`, `model_metadata_records`, and `monoize_provider_models`, run one transaction that mutates 100,000 rows with statement sizes of 1, 100, 1,000, and 10,000 rows. Test insert, relevant-column update, delete, `INSERT ... ON CONFLICT DO UPDATE`, and `INSERT ... ON CONFLICT DO NOTHING` separately. For the concurrency scenario, each of eight writers repeatedly commits one relevant-column update statement over 1,000 disjoint rows per transaction for ten minutes. Record transaction p50, p95, and p99 latency, committed rows per second, generation increments, lock-wait time, SQLite busy retries, PostgreSQL deadlocks, WAL bytes, peak WAL growth, and checkpoint time.
+
+Also replay each actual full-catalog synchronization transaction found in the generation-source writer manifest. Preserve its delete, batch, insert, and upsert statement order and its production batch-size rules. Run it once at the maximum catalog envelope and once while eight concurrent disjoint management updates execute. Apply the same measurements and bounds.
+
+Require zero deadlocks and zero exhausted SQLite busy retries. Require every single-writer 100,000-row transaction and every maximum-envelope full-catalog synchronization transaction to commit within 60 seconds. Require the eight-writer workload to sustain at least 5,000 committed source rows per second with transaction p99 at most 5 seconds. Require peak WAL growth to stay below 2 GiB and the post-run checkpoint to finish within 30 seconds. PostgreSQL generation deltas must equal the operation-event count defined above for every statement. SQLite generation deltas must equal affected source-row trigger invocations. Both revisions must remain below the ceiling and both databases must meet every latency, throughput, lock, and WAL bound.
+
+Gate B fails when either database misses one source-write bound. Do not waive a failure. A failed result requires a revised generation design that coalesces invalidation without permitting a stale Marketplace generation. Update this document and receive explicit design approval before creating a replacement Phase 1 artifact.
 
 Qualify one release against this maximum catalog envelope:
 
@@ -859,9 +883,54 @@ Do not change the user API result when status-event persistence fails.
 
 Write events through a dedicated durable spool and asynchronous batcher. Use one JSON file per event, temporary-file write plus file sync, same-directory atomic rename, and directory sync. Use stable event IDs for filenames. Recover final files at startup and insert with conflict-ignore semantics.
 
-Use `MONOIZE_STATUS_EVENT_SPOOL_DIR`, default `./data/status-event-spool`. Use `MONOIZE_STATUS_EVENT_SPOOL_MAX_BYTES`, default `536870912`, as the process-local sum of durable bytes plus outstanding reservations. Use `MONOIZE_STATUS_EVENT_SPOOL_ENTRY_MAX_BYTES`, default `4096`, as the per-event reservation. Accept only positive base-10 integers. Reject startup when the entry limit is below `1024`, the total limit is below the entry limit, or the spool directory cannot pass create, write, file-sync, rename, directory-sync, and delete probes.
+Use `MONOIZE_STATUS_EVENT_SPOOL_DIR`, default `./data/status-event-spool`. Use `MONOIZE_STATUS_EVENT_SPOOL_MAX_BYTES`, default `536870912`, as the process-local allocated-byte quota. Use `MONOIZE_STATUS_EVENT_SPOOL_ENTRY_MAX_BYTES`, default `4096`, as the maximum logical JSON file length. Use `MONOIZE_STATUS_EVENT_MAX_OUTAGE_SECONDS`, default `900`. Reject a value below `900`. Use `MONOIZE_STATUS_EVENT_SPOOL_SAFETY_FACTOR_MILLI`, default `1200`, to represent a factor of `1.200`. Reject a value below `1200`.
 
-Reserve one full entry before a physical dispatch. Reservation failure does not block the dispatch. On a counted terminal outcome, publish the event into that reservation; if no reservation exists, set the incomplete-data latch because one required event was lost. On an excluded outcome, release the reservation without setting the latch. Publication failure for a counted event sets the latch and releases the reservation after cleanup of any temporary file.
+Use `MONOIZE_STATUS_EVENT_MAX_IN_FLIGHT_DISPATCHES`, default `1024`, as a positive process-wide upper bound. Create one shared fair semaphore with exactly this many permits. Every forwarding path must acquire one permit before it reserves spool capacity and begins a physical upstream HTTP or WebSocket dispatch. Hold the permit until the physical dispatch reaches a terminal outcome and its reservation is published or released. Apply the same semaphore to initial attempts, same-Channel retries, and Provider fail-forward attempts. Waiting for a permit does not create a status-specific timeout or error; existing lifecycle cancellation and deadlines still apply. No code path may start a physical upstream dispatch without this permit. Deployment preflight must prove that the configured value is at least the node's `approved_node_max_in_flight_dispatches` from section 13.6. The default is not a capacity approval.
+
+Require `MONOIZE_STATUS_EVENT_PEAK_EVENTS_PER_SECOND` as a positive base-10 integer with no default on every Primary and Replica. Test and development nodes must set an explicit value; Phase 1 nodes use their assigned qualification rate.
+
+Resolve the filesystem that contains the final spool directory. Read its allocation unit. Define `entry_reservation_bytes` as `MONOIZE_STATUS_EVENT_SPOOL_ENTRY_MAX_BYTES` rounded up to that allocation unit. Verify the value by creating, syncing, and measuring a non-sparse probe file whose logical length equals the entry maximum. Require the probe's OS-reported allocated size to be at most `entry_reservation_bytes`. A logical file length is never a substitute for OS-reported allocated size.
+
+For each Primary or Replica node, set `node_peak_events_per_second = MONOIZE_STATUS_EVENT_PEAK_EVENTS_PER_SECOND`. Deployment preflight must prove that this configured value is at least that node's `approved_node_peak_events_per_second` from section 13.6. Do not reduce the approved peak through another concurrency, gateway, or rate-limit setting. Define:
+
+```text
+outage_event_slots = ceil(
+    node_peak_events_per_second
+    * MONOIZE_STATUS_EVENT_MAX_OUTAGE_SECONDS
+    * MONOIZE_STATUS_EVENT_SPOOL_SAFETY_FACTOR_MILLI
+    / 1000
+)
+
+in_flight_event_slots = MONOIZE_STATUS_EVENT_MAX_IN_FLIGHT_DISPATCHES
+minimum_spool_event_slots = outage_event_slots + in_flight_event_slots
+outage_bytes = outage_event_slots * entry_reservation_bytes
+in_flight_bytes = in_flight_event_slots * entry_reservation_bytes
+minimum_spool_bytes = outage_bytes + in_flight_bytes
+```
+
+Compute every product, sum, round-up, and subtraction with checked unsigned integer arithmetic. Implement `ceil(x / 1000)` as checked `(x + 999) / 1000`. Treat a parse error, arithmetic overflow, unavailable allocation unit, failed allocation probe, or configured quota below `minimum_spool_bytes` as a fatal configuration error. Do not start admission or background shipment with an invalid capacity configuration.
+
+Charge every final and temporary event file by its OS-reported allocated size. Keep the bounded final and temporary node-state files outside the event quota but include their allocated blocks in the filesystem free-byte check. Reject symlinks and non-regular files in the spool directory. Before one physical dispatch, reserve `entry_reservation_bytes` and one future file slot. While that dispatch owns a temporary event file, charge the greater of the reservation and that file's allocated size, not their sum. After the same-directory rename succeeds, atomically replace the reservation charge with the final file's allocated size. Release the reservation without a file charge for an excluded outcome. If a temporary or final event file allocates more than `entry_reservation_bytes`, fail publication, set the incomplete-data latch, retain the measured allocation in quota accounting until cleanup succeeds, and do not start another physical dispatch from that permit until accounting is reconciled.
+
+Reject an encoded event whose logical JSON length exceeds `MONOIZE_STATUS_EVENT_SPOOL_ENTRY_MAX_BYTES`. Set the incomplete-data latch for that counted event. Do not truncate or split the event.
+
+Define `accounted_spool_bytes` as the sum of event-file allocation charges and outstanding per-dispatch reservation charges, with each active event counted once by the preceding transition rule. Define `remaining_spool_bytes = MONOIZE_STATUS_EVENT_SPOOL_MAX_BYTES - accounted_spool_bytes` with checked subtraction. Before readiness becomes healthy, require `remaining_spool_bytes >= minimum_spool_bytes`. This condition reserves one complete future outage plus every permitted in-flight dispatch even when a recovered backlog already exists.
+
+Read filesystem bytes available to the deployed service account. Before readiness becomes healthy, require available bytes to be at least `remaining_spool_bytes + 67108864`. The final term reserves 64 MiB for the node-state replacement, directory blocks, filesystem metadata, and measurement drift. This byte check does not replace file-slot checks.
+
+Define `remaining_quota_event_slots = floor(remaining_spool_bytes / entry_reservation_bytes)`. Query the filesystem's available inode or file-record count and any independent per-directory entry limit. Require at least `remaining_quota_event_slots + 1024` available file slots in every applicable finite limit. The final 1024 slots reserve node-state replacement, probe files, and service maintenance. A filesystem API result that positively states that one limit is dynamic or absent makes only that limit inapplicable. An unknown, unsupported, permission-denied, or ambiguous result is a capacity-query failure, not an unlimited result.
+
+Fail process startup when the spool path cannot report allocated sizes, available bytes, or applicable file-slot capacity, or when `accounted_spool_bytes` exceeds the configured maximum. When configuration is valid but a recovered backlog, filesystem free-byte check, or file-slot check fails a startup admission condition, start the status batcher and Replica shipment in recovery-only mode, keep readiness unhealthy, and reject forwarding admission. Re-evaluate all startup admission conditions after every committed drain batch and at least once every 2 seconds. Begin serving only after every condition passes. This recovery path must not delete or ignore a durable event.
+
+After the process begins forwarding, the outage reserve becomes usable working capacity. Do not return to recovery-only mode merely because current outage events reduce `remaining_spool_bytes` below `minimum_spool_bytes`. Enforce the byte and file-slot limits on every new reservation. If a reservation fails, keep the user dispatch behavior defined below and set the incomplete-data latch for a later counted outcome. A later readiness failure may still occur for an independently defined fatal service condition, but reserve consumption alone is not such a condition.
+
+At startup, treat every final event file as replayable. Treat every temporary event file as an event whose durable publication did not complete. Set the incomplete-data latch, charge its allocated blocks during cleanup, delete it, and sync the directory. Enter recovery-only mode when deletion or directory sync fails. For a temporary node-state file, keep the final node-state file authoritative when it exists. Delete and sync the temporary file. When no final node-state file exists, treat the temporary state as evidence of an incomplete previous lifetime and set the latch before cleanup. Do not parse a temporary file as a committed event or state record.
+
+Apply the same formula, allocation probe, allocated-size scan, free-byte check, and file-slot checks in deployment preflight for every Primary and Replica. Record each input, filesystem result, and computed result. Re-run the checks after resolving the deployed data directory and before starting the service. A default 512-MiB spool is valid only when it satisfies that node's formula and filesystem checks; the default is not a capacity guarantee.
+
+Also reject startup when the entry limit is below `1024`, the total limit is below `entry_reservation_bytes`, or the spool directory cannot pass create, write, file-sync, allocation-size read, rename, directory-sync, and delete probes.
+
+After acquiring the global dispatch permit, reserve one full allocated entry and one file slot before the physical dispatch. Reservation failure does not block that dispatch. On a counted terminal outcome, publish the event into that reservation; if no reservation exists, set the incomplete-data latch because one required event was lost. On an excluded outcome, release the reservation without setting the latch. Publication failure for a counted event sets the latch. Release its reservation only after cleanup succeeds or after the remaining file allocation is transferred into settled quota accounting.
 
 Flush at most 100 events per database transaction and at least once every 2 seconds. Wake the batcher when a final spool file is published. Delete a final file only after the insert transaction commits. Retain it unchanged after a failed or ambiguous transaction outcome so replay is idempotent.
 
@@ -912,11 +981,13 @@ Test ambiguous HTTP outcomes, shipment replay, concurrent replicas, Primary rest
 
 ### 13.6 Qualification Load and Fault Profile
 
-Measure the highest sustained production rate of counted physical upstream dispatches over any consecutive five-minute window in the retained 30-day metrics interval. Let that value, rounded up to a whole event per second, be `production_peak_events_per_second`.
+For every deployed or planned Primary and Replica node, measure two values over its retained 30-day metrics interval. Measure the highest sustained rate of counted physical upstream dispatches over any consecutive five-minute window. Round it up to a whole event per second and call it `measured_node_peak_events_per_second`. Also measure the largest simultaneous count of physical upstream HTTP requests and WebSocket sessions from permit acquisition through terminal outcome. Call it `measured_node_max_in_flight_dispatches`.
 
-When 30 complete days of this metric are unavailable, derive a conservative peak from the longest available period of request-log and reverse-proxy dispatch evidence, then multiply that observed five-minute peak by two before rounding up. Require the owner to approve a declared design peak that is at least that derived value. When no usable dispatch evidence exists, Gate D is blocked until the owner supplies and approves a positive declared design peak. Do not substitute zero for missing evidence.
+When one node lacks 30 complete days, derive a conservative node event-rate peak and simultaneous-dispatch maximum from its longest available request-log, reverse-proxy dispatch, and connection-duration evidence. Multiply each observed value by two before rounding up. Require the owner to approve positive `approved_node_peak_events_per_second` and `approved_node_max_in_flight_dispatches` values that are at least their measured or derived node values. When only aggregate evidence exists, assign the complete aggregate value to every node. When no usable evidence exists, Gate D is blocked until the owner supplies and approves both positive design values for every node. Do not substitute zero for missing evidence.
 
-Let `approved_peak_events_per_second` equal the measured 30-day peak when complete evidence exists; otherwise use the approved declared design peak. Set `qualification_events_per_second = max(100, 5 * approved_peak_events_per_second)`. This is the aggregate rate across all sources. Use the same constrained qualification host and storage floor defined for Marketplace. In each multi-source profile, distribute event IDs round-robin across the Primary and four synthetic Replica sources so their aggregate equals the qualification rate.
+Let `approved_aggregate_peak_events_per_second` be the sum of all approved node event-rate peaks for the intended topology. Compute the sum with checked unsigned arithmetic. Set `qualification_events_per_second = max(100, 5 * approved_aggregate_peak_events_per_second)`. Use the same constrained qualification host and storage floor defined for Marketplace. In each multi-source profile, allocate generated events among the Primary and four synthetic Replica sources in proportion to their approved node event-rate peaks. When the intended topology has fewer than five nodes, assign the remaining synthetic nodes the highest approved Replica peak, or the Primary peak when no Replica peak exists. Call each resulting rate `assigned_events_per_second`. Round allocations up to whole events per second, then reduce the largest allocation as needed so the sum equals `qualification_events_per_second`. Record every allocation and require their sum to equal the qualification rate.
+
+For every qualification source, set its global semaphore to at least its approved simultaneous-dispatch maximum. Add held-open HTTP and WebSocket dispatches until the instrumented simultaneous count equals that configured bound. While those permits are held, verify that one additional dispatch waits and creates no reservation. Release permits and verify bounded forward progress without exceeding the configured count. This concurrency profile is separate from the event-rate profiles and does not replace them.
 
 Run these three load-and-outage profiles separately:
 
@@ -926,7 +997,7 @@ Run these three load-and-outage profiles separately:
 
 For each profile, generate events at `qualification_events_per_second` for 30 minutes. Keep upstream dispatch admission and spool publication running through the outage. At minute 20, restore the failed path while continuing the input rate for ten minutes. Then stop new input and drain the backlog. A pass in one profile does not substitute for another.
 
-Require every generated counted event to reach one of three reconciled states: one committed unique row, one remaining durable final spool file, or one event-ID entry in the test harness's explicit lost-event ledger accompanied by the incomplete latch. The lost-event ledger is a qualification-harness oracle; production does not retain event IDs that it failed to spool. Require zero unaccounted events. The main load-and-outage profiles must contain zero lost-event ledger entries. Permit such entries only in an injection that intentionally exhausts or disables durable persistence. Require `data_complete = false` while an event older than `data_through` remains pending. Require spool reservations and final files to remain within the configured byte quota. For each source, size its qualification spool to at least `assigned_events_per_second * 900 * MONOIZE_STATUS_EVENT_SPOOL_ENTRY_MAX_BYTES`, plus 20 percent headroom.
+Require every generated counted event to reach one of three reconciled states: one committed unique row, one remaining durable final spool file, or one event-ID entry in the test harness's explicit lost-event ledger accompanied by the incomplete latch. The lost-event ledger is a qualification-harness oracle; production does not retain event IDs that it failed to spool. Require zero unaccounted events. The main load-and-outage profiles must contain zero lost-event ledger entries. Permit such entries only in an injection that intentionally exhausts or disables durable persistence. Require `data_complete = false` while an event older than `data_through` remains pending. Require the global dispatch semaphore, per-dispatch reservations, allocated spool blocks, and file-slot usage to remain within their configured bounds. For each synthetic source, set its configured peak to `assigned_events_per_second` and compute its qualification spool with the section 13.4 formula, outage value `900`, logical entry limit `4096`, measured allocation unit, safety factor `1200`, and configured global in-flight dispatch bound.
 
 During recovery, require committed throughput to exceed the continuing input rate by at least 25 percent in every complete five-minute measurement window. After new input stops, require the remaining backlog to drain within 15 minutes. Require each process's resident-memory increase from its post-start idle baseline to stay at or below 256 MiB. Require the aggregate increase across the Primary and four Replica processes to stay at or below 768 MiB.
 
@@ -1214,6 +1285,10 @@ Verify request results remain unchanged by status persistence failure.
 
 Verify `data_complete` becomes false when an event is lost.
 
+Test the checked minimum-spool formula at exact boundary and one byte below. Cover missing or invalid configured peak, configured event-rate peak below the approved node value, configured in-flight bound below the approved node simultaneous-dispatch value during deployment preflight, zero or invalid in-flight bound, arithmetic overflow, outage below 900, safety factor below 1200, and allocation-unit round-up. Verify one global semaphore bounds all initial attempts, same-Channel retries, Provider fail-forward attempts, and HTTP and WebSocket dispatches. Verify cancellation while waiting does not consume a permit or reservation. Verify no instrumented physical dispatch count exceeds the configured simultaneous-permit count.
+
+Test recovered backlog that leaves less than one minimum-spool reserve, OS-allocated bytes above quota despite smaller logical lengths, a temporary file present at startup, a temporary file growing during publication, an entry whose allocated size exceeds its reservation, insufficient filesystem bytes, inode exhaustion, per-directory file-entry exhaustion, and each filesystem capacity or allocation-query failure. Verify fatal configuration and filesystem-query cases stop the process. Verify a valid configuration with insufficient admission capacity enters recovery-only mode, drains without accepting forwarding traffic, and becomes ready only after every byte and file-slot condition passes. Verify each Primary and Replica records its own approved event-rate peak, approved simultaneous-dispatch maximum, outage, logical entry limit, allocation unit, entry reservation, safety factor, configured in-flight bound, configured quota, allocated-byte total, available bytes, available file slots, and applicable directory limit.
+
 Run section 13.6 profile 1 on the Primary-only topology. Run profiles 2 and 3 on one Primary plus four synthetic Replicas. Run the stated recovery, crash-point, and conservation checks for each applicable profile. Retain machine-readable measurements and event-ID reconciliation output.
 
 ### 21.4 Public Security
@@ -1222,11 +1297,13 @@ Assert that public responses omit all internal and secret fields.
 
 Test the exact `/api/public/site` allow-list. Test rate limiting, bucket-cap exhaustion, idle eviction, cache headers, ETag lists, wildcard validators, malformed validators, malformed query input, and large datasets.
 
-Test Marketplace list and offer pagination at limits 1, 24, 50, and invalid values. Test cursor tampering, invalid signatures, filter mismatch, revision changes, duplicate sort keys, maximum-length cursor keys, ASCII-case search, non-ASCII literal search, empty pages, and the 1048576-byte boundary.
+Test Marketplace list and offer pagination at limits 1, 24, 50, and invalid values. Test cursor tampering, invalid signatures, filter mismatch, revision changes, duplicate sort keys, maximum-length cursor keys, ASCII-case search, non-ASCII literal search, empty pages, and the 1048576-byte boundary. Test that an offer `model` with any leading or trailing Unicode White_Space returns HTTP 400 `invalid_request`; test that a valid exact but absent model returns HTTP 404 `marketplace_model_not_found`.
 
 Test that SQLite and PostgreSQL return byte-identical pagination sequences for names and model IDs containing non-ASCII text.
 
 Run the maximum-envelope Marketplace benchmark from section 12. Test zero-, one-, 50-, and broad-match searches. Verify that search remains database-filtered and application memory does not scale with the complete mapping catalog.
+
+Run every source-write invalidation scenario and bound from section 12 on SQLite and PostgreSQL. Verify the backend-specific generation deltas for plain writes, zero-row writes, upsert-update, and conflict-do-nothing statements.
 
 Count database statements for 1, 24, and 50 returned rows. Verify that statement count is independent of returned-row count except for bounded bind-parameter chunks.
 
@@ -1234,9 +1311,11 @@ Test missing and malformed cursor HMAC key rows. Test stable cursors across proc
 
 Inject Marketplace generation changes before and after every source query. Verify that a response contains one revision only and that three consecutive changes return `marketplace_snapshot_busy`.
 
-Test that repeated Site requests over time return byte-identical uncompressed JSON bodies and HTTP 304 while the three selected settings are unchanged. Test that repeated Marketplace requests do the same while its source generation is unchanged. Test weak ETag syntax with identity and compressed transfer encodings. For each of the five Marketplace source tables, exercise each applicable management, background synchronization, bulk synchronization, migration or seed, and direct-SQL writer listed in the manifest. Mark an inapplicable writer category explicitly instead of inventing a path. Verify that every committed insert, update, and delete strictly advances both generation values and changes the Marketplace encoded body and ETag. Verify that rollback restores the preceding generation. Verify that deletion of the singleton fails. Verify that PostgreSQL rejects `TRUNCATE marketplace_generation`. Verify that a direct update cannot decrease or reuse a revision, skip a revision, change `singleton_id`, or keep or decrease the generation timestamp. Verify that one exact direct increment with a later timestamp succeeds and only invalidates the cache. In isolated fixtures that intentionally bypass or alter the target constraints, verify that a missing, out-of-range, or exhausted singleton aborts a source write. Verify PostgreSQL `TRUNCATE` on each Marketplace source table advances the generation and that SQLite tooling never uses `TRUNCATE`.
+Test that repeated Site requests over time return byte-identical uncompressed JSON bodies and HTTP 304 while the three selected settings are unchanged. Test that repeated Marketplace requests do the same while its source generation is unchanged. Test weak ETag syntax with identity and compressed transfer encodings. For each of the six Marketplace source tables, exercise each applicable management, background synchronization, bulk synchronization, migration or seed, and direct-SQL writer listed in the manifest. Mark an inapplicable writer category explicitly instead of inventing a path. Verify that every committed relevant insert, update, and delete strictly advances both generation values and changes the Marketplace encoded body and ETag. Verify that rollback restores the preceding generation. Verify that deletion of the singleton fails. Verify that PostgreSQL rejects `TRUNCATE marketplace_generation`. Verify that a direct update cannot decrease or reuse a revision, skip a revision, change `singleton_id`, or keep or decrease the generation timestamp. Verify that one exact direct increment with a later timestamp succeeds and only invalidates the cache. In isolated fixtures that intentionally bypass or alter the target constraints, verify that a missing, out-of-range, or exhausted singleton aborts a source write. Verify PostgreSQL `TRUNCATE` on each Marketplace source table advances the generation and that SQLite tooling never uses `TRUNCATE`.
 
-Compare the machine-readable generation-source manifest with source-code search results, source table schemas, and database trigger metadata. Require all five tables, every source column classified as included or excluded, all 15 row-operation triggers per database, the PostgreSQL truncate coverage, and every discovered writer to be present. Mutate each included column and verify a generation change. Mutate each excluded column and verify the serialized Marketplace body remains byte-identical.
+For `system_settings`, test insert, delete, key changes into and out of `reasoning_suffix_map`, byte-different value changes, byte-identical value writes, `updated_at`-only writes, and unrelated setting writes. Require generation advancement only for changes that can affect the filtered row. Verify that a missing row uses the billing default, invalid persisted JSON returns HTTP 503 `marketplace_source_invalid`, and a valid map change alters normalized pricing lookup and produces the expected Marketplace body and ETag change. Test PostgreSQL transition-table behavior for multi-row statements and every upsert conflict outcome used by current writers.
+
+Compare the machine-readable generation-source manifest with source-code search results, source table schemas, and database trigger metadata. Require all six tables, the filtered-row rule, every source column classified as included or excluded, all 18 source-operation triggers per database, the six PostgreSQL source-table `TRUNCATE` triggers, and every discovered writer to be present. Mutate each included column and verify a generation change. Mutate each excluded column and verify the serialized Marketplace body remains byte-identical.
 
 Test that two Status requests in one snapshot bucket return byte-identical bodies and HTTP 304. Test that the next bucket produces one later `generated_at` and recomputes `data_through`.
 
@@ -1294,6 +1373,7 @@ Passing Gate A does not authorize product implementation.
 - Public-name and logical-model binary-key CHECK, primary-key, uniqueness, and byte-order tests pass on both databases.
 - The generation-source manifest covers every source table, source column, trigger, and discovered writer.
 - The isolated maximum-envelope Marketplace query, cursor, aggregation, encoding, and cache benchmark meets every latency, memory, query, and response-size bound on both databases without registering an HTTP listener.
+- The maximum-envelope source-write invalidation benchmark meets every transaction-latency, throughput, lock, generation-delta, WAL, and checkpoint bound on both databases.
 
 ### Gate C: Pricing Equality
 
@@ -1306,7 +1386,9 @@ Passing Gate A does not authorize product implementation.
 - Retry, replay, concurrency, and fault-injection tests pass.
 - Lost events mark status data incomplete.
 - Status persistence failures do not change API billing or response results.
-- Production peak evidence or an owner-approved conservative design peak exists.
+- Production event-rate and simultaneous-dispatch evidence, or owner-approved conservative design values, exist for every intended Primary and Replica.
+- Every Primary and Replica passes the minimum spool-quota, allocated-block, free-byte, and file-slot preflight with recorded inputs.
+- The measured physical dispatch concurrency never exceeds the configured process-wide semaphore bound.
 - All three section 13.6 load-and-outage profiles, recovery bounds, crash points, four-Replica injections, and conservation checks pass.
 
 ### Gate E: Public Security
@@ -1332,16 +1414,17 @@ Treat the candidate as Primary-only until migration finishes and route verificat
 Before cutover:
 
 1. Build and verify the candidate image.
-2. Stop every Replica, stop new writes on the Primary, and record that no old binary remains connected.
-3. Drain in-flight requests and background batches.
-4. Run the final preflight. Require its database fingerprint to equal the approved manifest fingerprint.
-5. Create a current SQLite Online Backup snapshot, including all committed WAL content.
-6. Hash the snapshot and run `PRAGMA quick_check`.
-7. Restore the snapshot into an isolated directory.
-8. Start the old image against the restored copy without external network access.
-9. Verify health and expected row counts.
-10. Run the new image and migration against a second restored copy.
-11. Verify migration, pricing snapshot equality, and public contract tests.
+2. Resolve the deployed spool directory for every Primary and Replica. Run and record the minimum spool-quota, allocation probe, allocated-block scan, free-byte check, file-slot checks, and global dispatch-bound preflight for every node. Stop when any node would fail startup or enter recovery-only mode.
+3. Stop every Replica, stop new writes on the Primary, and record that no old binary remains connected.
+4. Drain in-flight requests and background batches.
+5. Run the final database preflight. Require its database fingerprint to equal the approved manifest fingerprint.
+6. Create a current SQLite Online Backup snapshot, including all committed WAL content.
+7. Hash the snapshot and run `PRAGMA quick_check`.
+8. Restore the snapshot into an isolated directory.
+9. Start the old image against the restored copy without external network access.
+10. Verify health and expected row counts.
+11. Run the new image and migration against a second restored copy.
+12. Verify migration, pricing snapshot equality, and public contract tests.
 
 Do not rely on the existing zero-Provider backup.
 
@@ -1377,6 +1460,6 @@ The current production data shape is route-safe and does not require Cartesian e
 
 The existing backup is not a valid current rollback point.
 
-Migration equality, pricing equality, status-event failure behavior, stable ETag behavior, Marketplace size bounds, public-name approval, global rate-limit topology, and restore rehearsal remain mandatory release gates.
+Migration equality, pricing equality, source-write invalidation performance, status-event failure behavior, per-node spool capacity, stable ETag behavior, Marketplace size bounds, public-name approval, global rate-limit topology, and restore rehearsal remain mandatory release gates.
 
 After this revised design receives user approval, proceed only with behavior-specification updates and migration-rehearsal planning. Require explicit approval before creating executable Phase 1 rehearsal artifacts. Require separate written approval before product implementation. Require another separate written approval before production deployment.
