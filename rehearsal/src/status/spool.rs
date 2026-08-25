@@ -131,6 +131,12 @@ impl Spool {
         *self.state.lock().expect("state mutex is not poisoned")
     }
 
+    pub fn delete_committed(&self, event_id: &str) -> Result<(), SpoolError> {
+        std::fs::remove_file(self.directory.join(format!("{event_id}.event.json")))
+            .map_err(|_| SpoolError::Io)?;
+        sync_directory(&self.directory).map_err(|_| SpoolError::Io)
+    }
+
     pub fn write_state(&self, state: NodeState) -> Result<(), SpoolError> {
         let bytes = serde_json::to_vec(&state).map_err(|_| SpoolError::Encode)?;
         if bytes.len() > self.config.state_max_bytes {
