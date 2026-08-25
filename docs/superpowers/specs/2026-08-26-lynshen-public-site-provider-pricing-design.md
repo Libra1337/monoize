@@ -31,6 +31,8 @@ Do not deploy or mutate production under this authorization.
 
 Approval of this revised document authorizes behavior-specification updates and migration-rehearsal planning only.
 
+After those specifications and plans receive user review, require explicit authorization to create the executable Phase 1 rehearsal artifacts. Phase 1 authorization still does not authorize product integration, production access, or deployment.
+
 Require a separate user approval before product implementation. Require another separate approval before production deployment.
 
 ## 3. Verified Baseline
@@ -82,15 +84,15 @@ Use four controlled phases.
 
 ### Phase 0: Design and Preflight
 
-Produce specifications, preflight tooling design, migration fixtures, and release gates.
+Produce behavioral specification updates, preflight tooling design, migration-rehearsal plans, and release gates after Gate A.
 
-Do not implement product behavior in this phase.
+Do not implement executable migration artifacts or product behavior in this phase.
 
 ### Phase 1: Migration Rehearsal Artifacts
 
-Create executable migration prototypes, fixtures, pricing snapshot tooling, and status-event fault-injection harnesses for isolated test databases.
+Create executable migration prototypes, fixtures, pricing snapshot tooling, an isolated Marketplace query/cursor/encoding benchmark, and status-event fault-injection harnesses for isolated test databases.
 
-Do not connect these artifacts to production startup or production routes. Do not expose new public pages in this phase.
+Do not connect these artifacts to production startup or production routes. The Marketplace benchmark must run as a test executable that registers no HTTP listener. Do not expose new public pages in this phase.
 
 Do not merge or deploy the destructive migration prototype. Require separate product-implementation approval after Gates B-E produce evidence.
 
@@ -176,6 +178,7 @@ Add these Provider fields:
 - `pricing_profile TEXT NULL`
 - `multiplier TEXT NOT NULL`
 - `public_name TEXT NOT NULL`
+- `public_name_key BLOB/BYTEA NOT NULL`
 - `configuration_generation BIGINT NOT NULL`
 
 Keep every existing Provider field that section 7.4 does not remove. Keep its current validation and runtime semantics unless this document states a replacement.
@@ -193,6 +196,12 @@ Allow that Profile to lack rates for a specific model. Report that mapping as un
 Use `public_name` on public responses. Do not expose the internal Provider `name`.
 
 For each Group, Provider, and Channel public name, trim surrounding Unicode whitespace and normalize the result to Unicode NFC. Require 1-64 Unicode scalar values. Reject C0 controls, DEL, CR, LF, and tab. Persist and return the normalized value.
+
+Derive a public-name key as the exact UTF-8 bytes of the normalized public name. Store the key as `BLOB` on SQLite and `BYTEA` on PostgreSQL. Require SQLite database encoding `UTF-8`. Add a database CHECK that `public_name_key = CAST(public_name AS BLOB)` on SQLite and `public_name_key = convert_to(public_name, 'UTF8')` on PostgreSQL. Apply the same rule to `monoize_groups.public_name_key` and the embedded `channel_public_name_key`.
+
+Compare, constrain, and order public names through their binary keys. Do not rely on a text collation. Return the normalized text, not the binary key, through an API.
+
+Derive every binary key on the server. Do not accept `public_name_key`, `channel_public_name_key`, `model_name_key`, or `model_search_key` in a management request. Map a database public-name unique-index violation to HTTP 409 with `public_name_conflict`. Return only `entity_type` (`group`, `provider`, or `channel`) and the conflicting normalized public name. Do not return an internal name, ID, SQL constraint name, or database error.
 
 After migration, require a management create request that assigns a Group, Provider, or Channel `public_name` to include `confirm_public_exposure: true`.
 
@@ -212,6 +221,8 @@ Keep Channel as a first-class API, runtime, status, and UI value object. Do not 
 
 Move every surviving Channel column into `monoize_providers` with a `channel_` prefix. This includes Channel ID, internal name, public name, API type, Base URL, API key, enabled state, retry and breaker overrides, probe overrides, affinity overrides, proxy URL, extra headers, session affinity, and missing-usage policy.
 
+Add `channel_public_name_key BLOB/BYTEA NOT NULL` beside `channel_public_name`. Apply the public-name derivation and database CHECK from section 7.1.
+
 Make every required embedded Channel column `NOT NULL`. Make `channel_id` unique.
 
 A Provider row cannot exist without its embedded Channel fields. One Provider row contains exactly one Channel. This enforces the invariant identically on SQLite and PostgreSQL.
@@ -224,27 +235,39 @@ Use this `monoize_provider_models` shape:
 
 - `provider_id TEXT NOT NULL`
 - `model_name TEXT NOT NULL`
+- `model_name_key BLOB/BYTEA NOT NULL`
+- `model_search_key BLOB/BYTEA NOT NULL`
 - `redirect TEXT NULL`
 - `pricing_profile_mode TEXT NOT NULL`
 - `pricing_profile_override TEXT NULL`
 - `multiplier_override TEXT NULL`
 - `created_at TEXT NOT NULL`
 
-Use `(provider_id, model_name)` as the primary key. Do not retain a separate model-mapping row ID. Use the logical model name in validation warnings and management responses.
+Do not retain a separate model-mapping row ID. Use the logical model name in validation warnings and management responses.
 
 For every new logical model name, trim surrounding Unicode White_Space code points. Require 1-256 UTF-8 bytes after trimming. Reject C0 controls, DEL, CR, LF, and tab. Persist and compare the trimmed value case-sensitively. During migration preflight, block a stored logical model name that differs from its trimmed value or violates these byte and control constraints. Do not silently rename it.
 
-Index `monoize_providers` by `(group_id, priority, created_at, id)`. Index `monoize_provider_models` by `(model_name, provider_id)` in addition to its primary key. Use these indexes for Group routing, Marketplace ordering, and offer lookup.
+Set `model_name_key` to the exact UTF-8 bytes of `model_name`. Set `model_search_key` to those bytes after adding 32 to each byte from ASCII `A` through `Z`; leave every other byte unchanged. Management writes and migrations must derive both keys. Add the same SQLite and PostgreSQL UTF-8 equality CHECK for `model_name_key` that public names use. Add a CHECK for `model_search_key` that applies all 26 exact uppercase-to-lowercase ASCII replacements to `model_name` and then encodes the result as BLOB/BYTEA. The replacement expression must not invoke a locale-sensitive lowercase function.
+
+Use `(provider_id, model_name_key)` as the database primary key. Keep `(provider_id, model_name)` as the public logical description of that key. Index `monoize_providers` by `(group_id, priority, created_at, id)`. Index `monoize_provider_models` by `(model_name_key, provider_id)`. Use these indexes for Group routing, Marketplace ordering, and offer lookup. The arbitrary substring predicate may scan `model_search_key`; do not claim that a B-tree index accelerates it.
 
 Remove Channel `weight`. Convert `weight <= 0` to `enabled = false` during migration.
 
 ### 7.3 Group
 
-Add `public_name TEXT NOT NULL` to `monoize_groups`.
+Add `public_name TEXT NOT NULL` and `public_name_key BLOB/BYTEA NOT NULL` to `monoize_groups`.
 
 Use the public Group name on public responses. Do not expose an unapproved internal label.
 
-Require public Group names to be unique after trimming and Unicode NFC normalization. Compare the normalized values case-sensitively.
+Require public Group names to be unique after trimming and Unicode NFC normalization. Compare the normalized values case-sensitively through `public_name_key`.
+
+Create these database unique indexes:
+
+- `monoize_groups(public_name_key)` for global Group public-name uniqueness;
+- `monoize_providers(group_id, public_name_key)` for Provider public-name uniqueness within one Group;
+- `monoize_providers(group_id, channel_public_name_key)` for Channel public-name uniqueness within one Group.
+
+Use BLOB/BYTEA byte order for these indexes on both databases. The unique indexes are the final concurrency guard. Application prechecks may produce a clearer error but do not replace an index. Validate the final names for all rows affected by one management transaction before writing. When one statement reorders or renames values that temporarily collide, use a two-step update with transaction-local non-conflicting keys, then write the final keys before commit. Do not use deferrable uniqueness because SQLite does not provide equivalent behavior.
 
 Reject Group deletion with HTTP 409 and `group_in_use` while a Provider references that Group. Require the administrator to move or delete those Providers first.
 
@@ -378,9 +401,9 @@ Build the manifest deterministically from the database. Include every migration-
 
 Re-run preflight after writes stop. Require the reviewed fingerprint to equal the final preflight fingerprint before migration starts.
 
-Require public names to be non-empty after trimming.
+Require public names to pass the normalization, length, control-character, and binary-key rules in section 7. Emit the normalized text and hexadecimal binary key in the manifest.
 
-Require Provider public names to be unique within one Group.
+Reject a global Group public-name-key collision. Reject a Provider or Channel public-name-key collision within one Group. Report every conflicting source row. Do not resolve a collision by appending an automatic suffix.
 
 Never infer approval from the presence of an existing internal name.
 
@@ -536,10 +559,12 @@ The public Marketplace endpoints return only public Group, Provider, Channel, mo
 
 Accept these query parameters on `GET /api/public/marketplace`:
 
-- `q`: optional substring. Trim Unicode White_Space code points. Limit the result to 128 UTF-8 bytes.
-- `group`: optional exact normalized public Group name.
+- `q`: optional substring. Canonicalize and validate it by the rules below.
+- `group`: optional public Group name. Canonicalize it by the rule below.
 - `cursor`: optional opaque cursor from the preceding response.
 - `limit`: optional integer from 1 through 50. Default to 24.
+
+Normalize a supplied `group` with the public-name rules in section 7. Derive its binary key and perform exact Group lookup through `public_name_key`. Do not compare the text through a database collation.
 
 Return HTTP 400 with `invalid_request` for an invalid Group, cursor, limit, or oversized search. Return this allow-listed logical response shape:
 
@@ -557,11 +582,13 @@ items: Array<{
 }>
 ```
 
-Order rows by the zero-based current Group ordinal and then exact logical-model UTF-8 byte order. Use the same byte ordering in SQLite, PostgreSQL, cursor encoding, and response assembly. Do not delegate model ordering to a locale-dependent database collation.
+Order rows by the zero-based current Group ordinal and then `model_name_key`. Use the same exact UTF-8 byte ordering in SQLite, PostgreSQL, cursor encoding, and response assembly. Do not delegate model ordering to a locale-dependent database collation.
 
 Render one visible Group section heading before the first row of each Group. Repeat the heading when a fetched page starts inside that Group. Never place rows from two Groups under one heading.
 
-Before substring comparison, map ASCII `A` through `Z` to `a` through `z` in `q` and each logical model ID. Leave every other Unicode scalar value unchanged. Perform this comparison in application code. Do not delegate it to database collation.
+Define canonical `q` as the input after Unicode White_Space trimming. Do not apply Unicode normalization. Reject C0 controls, DEL, CR, LF, tab, or a canonical value longer than 128 UTF-8 bytes. Treat an empty canonical value as absent. Otherwise, encode it as UTF-8 and add 32 to each byte from ASCII `A` through `Z`; leave every other byte unchanged. Bind that value as `BLOB` on SQLite and `BYTEA` on PostgreSQL.
+
+Filter mappings in the database with binary substring containment against `model_search_key`. Use `instr(model_search_key, ?1) > 0` on SQLite and the equivalent `position($1::bytea in model_search_key) > 0` predicate on PostgreSQL. Do not load the complete model catalog into application memory. Do not delegate matching to a text collation. Arbitrary substring search may scan the bounded mapping set; the qualification limits and latency gate below apply to that scan.
 
 Generate a 32-byte random Marketplace cursor HMAC key during migration. Store its base64url encoding in a dedicated `state_records` row inside the migration transaction. Do not return it through an API or place it in a log or reviewed manifest. Load it once at startup. Refuse readiness with `marketplace_cursor_key_unavailable` when the row is absent, malformed, or does not decode to exactly 32 bytes.
 
@@ -577,7 +604,7 @@ limit: u16 big-endian
 filter_digest: 32 SHA-256 bytes
 ```
 
-Build `filter_digest` from the endpoint kind and each canonical filter. Encode each field as one tag byte, a u32 big-endian byte length, and exact UTF-8 bytes. Include normalized `q` and Group for a list cursor. Include exact Group and model for an offer cursor.
+Build `filter_digest` from the endpoint kind and each canonical filter. Encode each field as one tag byte, a u32 big-endian byte length, and exact UTF-8 bytes. Include canonical `q` and normalized Group for a list cursor. Include normalized Group and exact model for an offer cursor.
 
 Append this list keyset after the common prefix:
 
@@ -593,7 +620,9 @@ Limit the complete list cursor to 512 ASCII bytes. Reject malformed input, an in
 
 Use the zero-based position in the complete canonical Group order as `group_ordinal`. Reject cursor construction if that position cannot fit `u64`.
 
-Add `GET /api/public/marketplace/offers`. Require `group` as the exact normalized public Group name and `model` as the exact logical model ID from a list row. Accept `cursor` and `limit` with the same validation rules. Use a default limit of 20 and a maximum of 50.
+Add `GET /api/public/marketplace/offers`. Require `group` to resolve to one normalized public Group name and `model` to equal the exact logical model ID from a list row. Accept `cursor` and `limit` with the same validation rules. Use a default limit of 20 and a maximum of 50.
+
+Normalize and resolve the offer `group` through `public_name_key` by the list rule. Validate `model` with the logical-model byte and control constraints in section 7.2, but do not trim or normalize it. Derive `model_name_key` from the exact accepted model bytes for lookup.
 
 Return this allow-listed offer response:
 
@@ -629,29 +658,86 @@ channel_name_length: u16 big-endian
 public_channel_name: exact UTF-8 bytes
 ```
 
-Compare Provider priority numerically before comparing the name byte strings. Compare public Provider and Channel names by exact UTF-8 byte order. Use the same ordering in SQLite, PostgreSQL, cursor encoding, and response assembly. Do not delegate name ordering to a locale-dependent database collation.
+Compare Provider priority numerically before comparing `public_name_key` and `channel_public_name_key`. Compare both keys by exact UTF-8 byte order. Use the same ordering in SQLite, PostgreSQL, cursor encoding, and response assembly. Do not delegate name ordering to a locale-dependent database collation.
 
 Limit the complete offer cursor to 1024 ASCII bytes. Apply the same signature, revision, filter, limit, and error rules. The next query selects offers strictly after that key. Return HTTP 404 with `marketplace_model_not_found` when no visible row matches the Group and model. Order offers by Provider priority, then public Provider and Channel name.
 
-Maintain one persistent Marketplace generation record in `state_records`. Store JSON with an unsigned decimal `revision` and an RFC3339 UTC `generated_at` value with exactly six fractional-second digits and a `Z` suffix. Initialize revision to one during migration. Set `generated_at` once when creating that record.
+Create a dedicated `marketplace_generation` table. Do not store this record as JSON in `state_records`. The table contains exactly one row with these fields:
 
-Increment the revision exactly once and replace `generated_at` with the transaction's one captured UTC timestamp in the same transaction as each committed Group create, update, delete, or reorder transaction, each Provider create, update, delete, or reorder transaction, and each Provider model-mapping mutation.
+- `singleton_id SMALLINT PRIMARY KEY`, fixed to `1` by a CHECK;
+- `revision BIGINT NOT NULL`, from `1` through `9223372036854775807` by a CHECK;
+- `generated_at_unix_us BIGINT NOT NULL`, from `0` through `253402300799999999` by a CHECK.
 
-Do the same once per transaction that creates, updates, deletes, or synchronizes one or more billing-rate or model-metadata rows. A failed transaction changes neither value.
+Create the row with revision one and the current database UTC time during migration. Create all source rows first. Create the generation row and its triggers after source backfill, so migration backfill does not consume revisions. Prevent deletion of the singleton row with a database trigger. On PostgreSQL, add a statement-level trigger that rejects `TRUNCATE marketplace_generation`. Product code and maintenance tooling must not truncate this table on SQLite.
+
+Add a database trigger on `marketplace_generation` updates. Permit an update only when `singleton_id` remains one, `revision = OLD.revision + 1`, and `generated_at_unix_us > OLD.generated_at_unix_us`. Reject every rollback, repeated value, skipped revision, primary-key change, and timestamp that does not increase. An exact direct increment that satisfies these rules may cause a harmless extra cache invalidation but cannot reuse an earlier cursor generation.
+
+Install database triggers for `INSERT`, `UPDATE OF <marketplace columns>`, and `DELETE` on each of these tables:
+
+- `monoize_groups`;
+- `monoize_providers`;
+- `monoize_provider_models`;
+- `billing_rate_records`;
+- `model_metadata_records`.
+
+For each table, define the exact column allow-list that can affect public Marketplace serialization, ordering, visibility, capability, or effective pricing. The update trigger must fire when any allow-listed column appears in the update target list, even when the new value equals the old value. Exclude audit-only columns that cannot change a public response. Record both included and excluded columns with a reason in the generation-source manifest.
+
+Create one trigger per operation and source table. Each database therefore has exactly 15 row-operation triggers. Create one PostgreSQL statement-level `TRUNCATE` trigger for each source table, for five additional PostgreSQL triggers. Product code and maintenance tooling must not disable these triggers or truncate a source table on SQLite.
+
+Each triggered row mutation must atomically increment `revision` and set `generated_at_unix_us` inside the source transaction. Let `clock_us` be the database UTC clock in integer Unix microseconds. Set the new timestamp to `max(clock_us, previous_generated_at_unix_us + 1)`. SQLite derives `clock_us` from integer Unix seconds and the three millisecond digits returned by `strftime('%f', 'now')`. PostgreSQL derives it from `clock_timestamp()`. The stored value is therefore strictly increasing even when several mutations share one clock tick. A transaction that mutates several source rows may advance the revision several times. Only strict generation change is an invariant; consecutive committed generations need not differ by one.
+
+The table primary key and singleton CHECK make a duplicate singleton impossible. The trigger must abort the complete source transaction when the singleton row is missing, outside its allowed revision or timestamp range, or cannot advance either value without overflow. Schema checks define malformed stored values as out of range. The update guard must also abort the complete source transaction when its exact increment or timestamp condition fails. A failed or rolled-back source transaction changes neither the source state nor the committed generation.
+
+Keep a machine-readable generation-source manifest in the migration rehearsal artifacts. List the five source tables, every included and excluded source column with a reason, every trigger name, every management writer, every background or catalog-sync writer, every seed or maintenance writer, and every direct-SQL test writer. Compare the manifest with database metadata during rehearsal and deployment preflight. Fail the check for a missing or disabled trigger, an unlisted source table, an unclassified source column, or an unlisted writer.
+
+The initial audited writer inventory is:
+
+| Source table | Current repository writer locations |
+| --- | --- |
+| `monoize_groups` | `src/users/groups.rs`; Group migration and direct-SQL fixtures |
+| `monoize_providers` | `src/monoize_routing.rs`; Provider migrations and direct-SQL fixtures |
+| `monoize_provider_models` | target Provider/model store derived from `src/monoize_routing.rs`; migration prototype and direct-SQL fixtures |
+| `billing_rate_records` | `src/billing_rate_store.rs`; `src/model_registry_store.rs`; billing migrations and direct-SQL fixtures |
+| `model_metadata_records` | `src/model_registry_store.rs`; metadata migrations and direct-SQL fixtures |
+
+Regenerate this inventory with repository search in Gate B. Do not treat the listed paths as permanently exhaustive. Trigger coverage is table-wide and therefore also covers a newly added writer, but Gate B fails until the manifest names that writer.
 
 Before Marketplace cache lookup, read only the current generation record. For each endpoint and each canonical query parameter set, build an immutable encoded response snapshot on cache miss.
 
 Read the generation record again after reading all source rows and before encoding. Retry the complete read when either generation value changed. Make at most three build attempts. Return HTTP 503 with `marketplace_snapshot_busy` when all three attempts observe a concurrent generation change.
 
-Copy `revision` and `generated_at` from the stable generation record. Reuse the exact uncompressed JSON bytes and ETag while that record remains unchanged. Do not recompute `generated_at` on cache expiry, eviction, or a conditional request. The revision, not timestamp uniqueness, identifies a Marketplace generation.
+Copy `revision` from the stable generation record. Convert its `generated_at_unix_us` to RFC3339 UTC with exactly six fractional-second digits and a `Z` suffix. Use that exact string as response `generated_at`. Reuse the exact uncompressed JSON bytes and ETag while the record remains unchanged. Do not recompute `generated_at` on cache expiry, eviction, or a conditional request. The revision, not timestamp uniqueness, identifies a Marketplace generation.
 
 Use a process-local LRU cache with at most 256 Marketplace response snapshots. Expire an entry 60 seconds after its last access.
 
 Limit each uncompressed encoded JSON response body to 1048576 bytes. Return no more than the requested limit. Evaluate each candidate body with its final envelope and `next_cursor` value. Stop before the first item that would exceed the body limit. Set `next_cursor` from the last included sort key so that the excluded item is first on the next page. If no item fits, return HTTP 500 with `public_response_too_large`, do not cache the body, and emit an error metric without public internal details.
 
-On a list cache miss, select at most `limit + 1` distinct Group and logical-model rows strictly after the cursor keyset. Load visible offers for all selected rows in one set-based Provider and model-mapping query. Load applicable billing-rate and model-metadata rows in set-based batches. Do not issue one database query per Group, model, Provider, offer, or rate.
+On a list cache miss, select at most `limit + 1` distinct Group and logical-model rows strictly after the cursor keyset. Apply `q` before the keyset limit. Load visible offers for all selected rows in one set-based Provider and model-mapping query. Load applicable billing-rate and model-metadata rows in set-based batches. Do not issue one database query per Group, model, Provider, offer, or rate.
 
 On an offer cache miss, select at most `limit + 1` visible offers strictly after the cursor keyset. Load their applicable billing-rate and model-metadata rows in set-based batches. Query count may increase only with the existing bounded SQLite bind-parameter chunking. It must not increase once per returned row.
+
+Qualify one release against this maximum catalog envelope:
+
+- 128 Groups;
+- 5,000 Providers and embedded Channels;
+- 250,000 Provider model mappings;
+- 100,000 distinct Group and logical-model Marketplace rows;
+- 100,000 model-metadata rows;
+- 500,000 billing-rate rows.
+
+These values define the supported qualification envelope. They are not hidden row-deletion rules. Emit an operator warning at 80 percent of any value. Fail migration and deployment preflight when an input exceeds a value. Require a revised benchmark and explicit approval before raising an envelope value.
+
+Run the Marketplace benchmark as an optimized release build on an otherwise idle Linux x86-64 host constrained by the benchmark runner to exactly four logical CPUs and 8 GiB RAM. Use a local SSD whose measured sequential read throughput is at least 400 MiB/s and whose measured random 4-KiB read throughput at queue depth one is at least 10,000 IOPS. Record the storage measurements. Run SQLite in WAL mode and PostgreSQL 16 in separate runs. Use the maximum envelope, include one model mapped to all 5,000 Providers, and use search terms that match zero rows, one row, 50 rows, and at least half of the mapping rows.
+
+In Phase 1, invoke the proposed database query, cursor, aggregation, size-limit, encoding, and cache code through the isolated benchmark executable. Do not register an HTTP listener or link the prototype into application startup. After product-implementation approval, run the same fixed data and query sets through the built public endpoints. Both runs must meet the same bounds before deployment approval.
+
+After five warm-up minutes, run 32 concurrent workers for at least ten minutes. Continue until the run contains at least 10,000 verified cache-miss samples for each operation kind. Send 80 percent list operations, distributed equally across the four search selectivities and first, middle, and final cursor positions. Send 20 percent offer operations, distributed equally across first, middle, and final cursor positions for the 5,000-offer model. Use more than 256 canonical query sets and cache instrumentation. Include only verified cache misses in operation latency samples; report cache hits separately.
+
+Use a fixed synthetic-data seed, fixed canonical query-set file, fixed benchmark tool version, and fixed application commit. Record the host CPU model, storage model, operating-system image, SQLite version, PostgreSQL version, database configuration, and application environment with each result.
+
+Before timing, run `ANALYZE` on both databases and checkpoint them. Do not run `VACUUM` during a measurement. Use a connection-pool maximum of 32. Give PostgreSQL an 8-GiB memory limit separate from the application process and include its database-process memory in a separate recorded metric. Give SQLite and the application one combined 8-GiB limit. Do not reuse a database instance between the SQLite and PostgreSQL runs.
+
+Require the list operation p95 to be at most 500 milliseconds and p99 at most 1,000 milliseconds. Require the offers operation p95 to be at most 400 milliseconds and p99 at most 800 milliseconds. For Phase 2 and the final release candidate, an operation is one complete HTTP request. Require the process resident-memory increase from the post-start idle baseline to stay at or below 512 MiB. Record database statement counts, rows scanned, response sizes, CPU time, cache disposition, and peak resident memory for both databases. Gate B fails when either database misses one bound.
 
 Derive `capabilities` and every rate discriminator from the selected complete billing-rate matrix and reviewed model metadata. Do not pass through arbitrary metadata JSON.
 
@@ -824,6 +910,37 @@ Retain spool files until the Primary returns HTTP 200.
 
 Test ambiguous HTTP outcomes, shipment replay, concurrent replicas, Primary restart, and Replica restart.
 
+### 13.6 Qualification Load and Fault Profile
+
+Measure the highest sustained production rate of counted physical upstream dispatches over any consecutive five-minute window in the retained 30-day metrics interval. Let that value, rounded up to a whole event per second, be `production_peak_events_per_second`.
+
+When 30 complete days of this metric are unavailable, derive a conservative peak from the longest available period of request-log and reverse-proxy dispatch evidence, then multiply that observed five-minute peak by two before rounding up. Require the owner to approve a declared design peak that is at least that derived value. When no usable dispatch evidence exists, Gate D is blocked until the owner supplies and approves a positive declared design peak. Do not substitute zero for missing evidence.
+
+Let `approved_peak_events_per_second` equal the measured 30-day peak when complete evidence exists; otherwise use the approved declared design peak. Set `qualification_events_per_second = max(100, 5 * approved_peak_events_per_second)`. This is the aggregate rate across all sources. Use the same constrained qualification host and storage floor defined for Marketplace. In each multi-source profile, distribute event IDs round-robin across the Primary and four synthetic Replica sources so their aggregate equals the qualification rate.
+
+Run these three load-and-outage profiles separately:
+
+1. Primary-only database outage: reject every Primary event-table transaction during minutes 5 through 20.
+2. Multi-source database outage: run one Primary and four synthetic Replicas; reject every Primary event-table transaction during minutes 5 through 20 while Replica shipment remains reachable.
+3. Multi-source shipment outage: run one Primary and four synthetic Replicas; reject every Replica status shipment during minutes 5 through 20 while Primary-local event-table writes remain available.
+
+For each profile, generate events at `qualification_events_per_second` for 30 minutes. Keep upstream dispatch admission and spool publication running through the outage. At minute 20, restore the failed path while continuing the input rate for ten minutes. Then stop new input and drain the backlog. A pass in one profile does not substitute for another.
+
+Require every generated counted event to reach one of three reconciled states: one committed unique row, one remaining durable final spool file, or one event-ID entry in the test harness's explicit lost-event ledger accompanied by the incomplete latch. The lost-event ledger is a qualification-harness oracle; production does not retain event IDs that it failed to spool. Require zero unaccounted events. The main load-and-outage profiles must contain zero lost-event ledger entries. Permit such entries only in an injection that intentionally exhausts or disables durable persistence. Require `data_complete = false` while an event older than `data_through` remains pending. Require spool reservations and final files to remain within the configured byte quota. For each source, size its qualification spool to at least `assigned_events_per_second * 900 * MONOIZE_STATUS_EVENT_SPOOL_ENTRY_MAX_BYTES`, plus 20 percent headroom.
+
+During recovery, require committed throughput to exceed the continuing input rate by at least 25 percent in every complete five-minute measurement window. After new input stops, require the remaining backlog to drain within 15 minutes. Require each process's resident-memory increase from its post-start idle baseline to stay at or below 256 MiB. Require the aggregate increase across the Primary and four Replica processes to stay at or below 768 MiB.
+
+Repeat the profile with process termination at five points: before temporary-file rename, after rename, during a database transaction, after an ambiguous commit, and during Replica shipment. Restart the affected process. Require idempotent replay, correct pending counts, and the specified incomplete-data latch behavior.
+
+Run separate injections for full spool quota, unwritable spool directory, lost directory-sync capability, database unavailability, Primary restart, Replica restart, clock skew beyond 30 seconds, and four Replicas replaying duplicate batches concurrently. Record accepted dispatches, counted outcomes, reservations, durable files, committed unique events, duplicates ignored, test-harness lost-event ledger entries, maximum backlog, recovery throughput, and peak resident memory. Gate D fails when conservation does not hold:
+
+```text
+generated counted event IDs
+= committed unique event IDs
++ durable pending event IDs not already committed
++ test-harness lost-event IDs not already committed or pending
+```
+
 ## 14. Public Status Calculation
 
 Add `GET /api/public/status`.
@@ -900,7 +1017,7 @@ Fetch public site settings through SWR. Render matching title, description, and 
 
 Never serialize a complete Provider, Channel, Group, rate-record, or settings entity into a public response.
 
-Use reviewed public names. Never fall back to internal names.
+Use approved migration-manifest names and post-migration names accepted with `confirm_public_exposure: true`. Never fall back to internal names.
 
 Apply an application-level per-IP limit of 60 public API requests per minute with a burst of 20.
 
@@ -930,7 +1047,7 @@ Parse `If-None-Match` as an HTTP entity-tag list. Return HTTP 304 with no body w
 
 Add automated negative assertions for every secret or internal field name.
 
-Require review of the public-name manifest before deployment.
+Require review of the migration public-name manifest before deployment. Post-migration management writes use the explicit confirmation contract in section 7.1.
 
 ## 16. API Documentation
 
@@ -1071,6 +1188,10 @@ Cover zero, one, and multiple Groups. Cover zero, one, disabled, zero-weight, an
 
 Cover deterministic IDs, ID collisions, name collisions, malformed JSON, missing foreign rows, and every injected transaction failure.
 
+Before Gate B, emit every Provider classified as semantic-change. Include its old Group and Channel memberships, old weighted attempt order, target rows, target order, and target identifiers. Require one written approval per listed Provider. An empty report must state that it contains zero items and include the source fingerprint.
+
+Test public-name and logical-model BLOB/BYTEA keys and database CHECK constraints on SQLite and PostgreSQL. Test public-name normalization collisions, concurrent inserts, direct-SQL invalid keys, rejected request key fields, and byte-identical ordering. Test every ASCII uppercase mapping and representative non-ASCII model bytes in `model_search_key`. Verify `(provider_id, model_name_key)` rejects duplicate logical models and that both model-key CHECK constraints reject a mismatched direct-SQL key. Verify the three public-name unique indexes reject the specified scopes without relying on application prechecks. Verify public-name collisions return HTTP 409 with `public_name_conflict` and no internal name or ID.
+
 Run the migration twice. Verify the second run is a no-op.
 
 Verify obsolete columns and indexes are absent.
@@ -1093,6 +1214,8 @@ Verify request results remain unchanged by status persistence failure.
 
 Verify `data_complete` becomes false when an event is lost.
 
+Run section 13.6 profile 1 on the Primary-only topology. Run profiles 2 and 3 on one Primary plus four synthetic Replicas. Run the stated recovery, crash-point, and conservation checks for each applicable profile. Retain machine-readable measurements and event-ID reconciliation output.
+
 ### 21.4 Public Security
 
 Assert that public responses omit all internal and secret fields.
@@ -1103,13 +1226,17 @@ Test Marketplace list and offer pagination at limits 1, 24, 50, and invalid valu
 
 Test that SQLite and PostgreSQL return byte-identical pagination sequences for names and model IDs containing non-ASCII text.
 
+Run the maximum-envelope Marketplace benchmark from section 12. Test zero-, one-, 50-, and broad-match searches. Verify that search remains database-filtered and application memory does not scale with the complete mapping catalog.
+
 Count database statements for 1, 24, and 50 returned rows. Verify that statement count is independent of returned-row count except for bounded bind-parameter chunks.
 
 Test missing and malformed cursor HMAC key rows. Test stable cursors across process restart and equivalent decoding on SQLite and PostgreSQL.
 
 Inject Marketplace generation changes before and after every source query. Verify that a response contains one revision only and that three consecutive changes return `marketplace_snapshot_busy`.
 
-Test that repeated Site and Marketplace requests over time return byte-identical uncompressed JSON bodies and HTTP 304 while their source generation is unchanged. Test weak ETag syntax with identity and compressed transfer encodings. Test that a relevant mutation changes the Marketplace revision, `generated_at`, encoded body, and ETag exactly once.
+Test that repeated Site requests over time return byte-identical uncompressed JSON bodies and HTTP 304 while the three selected settings are unchanged. Test that repeated Marketplace requests do the same while its source generation is unchanged. Test weak ETag syntax with identity and compressed transfer encodings. For each of the five Marketplace source tables, exercise each applicable management, background synchronization, bulk synchronization, migration or seed, and direct-SQL writer listed in the manifest. Mark an inapplicable writer category explicitly instead of inventing a path. Verify that every committed insert, update, and delete strictly advances both generation values and changes the Marketplace encoded body and ETag. Verify that rollback restores the preceding generation. Verify that deletion of the singleton fails. Verify that PostgreSQL rejects `TRUNCATE marketplace_generation`. Verify that a direct update cannot decrease or reuse a revision, skip a revision, change `singleton_id`, or keep or decrease the generation timestamp. Verify that one exact direct increment with a later timestamp succeeds and only invalidates the cache. In isolated fixtures that intentionally bypass or alter the target constraints, verify that a missing, out-of-range, or exhausted singleton aborts a source write. Verify PostgreSQL `TRUNCATE` on each Marketplace source table advances the generation and that SQLite tooling never uses `TRUNCATE`.
+
+Compare the machine-readable generation-source manifest with source-code search results, source table schemas, and database trigger metadata. Require all five tables, every source column classified as included or excluded, all 15 row-operation triggers per database, the PostgreSQL truncate coverage, and every discovered writer to be present. Mutate each included column and verify a generation change. Mutate each excluded column and verify the serialized Marketplace body remains byte-identical.
 
 Test that two Status requests in one snapshot bucket return byte-identical bodies and HTTP 304. Test that the next bucket produces one later `generated_at` and recomputes `data_through`.
 
@@ -1118,6 +1245,8 @@ Test startup and deployment preflight with one public process. Test that a decla
 Test that every new or changed public name requires `confirm_public_exposure: true`. Test that an unchanged normalized name does not require it.
 
 Test modal focus trapping, Escape close, focus restoration, keyboard navigation, mobile layout, and reduced motion.
+
+During Phase 1, run Marketplace query, cursor, aggregation, size-limit, encoding, cache, and cross-database tests through the isolated executable. Also run response-schema allow-list serialization, secret-field negative, standalone token-bucket and bucket-cap, and ETag-parser tests without registering an HTTP route. Defer HTTP integration, SWR, modal, and browser tests until product implementation receives separate approval. Re-run the complete section against the final implementation.
 
 ### 21.5 Commands
 
@@ -1153,7 +1282,7 @@ Passing Gate A does not authorize product implementation.
 - The user approves this document.
 - The user confirms intentional public display of reviewed Group, Provider, and Channel public names.
 - The user confirms that the old Provider management contract has no required external caller.
-- Design approval authorizes behavior-specification updates and migration-rehearsal planning only. It does not authorize product implementation, production migration, or deployment.
+- Design approval authorizes behavior-specification updates and migration-rehearsal planning only. It does not authorize executable rehearsal artifacts, product implementation, production migration, or deployment.
 
 ### Gate B: Migration Rehearsal
 
@@ -1162,6 +1291,9 @@ Passing Gate A does not authorize product implementation.
 - The projected row expansion is reviewed.
 - Every semantic-change Provider has explicit written approval.
 - Transaction rollback tests pass.
+- Public-name and logical-model binary-key CHECK, primary-key, uniqueness, and byte-order tests pass on both databases.
+- The generation-source manifest covers every source table, source column, trigger, and discovered writer.
+- The isolated maximum-envelope Marketplace query, cursor, aggregation, encoding, and cache benchmark meets every latency, memory, query, and response-size bound on both databases without registering an HTTP listener.
 
 ### Gate C: Pricing Equality
 
@@ -1174,17 +1306,22 @@ Passing Gate A does not authorize product implementation.
 - Retry, replay, concurrency, and fault-injection tests pass.
 - Lost events mark status data incomplete.
 - Status persistence failures do not change API billing or response results.
+- Production peak evidence or an owner-approved conservative design peak exists.
+- All three section 13.6 load-and-outage profiles, recovery bounds, crash points, four-Replica injections, and conservation checks pass.
 
 ### Gate E: Public Security
 
-- Public response allow-list tests pass.
-- Secret-field negative tests pass.
-- Rate-limit tests pass.
-- Stable ETag and Marketplace pagination or size-bound tests pass.
-- The public-name manifest receives explicit approval.
-- The deployment preflight proves that exactly one application process serves public endpoints, or proves an equivalent gateway or shared-store global limit.
+- In the rehearsal form, schema-level allow-list serialization tests pass for every proposed public response without registering an HTTP route.
+- In the rehearsal form, secret-field negative tests pass against serialized fixture responses.
+- In the rehearsal form, the isolated token-bucket, bucket-cap, ETag parser, cursor, pagination, and response-size test suites pass.
+- The migration public-name manifest receives explicit approval.
+- The production topology preflight plan identifies exactly one intended public application process, or requires an equivalent gateway or shared-store global limit before implementation may request deployment.
 
 Passing the rehearsal form of Gates B-E creates the evidence required for a separate product-implementation approval. Re-run Gates B-E against the final implementation before requesting deployment approval. Rehearsal results do not authorize implementation or deployment.
+
+For the final implementation run of Gate B, execute the fixed Marketplace benchmark corpus through the real public endpoints and meet the same bounds.
+
+For the final implementation run of Gate E, run the actual HTTP allow-list, secret-field, rate-limit, cache, ETag, pagination, and response-size tests. Run deployment preflight against the real serving topology. The rehearsal substitutions above do not satisfy the final Gate E.
 
 ## 23. Deployment Gate and Rollback
 
@@ -1242,4 +1379,4 @@ The existing backup is not a valid current rollback point.
 
 Migration equality, pricing equality, status-event failure behavior, stable ETag behavior, Marketplace size bounds, public-name approval, global rate-limit topology, and restore rehearsal remain mandatory release gates.
 
-After this revised design receives user approval, proceed only with behavior-specification updates and migration-rehearsal planning. Require separate written approval before product implementation. Require another separate written approval before production deployment.
+After this revised design receives user approval, proceed only with behavior-specification updates and migration-rehearsal planning. Require explicit approval before creating executable Phase 1 rehearsal artifacts. Require separate written approval before product implementation. Require another separate written approval before production deployment.
