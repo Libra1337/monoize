@@ -2,7 +2,7 @@
 
 Date: 2026-08-26
 
-Status: Proposed after read-only preflight. This document authorizes no product implementation and no production mutation.
+Status: Revised after read-only preflight and risk review. This document authorizes no product implementation and no production mutation.
 
 ## 1. Objective
 
@@ -23,13 +23,15 @@ Keep existing forwarding endpoint paths unchanged. Change only dashboard managem
 
 The current authorization covers this design document and read-only preflight checks.
 
-Do not change behavioral files under `spec/` until this document receives user approval.
+Do not change behavioral files under `spec/` until this revised document receives user approval.
 
 Do not implement migrations, backend behavior, frontend behavior, or documentation pages under this authorization.
 
 Do not deploy or mutate production under this authorization.
 
-Require a separate user approval before implementation. Require another separate approval before production deployment.
+Approval of this revised document authorizes behavior-specification updates and migration-rehearsal planning only.
+
+Require a separate user approval before product implementation. Require another separate approval before production deployment.
 
 ## 3. Verified Baseline
 
@@ -84,17 +86,17 @@ Produce specifications, preflight tooling design, migration fixtures, and releas
 
 Do not implement product behavior in this phase.
 
-### Phase 1: Migration and Core Contracts
+### Phase 1: Migration Rehearsal Artifacts
 
-Implement schema migration, Provider storage, pricing resolution, and status-event persistence.
+Create executable migration prototypes, fixtures, pricing snapshot tooling, and status-event fault-injection harnesses for isolated test databases.
 
-Do not expose new public pages in this phase.
+Do not connect these artifacts to production startup or production routes. Do not expose new public pages in this phase.
 
-Do not merge or deploy Phase 1 independently. The destructive schema and every updated repository caller must ship as one release after Phase 2 passes all gates.
+Do not merge or deploy the destructive migration prototype. Require separate product-implementation approval after Gates B-E produce evidence.
 
-### Phase 2: Public Product Surfaces
+### Phase 2: Product Implementation
 
-Implement the public layout, welcome page, Marketplace, API documentation, status page, and management UI.
+After separate product-implementation approval, implement schema migration, runtime contracts, public surfaces, documentation, and management UI as one release candidate.
 
 Build all four locales and complete security review.
 
@@ -229,6 +231,10 @@ Use this `monoize_provider_models` shape:
 - `created_at TEXT NOT NULL`
 
 Use `(provider_id, model_name)` as the primary key. Do not retain a separate model-mapping row ID. Use the logical model name in validation warnings and management responses.
+
+For every new logical model name, trim surrounding Unicode White_Space code points. Require 1-256 UTF-8 bytes after trimming. Reject C0 controls, DEL, CR, LF, and tab. Persist and compare the trimmed value case-sensitively. During migration preflight, block a stored logical model name that differs from its trimmed value or violates these byte and control constraints. Do not silently rename it.
+
+Index `monoize_providers` by `(group_id, priority, created_at, id)`. Index `monoize_provider_models` by `(model_name, provider_id)` in addition to its primary key. Use these indexes for Group routing, Marketplace ordering, and offer lookup.
 
 Remove Channel `weight`. Convert `weight <= 0` to `enabled = false` during migration.
 
@@ -526,36 +532,126 @@ Keep the exact path `/dashboard/marketplace`.
 
 Add `GET /api/public/marketplace` for the public page. Keep `GET /api/dashboard/marketplace/models` authenticated for Playground and other Console consumers.
 
-The public endpoint returns only public Group, Provider, Channel, model, capability, and effective price fields defined in this section. Encode every displayed rate as a canonical non-negative base-10 decimal JSON string in nano-USD per source unit, with at most nine fractional digits and no exponent notation. The frontend parses it as a decimal string and never as a JavaScript number.
+The public Marketplace endpoints return only public Group, Provider, Channel, model, capability, and effective price fields defined in this section. Encode every displayed rate as a canonical non-negative base-10 decimal JSON string in nano-USD per source unit, with at most nine fractional digits and no exponent notation. The frontend parses it as a decimal string and never as a JavaScript number.
 
-Return this allow-listed logical response shape:
+Accept these query parameters on `GET /api/public/marketplace`:
+
+- `q`: optional substring. Trim Unicode White_Space code points. Limit the result to 128 UTF-8 bytes.
+- `group`: optional exact normalized public Group name.
+- `cursor`: optional opaque cursor from the preceding response.
+- `limit`: optional integer from 1 through 50. Default to 24.
+
+Return HTTP 400 with `invalid_request` for an invalid Group, cursor, limit, or oversized search. Return this allow-listed logical response shape:
 
 ```text
 generated_at: RFC3339 UTC
-groups: Array<{
-  public_name: string,
-  models: Array<{
-    model: string,
-    capabilities: string[],
-    input_rate_range: { min: decimal string, max: decimal string, unit: string } | null,
-    output_rate_range: { min: decimal string, max: decimal string, unit: string } | null,
-    offers: Array<{
-      public_provider_name: string,
-      public_channel_name: string,
-      api_type: responses | chat_completion | messages | gemini | openai_image | replicate,
-      rates: Array<{
-        usage_class: string,
-        unit: string,
-        display_rate_nano_usd: decimal string,
-        context_tier: string | null,
-        service_tier: string | null,
-        modality: string | null,
-        cache_ttl: string | null
-      }>
-    }>
+revision: unsigned decimal string
+next_cursor: opaque string | null
+items: Array<{
+  public_group_name: string,
+  model: string,
+  capabilities: string[],
+  input_rate_range: { min: decimal string, max: decimal string, unit: string } | null,
+  output_rate_range: { min: decimal string, max: decimal string, unit: string } | null,
+  offer_count: positive integer
+}>
+```
+
+Order rows by the zero-based current Group ordinal and then exact logical-model UTF-8 byte order. Use the same byte ordering in SQLite, PostgreSQL, cursor encoding, and response assembly. Do not delegate model ordering to a locale-dependent database collation.
+
+Render one visible Group section heading before the first row of each Group. Repeat the heading when a fetched page starts inside that Group. Never place rows from two Groups under one heading.
+
+Before substring comparison, map ASCII `A` through `Z` to `a` through `z` in `q` and each logical model ID. Leave every other Unicode scalar value unchanged. Perform this comparison in application code. Do not delegate it to database collation.
+
+Generate a 32-byte random Marketplace cursor HMAC key during migration. Store its base64url encoding in a dedicated `state_records` row inside the migration transaction. Do not return it through an API or place it in a log or reviewed manifest. Load it once at startup. Refuse readiness with `marketplace_cursor_key_unavailable` when the row is absent, malformed, or does not decode to exactly 32 bytes.
+
+Encode a list `cursor` as `<payload>.<signature>`. Encode both parts with base64url without padding. Compute the signature as HMAC-SHA-256 over the exact binary payload. Compare signatures in constant time before parsing cursor fields.
+
+Use this common binary payload prefix:
+
+```text
+version: u8, value 1
+endpoint_kind: u8, list = 1, offers = 2
+revision: u64 big-endian
+limit: u16 big-endian
+filter_digest: 32 SHA-256 bytes
+```
+
+Build `filter_digest` from the endpoint kind and each canonical filter. Encode each field as one tag byte, a u32 big-endian byte length, and exact UTF-8 bytes. Include normalized `q` and Group for a list cursor. Include exact Group and model for an offer cursor.
+
+Append this list keyset after the common prefix:
+
+```text
+group_ordinal: u64 big-endian
+model_length: u16 big-endian
+model: exact UTF-8 bytes
+```
+
+The first request has no keyset. A response cursor contains the sort key of its last returned row. The next query selects rows strictly after that key.
+
+Limit the complete list cursor to 512 ASCII bytes. Reject malformed input, an invalid signature, a cursor whose endpoint kind, filter digest, or limit differs from the request, or a cursor whose revision differs from the current Marketplace revision. Return HTTP 409 with `marketplace_cursor_stale` only for a validly signed revision mismatch. Return HTTP 400 with `invalid_request` for every other cursor error. Do not place an internal database ID or internal name in a cursor.
+
+Use the zero-based position in the complete canonical Group order as `group_ordinal`. Reject cursor construction if that position cannot fit `u64`.
+
+Add `GET /api/public/marketplace/offers`. Require `group` as the exact normalized public Group name and `model` as the exact logical model ID from a list row. Accept `cursor` and `limit` with the same validation rules. Use a default limit of 20 and a maximum of 50.
+
+Return this allow-listed offer response:
+
+```text
+generated_at: RFC3339 UTC
+revision: unsigned decimal string
+public_group_name: string
+model: string
+next_cursor: opaque string | null
+offers: Array<{
+  public_provider_name: string,
+  public_channel_name: string,
+  api_type: responses | chat_completion | messages | gemini | openai_image | replicate,
+  rates: Array<{
+    usage_class: string,
+    unit: string,
+    display_rate_nano_usd: decimal string,
+    context_tier: string | null,
+    service_tier: string | null,
+    modality: string | null,
+    cache_ttl: string | null
   }>
 }>
 ```
+
+Append this offer keyset after the common prefix:
+
+```text
+provider_priority: i32 big-endian two's-complement
+provider_name_length: u16 big-endian
+public_provider_name: exact UTF-8 bytes
+channel_name_length: u16 big-endian
+public_channel_name: exact UTF-8 bytes
+```
+
+Compare Provider priority numerically before comparing the name byte strings. Compare public Provider and Channel names by exact UTF-8 byte order. Use the same ordering in SQLite, PostgreSQL, cursor encoding, and response assembly. Do not delegate name ordering to a locale-dependent database collation.
+
+Limit the complete offer cursor to 1024 ASCII bytes. Apply the same signature, revision, filter, limit, and error rules. The next query selects offers strictly after that key. Return HTTP 404 with `marketplace_model_not_found` when no visible row matches the Group and model. Order offers by Provider priority, then public Provider and Channel name.
+
+Maintain one persistent Marketplace generation record in `state_records`. Store JSON with an unsigned decimal `revision` and an RFC3339 UTC `generated_at` value with exactly six fractional-second digits and a `Z` suffix. Initialize revision to one during migration. Set `generated_at` once when creating that record.
+
+Increment the revision exactly once and replace `generated_at` with the transaction's one captured UTC timestamp in the same transaction as each committed Group create, update, delete, or reorder transaction, each Provider create, update, delete, or reorder transaction, and each Provider model-mapping mutation.
+
+Do the same once per transaction that creates, updates, deletes, or synchronizes one or more billing-rate or model-metadata rows. A failed transaction changes neither value.
+
+Before Marketplace cache lookup, read only the current generation record. For each endpoint and each canonical query parameter set, build an immutable encoded response snapshot on cache miss.
+
+Read the generation record again after reading all source rows and before encoding. Retry the complete read when either generation value changed. Make at most three build attempts. Return HTTP 503 with `marketplace_snapshot_busy` when all three attempts observe a concurrent generation change.
+
+Copy `revision` and `generated_at` from the stable generation record. Reuse the exact uncompressed JSON bytes and ETag while that record remains unchanged. Do not recompute `generated_at` on cache expiry, eviction, or a conditional request. The revision, not timestamp uniqueness, identifies a Marketplace generation.
+
+Use a process-local LRU cache with at most 256 Marketplace response snapshots. Expire an entry 60 seconds after its last access.
+
+Limit each uncompressed encoded JSON response body to 1048576 bytes. Return no more than the requested limit. Evaluate each candidate body with its final envelope and `next_cursor` value. Stop before the first item that would exceed the body limit. Set `next_cursor` from the last included sort key so that the excluded item is first on the next page. If no item fits, return HTTP 500 with `public_response_too_large`, do not cache the body, and emit an error metric without public internal details.
+
+On a list cache miss, select at most `limit + 1` distinct Group and logical-model rows strictly after the cursor keyset. Load visible offers for all selected rows in one set-based Provider and model-mapping query. Load applicable billing-rate and model-metadata rows in set-based batches. Do not issue one database query per Group, model, Provider, offer, or rate.
+
+On an offer cache miss, select at most `limit + 1` visible offers strictly after the cursor keyset. Load their applicable billing-rate and model-metadata rows in set-based batches. Query count may increase only with the existing bounded SQLite bind-parameter chunking. It must not increase once per returned row.
 
 Derive `capabilities` and every rate discriminator from the selected complete billing-rate matrix and reviewed model metadata. Do not pass through arbitrary metadata JSON.
 
@@ -586,11 +682,13 @@ Show these fields in the modal:
 
 Do not return Billing Profile names, multipliers, billing-rate row IDs, internal IDs, internal names, Base URLs, API keys, proxy URLs, custom headers, or internal errors.
 
-Return the modal offers in the same Marketplace response as the model range. Do not perform a second unauthenticated detail request when the dialog opens. Order Groups by current Group order, models by logical model ID, and offers by Provider priority then public Provider and Channel name.
+Fetch the first offer page when the modal opens. Use a separate SWR key for each Group, model, revision, and offer cursor. Render matching offer Skeletons while the first page loads. Fetch another page only after the user activates a localized Load more action. Keep the modal open while appending a successful page. Show an inline retry action after a failed page.
+
+When either endpoint returns `marketplace_cursor_stale`, clear all Marketplace page keys, close an open modal, fetch the first list page, and show a localized catalog-updated notice. Do not combine rows from different revisions.
 
 Use backend-produced exact decimal display values. Format only those decimal strings in the frontend. The browser must not multiply a base rate by a multiplier.
 
-Use SWR. Render matching Skeleton layouts while loading.
+Use SWR. Render matching Skeleton layouts while loading. Keep at most three list pages in browser state. Discard pages before that window when the user continues forward.
 
 Keep public Marketplace data in a separate SWR key from authenticated Playground data. The Playground must apply the authenticated user's effective Group restrictions and must not treat the public all-Group response as an authorization decision.
 
@@ -778,7 +876,7 @@ Ignore `insufficient_data` when at least one Provider has a known state. Show th
 
 Show Group `insufficient_data` only when every included Provider has insufficient data.
 
-Cache the aggregate response for 15 seconds. Refresh the frontend every 30 seconds through SWR.
+Build one immutable Status snapshot at most once per 15-second UTC bucket. Derive `data_through` and every aggregation from the bucket build time. Set `generated_at` once when the snapshot build completes. Reuse the exact uncompressed JSON bytes, `generated_at`, and ETag for the rest of that bucket. Refresh the frontend every 30 seconds through SWR.
 
 ## 15. Public API Security
 
@@ -812,11 +910,23 @@ Return HTTP 429 with `rate_limited` when the limit is exceeded.
 
 Add `Cache-Control`, ETag, `X-Content-Type-Options`, and existing CSP protections.
 
-Use one process-local token bucket keyed by the canonical trusted-proxy client IP across `/api/public/site`, `/api/public/marketplace`, and `/api/public/status`. Refill continuously at one token per second, cap tokens at 20, and consume one token per request. These rules implement the 60-per-minute rate with burst 20.
+Use one process-local token bucket keyed by the canonical trusted-proxy client IP across `/api/public/site`, `/api/public/marketplace`, `/api/public/marketplace/offers`, and `/api/public/status`. Refill continuously at one token per second, cap tokens at 20, and consume one token per request. These rules implement the 60-per-minute rate with burst 20 per serving process.
+
+The production topology approved by this design has exactly one public application process behind Caddy. Replica nodes do not expose public UI or public endpoints. This makes the application bucket the only public serving bucket for the approved topology.
+
+Block production deployment when two or more application processes can serve a public endpoint. Before such a topology is permitted, enforce one equivalent 60-per-minute, burst-20 bucket per canonical client IP at the single public gateway or in a shared atomic rate-limit store. Do not sum independent process-local limits and describe the result as global.
 
 Cap the bucket map at 10,000 entries. Define an entry as idle when it has received no request for at least 120 seconds. When a request from a new IP arrives at the cap, evict the least-recently-seen idle entry. When no entry is idle, return HTTP 429 with `rate_limited` and do not insert a bucket for the new IP. Continue to process an existing IP through its existing bucket while the map is at the cap.
 
-Set Site and Marketplace `Cache-Control: public, max-age=15, stale-while-revalidate=30`. Set Status `Cache-Control: public, max-age=15`. Compute a strong ETag from the exact encoded response body of each endpoint. Return HTTP 304 with no body when `If-None-Match` equals the current ETag. Apply rate limiting before conditional-response evaluation.
+Set Site and Marketplace `Cache-Control: public, max-age=15, stale-while-revalidate=30`. Set Status `Cache-Control: public, max-age=15`. Compute a weak ETag as `W/"<sha256>"`, where `<sha256>` is the lowercase SHA-256 hex digest of the exact uncompressed JSON snapshot bytes.
+
+Include the canonical path and canonical query parameters in every public cache key. Send `Vary: Accept-Encoding`. Do not send `Vary: Cookie` because these endpoints ignore authentication state. The weak validator remains valid when Caddy changes only the content encoding.
+
+For Site, build an immutable snapshot from the three selected settings. Set its ETag from its exact uncompressed JSON body. Keep it until one of those settings changes.
+
+For Marketplace, use the persistent generation time as `generated_at`. For Status, use the bucket snapshot time. Do not use the current request time in a cacheable response body.
+
+Parse `If-None-Match` as an HTTP entity-tag list. Return HTTP 304 with no body when the list contains the current weak ETag under weak comparison or contains `*`. Ignore a malformed header and return the normal HTTP 200 representation. Apply rate limiting before conditional-response evaluation.
 
 Add automated negative assertions for every secret or internal field name.
 
@@ -987,7 +1097,23 @@ Verify `data_complete` becomes false when an event is lost.
 
 Assert that public responses omit all internal and secret fields.
 
-Test the exact `/api/public/site` allow-list. Test rate limiting, bucket-cap exhaustion, idle eviction, cache headers, ETag behavior, malformed query input, and large datasets.
+Test the exact `/api/public/site` allow-list. Test rate limiting, bucket-cap exhaustion, idle eviction, cache headers, ETag lists, wildcard validators, malformed validators, malformed query input, and large datasets.
+
+Test Marketplace list and offer pagination at limits 1, 24, 50, and invalid values. Test cursor tampering, invalid signatures, filter mismatch, revision changes, duplicate sort keys, maximum-length cursor keys, ASCII-case search, non-ASCII literal search, empty pages, and the 1048576-byte boundary.
+
+Test that SQLite and PostgreSQL return byte-identical pagination sequences for names and model IDs containing non-ASCII text.
+
+Count database statements for 1, 24, and 50 returned rows. Verify that statement count is independent of returned-row count except for bounded bind-parameter chunks.
+
+Test missing and malformed cursor HMAC key rows. Test stable cursors across process restart and equivalent decoding on SQLite and PostgreSQL.
+
+Inject Marketplace generation changes before and after every source query. Verify that a response contains one revision only and that three consecutive changes return `marketplace_snapshot_busy`.
+
+Test that repeated Site and Marketplace requests over time return byte-identical uncompressed JSON bodies and HTTP 304 while their source generation is unchanged. Test weak ETag syntax with identity and compressed transfer encodings. Test that a relevant mutation changes the Marketplace revision, `generated_at`, encoded body, and ETag exactly once.
+
+Test that two Status requests in one snapshot bucket return byte-identical bodies and HTTP 304. Test that the next bucket produces one later `generated_at` and recomputes `data_through`.
+
+Test startup and deployment preflight with one public process. Test that a declared multi-process public topology fails the deployment gate until gateway or shared-store rate limiting is configured and verified.
 
 Test that every new or changed public name requires `confirm_public_exposure: true`. Test that an unchanged normalized name does not require it.
 
@@ -1016,15 +1142,18 @@ docker build .
 git diff --check
 ```
 
-## 22. Implementation Release Gates
+## 22. Release Gates
 
-Do not begin product implementation until all Gate A evidence exists.
+Do not begin behavior-specification updates or migration-rehearsal planning until all Gate A evidence exists.
+
+Passing Gate A does not authorize product implementation.
 
 ### Gate A: Written Design
 
 - The user approves this document.
 - The user confirms intentional public display of reviewed Group, Provider, and Channel public names.
 - The user confirms that the old Provider management contract has no required external caller.
+- Design approval authorizes behavior-specification updates and migration-rehearsal planning only. It does not authorize product implementation, production migration, or deployment.
 
 ### Gate B: Migration Rehearsal
 
@@ -1051,9 +1180,11 @@ Do not begin product implementation until all Gate A evidence exists.
 - Public response allow-list tests pass.
 - Secret-field negative tests pass.
 - Rate-limit tests pass.
+- Stable ETag and Marketplace pagination or size-bound tests pass.
 - The public-name manifest receives explicit approval.
+- The deployment preflight proves that exactly one application process serves public endpoints, or proves an equivalent gateway or shared-store global limit.
 
-Passing Gates A-E permits an implementation-complete decision. It does not permit deployment.
+Passing the rehearsal form of Gates B-E creates the evidence required for a separate product-implementation approval. Re-run Gates B-E against the final implementation before requesting deployment approval. Rehearsal results do not authorize implementation or deployment.
 
 ## 23. Deployment Gate and Rollback
 
@@ -1109,6 +1240,6 @@ The current production data shape is route-safe and does not require Cartesian e
 
 The existing backup is not a valid current rollback point.
 
-Migration equality, pricing equality, status-event failure behavior, public-name approval, and restore rehearsal remain mandatory release gates.
+Migration equality, pricing equality, status-event failure behavior, stable ETag behavior, Marketplace size bounds, public-name approval, global rate-limit topology, and restore rehearsal remain mandatory release gates.
 
-Proceed only with written specification work after this design receives user approval.
+After this revised design receives user approval, proceed only with behavior-specification updates and migration-rehearsal planning. Require separate written approval before product implementation. Require another separate written approval before production deployment.
