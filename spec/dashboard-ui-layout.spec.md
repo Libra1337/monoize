@@ -1,5 +1,22 @@
 # Dashboard UI Layout Specification
 
+## 0A. LynShen migration release
+
+DL-MIG-1. `/dashboard/marketplace` is the sole exception to this file's `/dashboard/*`
+scope. It is a public top-level route, uses `PublicLayout`, and MUST NOT render the
+authenticated sidebar or account menu.
+
+DL-MIG-2. After the Provider pricing migration, section 2 Provider list and editor rules
+that require a Channel count, Channel master list, `group_ids`, Channel `weight`, Provider
+`max_retries`, or Channel-model multipliers are replaced by
+`provider-pricing.spec.md` PP-F1 through PP-F6. The Provider list MUST show its singular
+Group, embedded Channel public name, model count, effective default Profile, multiplier,
+enabled state, and Group-local priority.
+
+DL-MIG-3. The authenticated sidebar MUST include a Model Marketplace action that targets
+the public `/dashboard/marketplace` route. Navigating to it MUST leave `DashboardLayout`.
+The public header and LynShen branding follow `public-site.spec.md`.
+
 ## 0. Status
 
 - Product name: Monoize.

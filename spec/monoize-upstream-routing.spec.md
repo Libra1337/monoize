@@ -1,5 +1,23 @@
 # Monoize Upstream Routing Specification
 
+## 0A. LynShen migration release
+
+UR-MIG-1. After the destructive migration in `provider-pricing.spec.md` commits, every
+runtime Provider contains one `group_id`, one embedded Channel, and Provider-owned model
+mappings. The post-migration runtime MUST NOT decode `group_ids`, `channels`, Channel
+`weight`, Provider `max_retries`, or Channel-model multipliers.
+
+UR-MIG-2. Provider collection, Group ordering, exact multiplier filtering, pricing
+eligibility, and retry count MUST follow `database-provider-routing.spec.md` R-MIG-2 through
+R-MIG-7. API-type resolution, transforms, timeout resolution, breaker behavior, affinity,
+failure classification, streaming commit boundaries, and request-log snapshots in this
+file continue to apply to the singular embedded Channel.
+
+UR-MIG-3. Any post-migration reference in a retained rule to a selected Channel means the
+selected Provider's embedded Channel. A retained rule that iterates Channels is executed
+once. A retained reference to a Channel model entry means the selected
+`monoize_provider_models` row.
+
 ## 0. Status
 
 - Product name: Monoize.

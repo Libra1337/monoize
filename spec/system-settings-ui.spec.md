@@ -1,5 +1,19 @@
 # System Settings UI Specification
 
+## 0A. LynShen migration release
+
+SS-MIG-1. The `pricing_profile_model_patterns` setting remains an administrative
+suggestion list after migration. It MUST NOT select a runtime Provider billing Profile or
+make an unpriced Provider-model mapping routable.
+
+SS-MIG-2. A committed change that can alter `reasoning_suffix_map` bytes MUST advance
+Marketplace generation under `model-marketplace.spec.md` MM-G7 through MM-G13. An
+unrelated setting write or an `updated_at`-only write MUST NOT advance that generation.
+
+SS-MIG-3. The built-in `site_name` default is `LynShen Console`. A migration may replace a
+stored value only when it exactly equals an old built-in default. The settings UI MUST
+preserve an administrator-defined site name.
+
 ## 0. Scope
 
 - Product name: Monoize.

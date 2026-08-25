@@ -1,5 +1,21 @@
 # Database Storage (Dashboard + Routing) Specification
 
+## 0A. LynShen destructive migration
+
+DB-MIG-1. The Provider pricing release MUST run one backend-specific transactional
+migration with the preflight, transformation, rollback, and idempotency behavior in
+`provider-pricing.spec.md` sections 9 through 11. Both SQLite and PostgreSQL are supported.
+
+DB-MIG-2. Successful migration MUST remove `monoize_channels`,
+`monoize_channel_models`, `monoize_providers.group_ids`, Provider `max_retries`, and every
+other obsolete Provider or Channel column or index. It MUST create the embedded-Channel
+Provider schema, `monoize_provider_models`, public-name keys, Marketplace generation
+objects, status-event objects, and required constraints and indexes.
+
+DB-MIG-3. An old executable MUST NOT open a migrated database. Deployment MUST use the
+database-aware cold rollback contract in `deployment-watchdog.spec.md` DW-MIG-1 through
+DW-MIG-4.
+
 ## 0. Status
 
 - Product name: Monoize.

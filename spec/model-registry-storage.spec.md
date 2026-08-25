@@ -1,5 +1,14 @@
 # Model Registry Storage Specification
 
+## LynShen migration release
+
+MRS-MIG-1. `model_registry_records` remains an independent logical-model registry. It MUST
+NOT replace `monoize_provider_models`, select a Provider billing Profile, or create a
+public Marketplace offer.
+
+MRS-MIG-2. Runtime Provider eligibility requires the singular mapping and complete pricing
+defined by `provider-pricing.spec.md`. A registry record alone is insufficient.
+
 ## Overview
 
 This subsystem provides persistent database storage for model registry records, enabling runtime management of model definitions through a dashboard API.

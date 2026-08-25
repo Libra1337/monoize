@@ -1,5 +1,21 @@
 # Request Logs Specification
 
+## 0A. LynShen migration release
+
+RL-MIG-1. Historical `provider_id`, `channel_id`, name snapshots, affinity target, and
+`tried_providers_json` values MUST remain unchanged during Provider migration. They are
+historical opaque values and need not reference a current row.
+
+RL-MIG-2. After migration, a new request-log write MUST snapshot Provider and embedded
+Channel IDs and names from the selected Provider row. A request-log read MUST NOT join
+`monoize_channels`; the table no longer exists. Current-name enrichment may join
+`monoize_providers` once by Provider ID and must read the embedded Channel columns there.
+
+RL-MIG-3. Retry-chain identity remains `(provider_id, channel_id)`. Same-Channel physical
+retries reuse the pair; fail-forward to another Provider uses that Provider's embedded
+Channel pair. Public status event storage is independent and MUST NOT expose request-log
+payload or user fields.
+
 ## 0. Status
 
 - **Purpose:** Record and expose per-request metadata for API-key-authenticated and classified internal proxy requests.

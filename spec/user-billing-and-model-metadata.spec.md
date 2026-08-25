@@ -1,5 +1,19 @@
 # User Billing and Model Metadata Specification
 
+## 0A. LynShen migration release
+
+UB-MIG-1. User balance, API-key Group ceilings, and model metadata storage retain their
+existing contracts. Provider runtime pricing and missing-pricing behavior are owned by
+`provider-pricing.spec.md` sections 7 and 8.
+
+UB-MIG-2. Metadata Profile values are administrative suggestions only. They MUST NOT
+implicitly choose a Provider billing Profile after migration.
+
+UB-MIG-3. Every committed Marketplace-relevant metadata or billing-rate write MUST advance
+the persistent Marketplace generation. The public Marketplace MUST display only rates
+derived from a priced Provider-model mapping and MUST NOT expose user or billing-ledger
+data.
+
 ## 0. Status
 
 - Product name: Monoize.

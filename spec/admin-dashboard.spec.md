@@ -1,5 +1,18 @@
 # Admin Dashboard Spec
 
+## LynShen migration release
+
+AD-MIG-1. After the Provider pricing migration, a health or routing response MUST NOT
+contain Channel `weight`, a Channel collection, or Provider `max_retries`. One Provider
+has one embedded Channel, and its health state uses the Channel public and internal
+identity stored on that Provider.
+
+AD-MIG-2. Admin health UI that previously compared sibling Channels MUST instead show the
+single embedded Channel state and Provider-level fail-forward order inside its Group.
+Public status is a separate allow-listed aggregate defined by
+`public-provider-status.spec.md`; admin health data MUST NOT be serialized through that
+public endpoint.
+
 ## Scope
 
 This spec defines the admin-only system dashboard: the backend endpoint

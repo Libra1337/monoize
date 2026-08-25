@@ -1,5 +1,22 @@
 # Initial SeaORM Migration Specification
 
+## 0A. LynShen migration release
+
+ISM-MIG-1. Sections 1 through 6 define the historical baseline and migrations before the
+Provider pricing release. After all migrations complete, the final schema MUST satisfy
+`provider-pricing.spec.md`, `model-marketplace.spec.md`, and
+`public-provider-status.spec.md` even when that differs from the baseline table list.
+
+ISM-MIG-2. The Provider pricing migration MUST drop `monoize_channels` and
+`monoize_channel_models`, must create `monoize_provider_models`, and must move each
+surviving Channel field into its target Provider row with a `channel_` prefix. The final
+schema MUST NOT contain compatibility views, aliases, columns, tables, entities, or stores.
+
+ISM-MIG-3. The migration MUST create `marketplace_generation`, its source triggers,
+`upstream_call_events`, and `status_source_state` with the exact constraints and indexes
+defined by their owning specifications. Migration registration order MUST place this
+release after `m20260825_000043_channel_allow_missing_usage`.
+
 ## 0. Scope
 
 ISM0.1. This specification defines a single initial SeaORM migration module under `src/migration/`.

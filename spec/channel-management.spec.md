@@ -1,5 +1,29 @@
 # Channel/Provider Management (Dashboard) Specification
 
+## 0A. LynShen migration release
+
+CM-M1. Sections 1 through 4 describe the schema and API before the destructive migration
+defined by `provider-pricing.spec.md`. They MUST NOT be used to decode or validate a
+Provider after that migration commits.
+
+CM-M2. After that migration commits, `provider-pricing.spec.md` sections 1 through 6 and
+12 replace the Provider object, Channel object, model-entry ownership, invariants,
+management paths, and editor structure in this file. In particular, the post-migration
+contract has one `group_id`, one `channel`, zero or more Provider-model rows, no `group_ids`,
+no `channels`, no Channel `weight`, no Provider `max_retries`, and no Channel-model
+`multiplier` field.
+
+CM-M3. The validation and runtime rules in this file for API type, Base URL, API key,
+breaker overrides, probe overrides, affinity overrides, proxy URL, extra headers,
+session-affinity settings, missing-usage policy, transforms, and API-type overrides remain
+applicable after migration. A rule that says `Channel.field` applies to the singular
+`channel.field` API value and the matching `monoize_providers.channel_field` column.
+
+CM-M4. After migration, the old Channel discovery route and every
+`/api/dashboard/providers/{provider_id}/channels/**` route MUST return HTTP `404`. Channel
+discovery, secret handling, liveness testing, and model selection MUST use only the
+singular Provider endpoints and shapes in `provider-pricing.spec.md`.
+
 ## 0. Status
 
 - Product name: Monoize.

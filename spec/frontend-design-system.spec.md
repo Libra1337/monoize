@@ -1,5 +1,22 @@
 # Frontend Design System Specification
 
+## 0A. LynShen public surfaces
+
+DS-P1. `PublicLayout`, the welcome page, API Docs, public Marketplace, and public status
+MUST use the existing semantic color, type, card, form, dialog, loading, empty-state,
+motion, localization, and accessibility primitives in this specification.
+
+DS-P2. Public surfaces use the Paper Console direction: neutral paper-like surfaces, the
+existing blue primary token, serif display type, sans-serif body type, and monospace code.
+They MUST NOT add a second brand palette or raw repeated status colors.
+
+DS-P3. Marketplace offer details MUST use the shared modal primitives and satisfy focus
+trap, Escape close, focus restoration, viewport-bounded body scrolling, and reduced-motion
+rules. Loading public data MUST render shape-matched Skeletons.
+
+DS-P4. Public navigation and content MUST satisfy `public-site.spec.md` PS-V1 through
+PS-V6 at 375, 768, 1024, and 1440 CSS pixels.
+
 ## 0. Scope
 
 - Product name: Monoize.

@@ -1,5 +1,21 @@
 # Groups Registry Specification
 
+## 0A. LynShen migration release
+
+GR-MIG-1. After the destructive migration in `provider-pricing.spec.md` commits,
+`monoize_providers.group_ids` is removed and `monoize_providers.group_id` is a non-null
+foreign key to `monoize_groups.id`. User, API-key, and billing-plan Group fields retain
+their existing cardinality and canonicalization rules.
+
+GR-MIG-2. Post-migration Provider writes accept exactly one `group_id`. Group deletion is
+restricted while any Provider references the Group and returns HTTP `409` code
+`group_in_use`; it MUST NOT remove that Group from a Provider or move the Provider to the
+default Group.
+
+GR-MIG-3. Group `public_name` and `public_name_key`, public-exposure confirmation,
+normalization, uniqueness, and conflict behavior MUST follow `provider-pricing.spec.md`
+PP-N1 through PP-N8. Existing internal `name` uniqueness remains independent.
+
 ## 0. Status
 
 - Purpose: define first-class routing groups (registry table, invariants, admin CRUD API,

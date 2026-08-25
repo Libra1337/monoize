@@ -1,5 +1,22 @@
 # Metered Billing Specification
 
+## 0A. LynShen Provider pricing
+
+MB-MIG-1. After the Provider pricing migration, runtime Profile selection and exact
+multiplier resolution MUST follow `provider-pricing.spec.md` PP-E1 through PP-E5. Global
+Profile patterns and model metadata MUST NOT provide a runtime fallback.
+
+MB-MIG-2. Billing MUST sum checked integer nano-USD token and meter line items, multiply
+the aggregate by the selected exact decimal multiplier once, and truncate toward zero
+once at final scaling. It MUST NOT multiply or truncate individual line items.
+
+MB-MIG-3. An unpriced selected mapping MUST be excluded before upstream dispatch. If all
+structurally eligible mappings are unpriced, the request MUST return HTTP `503` code
+`model_pricing_required` and MUST create no upstream call or charge.
+
+MB-MIG-4. Each committed relevant billing-rate write MUST invalidate the public
+Marketplace snapshot through `model-marketplace.spec.md` MM-G1 through MM-G13.
+
 ## 0. Status
 
 - Product name: Monoize.

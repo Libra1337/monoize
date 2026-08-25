@@ -1,5 +1,21 @@
 # Security Access Control Spec
 
+## Public LynShen surfaces
+
+SAC-P1. The public browser paths and public APIs listed in `public-site.spec.md` PS-R1 and
+PS-A1 MUST NOT require a dashboard session. Their responses MUST use the explicit
+allow-lists in `public-site.spec.md`, `model-marketplace.spec.md`, and
+`public-provider-status.spec.md`.
+
+SAC-P2. Public responses MUST NOT contain API keys, Base URLs, proxy URLs, extra headers,
+internal Provider, Channel, or Group names or IDs, Billing Profile names, rate row IDs,
+request data, user data, or topology fields not explicitly listed by those response
+schemas.
+
+SAC-P3. Public status and Marketplace names MUST come only from confirmed public-name
+fields. An absent public name makes that record ineligible for a public response; the
+server MUST NOT fall back to an internal name.
+
 ## Scope
 
 This spec defines authentication for topology-bearing HTTP surfaces, API-key

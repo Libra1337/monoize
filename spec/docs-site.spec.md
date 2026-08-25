@@ -1,5 +1,26 @@
 # Documentation Site Specification
 
+## 0A. LynShen release documentation
+
+DOC-MIG-1. The Provider documentation MUST describe exactly one Group and one embedded
+Channel per Provider, Provider default Profile and multiplier, per-model Profile and
+multiplier overrides, missing-pricing behavior, and Group-local priority. It MUST remove
+instructions for multiple Channels, Channel weight, Provider `max_retries`, and
+Channel-owned model multipliers.
+
+DOC-MIG-2. The endpoint documentation MUST describe `/`, `/apidocs`, `/status`, the public
+Model Marketplace, public response limits, and `model_pricing_required`. Content that
+duplicates `/apidocs` examples MUST use the same Base URL and request semantics.
+
+DOC-MIG-3. Every affected page MUST change in `en`, `zh`, `zh-TW`, and `ja`. Provider,
+Marketplace, public navigation, or status flow screenshots MUST be recaptured in both
+English and Simplified Chinese sets before product integration is complete.
+
+DOC-MIG-4. The Routing page MUST replace its weighted Channel-selection formula with the
+post-migration Group-order, Provider-priority, fail-forward, and same-Channel retry rules.
+DOC-41's requirement for a weighted Channel formula is removed for this release; each
+locale MUST instead contain at least one KaTeX formula for effective pricing.
+
 ## 0. Scope
 
 - Product name: Monoize.

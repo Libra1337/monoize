@@ -1,5 +1,18 @@
 # Playground Specification
 
+## 0A. LynShen migration release
+
+PG-MIG-1. The Playground remains authenticated and MUST use the authenticated
+`GET /api/dashboard/marketplace/models` catalog. It MUST NOT use the public Marketplace
+response as an authorization or routing catalog.
+
+PG-MIG-2. The model catalog MUST include only mappings that are structurally eligible and
+priced under `provider-pricing.spec.md`. A submitted model that has only unpriced mappings
+MUST receive `503 model_pricing_required` without an upstream dispatch.
+
+PG-MIG-3. The Playground request shape and API-key selection remain unchanged. It MUST NOT
+ask a user to choose a Channel because one Provider has exactly one embedded Channel.
+
 ## 0. Status
 
 - Product name: Monoize.

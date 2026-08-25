@@ -1,5 +1,21 @@
 # Model Metadata Dashboard Specification
 
+## 0A. LynShen migration release
+
+MD-MIG-1. Model metadata and billing-rate records remain administrative source catalogs.
+After the Provider pricing migration, `pricing_profile_model_patterns` and metadata Profile
+suggestions MUST NOT select a runtime Provider billing Profile. Runtime selection MUST use
+`provider-pricing.spec.md` PP-E1 through PP-E4.
+
+MD-MIG-2. Every committed Marketplace-relevant insert, update, delete, and bulk sync in
+this subsystem MUST advance `marketplace_generation` through the database triggers in
+`model-marketplace.spec.md` MM-G1 through MM-G13. A rolled-back write MUST leave the
+generation unchanged.
+
+MD-MIG-3. The authenticated Model Database and Billing Profile tabs remain Console
+surfaces. The public Marketplace is a separate read-only surface governed by
+`model-marketplace.spec.md` and MUST NOT expose Profile names or source catalog rows.
+
 ## 0. Status
 
 - Product name: Monoize.

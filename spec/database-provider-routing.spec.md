@@ -1,5 +1,39 @@
 # Monoize Database Provider Routing Specification
 
+## 0A. LynShen migration release
+
+R-MIG-1. After the destructive migration in `provider-pricing.spec.md` commits, rules that
+read `provider.group_ids`, a Channel collection, Channel `weight`, Provider `max_retries`,
+`monoize_channels`, or `monoize_channel_models` are replaced by R-MIG-2 through R-MIG-7.
+Other timeout, breaker, affinity, request-deadline, failure, and logging rules in this file
+remain in force for the embedded Channel.
+
+R-MIG-2. A Provider is group-eligible when `effective_groups == null` or its singular
+`group_id` occurs in `effective_groups`. An empty `effective_groups` rejects every
+Provider. For a non-null list, Provider order is Group index, then Provider `priority`,
+`created_at`, and `id`, all ascending.
+
+R-MIG-3. One set-based routing query MUST select enabled Providers whose embedded Channel
+is enabled and whose `monoize_provider_models` row matches the resolved logical model.
+The query MUST exclude unpriced mappings under `provider-pricing.spec.md` section 8 and,
+when present, mappings whose effective multiplier exceeds `max_multiplier`.
+
+R-MIG-4. Each selected Provider contributes exactly one Channel attempt. The first
+physical attempt and at most `channel_max_retries` same-Channel retries run before the
+router fails forward to the next Provider. There is no Provider-level total retry budget
+and no weighted Channel order.
+
+R-MIG-5. Provider create, update, mapping replacement, and Group-scoped reorder MUST use
+the transactions and dense priority rules in `provider-pricing.spec.md` section 6.
+
+R-MIG-6. The leading routing index for Provider-model lookup MUST be
+`monoize_provider_models(model_name_key, provider_id)`. The old Channel and Channel-model
+tables and their indexes MUST be absent.
+
+R-MIG-7. Routing and billing MUST use the exact effective multiplier from
+`provider-pricing.spec.md` PP-E1. A structurally eligible request for which every mapping
+is unpriced MUST return `503 model_pricing_required` as defined by PP-U3.
+
 ## 0. Status
 
 - Product name: Monoize.

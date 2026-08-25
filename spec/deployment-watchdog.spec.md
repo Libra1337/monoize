@@ -1,5 +1,23 @@
 # Deployment Watchdog Specification
 
+## 0A. Destructive Provider migration exception
+
+DW-MIG-1. The Provider pricing release MUST NOT use `deploy-watchdog`. The command MUST
+fail before build, copy, restart, or watchdog arming when the candidate declares this
+destructive schema release.
+
+DW-MIG-2. Binary-only rollback is forbidden after this migration starts. The old image
+MUST NOT open a migrated database.
+
+DW-MIG-3. Release deployment MUST freeze real writes, stop every Replica and old process,
+create and restore-test a current database backup, run migration against a restored copy,
+and receive separate deployment approval before production cutover.
+
+DW-MIG-4. Before release acceptance, rollback MUST stop the candidate, preserve the failed
+database, restore the verified pre-cutover database, then start image `monoize:cf36bd8`.
+After real writes resume, restoring that snapshot in place is forbidden without a separate
+data-reconciliation and data-loss plan.
+
 ## 0. Scope
 
 - This specification defines the behavior of the repository-local `deploy.sh` script.
