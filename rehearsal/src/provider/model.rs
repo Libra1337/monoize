@@ -53,9 +53,7 @@ impl ModelKeys {
         let name = model_name.as_bytes().to_vec();
         if name.is_empty()
             || name.len() > 256
-            || name
-                .iter()
-                .any(|byte| matches!(*byte, 0x00..=0x1f | 0x7f))
+            || name.iter().any(|byte| matches!(*byte, 0x00..=0x1f | 0x7f))
         {
             return Err(ModelError::InvalidModelName);
         }

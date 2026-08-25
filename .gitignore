@@ -1,4 +1,5 @@
 /target
+/rehearsal/target
 /data/
 .playwright-mcp
 frontend/playwright-report/
