@@ -34,6 +34,68 @@ pub struct MarketplaceListResponse {
     pub items: Vec<MarketplaceItem>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfferRate {
+    pub usage_class: String,
+    pub unit: String,
+    pub display_rate_nano_usd: String,
+    pub context_tier: Option<String>,
+    pub service_tier: Option<String>,
+    pub modality: Option<String>,
+    pub cache_ttl: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderOffer {
+    pub public_provider_name: String,
+    pub public_channel_name: String,
+    pub api_type: String,
+    pub rates: Vec<OfferRate>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfferResponse {
+    pub generated_at: String,
+    pub revision: String,
+    pub public_group_name: String,
+    pub model: String,
+    pub next_cursor: Option<String>,
+    pub offers: Vec<ProviderOffer>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthStateDto {
+    Operational,
+    MinorDegradation,
+    MajorDegradation,
+    Unavailable,
+    InsufficientData,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusProvider {
+    pub public_name: String,
+    pub state: HealthStateDto,
+    pub success_rate_24h_basis_points: Option<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusGroup {
+    pub public_name: String,
+    pub state: HealthStateDto,
+    pub insufficient_provider_count: u64,
+    pub providers: Vec<StatusProvider>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusResponse {
+    pub generated_at: String,
+    pub data_through: String,
+    pub data_complete: bool,
+    pub groups: Vec<StatusGroup>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicResponseError {
     Encode,

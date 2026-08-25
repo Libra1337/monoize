@@ -1,5 +1,5 @@
 use monoize_lynshen_rehearsal::marketplace::{
-    CursorError, EndpointKind, ListCursor, canonical_filter_digest,
+    CursorError, EndpointKind, ListCursor, OfferCursor, canonical_filter_digest,
 };
 
 const KEY: [u8; 32] = [7; 32];
@@ -67,5 +67,34 @@ fn rejects_invalid_model_and_oversized_ascii_cursor() {
     assert_eq!(
         ListCursor::new(1, 24, digest("", ""), 0, &"a".repeat(400)).unwrap_err(),
         CursorError::Invalid
+    );
+}
+
+#[test]
+fn offer_cursor_round_trip_uses_public_names_and_signed_revision() {
+    let filter = canonical_filter_digest(EndpointKind::Offers, &[(1, "Public"), (2, "GPT-4o")]);
+    let cursor = OfferCursor::new(42, 24, filter, -7, "Provider Public", "Channel Public").unwrap();
+    let encoded = cursor.encode(&KEY).unwrap();
+    assert!(encoded.len() <= 1_024);
+    assert_eq!(
+        OfferCursor::decode(&encoded, &KEY, 42, 24, filter).unwrap(),
+        cursor
+    );
+}
+
+#[test]
+fn offer_cursor_rejects_internal_controls_and_revision_changes() {
+    let filter = canonical_filter_digest(EndpointKind::Offers, &[(1, "g"), (2, "m")]);
+    assert_eq!(
+        OfferCursor::new(1, 24, filter, 0, "Provider\n", "Channel").unwrap_err(),
+        CursorError::Invalid
+    );
+    let encoded = OfferCursor::new(1, 24, filter, 0, "Provider", "Channel")
+        .unwrap()
+        .encode(&KEY)
+        .unwrap();
+    assert_eq!(
+        OfferCursor::decode(&encoded, &KEY, 2, 24, filter).unwrap_err(),
+        CursorError::Stale
     );
 }

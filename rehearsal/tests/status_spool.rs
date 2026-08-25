@@ -92,7 +92,7 @@ fn state_publication_round_trips_clean_shutdown_and_loss_times() {
             most_recent_loss_unix_ms: Some(100),
         })
         .unwrap();
-    assert_eq!(spool(&directory, 4_096).state().clean_shutdown, false);
+    assert!(!spool(&directory, 4_096).state().clean_shutdown);
     assert_eq!(
         spool(&directory, 4_096).state().incomplete_since_unix_ms,
         Some(100)

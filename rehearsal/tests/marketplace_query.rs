@@ -1,5 +1,5 @@
 use monoize_lynshen_rehearsal::marketplace::{
-    MarketplaceQuery, QueryInput, create_sqlite_query_fixture,
+    MarketplaceQuery, OfferKey, OfferQueryInput, QueryInput, create_sqlite_query_fixture,
 };
 use sqlx::{Connection, SqliteConnection};
 
@@ -112,4 +112,67 @@ async fn provider_offers_are_counted_within_each_group_model() {
     .unwrap();
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].offer_count, 2);
+}
+
+#[tokio::test]
+async fn offers_order_by_numeric_priority_then_public_names() {
+    let mut db = database().await;
+    let page = MarketplaceQuery::offers_sqlite(
+        &mut db,
+        OfferQueryInput {
+            group: "Alpha".to_owned(),
+            model: "GPT-4o".to_owned(),
+            after: None,
+            limit: 50,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|item| (
+                item.provider_public_name.as_str(),
+                item.channel_public_name.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![("Provider A", "Channel Z"), ("Provider B", "Channel A")]
+    );
+    assert_eq!(page.next_key, None);
+}
+
+#[tokio::test]
+async fn offer_keyset_resumes_after_public_sort_key() {
+    let mut db = database().await;
+    let first = MarketplaceQuery::offers_sqlite(
+        &mut db,
+        OfferQueryInput {
+            group: "Alpha".to_owned(),
+            model: "GPT-4o".to_owned(),
+            after: None,
+            limit: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        first.next_key,
+        Some(OfferKey {
+            priority: 1,
+            provider_public_name: "Provider A".to_owned(),
+            channel_public_name: "Channel Z".to_owned(),
+        })
+    );
+    let second = MarketplaceQuery::offers_sqlite(
+        &mut db,
+        OfferQueryInput {
+            group: "Alpha".to_owned(),
+            model: "GPT-4o".to_owned(),
+            after: first.next_key,
+            limit: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.items[0].provider_public_name, "Provider B");
 }

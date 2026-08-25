@@ -15,17 +15,15 @@ pub fn if_none_match_matches(header: &str, current: &str) -> bool {
     let Some(current_opaque) = parse_tag(current) else {
         return false;
     };
-    let mut saw_tag = false;
     for part in header.split(',') {
         let Some(candidate) = parse_tag(part.trim()) else {
             return false;
         };
-        saw_tag = true;
         if candidate == current_opaque {
             return true;
         }
     }
-    saw_tag && false
+    false
 }
 
 fn parse_tag(value: &str) -> Option<&str> {
