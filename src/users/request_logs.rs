@@ -383,6 +383,14 @@ mod tests {
     }
 
     #[test]
+    fn request_log_queries_use_embedded_provider_channel_names() {
+        let source = include_str!("request_logs.rs");
+        assert!(source.contains("p.channel_name AS channel_name"));
+        let legacy_table = ["monoize", "channels"].join("_");
+        assert!(!source.contains(&legacy_table));
+    }
+
+    #[test]
     fn postgres_filters_use_ascii_translate_and_prefold_bind_values() {
         let mut sql = "SELECT 1 FROM request_logs rl WHERE 1 = 1".to_string();
         let mut values = Vec::new();
@@ -447,22 +455,20 @@ mod tests {
             .map(|term| format!("model-{term}"))
             .collect::<Vec<_>>()
             .join(",");
-        assert!(
-            append_request_log_filters(
-                &mut sql,
-                &mut values,
-                &mut idx,
-                false,
-                Some(&over_limit),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .is_err()
-        );
+        assert!(append_request_log_filters(
+            &mut sql,
+            &mut values,
+            &mut idx,
+            false,
+            Some(&over_limit),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .is_err());
         assert_eq!(sql, "SELECT 1 FROM request_logs rl WHERE 1 = 1");
         assert!(values.is_empty());
         assert_eq!(idx, 1);
@@ -783,22 +789,20 @@ mod tests {
         let mut malformed_sql = "SELECT 1 FROM request_logs rl WHERE 1 = 1".to_string();
         let mut malformed_values = Vec::new();
         let mut malformed_idx = 1;
-        assert!(
-            append_request_log_filters(
-                &mut malformed_sql,
-                &mut malformed_values,
-                &mut malformed_idx,
-                false,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some("bad"),
-                None,
-            )
-            .is_err()
-        );
+        assert!(append_request_log_filters(
+            &mut malformed_sql,
+            &mut malformed_values,
+            &mut malformed_idx,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("bad"),
+            None,
+        )
+        .is_err());
         assert_eq!(malformed_idx, 1);
         assert!(malformed_values.is_empty());
     }
@@ -1334,35 +1338,25 @@ impl UserStore {
         let provider_rows = self
             .db
             .read()
-            .query_all(
-                self.db
-                    .stmt("SELECT id, name FROM monoize_providers", vec![]),
-            )
+            .query_all(self.db.stmt(
+                "SELECT id, name, channel_id, channel_name FROM monoize_providers",
+                vec![],
+            ))
             .await
             .map_err(|e| e.to_string())?;
         let mut provider_names = HashMap::new();
+        let mut channel_names = HashMap::new();
         for row in provider_rows {
             let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
             let name: String = row.try_get("", "name").map_err(|e| e.to_string())?;
             if !name.trim().is_empty() {
                 provider_names.insert(id, name);
             }
-        }
-        let channel_rows = self
-            .db
-            .read()
-            .query_all(
-                self.db
-                    .stmt("SELECT id, name FROM monoize_channels", vec![]),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut channel_names = HashMap::new();
-        for row in channel_rows {
-            let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-            let name: String = row.try_get("", "name").map_err(|e| e.to_string())?;
-            if !name.trim().is_empty() {
-                channel_names.insert(id, name);
+            let channel_id: String = row.try_get("", "channel_id").map_err(|e| e.to_string())?;
+            let channel_name: String =
+                row.try_get("", "channel_name").map_err(|e| e.to_string())?;
+            if !channel_name.trim().is_empty() {
+                channel_names.insert(channel_id, channel_name);
             }
         }
         Ok((provider_names, channel_names))
@@ -1483,11 +1477,10 @@ impl UserStore {
                       rl.session_affinity_value,
                       rl.created_at,
                       EXISTS (SELECT 1 FROM request_capture_records rcr WHERE rcr.request_id = rl.request_id AND rcr.user_id = rl.user_id) AS has_capture,
-                      u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
+                      u.username AS username, ak.name AS api_key_name, p.channel_name AS channel_name, p.name AS provider_name
                FROM request_logs rl
                LEFT JOIN users u ON u.id = rl.user_id
                LEFT JOIN api_keys ak ON ak.id = rl.api_key_id
-               LEFT JOIN monoize_channels ch ON ch.id = rl.channel_id
                LEFT JOIN monoize_providers p ON p.id = rl.provider_id
                WHERE rl.user_id = $1"#
             .to_string();
@@ -1638,11 +1631,10 @@ impl UserStore {
                       rl.session_affinity_value,
                       rl.created_at,
                       EXISTS (SELECT 1 FROM request_capture_records rcr WHERE rcr.request_id = rl.request_id AND rcr.user_id = rl.user_id) AS has_capture,
-                      u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
+                      u.username AS username, ak.name AS api_key_name, p.channel_name AS channel_name, p.name AS provider_name
                FROM request_logs rl
                LEFT JOIN users u ON u.id = rl.user_id
                LEFT JOIN api_keys ak ON ak.id = rl.api_key_id
-               LEFT JOIN monoize_channels ch ON ch.id = rl.channel_id
                LEFT JOIN monoize_providers p ON p.id = rl.provider_id
                WHERE 1 = 1"#
             .to_string();
@@ -2017,10 +2009,7 @@ impl UserStore {
     /// scoped to `user_id`. Token SUMs are cast to BIGINT so SQLite (INTEGER)
     /// and PostgreSQL (NUMERIC from SUM(bigint)) decode identically into i64;
     /// the cast wraps the aggregate, not the indexed range column (RL-S2b).
-    pub async fn get_user_live_usage(
-        &self,
-        user_id: &str,
-    ) -> Result<super::UserLiveUsage, String> {
+    pub async fn get_user_live_usage(&self, user_id: &str) -> Result<super::UserLiveUsage, String> {
         let now_ms = Utc::now().timestamp_millis();
         let from_ms = now_ms - super::LIVE_USAGE_WINDOW_SECONDS * 1000;
         let sql = "SELECT COUNT(*) AS rpm, \
@@ -2035,17 +2024,19 @@ impl UserStore {
         let row = self
             .db
             .read()
-            .query_one(self.db.stmt(
-                sql,
-                vec![user_id.into(), from_ms.into(), now_ms.into()],
-            ))
+            .query_one(
+                self.db
+                    .stmt(sql, vec![user_id.into(), from_ms.into(), now_ms.into()]),
+            )
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "no live usage aggregate row".to_string())?;
         Ok(super::UserLiveUsage {
             rpm: row.try_get("", "rpm").map_err(|e| e.to_string())?,
             input_tokens: row.try_get("", "input_tokens").map_err(|e| e.to_string())?,
-            output_tokens: row.try_get("", "output_tokens").map_err(|e| e.to_string())?,
+            output_tokens: row
+                .try_get("", "output_tokens")
+                .map_err(|e| e.to_string())?,
             cache_read_tokens: row
                 .try_get("", "cache_read_tokens")
                 .map_err(|e| e.to_string())?,

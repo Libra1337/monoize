@@ -1,8 +1,8 @@
 use crate::db::DbPool;
 use crate::model_registry::{ModelCapabilities, ModelRecord};
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use sea_orm::{ConnectionTrait, DatabaseTransaction, TransactionTrait};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -411,24 +411,7 @@ impl ModelRegistryStore {
         let rows = self
             .db
             .read()
-            .query_all(self.db.stmt(
-                "SELECT DISTINCT
-                        m.model_id, m.models_dev_provider, m.mode,
-                        m.input_cost_per_token_nano, m.output_cost_per_token_nano,
-                        m.cache_read_input_cost_per_token_nano,
-                        m.cache_creation_input_cost_per_token_nano,
-                        m.output_cost_per_reasoning_token_nano, m.max_input_tokens,
-                        m.max_output_tokens, m.max_tokens, m.raw_json, m.source, m.updated_at
-                 FROM model_metadata_records AS m
-                 INNER JOIN monoize_channel_models AS cm ON cm.model_name = m.model_id
-                 INNER JOIN monoize_channels AS c ON c.id = cm.channel_id
-                 INNER JOIN monoize_providers AS p ON p.id = c.provider_id
-                 WHERE p.enabled = 1
-                   AND c.enabled = 1
-                   AND c.weight > 0
-                 ORDER BY m.model_id ASC",
-                vec![],
-            ))
+            .query_all(self.db.stmt(marketplace_model_metadata_sql(), vec![]))
             .await
             .map_err(|e| e.to_string())?;
 
@@ -1035,6 +1018,20 @@ impl ModelRegistryStore {
     }
 }
 
+const fn marketplace_model_metadata_sql() -> &'static str {
+    "SELECT DISTINCT m.model_id, m.models_dev_provider, m.mode,
+            m.input_cost_per_token_nano, m.output_cost_per_token_nano,
+            m.cache_read_input_cost_per_token_nano,
+            m.cache_creation_input_cost_per_token_nano,
+            m.output_cost_per_reasoning_token_nano, m.max_input_tokens,
+            m.max_output_tokens, m.max_tokens, m.raw_json, m.source, m.updated_at
+     FROM model_metadata_records AS m
+     INNER JOIN monoize_provider_models AS pm ON pm.model_name = m.model_id
+     INNER JOIN monoize_providers AS p ON p.id = pm.provider_id
+     WHERE p.enabled = 1 AND p.channel_enabled = 1
+     ORDER BY m.model_id ASC"
+}
+
 fn row_to_record(row: &sea_orm::QueryResult) -> Result<DbModelRecord, String> {
     let capabilities_json: String = row
         .try_get("", "capabilities_json")
@@ -1488,8 +1485,8 @@ pub fn normalize_model_id(raw: &str, provider_hint: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelRegistryStore, UpsertModelMetadataInput, cost_per_1m_to_nano_string,
-        deserialize_nullable_field, models_dev_variant_for_dashboard,
+        cost_per_1m_to_nano_string, deserialize_nullable_field, models_dev_variant_for_dashboard,
+        ModelRegistryStore, UpsertModelMetadataInput,
     };
     use crate::db::DbPool;
     use crate::migration::Migrator;
@@ -1509,6 +1506,15 @@ mod tests {
             Some("0".to_string())
         );
         assert_eq!(cost_per_1m_to_nano_string(&json!(-1)), None);
+    }
+
+    #[test]
+    fn marketplace_metadata_query_uses_flattened_provider_models() {
+        let sql = super::marketplace_model_metadata_sql();
+        assert!(sql.contains("monoize_provider_models"));
+        assert!(sql.contains("p.channel_enabled = 1"));
+        assert!(!sql.contains("monoize_channels"));
+        assert!(!sql.contains("monoize_channel_models"));
     }
 
     #[test]
