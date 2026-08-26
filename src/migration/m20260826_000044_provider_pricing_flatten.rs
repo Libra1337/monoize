@@ -31,6 +31,25 @@ impl MigrationTrait for Migration {
 }
 
 async fn migrate_up(tx: &DatabaseTransaction, backend: DbBackend) -> Result<(), DbErr> {
+    let already_flattened = if backend == DbBackend::Postgres {
+        tx.query_one(Statement::from_string(
+            backend,
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'monoize_providers' AND column_name = 'channel_id' LIMIT 1".to_string(),
+        ))
+        .await?
+        .is_some()
+    } else {
+        tx.query_one(Statement::from_string(
+            backend,
+            "SELECT 1 FROM pragma_table_info('monoize_providers') WHERE name = 'channel_id' LIMIT 1".to_string(),
+        ))
+        .await?
+        .is_some()
+    };
+    if already_flattened {
+        return Ok(());
+    }
+
     let now = Utc::now().to_rfc3339();
     let suffix = if backend == DbBackend::Postgres {
         "BYTEA"
@@ -59,7 +78,7 @@ async fn migrate_up(tx: &DatabaseTransaction, backend: DbBackend) -> Result<(), 
         "ALTER TABLE monoize_providers RENAME TO monoize_providers_legacy_flatten".to_string(),
         "ALTER TABLE monoize_channels RENAME TO monoize_channels_legacy_flatten".to_string(),
         "ALTER TABLE monoize_channel_models RENAME TO monoize_channel_models_legacy_flatten".to_string(),
-        format!("CREATE TABLE monoize_providers (id TEXT PRIMARY KEY NOT NULL, group_id TEXT NOT NULL REFERENCES monoize_groups(id) ON DELETE RESTRICT, name TEXT NOT NULL, public_name TEXT NOT NULL, public_name_key {suffix} NOT NULL CHECK(public_name_key = {provider_key_cast}), priority INTEGER NOT NULL, enabled INTEGER NOT NULL, pricing_profile TEXT, multiplier TEXT NOT NULL DEFAULT '1', configuration_generation BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, max_retries INTEGER NOT NULL DEFAULT 0, channel_id TEXT NOT NULL UNIQUE, channel_name TEXT NOT NULL, channel_public_name TEXT NOT NULL, channel_public_name_key {suffix} NOT NULL CHECK(channel_public_name_key = {channel_key_cast}), channel_provider_type TEXT NOT NULL, channel_base_url TEXT NOT NULL, channel_api_key TEXT NOT NULL, channel_enabled INTEGER NOT NULL, channel_max_retries INTEGER NOT NULL DEFAULT 0, channel_passive_failure_count_threshold_override INTEGER, channel_passive_cooldown_seconds_override INTEGER, channel_passive_window_seconds_override INTEGER, channel_passive_rate_limit_cooldown_seconds_override INTEGER, channel_active_probe_enabled_override INTEGER, channel_active_probe_interval_seconds_override INTEGER, channel_active_probe_success_threshold_override INTEGER, channel_active_probe_model_override TEXT, channel_affinity_enabled_override INTEGER, channel_affinity_idle_ttl_seconds_override INTEGER, channel_affinity_failback_mode_override TEXT, channel_affinity_failback_delay_seconds_override INTEGER, channel_proxy_url TEXT, channel_extra_headers TEXT, channel_session_affinity_auto INTEGER, channel_allow_missing_usage INTEGER NOT NULL DEFAULT 0, transforms TEXT NOT NULL DEFAULT '[]', api_type_overrides TEXT NOT NULL DEFAULT '[]', active_probe_enabled_override INTEGER, active_probe_interval_seconds_override INTEGER, active_probe_success_threshold_override INTEGER, active_probe_model_override TEXT, request_timeout_ms_override INTEGER, extra_fields_whitelist TEXT, strip_cross_protocol_nested_extra INTEGER, circuit_breaker_enabled INTEGER NOT NULL DEFAULT 1, per_model_circuit_break INTEGER NOT NULL DEFAULT 0, channel_retry_interval_ms INTEGER NOT NULL DEFAULT 0)"),
+        format!("CREATE TABLE monoize_providers (id TEXT PRIMARY KEY NOT NULL, group_id TEXT NOT NULL REFERENCES monoize_groups(id) ON DELETE RESTRICT, name TEXT NOT NULL, public_name TEXT NOT NULL, public_name_key {suffix} NOT NULL CHECK(public_name_key = {provider_key_cast}), priority INTEGER NOT NULL, enabled INTEGER NOT NULL, pricing_profile TEXT, multiplier TEXT NOT NULL DEFAULT '1', configuration_generation BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, channel_id TEXT NOT NULL UNIQUE, channel_name TEXT NOT NULL, channel_public_name TEXT NOT NULL, channel_public_name_key {suffix} NOT NULL CHECK(channel_public_name_key = {channel_key_cast}), channel_provider_type TEXT NOT NULL, channel_base_url TEXT NOT NULL, channel_api_key TEXT NOT NULL, channel_enabled INTEGER NOT NULL, channel_max_retries INTEGER NOT NULL DEFAULT 0, channel_passive_failure_count_threshold_override INTEGER, channel_passive_cooldown_seconds_override INTEGER, channel_passive_window_seconds_override INTEGER, channel_passive_rate_limit_cooldown_seconds_override INTEGER, channel_active_probe_enabled_override INTEGER, channel_active_probe_interval_seconds_override INTEGER, channel_active_probe_success_threshold_override INTEGER, channel_active_probe_model_override TEXT, channel_affinity_enabled_override INTEGER, channel_affinity_idle_ttl_seconds_override INTEGER, channel_affinity_failback_mode_override TEXT, channel_affinity_failback_delay_seconds_override INTEGER, channel_proxy_url TEXT, channel_extra_headers TEXT, channel_session_affinity_auto INTEGER, channel_allow_missing_usage INTEGER NOT NULL DEFAULT 0, transforms TEXT NOT NULL DEFAULT '[]', api_type_overrides TEXT NOT NULL DEFAULT '[]', active_probe_enabled_override INTEGER, active_probe_interval_seconds_override INTEGER, active_probe_success_threshold_override INTEGER, active_probe_model_override TEXT, request_timeout_ms_override INTEGER, extra_fields_whitelist TEXT, strip_cross_protocol_nested_extra INTEGER, circuit_breaker_enabled INTEGER NOT NULL DEFAULT 1, per_model_circuit_break INTEGER NOT NULL DEFAULT 0, channel_retry_interval_ms INTEGER NOT NULL DEFAULT 0)"),
         format!("CREATE TABLE monoize_provider_models (provider_id TEXT NOT NULL, model_name TEXT NOT NULL, model_name_key {suffix} NOT NULL CHECK(model_name_key = {key_cast}), model_search_key {suffix} NOT NULL CHECK(model_search_key = {model_search_check}), redirect TEXT, pricing_profile_mode TEXT NOT NULL CHECK(pricing_profile_mode IN ('inherit','override','unpriced')), pricing_profile_override TEXT, multiplier_override TEXT, created_at TEXT NOT NULL, PRIMARY KEY(provider_id, model_name_key), FOREIGN KEY(provider_id) REFERENCES monoize_providers(id) ON DELETE CASCADE)"),
         "CREATE INDEX idx_monoize_provider_route ON monoize_providers(group_id, priority, created_at, id)".to_string(),
         "CREATE INDEX idx_monoize_provider_models_lookup ON monoize_provider_models(model_name_key, provider_id)".to_string(),
@@ -166,7 +185,10 @@ async fn insert_provider(
     let value = |column: &str| row.try_get::<String>("", column).unwrap_or_default();
     let opt = |column: &str| row.try_get::<Option<i32>>("", column).unwrap_or(None);
     let ch_opt = |column: &str| channel.try_get::<Option<i32>>("", column).unwrap_or(None);
-    let sql = numbered(backend, "INSERT INTO monoize_providers (id,group_id,name,public_name,public_name_key,priority,enabled,multiplier,configuration_generation,created_at,updated_at,max_retries,channel_id,channel_name,channel_public_name,channel_public_name_key,channel_provider_type,channel_base_url,channel_api_key,channel_enabled,channel_max_retries,channel_passive_failure_count_threshold_override,channel_passive_cooldown_seconds_override,channel_passive_window_seconds_override,channel_passive_rate_limit_cooldown_seconds_override,channel_active_probe_enabled_override,channel_active_probe_interval_seconds_override,channel_active_probe_success_threshold_override,channel_active_probe_model_override,channel_affinity_enabled_override,channel_affinity_idle_ttl_seconds_override,channel_affinity_failback_mode_override,channel_affinity_failback_delay_seconds_override,channel_proxy_url,channel_extra_headers,channel_session_affinity_auto,channel_allow_missing_usage,transforms,api_type_overrides,active_probe_enabled_override,active_probe_interval_seconds_override,active_probe_success_threshold_override,active_probe_model_override,request_timeout_ms_override,extra_fields_whitelist,strip_cross_protocol_nested_extra,circuit_breaker_enabled,per_model_circuit_break,channel_retry_interval_ms) VALUES (?,?,?,?,?,?,?,'1',0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    let sql = numbered(
+        backend,
+        "INSERT INTO monoize_providers (id,group_id,name,public_name,public_name_key,priority,enabled,multiplier,configuration_generation,created_at,updated_at,channel_id,channel_name,channel_public_name,channel_public_name_key,channel_provider_type,channel_base_url,channel_api_key,channel_enabled,channel_max_retries,channel_passive_failure_count_threshold_override,channel_passive_cooldown_seconds_override,channel_passive_window_seconds_override,channel_passive_rate_limit_cooldown_seconds_override,channel_active_probe_enabled_override,channel_active_probe_interval_seconds_override,channel_active_probe_success_threshold_override,channel_active_probe_model_override,channel_affinity_enabled_override,channel_affinity_idle_ttl_seconds_override,channel_affinity_failback_mode_override,channel_affinity_failback_delay_seconds_override,channel_proxy_url,channel_extra_headers,channel_session_affinity_auto,channel_allow_missing_usage,transforms,api_type_overrides,active_probe_enabled_override,active_probe_interval_seconds_override,active_probe_success_threshold_override,active_probe_model_override,request_timeout_ms_override,extra_fields_whitelist,strip_cross_protocol_nested_extra,circuit_breaker_enabled,per_model_circuit_break,channel_retry_interval_ms) VALUES (?,?,?,?,?,?,?,'1',0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    );
     let public_name = name.trim().to_string();
     let channel_public_name = channel_name.trim().to_string();
     let mut values: Vec<Value> = vec![
@@ -175,11 +197,10 @@ async fn insert_provider(
         name.into(),
         public_name.clone().into(),
         bytes(backend, public_name.as_bytes()),
-        provider.try_get::<i32>("", "priority")?.into(),
-        provider.try_get::<i32>("", "enabled")?.into(),
+        row.try_get::<i32>("", "priority")?.into(),
+        row.try_get::<i32>("", "enabled")?.into(),
         now.into(),
         now.into(),
-        provider.try_get::<i32>("", "max_retries")?.into(),
         channel_id.into(),
         channel_name.into(),
         channel_public_name.clone().into(),
@@ -188,7 +209,7 @@ async fn insert_provider(
         channel.try_get::<String>("", "base_url")?.into(),
         channel.try_get::<String>("", "api_key")?.into(),
         channel.try_get::<i32>("", "enabled")?.into(),
-        provider.try_get::<i32>("", "channel_max_retries")?.into(),
+        row.try_get::<i32>("", "channel_max_retries")?.into(),
     ];
     for col in [
         "passive_failure_count_threshold_override",
@@ -340,9 +361,10 @@ mod tests {
     fn target_schema_contains_flattened_tables() {
         let ddl = target_provider_ddl();
         assert!(ddl.iter().any(|sql| sql.contains("channel_id")));
-        assert!(ddl
-            .iter()
-            .any(|sql| sql.contains("monoize_provider_models")));
+        assert!(
+            ddl.iter()
+                .any(|sql| sql.contains("monoize_provider_models"))
+        );
         assert!(!ddl.iter().any(|sql| sql.contains("monoize_channels")));
     }
 
