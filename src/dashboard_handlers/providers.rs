@@ -99,20 +99,18 @@ fn apply_channel_runtime(
 async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) -> MonoizeProvider {
     let now = chrono::Utc::now().timestamp();
     if !provider.circuit_breaker_enabled {
-        for channel in &mut provider.channels {
-            apply_channel_runtime(
-                channel,
-                &ChannelHealthState::new(),
-                Vec::new(),
-                Vec::new(),
-                None,
-                now,
-            );
-        }
+        apply_channel_runtime(
+            &mut provider.channel,
+            &ChannelHealthState::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            now,
+        );
         return provider;
     }
     let health = state.channel_health.lock().await;
-    for channel in &mut provider.channels {
+    let channel = &mut provider.channel;
         let mut unhealthy_models = Vec::new();
         let mut probing_models = Vec::new();
         let states: Vec<ChannelHealthState> = if provider.per_model_circuit_break {
@@ -161,7 +159,6 @@ async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) 
             cooldown_until,
             now,
         );
-    }
     provider
 }
 
@@ -196,20 +193,14 @@ fn build_provider_model_runtime_statuses(
     provider: &MonoizeProvider,
     unpriced_entries: &HashSet<(String, String)>,
 ) -> Vec<ProviderModelRuntimeStatus> {
-    let mut models: Vec<String> = provider
-        .channels
-        .iter()
-        .flat_map(|channel| channel.models.keys().cloned())
-        .collect();
+    let mut models: Vec<String> = provider.channel.models.keys().cloned().collect();
     models.sort();
     models.dedup();
 
     models
         .into_iter()
         .map(|model| {
-            let mapped_channels: Vec<&MonoizeChannel> = provider
-                .channels
-                .iter()
+            let mapped_channels: Vec<&MonoizeChannel> = std::iter::once(&provider.channel)
                 .filter(|channel| channel.models.contains_key(&model))
                 .collect();
             let eligible_channels: Vec<&MonoizeChannel> = mapped_channels
@@ -476,7 +467,7 @@ pub async fn list_providers(
     };
     let mut pricing_pairs = HashSet::new();
     for provider in &providers {
-        for channel in &provider.channels {
+        for channel in std::iter::once(&provider.channel) {
             for (logical_model, model_entry) in &channel.models {
                 let normalized_upstream_model = normalize_pricing_model_key(
                     provider_pricing_model(logical_model, model_entry),
@@ -539,7 +530,7 @@ pub async fn list_providers(
     for provider in providers {
         let mut unpriced_model_ids = Vec::new();
         let mut unpriced_entries = HashSet::new();
-        for channel in &provider.channels {
+        for channel in std::iter::once(&provider.channel) {
             for (logical_model, model_entry) in &channel.models {
                 let has_pricing = channel_model_has_billable_rate_matrix(
                     &rate_matrix_cache,
@@ -602,23 +593,21 @@ pub async fn get_provider(
 
 /// CP-INV-14: non-empty channel `proxy_url` must be an absolute http(s) URL.
 #[allow(clippy::result_large_err)]
-fn validate_channel_proxy_urls<'a>(
-    channels: impl IntoIterator<Item = &'a crate::monoize_routing::CreateMonoizeChannelInput>,
+fn validate_channel_proxy_url(
+    channel: &crate::monoize_routing::CreateMonoizeChannelInput,
 ) -> AppResult<()> {
-    for channel in channels {
-        if let Some(url) = channel
-            .proxy_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            && let Err(detail) = crate::node_config::validate_http_proxy_url(url)
-        {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                format!("channel '{}' has invalid proxy_url: {detail}", channel.name),
-            ));
-        }
+    if let Some(url) = channel
+        .proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        && let Err(detail) = crate::node_config::validate_http_proxy_url(url)
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            format!("channel '{}' has invalid proxy_url: {detail}", channel.name),
+        ));
     }
     Ok(())
 }
@@ -629,7 +618,7 @@ pub async fn create_provider(
     Json(body): Json<CreateMonoizeProviderInput>,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
-    validate_channel_proxy_urls(body.channels.iter())?;
+    validate_channel_proxy_url(&body.channel)?;
 
     let provider = state
         .monoize_store
@@ -652,8 +641,8 @@ pub async fn update_provider(
     Json(body): Json<UpdateMonoizeProviderInput>,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
-    if let Some(channels) = body.channels.as_ref() {
-        validate_channel_proxy_urls(channels.iter())?;
+    if let Some(channel) = body.channel.as_ref() {
+        validate_channel_proxy_url(channel)?;
     }
 
     let prev_provider = state
@@ -675,11 +664,11 @@ pub async fn update_provider(
             }
         })?;
 
-    let affected_channel_ids: Vec<String> = prev_provider
-        .channels
-        .iter()
-        .chain(provider.channels.iter())
-        .map(|channel| channel.id.clone())
+    let affected_channel_ids: Vec<String> = [
+        prev_provider.channel.id.clone(),
+        provider.channel.id.clone(),
+    ]
+        .into_iter()
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
@@ -716,11 +705,7 @@ pub async fn delete_provider(
             }
         })?;
 
-    let removed_channel_ids: Vec<String> = existing_provider
-        .channels
-        .iter()
-        .map(|ch| ch.id.clone())
-        .collect();
+    let removed_channel_ids = vec![existing_provider.channel.id.clone()];
     advance_routing_config_revision(&state);
     prune_provider_channel_health(&state, &removed_channel_ids).await;
     prune_provider_channel_affinity(&state, &removed_channel_ids).await;
@@ -759,19 +744,7 @@ pub async fn fetch_provider_models(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "provider not found"))?;
 
-    if provider.channels.is_empty() {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "no_channels",
-            "provider has no channels",
-        ));
-    }
-
-    let channel = provider
-        .channels
-        .iter()
-        .find(|c| c.enabled)
-        .unwrap_or(&provider.channels[0]);
+    let channel = &provider.channel;
 
     let url = build_models_list_url(&channel.base_url);
 
@@ -869,10 +842,8 @@ async fn resolve_fetch_channel_api_key(
             )
         })?;
 
-    let channel = provider
-        .channels
-        .iter()
-        .find(|channel| channel.id == channel_id)
+    let channel = (&provider.channel.id == channel_id)
+        .then_some(&provider.channel)
         .ok_or_else(|| {
             AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -965,10 +936,7 @@ pub async fn test_channel(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "provider not found"))?;
 
-    let channel = provider
-        .channels
-        .first()
-        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "channel not found"))?;
+    let channel = &provider.channel;
     let channel_id = channel.id.clone();
 
     let (requested_model, stream) = body
@@ -1271,7 +1239,7 @@ mod tests {
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
-            channels: vec![CreateMonoizeChannelInput {
+            channel: CreateMonoizeChannelInput {
                 id: None,
                 name: "channel".to_string(),
                 provider_type: MonoizeProviderType::ChatCompletion,
@@ -1303,7 +1271,7 @@ mod tests {
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
             group_id: String::new(),
             transforms: Vec::new(),
             api_type_overrides: Vec::new(),
@@ -1471,7 +1439,7 @@ mod tests {
             .create_provider(test_provider_input(base_url.clone()))
             .await
             .expect("provider created");
-        let channel_id = provider.channels[0].id.clone();
+        let channel_id = provider.channel.id.clone();
 
         let mut headers = HeaderMap::new();
         headers.insert(

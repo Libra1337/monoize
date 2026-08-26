@@ -534,7 +534,7 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
                 api_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             }],
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("fisx-style-image-test-ch".to_string()),
                 name: "fisx-style-image-test-ch".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
@@ -560,7 +560,7 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
             proxy_url: None,
             extra_headers: None,
             session_affinity_auto: None,
-            }],
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,

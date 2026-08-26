@@ -1517,7 +1517,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
         .expect("list providers");
     let base_url = providers
         .iter()
-        .find_map(|p| p.channels.first().map(|c| c.base_url.clone()))
+        .map(|provider| provider.channel.base_url.clone())
         .expect("base_url");
 
     let mut models = HashMap::new();
@@ -1534,7 +1534,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
             name: "alias-route-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("alias-route-ch".to_string()),
                 name: "alias-route-ch".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -1560,7 +1560,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -1669,7 +1669,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
         .expect("list providers");
     let base_url = providers
         .iter()
-        .find_map(|p| p.channels.first().map(|c| c.base_url.clone()))
+        .map(|provider| provider.channel.base_url.clone())
         .expect("base_url");
 
     let mut models = HashMap::new();
@@ -1686,7 +1686,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
             name: "alias-fallback-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("alias-fallback-ch".to_string()),
                 name: "alias-fallback-ch".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -1712,7 +1712,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -1821,7 +1821,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
         .expect("list providers");
     let base_url = providers
         .iter()
-        .find_map(|p| p.channels.first().map(|c| c.base_url.clone()))
+        .map(|provider| provider.channel.base_url.clone())
         .expect("base_url");
 
     let mut models = HashMap::new();
@@ -1838,7 +1838,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
             name: "suffix-pricing-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("suffix-pricing-ch".to_string()),
                 name: "suffix-pricing-ch".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -1864,7 +1864,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,

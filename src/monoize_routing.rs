@@ -165,7 +165,7 @@ pub struct MonoizeChannel {
 pub struct MonoizeProvider {
     pub id: String,
     pub name: String,
-    pub channels: Vec<MonoizeChannel>,
+    pub channel: MonoizeChannel,
     pub channel_max_retries: i32,
     pub channel_retry_interval_ms: i32,
     pub circuit_breaker_enabled: bool,
@@ -243,7 +243,7 @@ pub struct CreateMonoizeChannelInput {
 #[serde(deny_unknown_fields)]
 pub struct CreateMonoizeProviderInput {
     pub name: String,
-    pub channels: Vec<CreateMonoizeChannelInput>,
+    pub channel: CreateMonoizeChannelInput,
     #[serde(default)]
     pub channel_max_retries: i32,
     #[serde(default)]
@@ -276,7 +276,7 @@ pub struct CreateMonoizeProviderInput {
 #[serde(deny_unknown_fields)]
 pub struct UpdateMonoizeProviderInput {
     pub name: Option<String>,
-    pub channels: Option<Vec<CreateMonoizeChannelInput>>,
+    pub channel: Option<CreateMonoizeChannelInput>,
     pub channel_max_retries: Option<i32>,
     pub channel_retry_interval_ms: Option<i32>,
     pub circuit_breaker_enabled: Option<bool>,
@@ -877,7 +877,7 @@ fn decode_channel_row(
 
 fn decode_provider_row(
     row: &QueryResult,
-    channels: Vec<MonoizeChannel>,
+    channel: MonoizeChannel,
 ) -> Result<MonoizeProvider, String> {
     let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
     let mut transforms: Vec<TransformRuleConfig> = serde_json::from_str(
@@ -906,7 +906,7 @@ fn decode_provider_row(
     Ok(MonoizeProvider {
         id: id.clone(),
         name: row.try_get("", "name").map_err(|e| e.to_string())?,
-        channels,
+        channel,
         channel_max_retries: row
             .try_get("", "channel_max_retries")
             .map_err(|e| e.to_string())?,
@@ -1171,7 +1171,7 @@ impl MonoizeRoutingStore {
     async fn load_channels_bulk(
         &self,
         provider_id: Option<&str>,
-    ) -> Result<HashMap<String, Vec<MonoizeChannel>>, String> {
+    ) -> Result<HashMap<String, MonoizeChannel>, String> {
         let filter = provider_id.map(|_| " WHERE id = $1").unwrap_or("");
         let values = provider_id.map(|id| vec![id.into()]).unwrap_or_default();
         let rows = self
@@ -1239,17 +1239,17 @@ impl MonoizeRoutingStore {
                 },
             );
         }
-        let mut result = HashMap::<String, Vec<MonoizeChannel>>::new();
+        let mut result = HashMap::<String, MonoizeChannel>::new();
         for row in rows {
             let provider_id: String = row.try_get("", "provider_id").map_err(|e| e.to_string())?;
             let channel_id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-            result
-                .entry(provider_id)
-                .or_default()
-                .push(decode_channel_row(
-                    &row,
-                    models_by_channel.remove(&channel_id).unwrap_or_default(),
-                )?);
+            let channel = decode_channel_row(
+                &row,
+                models_by_channel.remove(&channel_id).unwrap_or_default(),
+            )?;
+            if result.insert(provider_id.clone(), channel).is_some() {
+                return Err(format!("provider {provider_id} returned multiple embedded channels"));
+            }
         }
         Ok(result)
     }
@@ -1272,7 +1272,10 @@ impl MonoizeRoutingStore {
         rows.iter()
             .map(|row| {
                 let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-                decode_provider_row(row, channels_by_provider.remove(&id).unwrap_or_default())
+                let channel = channels_by_provider
+                    .remove(&id)
+                    .ok_or_else(|| format!("provider {id} missing embedded channel"))?;
+                decode_provider_row(row, channel)
             })
             .collect()
     }
@@ -1344,9 +1347,9 @@ impl MonoizeRoutingStore {
             .into_iter()
             .filter(|provider| {
                 provider.enabled
-                    && provider.channels.iter().any(|channel| {
-                        channel.enabled && channel.weight > 0 && channel.models.contains_key(model)
-                    })
+                    && provider.channel.enabled
+                    && provider.channel.weight > 0
+                    && provider.channel.models.contains_key(model)
             })
             .collect())
     }
@@ -1358,9 +1361,9 @@ impl MonoizeRoutingStore {
             .filter(|provider| {
                 provider.enabled
                     && provider.circuit_breaker_enabled
-                    && provider.channels.iter().any(|channel| {
-                        channel.enabled && channel.weight > 0 && !channel.models.is_empty()
-                    })
+                    && provider.channel.enabled
+                    && provider.channel.weight > 0
+                    && !provider.channel.models.is_empty()
             })
             .collect())
     }
@@ -1408,7 +1411,7 @@ impl MonoizeRoutingStore {
         &self,
         input: CreateMonoizeProviderInput,
     ) -> Result<MonoizeProvider, String> {
-        validate_provider_input(&input.name, &input.channels, &input.api_type_overrides)?;
+        validate_provider_input(&input.name, &input.channel, &input.api_type_overrides)?;
         if let Some(v) = input.active_probe_interval_seconds_override {
             if !(1..=i32::MAX as u64).contains(&v) {
                 return Err(
@@ -1488,10 +1491,7 @@ impl MonoizeRoutingStore {
             .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
         let strip_cross_proto = input.strip_cross_protocol_nested_extra;
 
-        let channel = input
-            .channels
-            .first()
-            .ok_or_else(|| "provider channel missing".to_string())?;
+        let channel = &input.channel;
         let public_name = input.name.trim();
         let channel_public_name = channel.name.trim();
         txn.execute(self.db.stmt(
@@ -1569,7 +1569,7 @@ impl MonoizeRoutingStore {
                 ],
             )).await.map_err(|e| e.to_string())?;
 
-        self.replace_channels_on(&*txn, &id, &input.channels)
+        self.replace_channel_on(&*txn, &id, &input.channel)
             .await?;
         txn.commit().await.map_err(|e| e.to_string())?;
 
@@ -1583,8 +1583,8 @@ impl MonoizeRoutingStore {
         id: &str,
         input: UpdateMonoizeProviderInput,
     ) -> Result<MonoizeProvider, String> {
-        if let Some(channels) = &input.channels {
-            validate_channels(channels, false)?;
+        if let Some(channel) = &input.channel {
+            validate_channel(channel, false)?;
         }
         if let Some(Some(v)) = input.active_probe_interval_seconds_override {
             if !(1..=i32::MAX as u64).contains(&v) {
@@ -1735,8 +1735,8 @@ impl MonoizeRoutingStore {
             return Err("provider not found".to_string());
         }
 
-        if let Some(channels) = &input.channels {
-            self.replace_channels_on(&*txn, id, channels).await?;
+        if let Some(channel) = &input.channel {
+            self.replace_channel_on(&*txn, id, channel).await?;
         }
 
         txn.commit().await.map_err(|e| e.to_string())?;
@@ -1849,16 +1849,13 @@ impl MonoizeRoutingStore {
         txn.commit().await.map_err(|e| e.to_string())
     }
 
-    async fn replace_channels_on(
+    async fn replace_channel_on(
         &self,
         conn: &impl ConnectionTrait,
         provider_id: &str,
-        channels: &[CreateMonoizeChannelInput],
+        channel: &CreateMonoizeChannelInput,
     ) -> Result<(), String> {
-        let channel = channels
-                .first()
-                .ok_or_else(|| "a provider must define exactly one channel".to_string())?;
-            let existing = conn
+        let existing = conn
                 .query_one(self.db.stmt(
                     "SELECT channel_id, channel_api_key, channel_max_retries FROM monoize_providers WHERE id = $1",
                     vec![provider_id.into()],
@@ -2038,18 +2035,11 @@ fn validate_models(models: &HashMap<String, MonoizeModelEntry>) -> Result<(), St
     Ok(())
 }
 
-fn validate_channels(
-    channels: &[CreateMonoizeChannelInput],
-    require_api_key: bool,
-) -> Result<(), String> {
-    if channels.len() != 1 {
-        return Err("a provider must define exactly one channel".to_string());
+fn validate_channel(channel: &CreateMonoizeChannelInput, require_api_key: bool) -> Result<(), String> {
+    if channel.models.is_empty() {
+        return Err("the channel must define at least one model".to_string());
     }
-    if !channels.iter().any(|channel| !channel.models.is_empty()) {
-        return Err("at least one channel must define a model".to_string());
-    }
-    let mut ids = HashSet::new();
-    for c in channels {
+    let c = channel;
         if c.name.trim().is_empty() {
             return Err("channel name must not be empty".to_string());
         }
@@ -2142,24 +2132,18 @@ fn validate_channels(
                 ));
             }
         }
-        if let Some(id) = &c.id {
-            if !ids.insert(id.clone()) {
-                return Err("duplicate channel id".to_string());
-            }
-        }
-    }
     Ok(())
 }
 
 fn validate_provider_input(
     name: &str,
-    channels: &[CreateMonoizeChannelInput],
+    channel: &CreateMonoizeChannelInput,
     api_type_overrides: &[ApiTypeOverride],
 ) -> Result<(), String> {
     if name.trim().is_empty() {
         return Err("provider name must not be empty".to_string());
     }
-    validate_channels(channels, true)?;
+    validate_channel(channel, true)?;
     validate_api_type_overrides(api_type_overrides)?;
     Ok(())
 }
@@ -2829,13 +2813,13 @@ mod tests {
             .create_provider(
                 serde_json::from_value(json!({
                     "name": "decode contract",
-                    "channels": [{
+                    "channel": {
                         "name": "channel",
                         "provider_type": "responses",
                         "base_url": "https://example.com",
                         "api_key": "secret",
                         "models": { "model-a": { "redirect": null, "multiplier": "1" } }
-                    }]
+                    }
                 }))
                 .expect("provider input parses"),
             )
@@ -2854,7 +2838,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn available_model_names_are_sorted_and_exclude_ineligible_channels() {
+    async fn available_model_names_are_sorted_and_exclude_ineligible_providers() {
         let db = DbPool::connect("sqlite::memory:")
             .await
             .expect("db connects");
@@ -2886,34 +2870,16 @@ mod tests {
         let input: CreateMonoizeProviderInput = serde_json::from_value(json!({
             "name": "visible models",
             "strip_cross_protocol_nested_extra": false,
-            "channels": [
-                {
-                    "name": "active",
-                    "provider_type": "responses",
-                    "base_url": "https://example.com",
-                    "api_key": "secret",
-                    "models": {
-                        "model-z": { "redirect": null, "multiplier": "1" },
-                        "model-a": { "redirect": null, "multiplier": "1" }
-                    }
-                },
-                {
-                    "name": "disabled",
-                    "provider_type": "responses",
-                    "base_url": "https://example.com",
-                    "api_key": "secret",
-                    "enabled": false,
-                    "models": { "model-hidden": { "redirect": null, "multiplier": "1" } }
-                },
-                {
-                    "name": "zero weight",
-                    "provider_type": "responses",
-                    "base_url": "https://example.com",
-                    "api_key": "secret",
-                    "weight": 0,
-                    "models": { "model-zero": { "redirect": null, "multiplier": "1" } }
+            "channel": {
+                "name": "active",
+                "provider_type": "responses",
+                "base_url": "https://example.com",
+                "api_key": "secret",
+                "models": {
+                    "model-z": { "redirect": null, "multiplier": "1" },
+                    "model-a": { "redirect": null, "multiplier": "1" }
                 }
-            ]
+            }
         }))
         .expect("provider input parses");
         let created = store
@@ -2931,8 +2897,6 @@ mod tests {
         assert_eq!(
             store
                 .available_model_names(&[
-                    "model-hidden".to_string(),
-                    "model-zero".to_string(),
                     "model-z".to_string(),
                 ])
                 .await
@@ -2942,15 +2906,13 @@ mod tests {
         let listed = store.list_providers().await.expect("providers list");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].strip_cross_protocol_nested_extra, Some(false));
-        assert_eq!(listed[0].channels.len(), 3);
-        assert_eq!(listed[0].channels[0].models.len(), 2);
+        assert_eq!(listed[0].channel.models.len(), 2);
         let fetched = store
             .get_provider(&created.id)
             .await
             .expect("provider loads")
             .expect("provider exists");
-        assert_eq!(fetched.channels.len(), 3);
-        assert_eq!(fetched.channels[0].models.len(), 2);
+        assert_eq!(fetched.channel.models.len(), 2);
         assert_eq!(fetched.strip_cross_protocol_nested_extra, Some(false));
         assert_eq!(
             store
@@ -2960,16 +2922,6 @@ mod tests {
                 .strip_cross_protocol_nested_extra,
             Some(false)
         );
-        assert!(store
-            .list_providers_for_model("model-hidden")
-            .await
-            .expect("disabled channel lookup")
-            .is_empty());
-        assert!(store
-            .list_providers_for_model("model-zero")
-            .await
-            .expect("zero-weight channel lookup")
-            .is_empty());
         let active_probe_candidates = store
             .list_active_probe_candidates()
             .await
@@ -2979,18 +2931,17 @@ mod tests {
             active_probe_candidates[0].strip_cross_protocol_nested_extra,
             Some(false)
         );
-        assert_eq!(active_probe_candidates[0].channels.len(), 1);
-        assert_eq!(active_probe_candidates[0].channels[0].name, "active");
+        assert_eq!(active_probe_candidates[0].channel.name, "active");
 
         let second_input: CreateMonoizeProviderInput = serde_json::from_value(json!({
             "name": "second",
-            "channels": [{
+            "channel": {
                 "name": "second channel",
                 "provider_type": "responses",
                 "base_url": "https://example.com",
                 "api_key": "secret",
                 "models": { "model-second": { "redirect": null, "multiplier": "1" } }
-            }]
+            }
         }))
         .expect("second provider input parses");
         let second = store
@@ -3020,7 +2971,7 @@ mod tests {
         let disabled_provider: CreateMonoizeProviderInput = serde_json::from_value(json!({
             "name": "disabled provider",
             "enabled": false,
-            "channels": [{
+            "channel": {
                 "name": "active channel",
                 "provider_type": "responses",
                 "base_url": "https://example.com",
@@ -3028,7 +2979,7 @@ mod tests {
                 "models": {
                     "model-disabled-provider": { "redirect": null, "multiplier": "1" }
                 }
-            }]
+            }
         }))
         .expect("disabled provider input parses");
         store
@@ -3046,10 +2997,8 @@ mod tests {
             .expect("active probe candidates reload")
             .iter()
             .all(|provider| provider.enabled
-                && provider
-                    .channels
-                    .iter()
-                    .all(|channel| channel.enabled && channel.weight > 0)));
+                && provider.channel.enabled
+                && provider.channel.weight > 0));
 
         db.write()
             .await

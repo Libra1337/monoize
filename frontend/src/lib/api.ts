@@ -338,7 +338,7 @@ export interface ApiTypeOverride {
 export interface Provider {
   id: string;
   name: string;
-  channels: MonoizeChannel[];
+  channel: MonoizeChannel;
   channel_max_retries: number;
   channel_retry_interval_ms: number;
   circuit_breaker_enabled: boolean;
@@ -391,7 +391,7 @@ export interface CreateMonoizeChannelInput {
 
 export interface CreateProviderInput {
   name: string;
-  channels: CreateMonoizeChannelInput[];
+  channel: CreateMonoizeChannelInput;
   channel_max_retries?: number;
   channel_retry_interval_ms?: number;
   circuit_breaker_enabled?: boolean;
@@ -412,7 +412,7 @@ export interface CreateProviderInput {
 
 export interface UpdateProviderInput {
   name?: string;
-  channels?: CreateMonoizeChannelInput[];
+  channel?: CreateMonoizeChannelInput;
   channel_max_retries?: number;
   channel_retry_interval_ms?: number;
   circuit_breaker_enabled?: boolean;

@@ -536,7 +536,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                 if !provider.circuit_breaker_enabled {
                     continue;
                 }
-                for channel in provider.channels {
+                for channel in [provider.channel] {
                     if probe_shutdown.load(Ordering::Acquire) {
                         break 'scheduler;
                     }
@@ -1195,7 +1195,7 @@ async fn build_active_probe_pricing_snapshot(
     let patterns = runtime.pricing_profile_model_patterns.clone();
     let mut pairs = std::collections::HashSet::new();
     for provider in providers {
-        for channel in &provider.channels {
+        for channel in std::iter::once(&provider.channel) {
             if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate {
                 continue;
             }

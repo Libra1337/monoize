@@ -5086,7 +5086,7 @@ async fn create_test_provider(
             name: name.to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: None,
                 name: format!("{name}-channel"),
                 provider_type,
@@ -5112,7 +5112,7 @@ async fn create_test_provider(
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-                }],
+                },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,

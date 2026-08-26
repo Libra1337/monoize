@@ -62,7 +62,7 @@ export type ProviderForm = {
 	strip_cross_protocol_nested_extra: boolean | null
 	group_id: string
 	priority?: number
-	channels: ChannelRow[]
+	channel: ChannelRow
 	transforms: TransformRuleConfig[]
 	api_type_overrides: ApiTypeOverride[]
 }
@@ -142,7 +142,7 @@ export function emptyForm(): ProviderForm {
 		strip_cross_protocol_nested_extra: null,
 		group_id: '',
 		priority: undefined,
-		channels: [emptyChannelRow()],
+		channel: emptyChannelRow(),
 		transforms: [],
 		api_type_overrides: []
 	}
@@ -167,37 +167,37 @@ export function fromProvider(provider: Provider): ProviderForm {
 		strip_cross_protocol_nested_extra: provider.strip_cross_protocol_nested_extra ?? null,
 		group_id: provider.group_id,
 		priority: provider.priority,
-		channels: provider.channels.slice(0, 1).map(channel => ({
+		channel: {
 			...emptyChannelRow(),
-			id: channel.id,
-			name: channel.name,
-			provider_type: channel.provider_type,
-			base_url: channel.base_url,
-			weight: String(channel.weight),
-			enabled: channel.enabled,
-			allow_missing_usage: channel.allow_missing_usage ?? false,
-			models: Object.entries(channel.models).map(([model, entry]) => ({
+			id: provider.channel.id,
+			name: provider.channel.name,
+			provider_type: provider.channel.provider_type,
+			base_url: provider.channel.base_url,
+			weight: String(provider.channel.weight),
+			enabled: provider.channel.enabled,
+			allow_missing_usage: provider.channel.allow_missing_usage ?? false,
+			models: Object.entries(provider.channel.models).map(([model, entry]) => ({
 				model,
 				redirect: entry.redirect ?? '',
 				multiplier: String(entry.multiplier)
 			})),
-			passive_failure_count_threshold_override: channel.passive_failure_count_threshold_override == null ? '' : String(channel.passive_failure_count_threshold_override),
-			passive_cooldown_seconds_override: channel.passive_cooldown_seconds_override == null ? '' : String(channel.passive_cooldown_seconds_override),
-			passive_window_seconds_override: channel.passive_window_seconds_override == null ? '' : String(channel.passive_window_seconds_override),
-			passive_rate_limit_cooldown_seconds_override: channel.passive_rate_limit_cooldown_seconds_override == null ? '' : String(channel.passive_rate_limit_cooldown_seconds_override),
-			active_probe_enabled_override: channel.active_probe_enabled_override ?? null,
-			active_probe_interval_seconds_override: channel.active_probe_interval_seconds_override == null ? '' : String(channel.active_probe_interval_seconds_override),
-			active_probe_success_threshold_override: channel.active_probe_success_threshold_override == null ? '' : String(channel.active_probe_success_threshold_override),
-			active_probe_model_override: channel.active_probe_model_override ?? '',
-			affinity_enabled_override: channel.affinity_enabled_override ?? null,
-			affinity_idle_ttl_seconds_override: channel.affinity_idle_ttl_seconds_override == null ? '' : String(channel.affinity_idle_ttl_seconds_override),
-			affinity_failback_mode_override: channel.affinity_failback_mode_override ?? null,
-			affinity_failback_delay_seconds_override: channel.affinity_failback_delay_seconds_override == null ? '' : String(channel.affinity_failback_delay_seconds_override),
-			proxy_url: channel.proxy_url ?? '',
-			extra_headers: channel.extra_headers && Object.keys(channel.extra_headers).length > 0 ? JSON.stringify(channel.extra_headers, null, 2) : '',
-			session_affinity_auto: channel.session_affinity_auto ?? null,
-			_health_status: channel._health_status
-		})),
+			passive_failure_count_threshold_override: provider.channel.passive_failure_count_threshold_override == null ? '' : String(provider.channel.passive_failure_count_threshold_override),
+			passive_cooldown_seconds_override: provider.channel.passive_cooldown_seconds_override == null ? '' : String(provider.channel.passive_cooldown_seconds_override),
+			passive_window_seconds_override: provider.channel.passive_window_seconds_override == null ? '' : String(provider.channel.passive_window_seconds_override),
+			passive_rate_limit_cooldown_seconds_override: provider.channel.passive_rate_limit_cooldown_seconds_override == null ? '' : String(provider.channel.passive_rate_limit_cooldown_seconds_override),
+			active_probe_enabled_override: provider.channel.active_probe_enabled_override ?? null,
+			active_probe_interval_seconds_override: provider.channel.active_probe_interval_seconds_override == null ? '' : String(provider.channel.active_probe_interval_seconds_override),
+			active_probe_success_threshold_override: provider.channel.active_probe_success_threshold_override == null ? '' : String(provider.channel.active_probe_success_threshold_override),
+			active_probe_model_override: provider.channel.active_probe_model_override ?? '',
+			affinity_enabled_override: provider.channel.affinity_enabled_override ?? null,
+			affinity_idle_ttl_seconds_override: provider.channel.affinity_idle_ttl_seconds_override == null ? '' : String(provider.channel.affinity_idle_ttl_seconds_override),
+			affinity_failback_mode_override: provider.channel.affinity_failback_mode_override ?? null,
+			affinity_failback_delay_seconds_override: provider.channel.affinity_failback_delay_seconds_override == null ? '' : String(provider.channel.affinity_failback_delay_seconds_override),
+			proxy_url: provider.channel.proxy_url ?? '',
+			extra_headers: provider.channel.extra_headers && Object.keys(provider.channel.extra_headers).length > 0 ? JSON.stringify(provider.channel.extra_headers, null, 2) : '',
+			session_affinity_auto: provider.channel.session_affinity_auto ?? null,
+			_health_status: provider.channel._health_status
+		},
 		transforms: provider.transforms ?? [],
 		api_type_overrides: provider.api_type_overrides ?? []
 	}

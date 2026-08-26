@@ -98,10 +98,10 @@ const providerTypes = Object.keys(PROVIDER_TYPE_CONFIG) as ProviderType[]
 function cloneForm(form: ProviderForm): ProviderForm {
 	return {
 		...form,
-		channels: form.channels.map(channel => ({
-			...channel,
-			models: channel.models.map(model => ({ ...model }))
-		})),
+		channel: {
+			...form.channel,
+			models: form.channel.models.map(model => ({ ...model }))
+		},
 		transforms: form.transforms.map(rule => ({ ...rule, config: { ...rule.config } })),
 		api_type_overrides: form.api_type_overrides.map(rule => ({ ...rule }))
 	}
@@ -180,7 +180,7 @@ function buildInput(form: ProviderForm, c: (zhText: string, enText: string) => s
 		channel_retry_interval_ms: form.channel_retry_interval_ms,
 		circuit_breaker_enabled: form.circuit_breaker_enabled,
 		per_model_circuit_break: form.per_model_circuit_break,
-		channels: form.channels.slice(0, 1).map(channel => channelInput(channel, c)),
+		channel: channelInput(form.channel, c),
 		transforms: form.transforms,
 		api_type_overrides: form.api_type_overrides,
 		active_probe_enabled_override: form.active_probe_enabled_override,
@@ -253,7 +253,7 @@ export function ProviderDialog({
 	}, [open, isEdit, detail, detailError, current])
 
 	const dirty = JSON.stringify(form) !== initialSnapshot.current
-	const activeChannel = form.channels[selectedChannel]
+	const activeChannel = form.channel
 	const pricedModels = useMemo(() => buildPricedModelIdSet(modelMetadata), [modelMetadata])
 	const metadataProvider = useMemo(
 		() => new Map(modelMetadata.map(item => [item.model_id, item.models_dev_provider])),
@@ -263,20 +263,16 @@ export function ProviderDialog({
 	const updateChannel = (index: number, patch: Partial<ChannelRow>) => {
 		setForm(previous => ({
 			...previous,
-			channels: previous.channels.map((channel, channelIndex) =>
-				channelIndex === index ? { ...channel, ...patch } : channel
-			)
+			channel: index === 0 ? { ...previous.channel, ...patch } : previous.channel
 		}))
 	}
 
 	const validate = () => {
-		if (form.channels.length > 1) return c('Provider channel selection is singular', 'A provider can configure only one channel')
 		if (!form.name.trim()) return c('请输入 Provider 名称', 'Enter a provider name')
-		if (!form.channels.length) return c('至少需要一个 Channel', 'At least one channel is required')
-		if (!form.channels.some(channel => channel.models.length > 0)) {
-			return c('至少为一个 Channel 添加模型', 'Add models to at least one channel')
+		if (form.channel.models.length === 0) {
+			return c('至少为 Channel 添加一个模型', 'Add at least one model to the channel')
 		}
-		for (const [index, channel] of form.channels.entries()) {
+		for (const [index, channel] of [form.channel].entries()) {
 			if (!channel.name.trim() || !channel.base_url.trim()) {
 				return c(`Channel ${index + 1} 的名称和 Base URL 不能为空`, `Channel ${index + 1} requires a name and base URL`)
 			}
@@ -337,7 +333,7 @@ export function ProviderDialog({
 
 	const sections: Array<{ id: Section; icon: typeof Server; label: string; summary: string }> = [
 		{ id: 'provider', icon: Server, label: 'Provider', summary: form.name || c('未命名', 'Untitled') },
-		{ id: 'channels', icon: Layers3, label: 'Channel', summary: `${Math.min(form.channels.length, 1)}` },
+		{ id: 'channels', icon: Layers3, label: 'Channel', summary: '1' },
 		{ id: 'routing', icon: GitBranch, label: c('路由', 'Routing'), summary: `${form.channel_max_retries + 1} attempts/channel` },
 		{ id: 'transforms', icon: Braces, label: c('转换', 'Transforms'), summary: `${form.transforms.length}` },
 		{ id: 'protocol', icon: Settings2, label: c('协议', 'Protocol'), summary: `${form.api_type_overrides.length}` }
@@ -462,7 +458,7 @@ export function ProviderDialog({
 			</AlertDialog>
 
 			<AlertDialog open={removeV1Open} onOpenChange={setRemoveV1Open}>
-				<AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{c('Base URL 包含 /v1', 'Base URL includes /v1')}</AlertDialogTitle><AlertDialogDescription>{c('多数适配器会自动追加 API 路径。建议移除末尾的 /v1。', 'Most adapters append the API path automatically. Removing the trailing /v1 is recommended.')}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{c('保留 /v1', 'Keep /v1')}</AlertDialogCancel><AlertDialogAction onClick={() => { if (v1ChannelIndex != null) updateChannel(v1ChannelIndex, { base_url: removeTrailingV1(form.channels[v1ChannelIndex]?.base_url ?? '') }) }}>{c('移除 /v1', 'Remove /v1')}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+			<AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{c('Base URL 包含 /v1', 'Base URL includes /v1')}</AlertDialogTitle><AlertDialogDescription>{c('多数适配器会自动追加 API 路径。建议移除末尾的 /v1。', 'Most adapters append the API path automatically. Removing the trailing /v1 is recommended.')}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{c('保留 /v1', 'Keep /v1')}</AlertDialogCancel><AlertDialogAction onClick={() => { if (v1ChannelIndex != null) updateChannel(v1ChannelIndex, { base_url: removeTrailingV1(form.channel.base_url) }) }}>{c('移除 /v1', 'Remove /v1')}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
 			</AlertDialog>
 		</>
 	)
@@ -519,7 +515,7 @@ function ChannelsWorkbench(props: WorkbenchProps) {
 		<div className={cn('h-full border-r bg-muted/10', mobileChannelOpen ? 'hidden lg:block' : 'block')}>
 			<div className='border-b px-4 py-3'><h3 className='font-semibold'>Channel</h3><p className='text-xs text-muted-foreground'>{c('配置该 Provider 的唯一上游', 'Configure the provider upstream')}</p></div>
 			<div className='flex flex-col gap-1 p-2'>
-				{form.channels.slice(0, 1).map((channel, index) => <button type='button' key={channel.id || index} onClick={() => { setSelectedChannel(index); setMobileChannelOpen(true) }} className={cn('flex min-h-16 items-center gap-3 rounded-lg border-l-2 px-3 py-2 text-left transition-colors', selectedChannel === index ? 'border-l-primary bg-primary/10' : 'border-l-transparent hover:bg-muted')}>
+				{[form.channel].map((channel, index) => <button type='button' key={channel.id || index} onClick={() => { setSelectedChannel(index); setMobileChannelOpen(true) }} className={cn('flex min-h-16 items-center gap-3 rounded-lg border-l-2 px-3 py-2 text-left transition-colors', selectedChannel === index ? 'border-l-primary bg-primary/10' : 'border-l-transparent hover:bg-muted')}>
 					<div className='min-w-0 flex-1'><div className='flex items-center gap-2'><span className='truncate text-sm font-medium'>{channel.name || c('未命名 Channel', 'Untitled channel')}</span>{!channel.enabled ? <Badge variant='secondary'>{c('停用', 'Off')}</Badge> : null}</div><p className='mt-1 truncate font-mono text-xs text-muted-foreground'>{channel.base_url || c('尚未填写 Base URL', 'No base URL')}</p><p className='mt-1 text-xs text-muted-foreground'>{PROVIDER_TYPE_CONFIG[channel.provider_type].label} · {channel.models.length} {c('个模型', 'models')}</p></div>
 					<ChevronRight className='size-4 shrink-0 text-muted-foreground' />
 				</button>)}

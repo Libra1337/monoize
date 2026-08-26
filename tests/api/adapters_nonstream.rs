@@ -268,8 +268,7 @@ async fn channel_extra_headers_are_sent_to_upstream() {
         let providers = ctx.state.monoize_store.list_providers().await.unwrap();
         providers
             .iter()
-            .flat_map(|provider| provider.channels.iter())
-            .map(|channel| channel.base_url.clone())
+            .map(|provider| provider.channel.base_url.clone())
             .next()
             .expect("at least one channel")
     };
@@ -279,7 +278,7 @@ async fn channel_extra_headers_are_sent_to_upstream() {
             name: "up-cf-affinity".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: None,
                 name: "cf-affinity-channel".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
@@ -307,7 +306,7 @@ async fn channel_extra_headers_are_sent_to_upstream() {
                     "ses_e2e_001".to_string(),
                 )])),
                 session_affinity_auto: Some(true),
-            }],
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: false,
@@ -355,8 +354,7 @@ async fn auto_session_affinity_is_stable_per_conversation_and_distinct_across_se
         let providers = ctx.state.monoize_store.list_providers().await.unwrap();
         providers
             .iter()
-            .flat_map(|provider| provider.channels.iter())
-            .map(|channel| channel.base_url.clone())
+            .map(|provider| provider.channel.base_url.clone())
             .next()
             .expect("at least one channel")
     };
@@ -366,7 +364,7 @@ async fn auto_session_affinity_is_stable_per_conversation_and_distinct_across_se
             name: "up-cf-auto-affinity".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: None,
                 name: "cf-auto-channel".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
@@ -397,7 +395,7 @@ async fn auto_session_affinity_is_stable_per_conversation_and_distinct_across_se
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: Some(true),
-            }],
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: false,

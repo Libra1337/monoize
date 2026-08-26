@@ -377,7 +377,7 @@ async fn seed_group_routing_provider(
     name: &str,
     circuit_breaker_enabled: bool,
     group_id: String,
-    channels: Vec<CreateMonoizeChannelInput>,
+    channel: CreateMonoizeChannelInput,
 ) {
     state
         .monoize_store
@@ -399,7 +399,7 @@ async fn seed_group_routing_provider(
 	                enabled: true,
             priority: Some(0),
             group_id,
-            channels,
+            channel,
         })
         .await
         .expect("provider created");
@@ -478,10 +478,7 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "channel-owned-models".to_string(),
-            channels: vec![
-                channel("cheap", "1", "cheap-upstream"),
-                channel("expensive", "2", "expensive-upstream"),
-            ],
+            channel: channel("cheap", "1", "cheap-upstream"),
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: false,
@@ -1525,7 +1522,7 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
             group_id: String::new(),
 	                enabled: true,
             priority: Some(0),
-            channels: vec![CreateMonoizeChannelInput {
+            channel: CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::Responses,
@@ -1557,7 +1554,7 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
         })
         .await
         .expect("provider created");
@@ -1650,7 +1647,7 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
             group_id: String::new(),
 	            enabled: true,
             priority: Some(0),
-            channels: vec![CreateMonoizeChannelInput {
+            channel: CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::Responses,
@@ -1682,7 +1679,7 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
         })
         .await
         .expect("provider created");
@@ -1730,7 +1727,7 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
             group_id: String::new(),
 	            enabled: true,
             priority: Some(0),
-            channels: vec![CreateMonoizeChannelInput {
+            channel: CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::Responses,
@@ -1762,7 +1759,7 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
         })
         .await
         .expect("provider created");
@@ -1809,7 +1806,7 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
             group_id: String::new(),
             enabled: true,
             priority: Some(0),
-            channels: vec![CreateMonoizeChannelInput {
+            channel: CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::Responses,
@@ -1841,7 +1838,7 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
         })
         .await
         .expect("provider created");
@@ -1891,7 +1888,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
             group_id: String::new(),
             enabled: true,
             priority: Some(0),
-            channels: vec![CreateMonoizeChannelInput {
+            channel: CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::Responses,
@@ -1923,7 +1920,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
         })
         .await
         .expect("provider created");
@@ -2021,7 +2018,7 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
             group_id: String::new(),
             enabled: true,
             priority: Some(0),
-            channels: vec![CreateMonoizeChannelInput {
+            channel: CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::ChatCompletion,
@@ -2053,7 +2050,7 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
         })
         .await
         .expect("provider created");
@@ -2131,7 +2128,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         "public-provider",
         false,
         String::new(),
-        vec![CreateMonoizeChannelInput {
+        CreateMonoizeChannelInput {
             id: Some("public".to_string()),
             name: "public".to_string(),
             provider_type: MonoizeProviderType::Responses,
@@ -2163,7 +2160,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             proxy_url: None,
             extra_headers: None,
             session_affinity_auto: None,
-        }],
+        },
     )
     .await;
     seed_group_routing_provider(
@@ -2171,7 +2168,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         "team-a-provider",
         false,
         team_a_group.id.clone(),
-        vec![CreateMonoizeChannelInput {
+        CreateMonoizeChannelInput {
             id: Some("team-a".to_string()),
             name: "team-a".to_string(),
             provider_type: MonoizeProviderType::Responses,
@@ -2203,7 +2200,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             proxy_url: None,
             extra_headers: None,
             session_affinity_auto: None,
-        }],
+        },
     )
     .await;
     seed_group_routing_provider(
@@ -2211,7 +2208,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         "team-b-provider",
         false,
         team_b_group.id.clone(),
-        vec![CreateMonoizeChannelInput {
+        CreateMonoizeChannelInput {
             id: Some("team-b".to_string()),
             name: "team-b".to_string(),
             provider_type: MonoizeProviderType::Responses,
@@ -2243,7 +2240,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             proxy_url: None,
             extra_headers: None,
             session_affinity_auto: None,
-        }],
+        },
     )
     .await;
     seed_model_pricing(&state, GROUP_ROUTING_MODEL).await;
@@ -2312,7 +2309,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
         "team-a-provider",
         true,
         team_a_group.id.clone(),
-        vec![CreateMonoizeChannelInput {
+        CreateMonoizeChannelInput {
             id: Some("team-a".to_string()),
             name: "team-a".to_string(),
             provider_type: MonoizeProviderType::Responses,
@@ -2344,7 +2341,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
             proxy_url: None,
             extra_headers: None,
             session_affinity_auto: None,
-        }],
+        },
     )
     .await;
 

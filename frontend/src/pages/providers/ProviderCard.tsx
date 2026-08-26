@@ -109,8 +109,8 @@ export function ProviderCard({
 	)
 	const canDragCard = useFinePointer()
 	const modelEntries = useMemo(
-		() => Array.from(new Set(provider.channels.flatMap(channel => Object.keys(channel.models)))).sort(),
-		[provider.channels]
+		() => Object.keys(provider.channel.models).sort(),
+		[provider.channel.models]
 	)
 	const modelMetadataById = useMemo(() => {
 		const map = new Map<string, ModelMetadataRecord>()
@@ -150,14 +150,14 @@ export function ProviderCard({
 	)
 
 	const channelTypeLabelEntries = useMemo(() => {
-		const types = Array.from(new Set(provider.channels.map(channel => channel.provider_type)))
+		const types = [provider.channel.provider_type]
 		return types
 			.map(type => ({
 				key: type,
 				label: PROVIDER_TYPE_CONFIG[type]?.label ?? type
 			}))
 			.sort((a, b) => a.label.localeCompare(b.label))
-	}, [provider.channels])
+	}, [provider.channel.provider_type])
 
 	const headerBadgeItems = useMemo(() => {
 		const channelTypeLabel = channelTypeLabelEntries
@@ -461,18 +461,18 @@ export function ProviderCard({
 											{t('providers.channelsSection')}
 										</h4>
 										<Badge variant='secondary' className='text-xs'>
-											{provider.channels.length}
+											1
 										</Badge>
 									</div>
 									<div className='rounded-lg border overflow-hidden'>
 										<Virtuoso
 											style={{
 												height: Math.min(
-													provider.channels.length * PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT,
+													PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT,
 													190
 												)
 											}}
-											data={provider.channels}
+										data={[provider.channel]}
 											itemContent={(_idx, channel) => (
 												<div className='flex min-h-10 items-center gap-3 px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors border-b last:border-b-0'>
 													<ChannelRuntimeStatus

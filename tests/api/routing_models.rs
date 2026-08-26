@@ -187,7 +187,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
         .expect("list providers");
     let base_url = providers
         .iter()
-        .find_map(|p| p.channels.first().map(|c| c.base_url.clone()))
+        .map(|provider| provider.channel.base_url.clone())
         .expect("at least one existing channel base url");
 
     let mut models = HashMap::new();
@@ -205,7 +205,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
             name: "override-threshold-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("override-threshold-ch".to_string()),
                 name: "override-threshold-ch".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
@@ -231,7 +231,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -249,7 +249,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
         })
         .await
         .expect("create provider with channel override");
-    let channel_id = created.channels[0].id.clone();
+    let channel_id = created.channel.id.clone();
 
     let (status, _body) = json_post(
         &ctx,
@@ -300,7 +300,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
         name: "mono-transform-original-model-match".to_string(),
         api_type_overrides: Vec::new(),
         group_id: String::new(),
-        channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+        channel: monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-transform-original-model-match-ch1".to_string()),
             name: "mono-transform-original-model-match-ch1".to_string(),
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -326,7 +326,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
             proxy_url: None,
             extra_headers: None,
             session_affinity_auto: None,
-        }],
+        },
         channel_max_retries: 0,
         channel_retry_interval_ms: 0,
         circuit_breaker_enabled: true,
@@ -411,7 +411,7 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
             api_type: monoize::monoize_routing::MonoizeProviderType::Responses,
         }],
         group_id: String::new(),
-        channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+        channel: monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-provider-redirect-api-type-override-ch1".to_string()),
             name: "mono-provider-redirect-api-type-override-ch1".to_string(),
             provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
@@ -437,7 +437,7 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
             proxy_url: None,
             extra_headers: None,
             session_affinity_auto: None,
-        }],
+        },
         channel_max_retries: 0,
         channel_retry_interval_ms: 0,
         circuit_breaker_enabled: true,

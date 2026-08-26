@@ -580,9 +580,8 @@ pub(super) async fn collect_provider_attempts(
     if !crate::users::is_provider_group_eligible(&provider.group_id, effective_groups) {
         return;
     }
-    let supporting_channels: Vec<crate::monoize_routing::MonoizeChannel> = provider
-        .channels
-        .iter()
+    let supporting_channels: Vec<crate::monoize_routing::MonoizeChannel> =
+        std::iter::once(&provider.channel)
         .filter(|channel| {
             channel.models.get(&urp.model).is_some_and(|entry| {
                 urp.max_multiplier
@@ -610,7 +609,7 @@ pub(super) async fn collect_provider_attempts(
         let origin_key = channel_origin_key(&channel.base_url);
         let origin_peer_channel_ids = origin_key
             .as_deref()
-            .map(|origin| origin_peer_channel_ids(&provider.channels, origin))
+            .map(|origin| origin_peer_channel_ids(std::slice::from_ref(&provider.channel), origin))
             .unwrap_or_default();
         let model_entry = channel
             .models

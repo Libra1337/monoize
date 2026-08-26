@@ -105,7 +105,7 @@ export function RequestLogsPage() {
 	const affinityTargetNames = useMemo(() => {
 		const names = new Map<string, string>()
 		for (const provider of providers ?? []) {
-			for (const channel of provider.channels) {
+			for (const channel of [provider.channel]) {
 				const readableNames = [provider.name.trim(), channel.name.trim()].filter(Boolean)
 				if (readableNames.length > 0) {
 					names.set(`${provider.id}/${channel.id}`, readableNames.join('/'))

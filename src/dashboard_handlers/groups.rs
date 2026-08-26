@@ -304,13 +304,13 @@ mod tests {
                 serde_json::from_value(serde_json::json!({
                     "name": "team-a-provider",
                     "group_id": created.id,
-                    "channels": [{
+                    "channel": {
                         "name": "primary",
                         "provider_type": "responses",
                         "base_url": "https://example.invalid",
                         "api_key": "secret",
                         "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
-                    }]
+                    }
                 }))
                 .expect("provider payload deserializes"),
             )

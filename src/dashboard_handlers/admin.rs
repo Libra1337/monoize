@@ -106,7 +106,7 @@ pub async fn get_admin_overview(
     let now_ms = crate::handlers::routing::now_ts();
     let mut channel_health: Vec<Value> = Vec::new();
     for provider in providers {
-        for channel in provider.channels {
+        for channel in [provider.channel] {
             let base_entry = health.get(&channel.id);
             let mut healthy = base_entry.map(|entry| entry.healthy).unwrap_or(true);
             let mut cooldown_until = base_entry.and_then(|entry| entry.cooldown_until);

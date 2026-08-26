@@ -57,7 +57,7 @@ export function SettingsPage() {
     const modelIds = new Set<string>();
     for (const provider of providers ?? []) {
       if (!provider.enabled) continue;
-      for (const channel of provider.channels) {
+      for (const channel of [provider.channel]) {
         if (!channel.enabled || channel.weight <= 0) continue;
         for (const modelId of Object.keys(channel.models)) {
           modelIds.add(modelId);

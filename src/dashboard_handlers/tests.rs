@@ -162,22 +162,13 @@ fn provider_dashboard_rate_matrix_cache_filters_bulk_candidates_in_memory() {
 fn dashboard_create_provider_group_id_defaults_to_empty() {
     let body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
-        "channels": [
-            {
-                "name": "public",
-                "provider_type": "responses",
-                "base_url": "https://example.com/public",
-                "api_key": "secret",
-                "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
-            },
-            {
-                "name": "restricted",
-                "provider_type": "responses",
-                "base_url": "https://example.com/restricted",
-                "api_key": "secret",
-                "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
-            }
-        ]
+        "channel": {
+            "name": "public",
+            "provider_type": "responses",
+            "base_url": "https://example.com/public",
+            "api_key": "secret",
+            "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
+        }
     }))
     .expect("payload deserializes");
 
@@ -185,17 +176,33 @@ fn dashboard_create_provider_group_id_defaults_to_empty() {
 }
 
 #[test]
+fn dashboard_create_provider_rejects_obsolete_channels_field() {
+    let result = serde_json::from_value::<CreateMonoizeProviderInput>(json!({
+        "name": "OpenAI",
+        "channel": {
+            "name": "primary",
+            "provider_type": "responses",
+            "base_url": "https://example.com",
+            "api_key": "secret",
+            "models": {}
+        }
+    }));
+
+    assert!(result.is_err(), "plural channels field must not be accepted");
+}
+
+#[test]
 fn dashboard_create_provider_rejects_obsolete_provider_models_field() {
     let result = serde_json::from_value::<CreateMonoizeProviderInput>(json!({
         "name": "OpenAI",
         "models": { "gpt-5": { "redirect": null, "multiplier": "1" } },
-        "channels": [{
+        "channel": {
             "name": "primary",
             "provider_type": "responses",
             "base_url": "https://example.com",
             "api_key": "secret",
             "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
-        }]
+        }
     }));
 
     assert!(
@@ -207,14 +214,12 @@ fn dashboard_create_provider_rejects_obsolete_provider_models_field() {
 #[test]
 fn dashboard_update_provider_group_id_is_partial() {
     let body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
-        "channels": [
-            {
-                "id": "mono_ch_existing",
-                "name": "existing",
-                "provider_type": "responses",
-                "base_url": "https://example.com/existing"
-            }
-        ]
+        "channel": {
+            "id": "mono_ch_existing",
+            "name": "existing",
+            "provider_type": "responses",
+            "base_url": "https://example.com/existing"
+        }
     }))
     .expect("payload deserializes");
 
@@ -266,7 +271,7 @@ fn dashboard_provider_response_includes_group_and_channel_hides_api_key() {
     let provider = MonoizeProvider {
         id: "mono_provider_123".to_string(),
         name: "provider".to_string(),
-        channels: vec![channel],
+        channel,
         channel_max_retries: 0,
         channel_retry_interval_ms: 0,
         circuit_breaker_enabled: true,
@@ -289,11 +294,11 @@ fn dashboard_provider_response_includes_group_and_channel_hides_api_key() {
 
     let value = serde_json::to_value(&provider).expect("provider serializes");
     let object = value.as_object().expect("provider object");
-    let channels = object
-        .get("channels")
-        .and_then(|value| value.as_array())
-        .expect("channels array");
-    let channel_object = channels[0].as_object().expect("channel object");
+    assert!(!object.contains_key("channels"));
+    let channel_object = object
+        .get("channel")
+        .and_then(|value| value.as_object())
+        .expect("channel object");
 
     assert_eq!(object.get("group_id"), Some(&json!("g-alpha")));
     assert!(!object.contains_key("group_ids"));
@@ -336,19 +341,17 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
     let create_body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
         "group_id": " g-beta ",
-        "channels": [
-            {
-                "name": "primary",
-                "provider_type": "responses",
-                "base_url": "https://example.com",
-                "api_key": "secret",
-                "affinity_enabled_override": true,
-                "affinity_idle_ttl_seconds_override": 90,
-                "affinity_failback_mode_override": "prefer_higher_priority",
-                "affinity_failback_delay_seconds_override": 15,
-                "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
-            }
-        ]
+        "channel": {
+            "name": "primary",
+            "provider_type": "responses",
+            "base_url": "https://example.com",
+            "api_key": "secret",
+            "affinity_enabled_override": true,
+            "affinity_idle_ttl_seconds_override": 90,
+            "affinity_failback_mode_override": "prefer_higher_priority",
+            "affinity_failback_delay_seconds_override": 15,
+            "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
+        }
     }))
     .expect("create payload deserializes");
 
@@ -356,39 +359,37 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
         .create_provider(create_body)
         .await
         .expect("provider created");
-    let channel_id = created.channels[0].id.clone();
+    let channel_id = created.channel.id.clone();
 
     assert_eq!(created.group_id, "g-beta");
-    assert_eq!(created.channels[0].api_key, "secret");
-    assert_eq!(created.channels[0].affinity_enabled_override, Some(true));
+    assert_eq!(created.channel.api_key, "secret");
+    assert_eq!(created.channel.affinity_enabled_override, Some(true));
     assert_eq!(
-        created.channels[0].affinity_idle_ttl_seconds_override,
+        created.channel.affinity_idle_ttl_seconds_override,
         Some(90)
     );
     assert_eq!(
-        created.channels[0].affinity_failback_mode_override,
+        created.channel.affinity_failback_mode_override,
         Some(AffinityFailbackMode::PreferHigherPriority)
     );
     assert_eq!(
-        created.channels[0].affinity_failback_delay_seconds_override,
+        created.channel.affinity_failback_delay_seconds_override,
         Some(15)
     );
 
     let update_body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
-        "channels": [
-            {
-                "id": channel_id,
-                "name": "primary",
-                "provider_type": "responses",
-                "base_url": "https://example.com",
-                "api_key": "",
-                "affinity_enabled_override": false,
-                "affinity_idle_ttl_seconds_override": 120,
-                "affinity_failback_mode_override": "sticky",
-                "affinity_failback_delay_seconds_override": 0,
-                "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
-            }
-        ]
+        "channel": {
+            "id": channel_id,
+            "name": "primary",
+            "provider_type": "responses",
+            "base_url": "https://example.com",
+            "api_key": "",
+            "affinity_enabled_override": false,
+            "affinity_idle_ttl_seconds_override": 120,
+            "affinity_failback_mode_override": "sticky",
+            "affinity_failback_delay_seconds_override": 0,
+            "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
+        }
     }))
     .expect("update payload deserializes");
 
@@ -398,18 +399,18 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
         .expect("provider updated");
 
     assert_eq!(updated.group_id, "g-beta");
-    assert_eq!(updated.channels[0].api_key, "secret");
-    assert_eq!(updated.channels[0].affinity_enabled_override, Some(false));
+    assert_eq!(updated.channel.api_key, "secret");
+    assert_eq!(updated.channel.affinity_enabled_override, Some(false));
     assert_eq!(
-        updated.channels[0].affinity_idle_ttl_seconds_override,
+        updated.channel.affinity_idle_ttl_seconds_override,
         Some(120)
     );
     assert_eq!(
-        updated.channels[0].affinity_failback_mode_override,
+        updated.channel.affinity_failback_mode_override,
         Some(AffinityFailbackMode::Sticky)
     );
     assert_eq!(
-        updated.channels[0].affinity_failback_delay_seconds_override,
+        updated.channel.affinity_failback_delay_seconds_override,
         Some(0)
     );
 

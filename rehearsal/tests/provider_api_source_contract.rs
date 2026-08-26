@@ -90,3 +90,23 @@ fn obsolete_channel_entities_are_not_exported() {
     assert!(!ENTITY_MODULE_SOURCE.contains("monoize_channels"));
     assert!(!ENTITY_MODULE_SOURCE.contains("monoize_channel_models"));
 }
+
+#[test]
+fn provider_channel_contract_is_singular() {
+    for declaration in [
+        "pub struct MonoizeProvider",
+        "pub struct CreateMonoizeProviderInput",
+        "pub struct UpdateMonoizeProviderInput",
+    ] {
+        let start = ROUTING_SOURCE.find(declaration).expect("Provider declaration");
+        let body = &ROUTING_SOURCE[start..start + 1_800];
+        assert!(body.contains("pub channel:"));
+        assert!(!body.contains("pub channels:"));
+    }
+    let provider_start = FRONTEND_API_SOURCE
+        .find("export interface Provider {")
+        .expect("frontend Provider declaration");
+    let provider = &FRONTEND_API_SOURCE[provider_start..provider_start + 1_200];
+    assert!(provider.contains("channel: MonoizeChannel;"));
+    assert!(!provider.contains("channels: MonoizeChannel[];"));
+}

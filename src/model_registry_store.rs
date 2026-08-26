@@ -1579,48 +1579,17 @@ mod tests {
 
         let enabled: CreateMonoizeProviderInput = serde_json::from_value(json!({
             "name": "enabled",
-            "channels": [
-                {
-                    "name": "active-a",
-                    "provider_type": "responses",
-                    "base_url": "https://example.com",
-                    "api_key": "secret-a",
-                    "models": {
-                        "eligible-z": { "redirect": null, "multiplier": "1" },
-                        "shared": { "redirect": null, "multiplier": "1" }
-                    }
-                },
-                {
-                    "name": "active-b",
-                    "provider_type": "responses",
-                    "base_url": "https://example.com",
-                    "api_key": "secret-b",
-                    "models": {
-                        "eligible-a": { "redirect": null, "multiplier": "1" },
-                        "shared": { "redirect": null, "multiplier": "1" }
-                    }
-                },
-                {
-                    "name": "disabled",
-                    "provider_type": "responses",
-                    "base_url": "https://example.com",
-                    "api_key": "secret-disabled",
-                    "enabled": false,
-                    "models": {
-                        "disabled-channel": { "redirect": null, "multiplier": "1" }
-                    }
-                },
-                {
-                    "name": "zero-weight",
-                    "provider_type": "responses",
-                    "base_url": "https://example.com",
-                    "api_key": "secret-zero",
-                    "weight": 0,
-                    "models": {
-                        "zero-weight": { "redirect": null, "multiplier": "1" }
-                    }
+            "channel": {
+                "name": "active",
+                "provider_type": "responses",
+                "base_url": "https://example.com",
+                "api_key": "secret",
+                "models": {
+                    "eligible-a": { "redirect": null, "multiplier": "1" },
+                    "eligible-z": { "redirect": null, "multiplier": "1" },
+                    "shared": { "redirect": null, "multiplier": "1" }
                 }
-            ]
+            }
         }))
         .expect("enabled provider input parses");
         routing_store
@@ -1631,7 +1600,7 @@ mod tests {
         let disabled: CreateMonoizeProviderInput = serde_json::from_value(json!({
             "name": "disabled provider",
             "enabled": false,
-            "channels": [{
+            "channel": {
                 "name": "active channel",
                 "provider_type": "responses",
                 "base_url": "https://example.com",
@@ -1639,7 +1608,7 @@ mod tests {
                 "models": {
                     "disabled-provider": { "redirect": null, "multiplier": "1" }
                 }
-            }]
+            }
         }))
         .expect("disabled provider input parses");
         routing_store

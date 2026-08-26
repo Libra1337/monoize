@@ -19,7 +19,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
             name: "mono-transform-summary".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-ch1".to_string()),
                 name: "mono-transform-summary-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -45,7 +45,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-                }],
+                },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -285,7 +285,7 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
             name: "mono-transform-streaming-markdown-images".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-streaming-markdown-images-ch1".to_string()),
                 name: "mono-transform-streaming-markdown-images-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -311,7 +311,7 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-                }],
+                },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,

@@ -589,7 +589,7 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
             name: "mono-transform-summary-messages".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-messages-ch1".to_string()),
                 name: "mono-transform-summary-messages-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -615,7 +615,7 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -1268,7 +1268,7 @@ async fn messages_stream_passthrough_transform_preserves_plaintext_reasoning_chu
             name: "mono-transform-chunked-messages".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
-            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-chunked-messages-ch1".to_string()),
                 name: "mono-transform-chunked-messages-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Messages,
@@ -1294,7 +1294,7 @@ async fn messages_stream_passthrough_transform_preserves_plaintext_reasoning_chu
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-            }],
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
