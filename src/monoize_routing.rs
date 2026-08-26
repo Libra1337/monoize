@@ -167,7 +167,6 @@ pub struct MonoizeProvider {
     pub id: String,
     pub name: String,
     pub channels: Vec<MonoizeChannel>,
-    pub max_retries: i32,
     pub channel_max_retries: i32,
     pub channel_retry_interval_ms: i32,
     pub circuit_breaker_enabled: bool,
@@ -248,8 +247,6 @@ pub struct CreateMonoizeProviderInput {
     pub name: String,
     pub channels: Vec<CreateMonoizeChannelInput>,
     #[serde(default)]
-    pub max_retries: i32,
-    #[serde(default)]
     pub channel_max_retries: i32,
     #[serde(default)]
     pub channel_retry_interval_ms: i32,
@@ -282,7 +279,6 @@ pub struct CreateMonoizeProviderInput {
 pub struct UpdateMonoizeProviderInput {
     pub name: Option<String>,
     pub channels: Option<Vec<CreateMonoizeChannelInput>>,
-    pub max_retries: Option<i32>,
     pub channel_max_retries: Option<i32>,
     pub channel_retry_interval_ms: Option<i32>,
     pub circuit_breaker_enabled: Option<bool>,
@@ -573,10 +569,6 @@ pub struct MonoizeRoutingStore {
 
 fn default_enabled() -> bool {
     true
-}
-
-fn default_max_retries() -> i32 {
-    -1
 }
 
 fn default_channel_weight() -> i32 {
@@ -936,7 +928,6 @@ fn decode_provider_row(
         id: id.clone(),
         name: row.try_get("", "name").map_err(|e| e.to_string())?,
         channels,
-        max_retries: row.try_get("", "max_retries").map_err(|e| e.to_string())?,
         channel_max_retries: row
             .try_get("", "channel_max_retries")
             .map_err(|e| e.to_string())?,
@@ -1050,7 +1041,7 @@ fn provider_projection(alias: &str, flattened: bool) -> String {
     };
     if flattened {
         format!(
-            "SELECT {p}id, {p}name, {p}max_retries, {p}channel_max_retries,
+            "SELECT {p}id, {p}name, {p}channel_max_retries,
                     {p}channel_retry_interval_ms, {p}circuit_breaker_enabled,
                     {p}per_model_circuit_break, {p}transforms, {p}api_type_overrides,
                     {p}active_probe_enabled_override, {p}active_probe_interval_seconds_override,
@@ -1061,7 +1052,7 @@ fn provider_projection(alias: &str, flattened: bool) -> String {
         )
     } else {
         format!(
-            "SELECT {p}id, {p}name, {p}max_retries, {p}channel_max_retries,
+            "SELECT {p}id, {p}name, {p}channel_max_retries,
                     {p}channel_retry_interval_ms, {p}circuit_breaker_enabled,
                     {p}per_model_circuit_break, {p}transforms, {p}api_type_overrides,
                     {p}active_probe_enabled_override, {p}active_probe_interval_seconds_override,
@@ -1545,7 +1536,7 @@ impl MonoizeRoutingStore {
             .db
             .read()
             .query_all(self.db.stmt(
-                r#"SELECT DISTINCT p.id, p.name, p.max_retries, p.channel_max_retries,
+                r#"SELECT DISTINCT p.id, p.name, p.channel_max_retries,
                           p.channel_retry_interval_ms, p.circuit_breaker_enabled,
                           p.per_model_circuit_break, p.transforms, p.api_type_overrides,
                           p.active_probe_enabled_override, p.active_probe_interval_seconds_override,
@@ -1634,7 +1625,7 @@ impl MonoizeRoutingStore {
             .db
             .read()
             .query_all(self.db.stmt(
-                r#"SELECT id, name, max_retries, channel_max_retries,
+                r#"SELECT id, name, channel_max_retries,
                           channel_retry_interval_ms, circuit_breaker_enabled,
                           per_model_circuit_break, transforms, api_type_overrides,
                           active_probe_enabled_override, active_probe_interval_seconds_override,
@@ -1773,7 +1764,7 @@ impl MonoizeRoutingStore {
             .db
             .read()
             .query_one(self.db.stmt(
-                r#"SELECT id, name, max_retries, channel_max_retries,
+                r#"SELECT id, name, channel_max_retries,
                           channel_retry_interval_ms, circuit_breaker_enabled,
                           per_model_circuit_break, transforms, api_type_overrides,
                           active_probe_enabled_override, active_probe_interval_seconds_override,
@@ -1836,12 +1827,10 @@ impl MonoizeRoutingStore {
         // which on single-connection SQLite would deadlock behind our own
         // write transaction.
         let resolved_group_ids = self.resolve_provider_group_ids(&input.group_ids).await?;
-        let group_ids_json = serialize_provider_group_ids_json(&resolved_group_ids)?;
         let group_id = resolved_group_ids
             .first()
             .cloned()
             .ok_or_else(|| "provider group resolution returned no group".to_string())?;
-        let flattened = self.uses_flattened_provider_schema().await?;
         let txn = self.db.begin_write().await.map_err(|e| e.to_string())?;
 
         let priority = match input.priority {
@@ -1888,18 +1877,17 @@ impl MonoizeRoutingStore {
             .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
         let strip_cross_proto = input.strip_cross_protocol_nested_extra;
 
-        if flattened {
-            let channel = input
-                .channels
-                .first()
-                .ok_or_else(|| "provider channel missing".to_string())?;
-            let public_name = input.name.trim();
-            let channel_public_name = channel.name.trim();
-            txn.execute(self.db.stmt(
+        let channel = input
+            .channels
+            .first()
+            .ok_or_else(|| "provider channel missing".to_string())?;
+        let public_name = input.name.trim();
+        let channel_public_name = channel.name.trim();
+        txn.execute(self.db.stmt(
                 r#"INSERT INTO monoize_providers (
                      id, group_id, name, public_name, public_name_key, priority, enabled,
                      pricing_profile, multiplier, configuration_generation, created_at, updated_at,
-                     max_retries, channel_id, channel_name, channel_public_name,
+                     channel_id, channel_name, channel_public_name,
                      channel_public_name_key, channel_provider_type, channel_base_url, channel_api_key,
                      channel_enabled, channel_max_retries,
                      channel_passive_failure_count_threshold_override,
@@ -1917,10 +1905,10 @@ impl MonoizeRoutingStore {
                      strip_cross_protocol_nested_extra, circuit_breaker_enabled,
                      per_model_circuit_break, channel_retry_interval_ms
                    ) VALUES (
-                     $1, $2, $3, $4, $5, $6, $7, NULL, '1', 1, $8, $8, $9, $10, $11, $12,
-                     $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
-                     $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
-                     $41, $42, $43, $44, $45, $46)"#,
+                     $1, $2, $3, $4, $5, $6, $7, NULL, '1', 1, $8, $8, $9, $10, $11,
+                     $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
+                     $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39,
+                     $40, $41, $42, $43, $44, $45)"#,
                 vec![
                     id.clone().into(),
                     group_id.into(),
@@ -1930,7 +1918,6 @@ impl MonoizeRoutingStore {
                     SeaValue::Int(Some(priority)),
                     SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
                     now.to_rfc3339().into(),
-                    SeaValue::Int(Some(input.max_retries)),
                     channel.id.clone().unwrap_or_else(generate_channel_id).into(),
                     channel.name.clone().into(),
                     channel_public_name.to_string().into(),
@@ -1970,49 +1957,6 @@ impl MonoizeRoutingStore {
                     SeaValue::Int(Some(input.channel_retry_interval_ms)),
                 ],
             )).await.map_err(|e| e.to_string())?;
-        } else {
-            txn.execute(self.db.stmt(
-                r#"INSERT INTO monoize_providers (
-                        id, name, max_retries, channel_max_retries,
-                        channel_retry_interval_ms, circuit_breaker_enabled,
-                        per_model_circuit_break, transforms, api_type_overrides,
-                        active_probe_enabled_override, active_probe_interval_seconds_override,
-                        active_probe_success_threshold_override, active_probe_model_override,
-                        request_timeout_ms_override, extra_fields_whitelist,
-                        strip_cross_protocol_nested_extra, group_ids,
-                        enabled, priority, created_at, updated_at
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"#,
-                vec![
-                        id.clone().into(),
-                        input.name.clone().into(),
-                        SeaValue::Int(Some(input.max_retries)),
-                        SeaValue::Int(Some(input.channel_max_retries)),
-                        SeaValue::Int(Some(input.channel_retry_interval_ms)),
-                        SeaValue::Int(Some(if input.circuit_breaker_enabled { 1 } else { 0 })),
-                        SeaValue::Int(Some(if input.per_model_circuit_break { 1 } else { 0 })),
-                        transforms_json.into(),
-                        api_type_overrides_json.into(),
-                        opt_bool_to_value(input.active_probe_enabled_override),
-                        opt_u64_to_value(input.active_probe_interval_seconds_override),
-                        opt_u64_to_value(
-                            input
-                                .active_probe_success_threshold_override
-                                .map(|v| v as u64),
-                        ),
-                        input.active_probe_model_override.clone().into(),
-                        opt_u64_to_value(input.request_timeout_ms_override),
-                        extra_fields_whitelist_json.into(),
-                        opt_bool_to_value(strip_cross_proto),
-                        group_ids_json.into(),
-                        SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
-                        SeaValue::Int(Some(priority)),
-                        now.to_rfc3339().into(),
-                        now.to_rfc3339().into(),
-                    ],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        }
 
         self.replace_channels_on(&*txn, &id, &input.channels)
             .await?;
@@ -2082,9 +2026,6 @@ impl MonoizeRoutingStore {
                     SeaValue::Bytes(Some(Box::new(trimmed.as_bytes().to_vec()))),
                 );
             }
-        }
-        if let Some(value) = input.max_retries {
-            push_value("max_retries", SeaValue::Int(Some(value)));
         }
         if let Some(value) = input.channel_max_retries {
             push_value("channel_max_retries", SeaValue::Int(Some(value)));

@@ -1267,7 +1267,6 @@ mod tests {
             name: "provider".to_string(),
             enabled: true,
             priority: Some(0),
-            max_retries: -1,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,

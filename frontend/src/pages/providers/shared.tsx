@@ -49,7 +49,6 @@ export type ProviderForm = {
 	id?: string
 	name: string
 	enabled: boolean
-	max_retries: number
 	channel_max_retries: number
 	channel_retry_interval_ms: number
 	circuit_breaker_enabled: boolean
@@ -130,7 +129,6 @@ export function emptyForm(): ProviderForm {
 		id: '',
 		name: '',
 		enabled: true,
-		max_retries: -1,
 		channel_max_retries: 0,
 		channel_retry_interval_ms: 0,
 		circuit_breaker_enabled: true,
@@ -156,7 +154,6 @@ export function fromProvider(provider: Provider): ProviderForm {
 		id: provider.id,
 		name: provider.name,
 		enabled: provider.enabled,
-		max_retries: provider.max_retries,
 		channel_max_retries: provider.channel_max_retries ?? 0,
 		channel_retry_interval_ms: provider.channel_retry_interval_ms ?? 0,
 		circuit_breaker_enabled: provider.circuit_breaker_enabled ?? true,

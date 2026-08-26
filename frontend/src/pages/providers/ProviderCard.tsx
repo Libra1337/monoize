@@ -319,8 +319,7 @@ export function ProviderCard({
 									contentClassName='max-w-[min(28rem,calc(100vw-2rem))]'
 								/>
 								<span className='hidden lg:inline text-xs text-muted-foreground whitespace-nowrap'>
-									[{t('providers.priority')}: {provider.priority} ·{' '}
-									{t('providers.maxRetriesLabel')}: {provider.max_retries}]
+									[{t('providers.priority')}: {provider.priority}]
 								</span>
 							</div>
 						</div>
@@ -403,8 +402,7 @@ export function ProviderCard({
 					</div>
 					<div className='md:hidden mt-2 flex items-center justify-between gap-2 text-sm text-muted-foreground'>
 						<span>
-							[{t('providers.priority')}: {provider.priority} ·{' '}
-							{t('providers.maxRetriesLabel')}: {provider.max_retries}]
+							[{t('providers.priority')}: {provider.priority}]
 						</span>
 						<div
 							className='flex items-center gap-2'

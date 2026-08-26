@@ -482,7 +482,6 @@
 		"channelRetryIntervalMs": "Channel Retry Interval (ms)",
 		"circuitBreakerEnabled": "Enable circuit breaker",
 		"perModelCircuitBreak": "Per-model circuit breaker",
-		"maxRetriesLabel": "Max Retries",
 		"probeOverrideTitle": "Active Probe",
 		"probeOverrideDescription": "Provider-level probe settings override global health monitoring settings. Empty values inherit global settings.",
 		"probeEnabledOverride": "Active Probe Override",

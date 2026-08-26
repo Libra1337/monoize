@@ -177,7 +177,6 @@ function buildInput(form: ProviderForm, c: (zhText: string, enText: string) => s
 		name: form.name.trim(),
 		enabled: form.enabled,
 		priority: form.priority,
-		max_retries: form.max_retries,
 		channel_max_retries: form.channel_max_retries,
 		channel_retry_interval_ms: form.channel_retry_interval_ms,
 		circuit_breaker_enabled: form.circuit_breaker_enabled,
@@ -341,7 +340,7 @@ export function ProviderDialog({
 	const sections: Array<{ id: Section; icon: typeof Server; label: string; summary: string }> = [
 		{ id: 'provider', icon: Server, label: 'Provider', summary: form.name || c('未命名', 'Untitled') },
 		{ id: 'channels', icon: Layers3, label: 'Channel', summary: `${Math.min(form.channels.length, 1)}` },
-		{ id: 'routing', icon: GitBranch, label: c('路由', 'Routing'), summary: `${form.max_retries === -1 ? '∞' : form.max_retries + 1} attempts` },
+		{ id: 'routing', icon: GitBranch, label: c('路由', 'Routing'), summary: `${form.channel_max_retries + 1} attempts/channel` },
 		{ id: 'transforms', icon: Braces, label: c('转换', 'Transforms'), summary: `${form.transforms.length}` },
 		{ id: 'protocol', icon: Settings2, label: c('协议', 'Protocol'), summary: `${form.api_type_overrides.length}` }
 	]
@@ -624,7 +623,6 @@ function AffinityModeOverride({ label, value, onChange, c }: { label: string; va
 function RoutingSettings({ form, setForm, settings, c }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>>; settings?: SystemSettings; c: (zh: string, en: string) => string }) {
 	return <div className='mx-auto flex w-full max-w-4xl flex-col gap-6 p-4 sm:p-6'><SectionHeading title={c('路由与重试', 'Routing and retries')} description={c('这些策略应用到 Provider 下的全部 Channel。', 'These policies apply to every channel in the provider.')} />
 		<div className='grid gap-4 rounded-xl border bg-card p-4 sm:grid-cols-2 sm:p-5'>
-			<Field label={c('Provider 最大重试', 'Provider max retries')} hint={c('-1 表示尝试全部可用 Channel。', '-1 tries every eligible channel.')}><Input type='number' min='-1' value={form.max_retries} onChange={event => setForm(previous => ({ ...previous, max_retries: Number(event.target.value) }))} /></Field>
 			<Field label={c('单 Channel 重试', 'Retries per channel')}><Input type='number' min='0' value={form.channel_max_retries} onChange={event => setForm(previous => ({ ...previous, channel_max_retries: Number(event.target.value) }))} /></Field>
 			<Field label={c('重试间隔（毫秒）', 'Retry interval (ms)')}><Input type='number' min='0' value={form.channel_retry_interval_ms} onChange={event => setForm(previous => ({ ...previous, channel_retry_interval_ms: Number(event.target.value) }))} /></Field>
 			<Field label={c('请求超时覆盖（毫秒）', 'Request timeout override (ms)')} hint={c(`留空继承全局 ${settings?.monoize_request_timeout_ms ?? '—'}`, `Empty inherits global ${settings?.monoize_request_timeout_ms ?? '—'}`)}><Input type='number' min='1' value={form.request_timeout_ms_override} onChange={event => setForm(previous => ({ ...previous, request_timeout_ms_override: event.target.value }))} /></Field>

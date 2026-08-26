@@ -436,7 +436,6 @@
 		"channelRetryIntervalMs": "通道重試間隔（毫秒）",
 		"circuitBreakerEnabled": "啟用斷路器",
 		"perModelCircuitBreak": "按模型熔斷",
-		"maxRetriesLabel": "最大重試",
 		"probeOverrideTitle": "主動探測",
 		"probeOverrideDescription": "Provider 層級探測設定會覆蓋全域健康監測設定。留空代表繼承全域設定。",
 		"probeEnabledOverride": "主動探測覆蓋",

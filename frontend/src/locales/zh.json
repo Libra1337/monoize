@@ -451,7 +451,6 @@
 		"channelRetryIntervalMs": "通道重试间隔（毫秒）",
 		"circuitBreakerEnabled": "启用断路器",
 		"perModelCircuitBreak": "按模型熔断",
-		"maxRetriesLabel": "最大重试",
 		"probeOverrideTitle": "主动探测",
 		"probeOverrideDescription": "Provider 级探测配置会覆盖全局健康监测配置。留空表示继承全局配置。",
 		"probeEnabledOverride": "主动探测覆盖",

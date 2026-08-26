@@ -267,7 +267,6 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
         id: "mono_provider_123".to_string(),
         name: "provider".to_string(),
         channels: vec![channel],
-        max_retries: -1,
         channel_max_retries: 0,
         channel_retry_interval_ms: 0,
         circuit_breaker_enabled: true,

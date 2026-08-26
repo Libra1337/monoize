@@ -8,22 +8,15 @@ description: How Monoize selects a route, retries failures, falls forward, and b
 For each request, Monoize resolves the route in this order:
 
 1. **Model redirects.** API-key rules run first, then global rules. The first match rewrites the model name.
-2. **Provider selection.** Monoize collects enabled Providers that serve the model through at least one enabled Channel with weight greater than zero, and whose groups intersect the key's groups. Group order sets the preference order; inside one group, Provider priority applies.
-3. **Channel selection.** Inside the chosen Provider, Monoize orders eligible Channels by weighted randomization. The probability that Channel $i$ is tried first is:
-
-```math
-P(i) = \frac{w_i}{\sum_{j=1}^{n} w_j}
-```
-
-A Channel with weight `2` therefore receives twice the traffic of a Channel with weight `1`.
+2. **Provider selection.** Monoize collects enabled Providers whose Group is allowed by the API key and whose embedded Channel maps the model with complete pricing.
+3. **Channel selection.** Each Provider owns one embedded Channel. Monoize uses that Channel when it is enabled and healthy.
 
 ## Retry and fallback
 
-Monoize tries routes in nested order: Channels inside a Provider first, then the next Provider.
+Monoize tries the selected Provider's Channel, then falls forward to the next Provider in the same Group.
 
 - Each Channel gets `channel_max_retries + 1` attempts. The default is 1 attempt, no in-Channel retry.
 - `channel_retry_interval_ms` inserts a wait between in-Channel retries. The default is `0`.
-- `max_retries` bounds the total attempt count across the Provider.
 - When a Provider is exhausted, Monoize continues with the next eligible Provider.
 - When all Providers are exhausted, the client receives HTTP `502` with code `upstream_error`.
 
@@ -57,4 +50,4 @@ Monoize can bind a conversation to the Channel that served it, so follow-up requ
 
 ## Timing metrics
 
-Every request row in [Request Logs](/en/docs/request-logs) records total duration, time to first byte, and visible-output tokens per second. Use these values to compare Channels before you change weights.
+Every request row in [Request Logs](/en/docs/request-logs) records total duration, time to first byte, and visible-output tokens per second. Use these values to compare Providers before you change Group priority.

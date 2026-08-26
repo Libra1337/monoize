@@ -1,12 +1,12 @@
 ---
 title: Provider と Channel
-description: 順序付きの Provider と重み付きの Channel で上流ルートを定義します。
+description: Group 内で順序付けた Provider と内蔵 Channel で上流ルートを定義します。
 ---
 
 ## 概念
 
-- **Provider（プロバイダー）** はルーティンググループです。ルーティング順序、リトライ予算、ヘルスポリシー、順序付き変換チェーンを定義します。
-- **Channel（チャネル）** は Provider 内の 1 つの上流エンドポイントです。上流タイプ、ベース URL、認証情報、モデル対応付け、重み、タイムアウトを保持します。
+- **Provider（プロバイダー）** は 1 つの Group に属します。ルーティング順序、既定価格、ヘルスポリシー、順序付き変換チェーンを定義します。
+- **Channel（チャネル）** は Provider が持つ唯一の上流エンドポイントです。上流タイプ、ベース URL、認証情報、モデル対応付け、タイムアウトを保持します。
 
 リクエストはまず Provider を選択し、その中の Channel を選択します。選択規則は[ルーティングと信頼性](/ja/docs/routing)を参照してください。
 
@@ -16,30 +16,28 @@ description: 順序付きの Provider と重み付きの Channel で上流ルー
 
 1. サイドバーの**プロバイダー**を開きます。
 2. 作成ボタンをクリックして名前を入力します。
-3. 既定値が合わない場合はリトライオプションを調整します。
-   - `max_retries`：Provider 全体のリトライ総予算。`-1` はそのルート内で無制限。
-   - `channel_max_retries`：次へ進む前の Channel 内リトライ回数。既定 `0`。
-   - `channel_retry_interval_ms`：Channel 内リトライの間隔。既定 `0`。
-4. 明確な理由がない限り、`circuit_breaker_enabled` は有効のままにします。
+3. 1 つの Group を選択し、内蔵 Channel を設定します。
+4. 既定値が合わない場合は `channel_max_retries` と `channel_retry_interval_ms` を設定します。
+5. 明確な理由がない限り、`circuit_breaker_enabled` は有効のままにします。
 
-## Channel を追加
+## Channel を設定
 
-1. Provider を開き、**Channel を追加**をクリックします。
+1. Provider を開き、**Channel** を選択します。
 2. 上流タイプを選択します：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`replicate`。
 3. 上流のベース URL と API キーを入力します。
-4. 重みを設定します。トラフィックは対象 Channel 間で重みに比例して分配されます。既定 `1`。
-5. 任意：Channel ごとの `proxy_url` を設定して、プロセスレベルの上流プロキシを上書きします。
+4. 任意：`proxy_url` を設定して、プロセスレベルの上流プロキシを上書きします。
 
 後で Channel を編集するとき、API キー欄を空にすると保存済みのキーが維持されます。
 
 ## モデルを対応付け
 
-各 Channel は、提供する論理モデルを列挙します。モデルエントリの内容：
+内蔵 Channel は、提供する論理モデルを列挙します。モデル対応付けの内容：
 
 - `redirect`：実際の上流モデル名。空にすると論理名をそのまま送信します。
-- `multiplier`：課金に使う正の小数の価格乗数。
+- 価格 Profile モード：Provider の既定値を継承、上書き、または未価格設定にします。
+- 任意の倍率上書き。未設定の場合は Provider の倍率を継承します。
 
-Provider 内の有効な Channel が論理モデルを対応付けている場合のみ、そのモデルはその Provider にルーティングされます。
+Channel が有効で、モデル対応付けに完全な価格がある場合のみ、そのモデルはその Provider にルーティングされます。
 
 ## Provider の変換
 
@@ -47,4 +45,4 @@ Provider は順序付き変換ルールのリストを保持できます。Provi
 
 ## グループ
 
-すべての Provider は少なくとも 1 つのグループに属します。API キーは、グループが交差する Provider のみにルーティングされます。ユーザー層や環境の分離にグループを使います。
+各 Provider は 1 つの Group に属します。API キーは許可された Group の Provider のみにルーティングされます。Group を使ってユーザー層や環境を分離します。

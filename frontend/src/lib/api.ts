@@ -339,7 +339,6 @@ export interface Provider {
   id: string;
   name: string;
   channels: MonoizeChannel[];
-  max_retries: number;
   channel_max_retries: number;
   channel_retry_interval_ms: number;
   circuit_breaker_enabled: boolean;
@@ -393,7 +392,6 @@ export interface CreateMonoizeChannelInput {
 export interface CreateProviderInput {
   name: string;
   channels: CreateMonoizeChannelInput[];
-  max_retries?: number;
   channel_max_retries?: number;
   channel_retry_interval_ms?: number;
   circuit_breaker_enabled?: boolean;
@@ -415,7 +413,6 @@ export interface CreateProviderInput {
 export interface UpdateProviderInput {
   name?: string;
   channels?: CreateMonoizeChannelInput[];
-  max_retries?: number;
   channel_max_retries?: number;
   channel_retry_interval_ms?: number;
   circuit_breaker_enabled?: boolean;

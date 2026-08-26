@@ -436,7 +436,6 @@
 		"channelRetryIntervalMs": "Channel リトライ間隔（ms）",
 		"circuitBreakerEnabled": "サーキットブレーカーを有効化",
 		"perModelCircuitBreak": "モデル別サーキットブレーカー",
-		"maxRetriesLabel": "最大リトライ",
 		"probeOverrideTitle": "アクティブプローブ",
 		"probeOverrideDescription": "プロバイダー単位のプローブ設定はグローバルなヘルス監視設定を上書きします。空値はグローバル設定を継承します。",
 		"probeEnabledOverride": "アクティブプローブ上書き",

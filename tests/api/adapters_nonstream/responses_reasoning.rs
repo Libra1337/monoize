@@ -561,7 +561,6 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
             extra_headers: None,
             session_affinity_auto: None,
             }],
-            max_retries: -1,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,

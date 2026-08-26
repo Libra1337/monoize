@@ -8,22 +8,15 @@ description: Monoize 如何选择路由、重试失败、前进回退和熔断�
 对每个请求，Monoize 按以下顺序解析路由：
 
 1. **模型重定向。** 先执行 API 密钥规则，再执行全局规则。第一条匹配的规则重写模型名。
-2. **Provider 选择。** Monoize 收集满足以下条件的已启用 Provider：至少有一个已启用、权重大于零的 Channel 服务该模型，且分组与密钥分组有交集。分组顺序决定优先顺序；同一分组内按 Provider 优先级排序。
-3. **Channel 选择。** 在选中的 Provider 内，Monoize 按权重随机排序候选 Channel。Channel $i$ 被首先尝试的概率为：
-
-```math
-P(i) = \frac{w_i}{\sum_{j=1}^{n} w_j}
-```
-
-因此权重为 `2` 的 Channel 获得的流量是权重为 `1` 的 Channel 的两倍。
+2. **Provider 选择。** Monoize 收集 API 密钥允许的 Group 中，已启用且通过内嵌 Channel 映射该模型并具备完整价格的 Provider。
+3. **Channel 选择。** 每个 Provider 只有一个内嵌 Channel。该 Channel 已启用且健康时，Monoize 使用它。
 
 ## 重试与回退
 
-Monoize 按嵌套顺序尝试路由：先在一个 Provider 内遍历 Channel，再前进到下一个 Provider。
+Monoize 先尝试所选 Provider 的 Channel，再前进到同一 Group 中的下一个 Provider。
 
 - 每个 Channel 获得 `channel_max_retries + 1` 次尝试。默认为 1 次尝试，不做 Channel 内重试。
 - `channel_retry_interval_ms` 在 Channel 内重试之间插入等待。默认为 `0`。
-- `max_retries` 限制整个 Provider 的总尝试次数。
 - 一个 Provider 耗尽后，Monoize 继续尝试下一个符合条件的 Provider。
 - 所有 Provider 都耗尽后，客户端收到 HTTP `502`，错误码为 `upstream_error`。
 
@@ -57,4 +50,4 @@ Monoize 可以把一个会话绑定到服务它的 Channel，让携带服务端�
 
 ## 时间指标
 
-[请求日志](/zh/docs/request-logs)中的每一行记录总耗时、首字节时间和可见输出的每秒 Token 数。修改权重之前，用这些数值比较各个 Channel。
+[请求日志](/zh/docs/request-logs)中的每一行记录总耗时、首字节时间和可见输出的每秒 Token 数。修改 Group 优先级之前，用这些数值比较 Provider。

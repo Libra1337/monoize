@@ -28,3 +28,12 @@ fn provider_reorder_is_scoped_to_one_group() {
             .contains("body: JSON.stringify({ group_id: groupId, provider_ids: providerIds })")
     );
 }
+
+#[test]
+fn provider_retry_field_is_removed_from_management_and_routing_contracts() {
+    assert!(!ROUTING_SOURCE.contains("pub max_retries:"));
+    assert!(!ROUTING_SOURCE.contains("input.max_retries"));
+    assert!(!ROUTING_SOURCE.contains("{p}max_retries"));
+    assert!(!FRONTEND_API_SOURCE.contains("\n  max_retries: number;"));
+    assert!(!include_str!("../../src/handlers/mod.rs").contains("provider_budget_remaining"));
+}

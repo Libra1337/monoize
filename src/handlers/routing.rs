@@ -605,16 +605,8 @@ pub(super) async fn collect_provider_attempts(
     }
 
     let ordered = weighted_shuffle_channels(channels);
-    let provider_attempt_limit = if provider.max_retries == -1 {
-        None
-    } else {
-        Some(provider.max_retries.max(0) as usize + 1)
-    };
-    let max_attempts = provider_attempt_limit
-        .unwrap_or(ordered.len())
-        .min(ordered.len());
     let runtime = state.monoize_runtime.read().await;
-    for channel in ordered.into_iter().take(max_attempts) {
+    for channel in ordered {
         let origin_key = channel_origin_key(&channel.base_url);
         let origin_peer_channel_ids = origin_key
             .as_deref()
@@ -684,7 +676,6 @@ pub(super) async fn collect_provider_attempts(
             channel_retry_interval_ms: provider.channel_retry_interval_ms.max(0) as u64,
             circuit_breaker_enabled: provider.circuit_breaker_enabled,
             per_model_circuit_break: provider.per_model_circuit_break,
-            provider_attempt_limit,
             request_timeout_ms,
             extra_fields_whitelist: merge_extra_fields_whitelist(
                 &runtime.extra_fields_whitelist,

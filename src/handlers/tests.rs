@@ -383,7 +383,6 @@ async fn seed_group_routing_provider(
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: name.to_string(),
-            max_retries: -1,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled,
@@ -483,7 +482,6 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
                 channel("cheap", "1", "cheap-upstream"),
                 channel("expensive", "2", "expensive-upstream"),
             ],
-            max_retries: -1,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: false,
@@ -1511,7 +1509,6 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "OpenAI".to_string(),
-            max_retries: 0,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -1637,7 +1634,6 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "OpenAI".to_string(),
-            max_retries: 0,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -1718,7 +1714,6 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "OpenAI".to_string(),
-            max_retries: 0,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -1798,7 +1793,6 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "OpenAI".to_string(),
-            max_retries: 0,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -1881,7 +1875,6 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "OpenAI".to_string(),
-            max_retries: 0,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -2012,7 +2005,6 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "Gateway".to_string(),
-            max_retries: 0,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -3356,7 +3348,6 @@ fn affinity_test_attempt(
         channel_retry_interval_ms: 0,
         circuit_breaker_enabled: true,
         per_model_circuit_break: false,
-        provider_attempt_limit: Some(1),
         request_timeout_ms: 30_000,
         extra_fields_whitelist: None,
         strip_cross_protocol_nested_extra: true,
@@ -3950,29 +3941,6 @@ async fn response_id_affinity_inherits_source_binding_age_on_hit() {
         response_binding.expires_at - response_binding.last_used_at,
         attempt.affinity_idle_ttl_seconds as i64
     );
-}
-
-#[test]
-fn provider_attempt_budget_survives_affinity_interleaving() {
-    let provider_a = affinity_test_attempt(
-        "provider-a",
-        "channel-a1",
-        crate::monoize_routing::AffinityFailbackMode::Sticky,
-        300,
-    );
-    let provider_b = affinity_test_attempt(
-        "provider-b",
-        "channel-b1",
-        crate::monoize_routing::AffinityFailbackMode::Sticky,
-        300,
-    );
-    let mut execution = AttemptExecutionState::default();
-
-    execution.record_upstream_attempt(&provider_b);
-    execution.record_upstream_attempt(&provider_a);
-
-    assert!(!execution.provider_budget_remaining(&provider_b));
-    assert!(!execution.provider_budget_remaining(&provider_a));
 }
 
 #[test]

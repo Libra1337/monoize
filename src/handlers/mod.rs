@@ -907,7 +907,6 @@ struct MonoizeAttempt {
     channel_retry_interval_ms: u64,
     circuit_breaker_enabled: bool,
     per_model_circuit_break: bool,
-    provider_attempt_limit: Option<usize>,
     request_timeout_ms: u64,
     extra_fields_whitelist: Option<Vec<String>>,
     strip_cross_protocol_nested_extra: bool,
@@ -1036,26 +1035,12 @@ fn shared_origin_skip_token(provider_id: &str, origin_key: &str) -> String {
 
 #[derive(Default)]
 struct AttemptExecutionState {
-    provider_attempts_used: HashMap<String, usize>,
     next_attempt_number: u32,
     shared_origin_skips: HashSet<String>,
     current_attempt_started: Option<Instant>,
 }
 
 impl AttemptExecutionState {
-    fn provider_budget_remaining(&self, attempt: &MonoizeAttempt) -> bool {
-        attempt
-            .provider_attempt_limit
-            .map(|limit| {
-                self.provider_attempts_used
-                    .get(&attempt.provider_id)
-                    .copied()
-                    .unwrap_or(0)
-                    < limit
-            })
-            .unwrap_or(true)
-    }
-
     fn skip_shared_origin(&self, attempt: &MonoizeAttempt) -> bool {
         let Some(origin_key) = attempt.origin_key.as_ref() else {
             return false;
@@ -1073,16 +1058,11 @@ impl AttemptExecutionState {
     }
 
     fn should_skip(&self, attempt: &MonoizeAttempt) -> bool {
-        !self.provider_budget_remaining(attempt) || self.skip_shared_origin(attempt)
+        self.skip_shared_origin(attempt)
     }
 
-    fn record_upstream_attempt(&mut self, attempt: &MonoizeAttempt) -> u32 {
+    fn record_upstream_attempt(&mut self, _attempt: &MonoizeAttempt) -> u32 {
         self.current_attempt_started = Some(Instant::now());
-        let used = self
-            .provider_attempts_used
-            .entry(attempt.provider_id.clone())
-            .or_default();
-        *used = used.saturating_add(1);
         self.next_attempt_number = self.next_attempt_number.saturating_add(1);
         self.next_attempt_number
     }
