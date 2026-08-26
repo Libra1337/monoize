@@ -14,7 +14,9 @@ SB-0.5. The account ledger remains `users.balance_nano_usd`. The Store MUST NOT 
 
 ## 1. Exchange Rate
 
-SB-FX-1. The backend MUST request `https://open.er-api.com/v6/latest/USD` at process start and at most once per 15-minute interval after the previous attempt.
+SB-FX-1. A primary node MUST request `https://open.er-api.com/v6/latest/USD` at process start and at most once per 15-minute interval after the previous attempt.
+
+SB-FX-1A. A replica node MUST load only the persisted exchange-rate snapshot. A replica MUST NOT request the remote exchange-rate service or write `store_exchange_rates`.
 
 SB-FX-2. A valid response MUST contain a finite positive `rates.CNY` decimal and a source update time. The backend MUST persist the decimal as `cny_per_usd` without binary floating conversion.
 
@@ -132,6 +134,8 @@ SB-R-6. Successful redemption MUST apply the reward and change the code to used 
 
 SB-R-7. Balance redemption MUST append one `billing_ledger` row with kind `redemption_credit` and a delta dedupe key derived from the code id. Plan redemption MUST activate one entitlement with `source_kind = redemption`.
 
+SB-R-8. A USD balance redemption MUST NOT require an exchange-rate snapshot. A CNY balance redemption and a plan redemption MUST return HTTP `503` code `exchange_rate_unavailable` when no snapshot exists.
+
 ## 7. API Surface
 
 SB-A-1. Session user endpoints are:
@@ -152,6 +156,9 @@ SB-A-2. Admin endpoints are:
 - `POST /api/dashboard/store/admin/orders/{id}/complete`
 - `POST /api/dashboard/store/admin/orders/{id}/cancel`
 - `GET|POST /api/dashboard/store/admin/redemption-codes`
+- `GET|PUT /api/dashboard/store/admin/settings`
+
+Every endpoint in SB-A-2 MUST require an admin session.
 
 SB-A-3. User mutations MUST reject replica nodes by the repository's shared write policy. Admin mutations MUST use the same policy.
 

@@ -24,6 +24,8 @@ pub enum StoreBillingError {
     InvalidInput,
     #[error("invalid monetary amount")]
     InvalidAmount,
+    #[error("monetary amount overflow")]
+    AmountOverflow,
     #[error("invalid exchange rate")]
     InvalidExchangeRate,
     #[error("product is not available")]
@@ -56,7 +58,8 @@ impl From<MoneyError> for StoreBillingError {
     fn from(error: MoneyError) -> Self {
         match error {
             MoneyError::InvalidExchangeRate => Self::InvalidExchangeRate,
-            MoneyError::InvalidAmount | MoneyError::AmountOverflow => Self::InvalidAmount,
+            MoneyError::InvalidAmount => Self::InvalidAmount,
+            MoneyError::AmountOverflow => Self::AmountOverflow,
         }
     }
 }
@@ -673,7 +676,7 @@ impl StoreBillingStore {
                 )?;
                 let actual = recharge
                     .checked_add(bonus)
-                    .ok_or(StoreBillingError::InvalidAmount)?;
+                    .ok_or(StoreBillingError::AmountOverflow)?;
                 (
                     recharge.to_string(),
                     Some(BalanceProduct {
@@ -982,7 +985,7 @@ impl StoreBillingStore {
         let previous = parse_minor(&row_string(&row, "balance_nano_usd")?)?;
         let balance = previous
             .checked_add(delta)
-            .ok_or(StoreBillingError::InvalidAmount)?;
+            .ok_or(StoreBillingError::AmountOverflow)?;
         conn.execute(self.db.stmt(
             "UPDATE users SET balance_nano_usd = $2, updated_at = $3 WHERE id = $1",
             vec![
@@ -1151,9 +1154,8 @@ impl StoreBillingStore {
         &self,
         user_id: &str,
         code: &str,
-        rate: &ExchangeRateSnapshot,
+        rate: Option<&ExchangeRateSnapshot>,
     ) -> Result<RedemptionCodeRecord, StoreBillingError> {
-        validate_rate_snapshot(rate)?;
         let normalized = normalize_code(code);
         if normalized.len() != 16 || !normalized.bytes().all(is_code_character) {
             return Err(StoreBillingError::InvalidRedemptionCode);
@@ -1189,11 +1191,16 @@ impl StoreBillingStore {
                 currency,
                 amount_minor,
             } => {
-                let delta = quoted_received_to_nano_usd(
-                    parse_minor(&amount_minor)?,
-                    currency,
-                    &rate.cny_per_usd,
-                )?;
+                let rate_value = match currency {
+                    Currency::USD => "1",
+                    Currency::CNY => {
+                        let rate = rate.ok_or(StoreBillingError::InvalidExchangeRate)?;
+                        validate_rate_snapshot(rate)?;
+                        &rate.cny_per_usd
+                    }
+                };
+                let delta =
+                    quoted_received_to_nano_usd(parse_minor(&amount_minor)?, currency, rate_value)?;
                 self.credit_balance(
                     &*tx,
                     user_id,
@@ -1206,6 +1213,8 @@ impl StoreBillingStore {
                 .await?;
             }
             PersistedReward::Plan { product } => {
+                let rate = rate.ok_or(StoreBillingError::InvalidExchangeRate)?;
+                validate_rate_snapshot(rate)?;
                 self.activate_plan(
                     &*tx,
                     user_id,
@@ -1636,7 +1645,7 @@ fn actual_received(balance: &BalanceProductInput) -> Result<String, StoreBilling
     parse_minor(&balance.recharge_minor)?
         .checked_add(parse_minor(&balance.bonus_minor)?)
         .map(|value| value.to_string())
-        .ok_or(StoreBillingError::InvalidAmount)
+        .ok_or(StoreBillingError::AmountOverflow)
 }
 
 #[cfg(test)]

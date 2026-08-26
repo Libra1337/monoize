@@ -4,8 +4,8 @@ use monoize::migration::Migrator;
 use monoize::store_billing::{
     BalanceProductInput, CreateOrderInput, CreatePaymentChannelInput, CreateProductInput, Currency,
     ExchangeRateSnapshot, GenerateRedemptionCodesInput, IconKind, PaymentChannelKind,
-    PaymentChannelMode, PlanQuotaInput, ProductKind, RedemptionRewardInput, StoreBillingError,
-    StoreBillingStore, StoreSettings, UpdatePaymentChannelInput, WindowKind,
+    PaymentChannelMode, PlanQuotaInput, ProductKind, RedemptionCodeStatus, RedemptionRewardInput,
+    StoreBillingError, StoreBillingStore, StoreSettings, UpdatePaymentChannelInput, WindowKind,
 };
 use sea_orm::{ConnectionTrait, MigratorTrait, TryGetable};
 
@@ -449,7 +449,7 @@ async fn expired_codes_fail_and_one_code_can_be_redeemed_only_once_concurrently(
         .unwrap();
     assert_eq!(
         store
-            .redeem("user-a", &generated[0].code, &rate())
+            .redeem("user-a", &generated[0].code, Some(&rate()))
             .await
             .unwrap_err(),
         StoreBillingError::RedemptionCodeExpired
@@ -460,8 +460,12 @@ async fn expired_codes_fail_and_one_code_can_be_redeemed_only_once_concurrently(
     let second_store = store.clone();
     let first_code = code.clone();
     let (first, second) = tokio::join!(
-        async move { first_store.redeem("user-a", &first_code, &rate()).await },
-        async move { second_store.redeem("user-b", &code, &rate()).await }
+        async move {
+            first_store
+                .redeem("user-a", &first_code, Some(&rate()))
+                .await
+        },
+        async move { second_store.redeem("user-b", &code, Some(&rate())).await }
     );
     assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
     let error = first.err().or_else(|| second.err()).unwrap();
@@ -489,6 +493,33 @@ async fn expired_codes_fail_and_one_code_can_be_redeemed_only_once_concurrently(
                 .unwrap()
                 .contains(&generated[1].code))
     );
+}
+
+#[tokio::test]
+async fn usd_balance_redemption_does_not_require_an_exchange_rate() {
+    let (db, store) = setup().await;
+    insert_user(&db, "user-a").await;
+    insert_user(&db, "admin").await;
+    let generated = store
+        .generate_redemption_codes(
+            "admin",
+            GenerateRedemptionCodesInput {
+                reward: RedemptionRewardInput::Balance {
+                    currency: Currency::USD,
+                    amount_minor: "100".to_string(),
+                },
+                count: 1,
+                validity_days: 30,
+            },
+        )
+        .await
+        .unwrap();
+
+    let redeemed = store
+        .redeem("user-a", &generated[0].code, None)
+        .await
+        .unwrap();
+    assert_eq!(redeemed.status, RedemptionCodeStatus::Used);
 }
 
 #[tokio::test]

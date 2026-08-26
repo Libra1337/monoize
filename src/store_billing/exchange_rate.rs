@@ -235,8 +235,9 @@ impl ExchangeRateFetcher for ReqwestExchangeRateFetcher {
 #[derive(Clone)]
 pub struct ExchangeRateService {
     store: ExchangeRateStore,
-    fetcher: Arc<dyn ExchangeRateFetcher>,
+    fetcher: Option<Arc<dyn ExchangeRateFetcher>>,
     cache: Arc<Mutex<ExchangeRateCache>>,
+    read_only: bool,
 }
 
 impl ExchangeRateService {
@@ -250,6 +251,17 @@ impl ExchangeRateService {
         Ok(service)
     }
 
+    pub async fn new_read_only(db: DbPool) -> Result<Self, ExchangeRateError> {
+        let store = ExchangeRateStore::new(db);
+        let snapshot = store.load().await?;
+        Ok(Self {
+            store,
+            fetcher: None,
+            cache: Arc::new(Mutex::new(ExchangeRateCache::new(snapshot))),
+            read_only: true,
+        })
+    }
+
     pub async fn with_fetcher<F>(
         store: ExchangeRateStore,
         fetcher: F,
@@ -257,11 +269,23 @@ impl ExchangeRateService {
     where
         F: ExchangeRateFetcher + 'static,
     {
+        Self::with_fetcher_mode(store, fetcher, false).await
+    }
+
+    async fn with_fetcher_mode<F>(
+        store: ExchangeRateStore,
+        fetcher: F,
+        read_only: bool,
+    ) -> Result<Self, ExchangeRateError>
+    where
+        F: ExchangeRateFetcher + 'static,
+    {
         let snapshot = store.load().await?;
         Ok(Self {
             store,
-            fetcher: Arc::new(fetcher),
+            fetcher: Some(Arc::new(fetcher)),
             cache: Arc::new(Mutex::new(ExchangeRateCache::new(snapshot))),
+            read_only,
         })
     }
 
@@ -278,6 +302,9 @@ impl ExchangeRateService {
         &self,
         attempted_at: DateTime<Utc>,
     ) -> Result<ExchangeRateSnapshot, ExchangeRateError> {
+        if self.read_only {
+            return self.current().await;
+        }
         {
             let mut cache = self.cache.lock().await;
             if !cache.should_refresh(attempted_at) {
@@ -291,6 +318,8 @@ impl ExchangeRateService {
 
         let refreshed = self
             .fetcher
+            .as_ref()
+            .expect("writable exchange-rate service must have a fetcher")
             .fetch_latest_usd()
             .await
             .map_err(ExchangeRateError::Request)
@@ -482,6 +511,27 @@ mod tests {
         let returned = service.refresh_if_due(now).await.unwrap();
 
         assert_eq!(returned, expected);
+        assert_eq!(store.load().await.unwrap(), Some(expected));
+    }
+
+    #[tokio::test]
+    async fn read_only_service_never_fetches_or_persists() {
+        let store = migrated_store().await;
+        let now = Utc.with_ymd_and_hms(2026, 8, 27, 1, 2, 3).unwrap();
+        let expected = snapshot(now);
+        store.persist(&expected).await.unwrap();
+        let fetcher = StubFetcher::new([Ok(VALID_RESPONSE)]);
+        let service = ExchangeRateService::with_fetcher_mode(store.clone(), fetcher.clone(), true)
+            .await
+            .unwrap();
+
+        let returned = service
+            .refresh_if_due(now + chrono::Duration::hours(1))
+            .await
+            .unwrap();
+
+        assert_eq!(returned, expected);
+        assert_eq!(fetcher.call_count(), 0);
         assert_eq!(store.load().await.unwrap(), Some(expected));
     }
 }

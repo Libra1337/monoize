@@ -3,11 +3,23 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::str::FromStr;
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Currency {
     CNY,
     USD,
+}
+
+impl<'de> Deserialize<'de> for Currency {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "CNY" => Ok(Self::CNY),
+            "USD" => Ok(Self::USD),
+            _ => Err(serde::de::Error::custom("invalid_currency")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -170,6 +182,16 @@ mod tests {
         for invalid in ["", "00", "01", "+1", "-1", "1.0", " 1", "1 "] {
             assert!(parse_minor(invalid).is_err(), "accepted {invalid:?}");
         }
+        assert_eq!(
+            parse_minor(&"9".repeat(100)),
+            Err(super::MoneyError::AmountOverflow)
+        );
+    }
+
+    #[test]
+    fn unsupported_currency_has_a_stable_error_marker() {
+        let error = serde_json::from_str::<Currency>(r#""EUR""#).unwrap_err();
+        assert!(error.to_string().contains("invalid_currency"));
     }
 
     #[test]

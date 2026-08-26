@@ -41,3 +41,6 @@ mod error_sanitization;
 
 #[path = "api/live_usage.rs"]
 mod live_usage;
+
+#[path = "api/store_billing.rs"]
+mod store_billing;

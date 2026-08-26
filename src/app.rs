@@ -15,6 +15,8 @@ use crate::monoize_routing::{
 use crate::node_config::{HttpClients, NodeRole, NodeSettings};
 use crate::request_capture::RequestCaptureStore;
 use crate::settings::{SettingsStore, normalize_pricing_model_key};
+use crate::store_billing::StoreBillingStore;
+use crate::store_billing::exchange_rate::ExchangeRateService;
 use crate::transforms::TransformRegistry;
 use crate::users::{InsertRequestLog, UserRole, UserStore};
 use axum::Router;
@@ -199,6 +201,8 @@ pub struct AppState {
     pub settings_update_lock: Arc<Mutex<()>>,
     pub model_registry_store: ModelRegistryStore,
     pub billing_rate_store: BillingRateStore,
+    pub store_billing: StoreBillingStore,
+    pub exchange_rate_service: ExchangeRateService,
     pub transform_registry: Arc<TransformRegistry>,
     pub cap_verifier: CapVerifier,
     pub log_broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
@@ -417,6 +421,19 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             axum::http::StatusCode::BAD_REQUEST,
             "billing_rate_store_init_failed",
             err,
+        )
+    })?;
+    let store_billing = StoreBillingStore::new(db.clone());
+    let exchange_rate_service = if is_replica {
+        ExchangeRateService::new_read_only(db.clone()).await
+    } else {
+        ExchangeRateService::new(db.clone(), http.clone()).await
+    }
+    .map_err(|err| {
+        AppError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "store_exchange_rate_init_failed",
+            err.to_string(),
         )
     })?;
 
@@ -956,6 +973,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         settings_update_lock,
         model_registry_store,
         billing_rate_store,
+        store_billing,
+        exchange_rate_service,
         transform_registry,
         cap_verifier,
         log_broadcast,
@@ -1989,6 +2008,65 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/auth/register",
             post(crate::dashboard_handlers::register),
+        )
+        .route(
+            "/dashboard/store/catalog",
+            get(crate::dashboard_handlers::get_store_catalog),
+        )
+        .route(
+            "/dashboard/store/exchange-rate",
+            get(crate::dashboard_handlers::get_store_exchange_rate),
+        )
+        .route(
+            "/dashboard/store/orders",
+            get(crate::dashboard_handlers::list_store_orders)
+                .post(crate::dashboard_handlers::create_store_order),
+        )
+        .route(
+            "/dashboard/store/redeem",
+            post(crate::dashboard_handlers::redeem_store_code),
+        )
+        .route(
+            "/dashboard/store/admin/products",
+            get(crate::dashboard_handlers::list_store_products_admin)
+                .post(crate::dashboard_handlers::create_store_product_admin),
+        )
+        .route(
+            "/dashboard/store/admin/products/{id}",
+            put(crate::dashboard_handlers::update_store_product_admin)
+                .delete(crate::dashboard_handlers::delete_store_product_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels",
+            get(crate::dashboard_handlers::list_store_payment_channels_admin)
+                .post(crate::dashboard_handlers::create_store_payment_channel_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}",
+            put(crate::dashboard_handlers::update_store_payment_channel_admin)
+                .delete(crate::dashboard_handlers::delete_store_payment_channel_admin),
+        )
+        .route(
+            "/dashboard/store/admin/orders",
+            get(crate::dashboard_handlers::list_all_store_orders_admin),
+        )
+        .route(
+            "/dashboard/store/admin/orders/{id}/complete",
+            post(crate::dashboard_handlers::complete_store_order_admin),
+        )
+        .route(
+            "/dashboard/store/admin/orders/{id}/cancel",
+            post(crate::dashboard_handlers::cancel_store_order_admin),
+        )
+        .route(
+            "/dashboard/store/admin/redemption-codes",
+            get(crate::dashboard_handlers::list_store_redemption_codes_admin)
+                .post(crate::dashboard_handlers::generate_store_redemption_codes_admin),
+        )
+        .route(
+            "/dashboard/store/admin/settings",
+            get(crate::dashboard_handlers::get_store_settings_admin)
+                .put(crate::dashboard_handlers::update_store_settings_admin),
         )
         .route(
             "/dashboard/auth/login",
