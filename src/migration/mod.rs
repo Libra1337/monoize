@@ -229,6 +229,7 @@ mod m20260824_000040_drop_request_log_visible_tps;
 mod m20260824_000041_request_capture_records;
 mod m20260825_000042_groups_registry;
 mod m20260825_000043_channel_allow_missing_usage;
+mod m20260826_000044_provider_pricing_flatten;
 
 #[cfg(test)]
 mod tests {
