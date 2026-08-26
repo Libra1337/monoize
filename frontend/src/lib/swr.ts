@@ -912,11 +912,12 @@ export async function deleteProviderOptimistic(
 }
 
 export async function reorderProviders(
+  groupId: string,
   providerIds: string[],
   onError?: (error: Error) => void
 ) {
   try {
-    await api.reorderProviders(providerIds);
+    await api.reorderProviders(groupId, providerIds);
     mutate(SWR_KEYS.PROVIDERS);
   } catch (error) {
     if (onError && error instanceof Error) {

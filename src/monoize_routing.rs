@@ -302,7 +302,9 @@ pub struct UpdateMonoizeProviderInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReorderProvidersInput {
+    pub group_id: String,
     pub provider_ids: Vec<String>,
 }
 
@@ -2222,6 +2224,9 @@ impl MonoizeRoutingStore {
     }
 
     pub async fn reorder_providers(&self, input: ReorderProvidersInput) -> Result<(), String> {
+        if input.group_id.is_empty() {
+            return Err("group_id must not be empty".to_string());
+        }
         if input.provider_ids.len() > provider_reorder_max_ids() {
             return Err(format!(
                 "provider reorder accepts at most {} ids",
@@ -2241,11 +2246,22 @@ impl MonoizeRoutingStore {
                 .await
                 .map_err(|e| e.to_string())?;
         }
+        let group_exists = txn
+            .query_one(self.db.stmt(
+                "SELECT id FROM monoize_groups WHERE id = $1",
+                vec![input.group_id.clone().into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some();
+        if !group_exists {
+            return Err("group_id does not identify a Group".to_string());
+        }
         let rows = txn
-            .query_all(
-                self.db
-                    .stmt("SELECT id FROM monoize_providers ORDER BY id", vec![]),
-            )
+            .query_all(self.db.stmt(
+                "SELECT id FROM monoize_providers WHERE group_id = $1 ORDER BY id",
+                vec![input.group_id.clone().into()],
+            ))
             .await
             .map_err(|e| e.to_string())?;
         if rows.len() != input.provider_ids.len() {
@@ -2275,10 +2291,13 @@ impl MonoizeRoutingStore {
         }
         let updated_at_index = values.len() + 1;
         values.push(Utc::now().to_rfc3339().into());
+        let group_id_index = values.len() + 1;
+        values.push(input.group_id.into());
         txn.execute(self.db.stmt(
             &format!(
                 "UPDATE monoize_providers
-                 SET priority = CASE id {} END, updated_at = ${updated_at_index}",
+                 SET priority = CASE id {} END, updated_at = ${updated_at_index}
+                 WHERE group_id = ${group_id_index}",
                 cases.join(" ")
             ),
             values,
@@ -3495,8 +3514,20 @@ mod tests {
         let store = MonoizeRoutingStore::new(db.clone())
             .await
             .expect("store creates");
+        let default_group_id: String = db
+            .read()
+            .query_one(db.stmt(
+                "SELECT id FROM monoize_groups WHERE is_default = 1",
+                vec![],
+            ))
+            .await
+            .expect("default Group query succeeds")
+            .expect("default Group exists")
+            .try_get("", "id")
+            .expect("default Group ID decodes");
         store
             .reorder_providers(ReorderProvidersInput {
+                group_id: default_group_id,
                 provider_ids: Vec::new(),
             })
             .await
@@ -3619,6 +3650,7 @@ mod tests {
         assert_eq!(second.priority, 1);
         store
             .reorder_providers(ReorderProvidersInput {
+                group_id: created.group_ids[0].clone(),
                 provider_ids: vec![second.id.clone(), created.id.clone()],
             })
             .await

@@ -1106,10 +1106,10 @@ class ApiClient {
     await this.request(`/providers/${id}`, { method: "DELETE" });
   }
 
-  async reorderProviders(providerIds: string[]): Promise<void> {
+  async reorderProviders(groupId: string, providerIds: string[]): Promise<void> {
     await this.request("/providers/reorder", {
       method: "POST",
-      body: JSON.stringify({ provider_ids: providerIds }),
+      body: JSON.stringify({ group_id: groupId, provider_ids: providerIds }),
     });
   }
 

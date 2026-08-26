@@ -46,9 +46,9 @@ export function ProvidersPage() {
 	const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null)
 	const [draggingProviderId, setDraggingProviderId] = useState<string | null>(null)
 
-	const applyReorder = async (orderedIds: string[]) => {
+	const applyReorder = async (groupId: string, orderedIds: string[]) => {
 		try {
-			await reorderProviders(orderedIds)
+			await reorderProviders(groupId, orderedIds)
 			toast.success(t('providers.reorderSuccess'))
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : t('common.error'))
@@ -59,10 +59,15 @@ export function ProvidersPage() {
 		if (to < 0 || to >= providers.length || from === to) {
 			return
 		}
+		const groupId = providers[from]?.group_ids[0]
+		if (!groupId || providers[to]?.group_ids[0] !== groupId) return
 		const next = [...providers]
 		const [item] = next.splice(from, 1)
 		next.splice(to, 0, item)
-		await applyReorder(next.map(provider => provider.id))
+		await applyReorder(
+			groupId,
+			next.filter(provider => provider.group_ids[0] === groupId).map(provider => provider.id)
+		)
 	}
 
 	const handleDrop = async (targetProviderId: string) => {
@@ -75,10 +80,18 @@ export function ProvidersPage() {
 		if (from < 0 || to < 0) {
 			return
 		}
+		const groupId = next[from]?.group_ids[0]
+		if (!groupId || next[to]?.group_ids[0] !== groupId) {
+			setDraggingProviderId(null)
+			return
+		}
 		const [item] = next.splice(from, 1)
 		next.splice(to, 0, item)
 		setDraggingProviderId(null)
-		await applyReorder(next.map(provider => provider.id))
+		await applyReorder(
+			groupId,
+			next.filter(provider => provider.group_ids[0] === groupId).map(provider => provider.id)
+		)
 	}
 
 	const handleDelete = async (provider: Provider) => {
