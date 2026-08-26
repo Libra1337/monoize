@@ -290,3 +290,27 @@ WAL growth below 2 GiB, and checkpoint below 30 seconds.
 
 MM-Q6. Gate B fails if either database misses one read, write, query-count, memory, response,
 lock, generation-delta, WAL, ordering, or cursor requirement.
+
+MM-Q7. The isolated PostgreSQL benchmark MUST parse its connection URL before connection.
+The parsed host MUST equal `127.0.0.1`; another host MUST return
+`postgres_rehearsal_host_required`. The parsed database name MUST equal
+`lynshen_rehearsal`. Another database name, a missing database name, or an invalid URL MUST
+return `postgres_rehearsal_database_required`. Both errors MUST occur before connection or
+DDL. The benchmark MUST drop and recreate only the
+`lynshen_marketplace_benchmark` schema. It MUST NOT drop, recreate, truncate, or write the
+`public` schema. Its connection MUST set `search_path` to `lynshen_marketplace_benchmark`
+before creating a benchmark table. Reset, table creation, and index creation MUST run in one
+transaction. A failure MUST restore the pre-run benchmark schema. PostgreSQL `ANALYZE` MUST
+name the five schema-qualified benchmark tables. It MUST NOT analyze another schema.
+
+MM-Q8. The rehearsal CLI MUST accept `sqlite`, `postgres`, and `paired` as benchmark
+backends. The `postgres` and `paired` backends MUST read
+`LYNSHEN_REHEARSAL_POSTGRES_URL`. A missing value MUST return
+`missing LYNSHEN_REHEARSAL_POSTGRES_URL` before benchmark execution. `paired` MUST run
+SQLite and PostgreSQL with one identical BenchmarkConfig and write one comparison report.
+
+MM-Q9. SQLite and PostgreSQL benchmark reports for one seed and envelope MUST have equal
+`fixture_recipe_sha256`, `loaded_source_sha256`, `query_set_sha256`, loaded row counts, and
+materialized offer-rate entry counts. A mismatch fails rehearsal and MUST NOT qualify Gate B.
+The paired report MUST contain both complete backend reports, `comparison_passed: true`, and
+`gate_b_qualified: false` until every MM-Q2 through MM-Q6 requirement is recorded as passed.

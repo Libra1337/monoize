@@ -1,6 +1,7 @@
 use crate::marketplace::{
     BenchmarkConfig, BenchmarkMode, Envelope, FixtureManifest, QuerySetManifest,
-    run_sqlite_benchmark, write_benchmark_report,
+    compare_benchmark_reports, run_postgres_benchmark, run_sqlite_benchmark,
+    write_benchmark_comparison_report, write_benchmark_report,
 };
 use crate::provider::canonical_json;
 use serde::{Deserialize, Serialize};
@@ -41,9 +42,14 @@ async fn run_gate_summary(args: &[OsString]) -> anyhow::Result<()> {
 
 async fn run_marketplace_benchmark(args: &[OsString]) -> anyhow::Result<()> {
     let backend = required_argument(args, "--backend")?;
-    if backend != "sqlite" {
-        anyhow::bail!("unsupported benchmark backend: {backend}");
-    }
+    let postgres_url = match backend {
+        "sqlite" => None,
+        "postgres" | "paired" => Some(
+            std::env::var("LYNSHEN_REHEARSAL_POSTGRES_URL")
+                .context("missing LYNSHEN_REHEARSAL_POSTGRES_URL")?,
+        ),
+        _ => anyhow::bail!("unsupported benchmark backend: {backend}"),
+    };
     let envelope = match required_argument(args, "--envelope")? {
         "smoke" => Envelope::Smoke,
         "qualification" => Envelope::Qualification,
@@ -59,15 +65,30 @@ async fn run_marketplace_benchmark(args: &[OsString]) -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
     let fixture = FixtureManifest::generate(0x004c_594e_5348_454e, envelope)?;
     QuerySetManifest::read(&root.join(query_set))?.validate(&fixture)?;
-    let report = run_sqlite_benchmark(BenchmarkConfig {
+    let config = BenchmarkConfig {
         seed: fixture.seed,
         envelope,
         mode,
         query_limit: None,
         git_commit: resolve_clean_git_commit(&root)?,
-    })
-    .await?;
-    write_benchmark_report(&root, output, &report)
+    };
+    match (backend, postgres_url) {
+        ("sqlite", None) => {
+            let report = run_sqlite_benchmark(config).await?;
+            write_benchmark_report(&root, output, &report)
+        }
+        ("postgres", Some(url)) => {
+            let report = run_postgres_benchmark(&url, config).await?;
+            write_benchmark_report(&root, output, &report)
+        }
+        ("paired", Some(url)) => {
+            let sqlite = run_sqlite_benchmark(config.clone()).await?;
+            let postgres = run_postgres_benchmark(&url, config).await?;
+            let report = compare_benchmark_reports(sqlite, postgres)?;
+            write_benchmark_comparison_report(&root, output, &report)
+        }
+        _ => unreachable!("validated benchmark backend"),
+    }
 }
 
 fn required_argument<'a>(args: &'a [OsString], name: &str) -> anyhow::Result<&'a str> {
@@ -117,7 +138,7 @@ pub fn resolve_clean_git_commit(root: &Path) -> anyhow::Result<String> {
 }
 
 fn usage() -> &'static str {
-    "usage: lynshen-rehearsal gate-summary --output rehearsal/evidence/<file>.json\n       lynshen-rehearsal marketplace benchmark --backend sqlite --envelope smoke --query-set rehearsal/fixtures/marketplace/query-set.json --output rehearsal/evidence/<file>.json"
+    "usage: lynshen-rehearsal gate-summary --output rehearsal/evidence/<file>.json\n       lynshen-rehearsal marketplace benchmark --backend <sqlite|postgres|paired> --envelope smoke --query-set rehearsal/fixtures/marketplace/query-set.json --output rehearsal/evidence/<file>.json"
 }
 
 use anyhow::Context;

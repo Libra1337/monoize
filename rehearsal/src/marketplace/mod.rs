@@ -5,8 +5,9 @@ mod generation;
 mod query;
 
 pub use benchmark::{
-    BenchmarkConfig, BenchmarkMode, BenchmarkReport, OperationMetrics, run_sqlite_benchmark,
-    write_benchmark_report,
+    BenchmarkComparisonReport, BenchmarkConfig, BenchmarkMode, BenchmarkReport, OperationMetrics,
+    compare_benchmark_reports, run_postgres_benchmark, run_sqlite_benchmark,
+    write_benchmark_comparison_report, write_benchmark_report,
 };
 pub use cursor::{CursorError, EndpointKind, ListCursor, OfferCursor, canonical_filter_digest};
 pub use fixture::{
