@@ -81,6 +81,15 @@ async fn target_constraints_reject_duplicate_names_and_mismatched_keys() {
             .await
             .is_err()
     );
+    assert!(
+        sqlx::query(model_insert)
+            .bind("GPT-4o")
+            .bind("GPT-4o")
+            .bind("wrong")
+            .execute(&mut db)
+            .await
+            .is_err()
+    );
     sqlx::query(model_insert)
         .bind("GPT-4o")
         .bind("GPT-4o")

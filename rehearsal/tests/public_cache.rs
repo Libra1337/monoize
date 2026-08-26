@@ -18,7 +18,13 @@ fn entity_tag_list_uses_weak_comparison_and_wildcard() {
 
 #[test]
 fn malformed_entity_tag_list_is_ignored() {
-    for malformed in ["abc", "W/abc", "\"unterminated", "*, \"abc\""] {
+    for malformed in [
+        "abc",
+        "W/abc",
+        "\"unterminated",
+        "*, \"abc\"",
+        "W/\"abc\", malformed",
+    ] {
         assert!(!if_none_match_matches(malformed, "W/\"abc\""));
     }
 }

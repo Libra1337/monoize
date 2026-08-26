@@ -68,6 +68,10 @@ fn rejects_invalid_model_and_oversized_ascii_cursor() {
         ListCursor::new(1, 24, digest("", ""), 0, &"a".repeat(400)).unwrap_err(),
         CursorError::Invalid
     );
+    assert_eq!(
+        ListCursor::new(1, 24, digest("", ""), 0, &"a".repeat(257)).unwrap_err(),
+        CursorError::Invalid
+    );
 }
 
 #[test]

@@ -7,6 +7,7 @@ fn summary_distinguishes_passed_executed_and_blocked_gates() {
         git_commit: "abc123".to_owned(),
         sqlite_tests_passed: true,
         postgres_available: false,
+        postgres_rehearsal_passed: false,
         root_tests_passed: false,
         docs_build_passed: false,
         marketplace_qualification_passed: false,

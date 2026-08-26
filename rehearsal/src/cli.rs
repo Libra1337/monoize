@@ -20,6 +20,9 @@ pub async fn run(args: impl IntoIterator<Item = OsString>) -> anyhow::Result<()>
         git_commit: std::env::var("LYNSHEN_REHEARSAL_GIT_COMMIT")
             .unwrap_or_else(|_| "unknown".to_owned()),
         sqlite_tests_passed: true,
+        postgres_available: std::env::var("LYNSHEN_REHEARSAL_POSTGRES_URL").is_ok(),
+        postgres_rehearsal_passed: std::env::var("LYNSHEN_REHEARSAL_POSTGRES_VERIFIED")
+            .is_ok_and(|value| value == "1"),
         ..GateSummaryInput::default()
     });
     write_gate_summary(&root, PathBuf::from(output), &summary)
@@ -32,6 +35,7 @@ pub struct GateSummaryInput {
     pub git_commit: String,
     pub sqlite_tests_passed: bool,
     pub postgres_available: bool,
+    pub postgres_rehearsal_passed: bool,
     pub root_tests_passed: bool,
     pub docs_build_passed: bool,
     pub marketplace_qualification_passed: bool,
@@ -98,6 +102,8 @@ pub fn build_gate_summary(input: GateSummaryInput) -> GateSummary {
     let mut gate_b_blockers = Vec::new();
     if !input.postgres_available {
         gate_b_blockers.push("postgres_not_available".to_owned());
+    } else if !input.postgres_rehearsal_passed {
+        gate_b_blockers.push("postgres_core_rehearsal_not_recorded".to_owned());
     }
     if !input.marketplace_qualification_passed {
         gate_b_blockers.push("maximum_envelope_marketplace_not_run".to_owned());
@@ -143,7 +149,7 @@ pub fn build_gate_summary(input: GateSummaryInput) -> GateSummary {
             provider_transform: component(input.sqlite_tests_passed, "isolated TDD suite"),
             sqlite_migration: component(
                 input.sqlite_tests_passed,
-                "transaction and rollback suite",
+                "schema prototype, Cartesian transform, transaction, rollback, and no-op suite",
             ),
             exact_pricing: component(input.sqlite_tests_passed, "canonical golden snapshot suite"),
             marketplace_primitives: component(
@@ -152,10 +158,15 @@ pub fn build_gate_summary(input: GateSummaryInput) -> GateSummary {
             ),
             status_primitives: component(
                 input.sqlite_tests_passed,
-                "capacity, spool, dispatch, replay, aggregation suite",
+                "capacity, logical spool lifecycle, dispatch, replay, aggregation suite; full platform fsync and fault profiles remain Gate D blockers",
             ),
-            postgres_rehearsal: if input.postgres_available {
-                component(false, "available but Gate B suite not recorded")
+            postgres_rehearsal: if input.postgres_rehearsal_passed {
+                component(
+                    true,
+                    "PostgreSQL 17 schema, Cartesian migration, rollback, no-op, and generation core suite",
+                )
+            } else if input.postgres_available {
+                component(false, "available but core rehearsal suite not recorded")
             } else {
                 unavailable("Docker and PostgreSQL client are unavailable on this host")
             },

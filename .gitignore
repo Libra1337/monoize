@@ -1,5 +1,7 @@
 /target
 /rehearsal/target
+/rehearsal/.postgres-data/
+/rehearsal/.postgres.log
 /data/
 .playwright-mcp
 frontend/playwright-report/

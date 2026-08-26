@@ -1,9 +1,13 @@
 mod model;
+mod postgres;
 mod preflight;
 mod sqlite;
 mod transform;
 
-pub use model::{CanonicalDecimal, ModelKeys};
+pub use model::{CanonicalDecimal, ModelKeys, PublicNameKey};
+pub use postgres::{
+    create_postgres_target_schema, migrate_postgres_provider_schema, postgres_table_exists,
+};
 pub use preflight::{
     PreflightReport, PreflightSource, ProviderPreflight, PublicName, build_preflight_report,
     canonical_json,

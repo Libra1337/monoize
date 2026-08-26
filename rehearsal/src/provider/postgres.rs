@@ -1,6 +1,10 @@
-use super::{LegacyProvider, ModelKeys, PricingMode, transform_provider};
+use super::sqlite::{fail_at, source_name};
+use super::{
+    LegacyProvider, MigrationFailurePoint, MigrationOutcome, ModelKeys, PricingMode,
+    transform_provider,
+};
 use anyhow::{Context, bail};
-use sqlx::{Connection, Executor, Row, Sqlite, SqliteConnection, Transaction};
+use sqlx::{Connection, Executor, PgConnection, Postgres, Row, Transaction};
 use std::collections::BTreeMap;
 
 const TARGET_DDL: &[&str] = &[
@@ -9,17 +13,17 @@ const TARGET_DDL: &[&str] = &[
         group_id TEXT NOT NULL REFERENCES monoize_groups(id) ON DELETE RESTRICT,
         name TEXT NOT NULL,
         public_name TEXT NOT NULL,
-        public_name_key BLOB NOT NULL CHECK(public_name_key = CAST(public_name AS BLOB)),
+        public_name_key BYTEA NOT NULL CHECK(public_name_key = convert_to(public_name, 'UTF8')),
         priority INTEGER NOT NULL,
         enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
         pricing_profile TEXT NULL,
         multiplier TEXT NOT NULL,
-        configuration_generation INTEGER NOT NULL CHECK(configuration_generation >= 1),
+        configuration_generation BIGINT NOT NULL CHECK(configuration_generation >= 1),
         created_at TEXT NOT NULL,
         channel_id TEXT NOT NULL UNIQUE,
         channel_name TEXT NOT NULL,
         channel_public_name TEXT NOT NULL,
-        channel_public_name_key BLOB NOT NULL CHECK(channel_public_name_key = CAST(channel_public_name AS BLOB)),
+        channel_public_name_key BYTEA NOT NULL CHECK(channel_public_name_key = convert_to(channel_public_name, 'UTF8')),
         channel_provider_type TEXT NOT NULL,
         channel_base_url TEXT NOT NULL,
         channel_api_key TEXT NOT NULL,
@@ -32,8 +36,8 @@ const TARGET_DDL: &[&str] = &[
     r#"CREATE TABLE IF NOT EXISTS monoize_provider_models (
         provider_id TEXT NOT NULL REFERENCES monoize_providers(id) ON DELETE CASCADE,
         model_name TEXT NOT NULL,
-        model_name_key BLOB NOT NULL CHECK(model_name_key = CAST(model_name AS BLOB)),
-        model_search_key BLOB NOT NULL,
+        model_name_key BYTEA NOT NULL CHECK(model_name_key = convert_to(model_name, 'UTF8')),
+        model_search_key BYTEA NOT NULL,
         redirect TEXT NULL,
         pricing_profile_mode TEXT NOT NULL CHECK(pricing_profile_mode IN ('inherit', 'override', 'unpriced')),
         pricing_profile_override TEXT NULL,
@@ -45,45 +49,29 @@ const TARGET_DDL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_provider_models_lookup ON monoize_provider_models(model_name_key, provider_id)",
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MigrationFailurePoint {
-    AfterLegacyRename,
-    AfterTargetSchema,
-    AfterProviders,
-    BeforeLegacyDrop,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MigrationOutcome {
-    Migrated {
-        provider_count: usize,
-        model_count: usize,
-    },
-    AlreadyMigrated,
-}
-
-pub async fn create_sqlite_target_schema(db: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+pub async fn create_postgres_target_schema(db: &mut PgConnection) -> Result<(), sqlx::Error> {
     let mut transaction = db.begin().await?;
     execute_target_ddl(&mut transaction).await?;
     transaction.commit().await
 }
 
-pub async fn migrate_sqlite_provider_schema(
-    db: &mut SqliteConnection,
+pub async fn migrate_postgres_provider_schema(
+    db: &mut PgConnection,
     sources: &[LegacyProvider],
     failure: Option<MigrationFailurePoint>,
 ) -> anyhow::Result<MigrationOutcome> {
-    let has_provider_models = sqlite_table_exists(db, "monoize_provider_models").await?;
-    let has_channels = sqlite_table_exists(db, "monoize_channels").await?;
-    let has_channel_models = sqlite_table_exists(db, "monoize_channel_models").await?;
-    if has_provider_models && !has_channels && !has_channel_models {
+    let has_models = postgres_table_exists(db, "monoize_provider_models").await?;
+    let has_channels = postgres_table_exists(db, "monoize_channels").await?;
+    let has_channel_models = postgres_table_exists(db, "monoize_channel_models").await?;
+    if has_models && !has_channels && !has_channel_models {
         return Ok(MigrationOutcome::AlreadyMigrated);
     }
-    if !has_channels || !has_channel_models || !sqlite_table_exists(db, "monoize_providers").await?
+    if !has_channels
+        || !has_channel_models
+        || !postgres_table_exists(db, "monoize_providers").await?
     {
         bail!("legacy_provider_schema_incomplete");
     }
-
     let transformed = sources
         .iter()
         .map(transform_provider)
@@ -95,15 +83,6 @@ pub async fn migrate_sqlite_provider_schema(
         .flat_map(|result| &result.targets)
         .map(|target| target.models.len())
         .sum();
-
-    let mut transaction = db.begin().await?;
-    transaction
-        .execute("ALTER TABLE monoize_providers RENAME TO legacy_monoize_providers")
-        .await?;
-    fail_at(failure, MigrationFailurePoint::AfterLegacyRename)?;
-    execute_target_ddl(&mut transaction).await?;
-    fail_at(failure, MigrationFailurePoint::AfterTargetSchema)?;
-
     let mut targets = transformed
         .into_iter()
         .flat_map(|result| result.targets)
@@ -125,6 +104,14 @@ pub async fn migrate_sqlite_provider_schema(
                     .cmp(right.channel.source_channel_id.as_bytes())
             })
     });
+
+    let mut transaction = db.begin().await?;
+    transaction
+        .execute("ALTER TABLE monoize_providers RENAME TO legacy_monoize_providers")
+        .await?;
+    fail_at(failure, MigrationFailurePoint::AfterLegacyRename)?;
+    execute_target_ddl(&mut transaction).await?;
+    fail_at(failure, MigrationFailurePoint::AfterTargetSchema)?;
     let mut next_priority = BTreeMap::<String, i32>::new();
     for mut target in targets {
         let priority = next_priority.entry(target.group_id.clone()).or_default();
@@ -135,24 +122,22 @@ pub async fn migrate_sqlite_provider_schema(
             source_name(sources, &target.source_provider_id),
             target.channel.name
         );
-        let provider_key = provider_public_name.as_bytes();
         let channel_public_name = target.channel.name.clone();
-        let channel_key = channel_public_name.as_bytes();
         sqlx::query(
             r#"INSERT INTO monoize_providers (
-                    id, group_id, name, public_name, public_name_key, priority, enabled,
-                    pricing_profile, multiplier, configuration_generation, created_at,
-                    channel_id, channel_name, channel_public_name, channel_public_name_key,
-                    channel_provider_type, channel_base_url, channel_api_key, channel_enabled,
-                    channel_max_retries
-                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?, ?, ?, ?, ?, 'responses',
-                          'https://redacted.invalid', 'redacted', ?, 0)"#,
+                id, group_id, name, public_name, public_name_key, priority, enabled,
+                pricing_profile, multiplier, configuration_generation, created_at,
+                channel_id, channel_name, channel_public_name, channel_public_name_key,
+                channel_provider_type, channel_base_url, channel_api_key, channel_enabled,
+                channel_max_retries
+            ) VALUES ($1, $2, $3, $4, convert_to($4, 'UTF8'), $5, 1, $6, $7, 1, $8,
+                      $9, $10, $11, convert_to($11, 'UTF8'), 'responses',
+                      'https://redacted.invalid', 'redacted', $12, 0)"#,
         )
         .bind(&target.id)
         .bind(&target.group_id)
         .bind(source_name(sources, &target.source_provider_id))
         .bind(&provider_public_name)
-        .bind(provider_key)
         .bind(target.priority)
         .bind(&target.pricing_profile)
         .bind(target.multiplier.as_str())
@@ -160,11 +145,9 @@ pub async fn migrate_sqlite_provider_schema(
         .bind(&target.channel.id)
         .bind(&target.channel.name)
         .bind(&channel_public_name)
-        .bind(channel_key)
-        .bind(target.channel.enabled)
+        .bind(i32::from(target.channel.enabled))
         .execute(&mut *transaction)
         .await?;
-
         for model in target.models {
             let keys = ModelKeys::new(&model.name).context("derive model keys")?;
             let (mode, profile) = match model.pricing {
@@ -174,10 +157,9 @@ pub async fn migrate_sqlite_provider_schema(
             };
             sqlx::query(
                 r#"INSERT INTO monoize_provider_models (
-                        provider_id, model_name, model_name_key, model_search_key, redirect,
-                        pricing_profile_mode, pricing_profile_override, multiplier_override,
-                        created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2026-08-26T00:00:00Z')"#,
+                    provider_id, model_name, model_name_key, model_search_key, redirect,
+                    pricing_profile_mode, pricing_profile_override, multiplier_override, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '2026-08-26T00:00:00Z')"#,
             )
             .bind(&target.id)
             .bind(&keys.model_name)
@@ -212,7 +194,22 @@ pub async fn migrate_sqlite_provider_schema(
     })
 }
 
-async fn execute_target_ddl(transaction: &mut Transaction<'_, Sqlite>) -> Result<(), sqlx::Error> {
+pub async fn postgres_table_exists(
+    db: &mut PgConnection,
+    table: &str,
+) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1",
+    )
+    .bind(table)
+    .fetch_one(db)
+    .await?;
+    Ok(row.try_get::<i64, _>("count")? == 1)
+}
+
+async fn execute_target_ddl(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<(), sqlx::Error> {
     for statement in target_ddl() {
         transaction.execute(statement.as_str()).await?;
     }
@@ -221,13 +218,13 @@ async fn execute_target_ddl(transaction: &mut Transaction<'_, Sqlite>) -> Result
 
 fn target_ddl() -> Vec<String> {
     let search_check = format!(
-        "model_search_key BLOB NOT NULL CHECK(model_search_key = CAST({} AS BLOB)),",
+        "model_search_key BYTEA NOT NULL CHECK(model_search_key = convert_to({}, 'UTF8')),",
         ascii_fold_expression("model_name")
     );
     TARGET_DDL
         .iter()
         .map(|statement| {
-            statement.replace("model_search_key BLOB NOT NULL,", search_check.as_str())
+            statement.replace("model_search_key BYTEA NOT NULL,", search_check.as_str())
         })
         .collect()
 }
@@ -240,34 +237,4 @@ fn ascii_fold_expression(column: &str) -> String {
             char::from(upper + 32)
         )
     })
-}
-
-pub(super) fn fail_at(
-    selected: Option<MigrationFailurePoint>,
-    current: MigrationFailurePoint,
-) -> anyhow::Result<()> {
-    if selected == Some(current) {
-        bail!("injected_migration_failure:{current:?}");
-    }
-    Ok(())
-}
-
-pub(super) fn source_name<'a>(sources: &'a [LegacyProvider], provider_id: &str) -> &'a str {
-    sources
-        .iter()
-        .find(|source| source.id == provider_id)
-        .map_or("migrated Provider", |source| source.name.as_str())
-}
-
-pub async fn sqlite_table_exists(
-    db: &mut SqliteConnection,
-    table: &str,
-) -> Result<bool, sqlx::Error> {
-    let row = sqlx::query(
-        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?",
-    )
-    .bind(table)
-    .fetch_one(db)
-    .await?;
-    Ok(row.try_get::<i64, _>("count")? == 1)
 }

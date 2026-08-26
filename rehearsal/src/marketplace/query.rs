@@ -1,4 +1,4 @@
-use sqlx::{Executor, Row, SqliteConnection};
+use sqlx::{Executor, PgConnection, Row, SqliteConnection};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueryInput {
@@ -180,6 +180,75 @@ impl MarketplaceQuery {
             items,
         })
     }
+
+    pub async fn list_postgres(
+        db: &mut PgConnection,
+        input: QueryInput,
+    ) -> Result<ListPage, sqlx::Error> {
+        if !(1..=50).contains(&input.limit) {
+            return Err(sqlx::Error::Protocol("invalid limit".to_owned()));
+        }
+        let query = input.query.as_deref().map(ascii_fold).unwrap_or_default();
+        let group = input.group.unwrap_or_default();
+        let (after_group, after_model) = input.after.map_or((-1, Vec::new()), |key| {
+            (key.group_ordinal, key.model_name.into_bytes())
+        });
+        let rows = sqlx::query(
+            r#"SELECT g.sort_order, g.public_name AS group_name, pm.model_name,
+                      COUNT(*) AS offer_count
+               FROM monoize_provider_models pm
+               JOIN monoize_providers p ON p.id = pm.provider_id
+               JOIN monoize_groups g ON g.id = p.group_id
+               WHERE p.enabled = 1 AND p.channel_enabled = 1
+                 AND (octet_length($1::bytea) = 0 OR position($1::bytea in pm.model_search_key) > 0)
+                 AND ($2 = '' OR g.public_name = $2)
+                 AND (g.sort_order > $3 OR (g.sort_order = $3 AND pm.model_name_key > $4::bytea))
+               GROUP BY g.sort_order, g.public_name, pm.model_name, pm.model_name_key
+               ORDER BY g.sort_order ASC, pm.model_name_key ASC
+               LIMIT $5"#,
+        )
+        .bind(query)
+        .bind(group)
+        .bind(after_group)
+        .bind(after_model)
+        .bind(i64::from(input.limit) + 1)
+        .fetch_all(db)
+        .await?;
+        decode_list_rows(rows, input.limit)
+    }
+
+    pub async fn offers_postgres(
+        db: &mut PgConnection,
+        input: OfferQueryInput,
+    ) -> Result<OfferPage, sqlx::Error> {
+        if !(1..=50).contains(&input.limit) {
+            return Err(sqlx::Error::Protocol("invalid limit".to_owned()));
+        }
+        let (after_priority, after_provider, after_channel, has_after) = offer_after(input.after);
+        let rows = sqlx::query(
+            r#"SELECT p.priority, p.public_name, p.channel_public_name
+               FROM monoize_provider_models pm
+               JOIN monoize_providers p ON p.id = pm.provider_id
+               JOIN monoize_groups g ON g.id = p.group_id
+               WHERE p.enabled = 1 AND p.channel_enabled = 1
+                 AND g.public_name = $1 AND pm.model_name = $2
+                 AND ($6 = 0 OR p.priority > $3
+                      OR (p.priority = $3 AND p.public_name_key > $4::bytea)
+                      OR (p.priority = $3 AND p.public_name_key = $4::bytea AND p.channel_public_name_key > $5::bytea))
+               ORDER BY p.priority ASC, p.public_name_key ASC, p.channel_public_name_key ASC
+               LIMIT $7"#,
+        )
+        .bind(input.group)
+        .bind(input.model)
+        .bind(after_priority)
+        .bind(after_provider)
+        .bind(after_channel)
+        .bind(has_after)
+        .bind(i64::from(input.limit) + 1)
+        .fetch_all(db)
+        .await?;
+        decode_offer_rows(rows, input.limit)
+    }
 }
 
 pub async fn create_sqlite_query_fixture(db: &mut SqliteConnection) -> Result<(), sqlx::Error> {
@@ -194,6 +263,95 @@ pub async fn create_sqlite_query_fixture(db: &mut SqliteConnection) -> Result<()
         db.execute(statement).await?;
     }
     Ok(())
+}
+
+pub async fn create_postgres_query_fixture(db: &mut PgConnection) -> Result<(), sqlx::Error> {
+    db.execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public")
+        .await?;
+    for statement in [
+        "CREATE TABLE monoize_groups (id TEXT PRIMARY KEY, public_name TEXT NOT NULL, sort_order BIGINT NOT NULL)",
+        "CREATE TABLE monoize_providers (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, public_name TEXT NOT NULL, public_name_key BYTEA NOT NULL, priority INTEGER NOT NULL, enabled INTEGER NOT NULL, channel_public_name TEXT NOT NULL, channel_public_name_key BYTEA NOT NULL, channel_enabled INTEGER NOT NULL)",
+        "CREATE TABLE monoize_provider_models (provider_id TEXT NOT NULL, model_name TEXT NOT NULL, model_name_key BYTEA NOT NULL, model_search_key BYTEA NOT NULL)",
+        "INSERT INTO monoize_groups VALUES ('ga', 'Alpha', 0), ('gb', 'Beta', 1)",
+        "INSERT INTO monoize_providers VALUES ('pa1', 'ga', 'Provider B', convert_to('Provider B', 'UTF8'), 1, 1, 'Channel A', convert_to('Channel A', 'UTF8'), 1), ('pa2', 'ga', 'Provider A', convert_to('Provider A', 'UTF8'), 1, 1, 'Channel Z', convert_to('Channel Z', 'UTF8'), 1), ('pb1', 'gb', 'Provider C', convert_to('Provider C', 'UTF8'), 0, 1, 'Channel C', convert_to('Channel C', 'UTF8'), 1), ('disabled', 'ga', 'Hidden', convert_to('Hidden', 'UTF8'), 0, 0, 'Hidden', convert_to('Hidden', 'UTF8'), 1)",
+        "INSERT INTO monoize_provider_models VALUES ('pa1', 'GPT-4o', convert_to('GPT-4o', 'UTF8'), convert_to('gpt-4o', 'UTF8')), ('pa2', 'GPT-4o', convert_to('GPT-4o', 'UTF8'), convert_to('gpt-4o', 'UTF8')), ('pa1', '模型-A', convert_to('模型-A', 'UTF8'), convert_to('模型-a', 'UTF8')), ('pb1', 'GPT-4o', convert_to('GPT-4o', 'UTF8'), convert_to('gpt-4o', 'UTF8')), ('disabled', 'hidden', convert_to('hidden', 'UTF8'), convert_to('hidden', 'UTF8'))",
+    ] {
+        db.execute(statement).await?;
+    }
+    Ok(())
+}
+
+fn offer_after(after: Option<OfferKey>) -> (i32, Vec<u8>, Vec<u8>, i64) {
+    after.map_or((0, Vec::new(), Vec::new(), 0), |key| {
+        (
+            key.priority,
+            key.provider_public_name.into_bytes(),
+            key.channel_public_name.into_bytes(),
+            1,
+        )
+    })
+}
+
+fn decode_list_rows<DB>(rows: Vec<DB>, limit: u16) -> Result<ListPage, sqlx::Error>
+where
+    DB: Row,
+    for<'a> &'a str: sqlx::ColumnIndex<DB>,
+    i64: for<'r> sqlx::Decode<'r, DB::Database> + sqlx::Type<DB::Database>,
+    String: for<'r> sqlx::Decode<'r, DB::Database> + sqlx::Type<DB::Database>,
+{
+    let has_more = rows.len() > usize::from(limit);
+    let mut items = Vec::with_capacity(rows.len().min(usize::from(limit)));
+    let mut keys = Vec::with_capacity(items.capacity());
+    for row in rows.into_iter().take(usize::from(limit)) {
+        let group_ordinal = row.try_get::<i64, _>("sort_order")?;
+        let model = row.try_get::<String, _>("model_name")?;
+        let offer_count = u64::try_from(row.try_get::<i64, _>("offer_count")?)
+            .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+        keys.push(ListKey {
+            group_ordinal,
+            model_name: model.clone(),
+        });
+        items.push(MarketplaceRow {
+            group: row.try_get("group_name")?,
+            model,
+            offer_count,
+        });
+    }
+    Ok(ListPage {
+        next_key: has_more.then(|| keys.last().expect("non-empty page").clone()),
+        items,
+    })
+}
+
+fn decode_offer_rows<DB>(rows: Vec<DB>, limit: u16) -> Result<OfferPage, sqlx::Error>
+where
+    DB: Row,
+    for<'a> &'a str: sqlx::ColumnIndex<DB>,
+    i32: for<'r> sqlx::Decode<'r, DB::Database> + sqlx::Type<DB::Database>,
+    String: for<'r> sqlx::Decode<'r, DB::Database> + sqlx::Type<DB::Database>,
+{
+    let has_more = rows.len() > usize::from(limit);
+    let mut items = Vec::with_capacity(rows.len().min(usize::from(limit)));
+    let mut keys = Vec::with_capacity(items.capacity());
+    for row in rows.into_iter().take(usize::from(limit)) {
+        let priority = row.try_get::<i32, _>("priority")?;
+        let provider_public_name = row.try_get::<String, _>("public_name")?;
+        let channel_public_name = row.try_get::<String, _>("channel_public_name")?;
+        keys.push(OfferKey {
+            priority,
+            provider_public_name: provider_public_name.clone(),
+            channel_public_name: channel_public_name.clone(),
+        });
+        items.push(OfferItem {
+            provider_public_name,
+            channel_public_name,
+            priority,
+        });
+    }
+    Ok(OfferPage {
+        next_key: has_more.then(|| keys.last().expect("non-empty offers").clone()),
+        items,
+    })
 }
 
 fn ascii_fold(value: &str) -> Vec<u8> {

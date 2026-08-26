@@ -48,6 +48,7 @@ impl ListCursor {
     ) -> Result<Self, CursorError> {
         if !(1..=50).contains(&limit)
             || model.is_empty()
+            || model.len() > 256
             || model.len() > u16::MAX as usize
             || model
                 .as_bytes()

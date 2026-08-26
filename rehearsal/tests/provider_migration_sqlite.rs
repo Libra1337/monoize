@@ -106,6 +106,28 @@ async fn migration_replaces_legacy_tables_and_expands_every_pair() {
             .unwrap();
     assert_eq!(provider_count, 4);
     assert_eq!(enabled_count, 2);
+    let priorities =
+        sqlx::query("SELECT group_id, priority FROM monoize_providers ORDER BY group_id, priority")
+            .fetch_all(&mut db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                (
+                    row.try_get::<String, _>("group_id").unwrap(),
+                    row.try_get::<i32, _>("priority").unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+    assert_eq!(
+        priorities,
+        vec![
+            ("g1".to_owned(), 0),
+            ("g1".to_owned(), 1),
+            ("g2".to_owned(), 0),
+            ("g2".to_owned(), 1),
+        ]
+    );
 }
 
 #[tokio::test]

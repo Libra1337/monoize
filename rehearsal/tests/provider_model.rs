@@ -1,4 +1,4 @@
-use monoize_lynshen_rehearsal::provider::{CanonicalDecimal, ModelKeys};
+use monoize_lynshen_rehearsal::provider::{CanonicalDecimal, ModelKeys, PublicNameKey};
 
 #[test]
 fn canonical_multiplier_normalizes_without_binary_float() {
@@ -39,4 +39,19 @@ fn model_keys_reject_controls_and_oversized_names() {
     assert!(ModelKeys::new("gpt\t4").is_err());
     assert!(ModelKeys::new("\u{7f}").is_err());
     assert!(ModelKeys::new(&"a".repeat(257)).is_err());
+}
+
+#[test]
+fn public_names_trim_and_normalize_to_nfc_bytes() {
+    let composed = PublicNameKey::new("  Cafe\u{301}  ").unwrap();
+    assert_eq!(composed.name, "Café");
+    assert_eq!(composed.key, "Café".as_bytes());
+    assert_eq!(composed, PublicNameKey::new("Café").unwrap());
+}
+
+#[test]
+fn public_names_reject_controls_empty_and_more_than_64_scalars() {
+    for invalid in ["", " \t ", "Na\nme", &"a".repeat(65)] {
+        assert!(PublicNameKey::new(invalid).is_err());
+    }
 }
