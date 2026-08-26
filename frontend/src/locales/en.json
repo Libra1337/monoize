@@ -114,7 +114,25 @@
 		"marketplace": "Models",
 		"billingPlans": "Plans",
 		"adminDashboard": "System Dashboard",
-		"groups": "Groups"
+		"groups": "Groups",
+		"store": "Store",
+		"orders": "Orders",
+		"storeManagement": "Store Management"
+	},
+	"store": {
+		"title": "Store",
+		"description": "Recharge balance, purchase a plan, or redeem a code.",
+		"tabs": { "balance": "Balance", "plan": "Plans", "redeem": "Redeem code" },
+		"currency": { "label": "Display currency", "cny": "CNY", "usd": "USD", "rate": "1 USD = ¥{{rate}}", "updated": "Updated {{time}}", "unavailable": "Exchange rate unavailable" },
+		"account": { "balance": "Available balance", "monthlyUsage": "Monthly usage", "currentPlan": "Current plan", "noPlan": "No active plan" },
+		"balanceProduct": { "recharge": "Recharge", "bonus": "Bonus", "actualReceived": "Actual received", "formula": "Actual received = recharge + bonus", "custom": "Custom amount", "customPlaceholder": "Enter an amount" },
+		"plan": { "price": "Plan price", "duration": "Duration", "quota": "Quota", "groups": "Groups", "unrestricted": "All Groups" },
+		"payment": { "title": "Payment method", "empty": "No payment method is available", "select": "Select {{name}}" },
+		"summary": { "title": "Order summary", "product": "Product", "payment": "Payment method", "total": "Total", "actualReceived": "Actual received", "submit": "Create order" },
+		"redeem": { "title": "Redeem a code", "description": "Enter one unused code to receive its reward.", "code": "Redemption code", "placeholder": "XXXX-XXXX-XXXX-XXXX", "submit": "Redeem", "success": "Code redeemed", "failed": "Code redemption failed" },
+		"orders": { "title": "Orders", "description": "Review your Store purchase history.", "empty": "No orders", "number": "Order number", "product": "Product", "amount": "Amount", "payment": "Payment method", "status": "Status", "created": "Created", "details": "Order details", "pending": "Pending", "completed": "Completed", "cancelled": "Cancelled" },
+		"admin": { "title": "Store Management", "description": "Manage products, payment channels, orders, and redemption codes.", "tabs": { "products": "Products", "paymentChannels": "Payment Channels", "orders": "Orders", "redemptionCodes": "Redemption Codes" }, "addProduct": "Add product", "addChannel": "Add payment channel", "generateCodes": "Generate codes", "completeOrder": "Complete order", "cancelOrder": "Cancel order", "settings": "Recharge settings" },
+		"fields": { "kind": "Type", "name": "Name", "description": "Description", "price": "Price", "duration": "Duration", "groups": "Groups", "sortOrder": "Sort order", "enabled": "Enabled", "recharge": "Recharge amount", "bonus": "Bonus amount", "quotas": "Quota windows", "window": "Window", "hours": "Hours", "quota": "Quota in CNY", "channelMode": "Payment mode", "endpoint": "Endpoint", "icon": "Icon", "iconUrl": "Image URL", "iconUpload": "Upload image", "secret": "Secret configuration", "reward": "Reward", "count": "Code count", "validityDays": "Validity days", "expires": "Expires", "hint": "Code hint" }
 	},
 	"roles": {
 		"super_admin": "Super Admin",

@@ -14,6 +14,9 @@ import {
   CalendarClock,
   Gauge,
   Boxes,
+  ShoppingBag,
+  ReceiptText,
+  BadgeDollarSign,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -126,6 +129,8 @@ function Sidebar({
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
+    { to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") },
+    { to: "/dashboard/orders", icon: ReceiptText, label: t("nav.orders") },
   ];
 
   const adminNavItems = [
@@ -135,6 +140,7 @@ function Sidebar({
     { to: "/dashboard/plans", icon: CalendarClock, label: t("nav.billingPlans") },
     { to: "/dashboard/users", icon: Users, label: t("nav.users") },
     { to: "/dashboard/groups", icon: Boxes, label: t("nav.groups") },
+    { to: "/dashboard/store-admin", icon: BadgeDollarSign, label: t("nav.storeManagement") },
     { to: "/dashboard/admin-settings", icon: Settings, label: t("nav.settings") },
   ];
 

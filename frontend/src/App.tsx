@@ -24,7 +24,17 @@ import { ApiDocsPage } from "@/pages/api-docs";
 import { PublicMarketplacePage } from "@/pages/public-marketplace";
 import { PublicStatusPage } from "@/pages/public-status";
 import { PUBLIC_PATHS } from "@/public-routes";
+import { StorePage } from "@/pages/store";
+import { OrdersPage } from "@/pages/orders";
+import { StoreAdminPage } from "@/pages/store-admin";
+import { useAuth } from "@/hooks/use-auth";
 import "@/i18n";
+
+function StoreAdminRoute() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "super_admin" || user?.role === "admin";
+  return isAdmin ? <StoreAdminPage /> : <Navigate to="/dashboard/store" replace />;
+}
 
 function App() {
   return (
@@ -58,6 +68,9 @@ function App() {
             <Route path="users" element={<UsersPage />} />
             <Route path="groups" element={<GroupsPage />} />
             <Route path="plans" element={<BillingPlansPage />} />
+            <Route path="store" element={<StorePage />} />
+            <Route path="orders" element={<OrdersPage />} />
+            <Route path="store-admin" element={<StoreAdminRoute />} />
             <Route path="admin-settings" element={<SettingsPage />} />
           </Route>
           {/* User settings routes */}

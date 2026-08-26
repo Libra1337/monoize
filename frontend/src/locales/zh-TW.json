@@ -71,7 +71,25 @@
 		"marketplace": "模型廣場",
 		"billingPlans": "訂閱方案",
 		"adminDashboard": "系統儀表板",
-		"groups": "群組"
+		"groups": "群組",
+		"store": "商店",
+		"orders": "訂單",
+		"storeManagement": "商店管理"
+	},
+	"store": {
+		"title": "商店",
+		"description": "儲值餘額、購買方案或兌換兌換碼。",
+		"tabs": { "balance": "餘額儲值", "plan": "方案購買", "redeem": "兌換碼" },
+		"currency": { "label": "顯示貨幣", "cny": "人民幣", "usd": "美元", "rate": "1 美元 = ¥{{rate}}", "updated": "更新於 {{time}}", "unavailable": "匯率暫不可用" },
+		"account": { "balance": "可用餘額", "monthlyUsage": "本月用量", "currentPlan": "目前方案", "noPlan": "沒有有效方案" },
+		"balanceProduct": { "recharge": "儲值", "bonus": "贈送", "actualReceived": "實得", "formula": "實得金額 = 儲值 + 贈送", "custom": "自訂金額", "customPlaceholder": "輸入金額" },
+		"plan": { "price": "方案價格", "duration": "有效期", "quota": "額度", "groups": "Group", "unrestricted": "全部 Group" },
+		"payment": { "title": "付款方式", "empty": "沒有可用付款方式", "select": "選擇 {{name}}" },
+		"summary": { "title": "訂單摘要", "product": "商品", "payment": "付款方式", "total": "合計", "actualReceived": "實得金額", "submit": "建立訂單" },
+		"redeem": { "title": "兌換兌換碼", "description": "輸入一個未使用的兌換碼以領取獎勵。", "code": "兌換碼", "placeholder": "XXXX-XXXX-XXXX-XXXX", "submit": "立即兌換", "success": "兌換成功", "failed": "兌換失敗" },
+		"orders": { "title": "訂單", "description": "查看商店購買記錄。", "empty": "沒有訂單", "number": "訂單編號", "product": "商品", "amount": "金額", "payment": "付款方式", "status": "狀態", "created": "建立時間", "details": "訂單詳情", "pending": "待處理", "completed": "已完成", "cancelled": "已取消" },
+		"admin": { "title": "商店管理", "description": "管理商品、付款管道、訂單和兌換碼。", "tabs": { "products": "商品", "paymentChannels": "付款管道", "orders": "訂單", "redemptionCodes": "兌換碼" }, "addProduct": "新增商品", "addChannel": "新增付款管道", "generateCodes": "產生兌換碼", "completeOrder": "完成訂單", "cancelOrder": "取消訂單", "settings": "儲值設定" },
+		"fields": { "kind": "類型", "name": "名稱", "description": "描述", "price": "價格", "duration": "有效期", "groups": "Group", "sortOrder": "排序", "enabled": "啟用", "recharge": "儲值金額", "bonus": "贈送金額", "quotas": "額度週期", "window": "週期", "hours": "小時", "quota": "人民幣額度", "channelMode": "付款模式", "endpoint": "端點", "icon": "圖示", "iconUrl": "圖片連結", "iconUpload": "上傳圖片", "secret": "管道密鑰設定", "reward": "獎勵", "count": "產生數量", "validityDays": "有效天數", "expires": "到期時間", "hint": "兌換碼尾號" }
 	},
 	"roles": {
 		"super_admin": "超級管理員",
