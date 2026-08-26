@@ -23,6 +23,8 @@ pub mod model_registry_store;
 pub mod monoize_routing;
 pub mod node_config;
 pub mod presets;
+pub mod public_api;
+pub mod public_handlers;
 pub mod replica;
 pub mod request_capture;
 pub mod settings;

@@ -1978,6 +1978,15 @@ fn build_dashboard_api_router() -> Router<AppState> {
             get(crate::dashboard_handlers::get_public_site_settings),
         )
         .route(
+            "/public/marketplace",
+            get(crate::public_handlers::list_marketplace),
+        )
+        .route(
+            "/public/marketplace/offers",
+            get(crate::public_handlers::marketplace_offers),
+        )
+        .route("/public/status", get(crate::public_handlers::public_status))
+        .route(
             "/dashboard/auth/register",
             post(crate::dashboard_handlers::register),
         )
