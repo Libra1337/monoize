@@ -50,6 +50,7 @@ pub enum GroupStoreError {
     InvalidDescription,
     InvalidReorder(String),
     CannotDeleteDefault,
+    GroupInUse,
     Storage(String),
 }
 
@@ -380,9 +381,7 @@ impl UserStore {
         Ok(())
     }
 
-    /// Delete a non-default group and apply the GR-X1..GR-X5 cascade in one
-    /// transaction. The caller must bump the routing config revision after a
-    /// successful delete (GR-X6).
+    /// Delete a non-default Group and update non-Provider references in one transaction.
     pub async fn delete_group(&self, id: &str) -> Result<(), GroupStoreError> {
         let target = self
             .get_group_by_id(id)
@@ -399,6 +398,16 @@ impl UserStore {
 
         let write = self.db.write().await;
         let tx = write.begin().await.map_err(storage)?;
+        let provider_reference = tx
+            .query_one(self.db.stmt(
+                "SELECT 1 AS one FROM monoize_providers WHERE group_id = $1 LIMIT 1",
+                vec![id.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        if provider_reference.is_some() {
+            return Err(GroupStoreError::GroupInUse);
+        }
 
         // GR-X1: members move to the default group.
         tx.execute(self.db.stmt(
@@ -437,38 +446,6 @@ impl UserStore {
                 vec![
                     serde_json::to_string(&remaining).map_err(storage)?.into(),
                     SeaValue::Int(Some(next_use_user_group)),
-                    row_id.into(),
-                ],
-            ))
-            .await
-            .map_err(storage)?;
-        }
-
-        // GR-X3: providers keep a non-empty group set (GR-I2).
-        let rows = tx
-            .query_all(
-                self.db
-                    .stmt("SELECT id, group_ids FROM monoize_providers", vec![]),
-            )
-            .await
-            .map_err(storage)?;
-        for row in rows {
-            let row_id: String = row.try_get("", "id").map_err(storage)?;
-            let raw: Option<String> = row.try_get("", "group_ids").map_err(storage)?;
-            let group_ids = parse_group_ids_json(raw.as_deref(), "monoize_providers.group_ids")
-                .map_err(GroupStoreError::Storage)?;
-            if !group_ids.iter().any(|gid| gid == id) {
-                continue;
-            }
-            let mut remaining: Vec<String> =
-                group_ids.into_iter().filter(|gid| gid != id).collect();
-            if remaining.is_empty() {
-                remaining.push(default_group_id.clone());
-            }
-            tx.execute(self.db.stmt(
-                "UPDATE monoize_providers SET group_ids = $1 WHERE id = $2",
-                vec![
-                    serde_json::to_string(&remaining).map_err(storage)?.into(),
                     row_id.into(),
                 ],
             ))

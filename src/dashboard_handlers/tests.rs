@@ -159,7 +159,7 @@ fn provider_dashboard_rate_matrix_cache_filters_bulk_candidates_in_memory() {
 }
 
 #[test]
-fn dashboard_create_provider_group_ids_default_to_empty() {
+fn dashboard_create_provider_group_id_defaults_to_empty() {
     let body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
         "channels": [
@@ -181,7 +181,7 @@ fn dashboard_create_provider_group_ids_default_to_empty() {
     }))
     .expect("payload deserializes");
 
-    assert!(body.group_ids.is_empty());
+    assert!(body.group_id.is_empty());
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn dashboard_create_provider_rejects_obsolete_provider_models_field() {
 }
 
 #[test]
-fn dashboard_update_provider_group_ids_are_partial() {
+fn dashboard_update_provider_group_id_is_partial() {
     let body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
         "channels": [
             {
@@ -218,11 +218,11 @@ fn dashboard_update_provider_group_ids_are_partial() {
     }))
     .expect("payload deserializes");
 
-    assert!(body.group_ids.is_none());
+    assert!(body.group_id.is_none());
 }
 
 #[test]
-fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
+fn dashboard_provider_response_includes_group_and_channel_hides_api_key() {
     let channel = MonoizeChannel {
         id: "mono_ch_123".to_string(),
         name: "primary".to_string(),
@@ -280,7 +280,7 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
         request_timeout_ms_override: None,
         extra_fields_whitelist: None,
         strip_cross_protocol_nested_extra: None,
-        group_ids: vec!["g-alpha".to_string(), "g-beta".to_string()],
+        group_id: "g-alpha".to_string(),
         enabled: true,
         priority: 0,
         created_at: chrono::Utc::now(),
@@ -295,13 +295,14 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
         .expect("channels array");
     let channel_object = channels[0].as_object().expect("channel object");
 
-    assert_eq!(object.get("group_ids"), Some(&json!(["g-alpha", "g-beta"])));
+    assert_eq!(object.get("group_id"), Some(&json!("g-alpha")));
+    assert!(!object.contains_key("group_ids"));
     assert!(!channel_object.contains_key("api_key"));
     assert!(!channel_object.contains_key("group_ids"));
 }
 
 #[tokio::test]
-async fn dashboard_provider_group_ids_round_trip_and_empty_selection_binds_default_group() {
+async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_group() {
     let db = DbPool::connect("sqlite::memory:")
         .await
         .expect("db connects");
@@ -334,7 +335,7 @@ async fn dashboard_provider_group_ids_round_trip_and_empty_selection_binds_defau
 
     let create_body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
-        "group_ids": [" g-beta ", "g-alpha", "g-alpha", ""],
+        "group_id": " g-beta ",
         "channels": [
             {
                 "name": "primary",
@@ -357,11 +358,7 @@ async fn dashboard_provider_group_ids_round_trip_and_empty_selection_binds_defau
         .expect("provider created");
     let channel_id = created.channels[0].id.clone();
 
-    // Trim + dedupe, but preserve the submitted order (no lowercasing of ids).
-    assert_eq!(
-        created.group_ids,
-        vec!["g-beta".to_string(), "g-alpha".to_string()]
-    );
+    assert_eq!(created.group_id, "g-beta");
     assert_eq!(created.channels[0].api_key, "secret");
     assert_eq!(created.channels[0].affinity_enabled_override, Some(true));
     assert_eq!(
@@ -400,10 +397,7 @@ async fn dashboard_provider_group_ids_round_trip_and_empty_selection_binds_defau
         .await
         .expect("provider updated");
 
-    assert_eq!(
-        updated.group_ids,
-        vec!["g-beta".to_string(), "g-alpha".to_string()]
-    );
+    assert_eq!(updated.group_id, "g-beta");
     assert_eq!(updated.channels[0].api_key, "secret");
     assert_eq!(updated.channels[0].affinity_enabled_override, Some(false));
     assert_eq!(
@@ -419,26 +413,25 @@ async fn dashboard_provider_group_ids_round_trip_and_empty_selection_binds_defau
         Some(0)
     );
 
-    // GR-I2: clearing the selection falls back to the default group instead
-    // of leaving an empty (formerly "public") set.
+    // An empty value binds the Provider to the default Group.
     let cleared = store
         .update_provider(
             &created.id,
             serde_json::from_value(json!({
-                "group_ids": []
+                "group_id": ""
             }))
             .expect("clear payload deserializes"),
         )
         .await
         .expect("provider group selection cleared");
-    assert_eq!(cleared.group_ids, vec![default_group_id]);
+    assert_eq!(cleared.group_id, default_group_id);
 
     // GR-C3: unknown registry ids are rejected.
     let unknown_err = store
         .update_provider(
             &created.id,
             serde_json::from_value(json!({
-                "group_ids": ["g-missing"]
+                "group_id": "g-missing"
             }))
             .expect("unknown payload deserializes"),
         )

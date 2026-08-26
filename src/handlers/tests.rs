@@ -376,7 +376,7 @@ async fn seed_group_routing_provider(
     state: &AppState,
     name: &str,
     circuit_breaker_enabled: bool,
-    group_ids: Vec<String>,
+    group_id: String,
     channels: Vec<CreateMonoizeChannelInput>,
 ) {
     state
@@ -398,7 +398,7 @@ async fn seed_group_routing_provider(
             strip_cross_protocol_nested_extra: None,
 	                enabled: true,
             priority: Some(0),
-            group_ids,
+            group_id,
             channels,
         })
         .await
@@ -495,7 +495,7 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-            group_ids: Vec::new(),
+            group_id: String::new(),
 	                enabled: true,
             priority: Some(0),
         })
@@ -1522,7 +1522,7 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-            group_ids: Vec::new(),
+            group_id: String::new(),
 	                enabled: true,
             priority: Some(0),
             channels: vec![CreateMonoizeChannelInput {
@@ -1647,7 +1647,7 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-            group_ids: Vec::new(),
+            group_id: String::new(),
 	            enabled: true,
             priority: Some(0),
             channels: vec![CreateMonoizeChannelInput {
@@ -1727,7 +1727,7 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-            group_ids: Vec::new(),
+            group_id: String::new(),
 	            enabled: true,
             priority: Some(0),
             channels: vec![CreateMonoizeChannelInput {
@@ -1806,7 +1806,7 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-            group_ids: Vec::new(),
+            group_id: String::new(),
             enabled: true,
             priority: Some(0),
             channels: vec![CreateMonoizeChannelInput {
@@ -1888,7 +1888,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-            group_ids: Vec::new(),
+            group_id: String::new(),
             enabled: true,
             priority: Some(0),
             channels: vec![CreateMonoizeChannelInput {
@@ -2018,7 +2018,7 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-            group_ids: Vec::new(),
+            group_id: String::new(),
             enabled: true,
             priority: Some(0),
             channels: vec![CreateMonoizeChannelInput {
@@ -2130,7 +2130,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         &state,
         "public-provider",
         false,
-        Vec::new(),
+        String::new(),
         vec![CreateMonoizeChannelInput {
             id: Some("public".to_string()),
             name: "public".to_string(),
@@ -2170,7 +2170,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         &state,
         "team-a-provider",
         false,
-        vec![team_a_group.id.clone()],
+        team_a_group.id.clone(),
         vec![CreateMonoizeChannelInput {
             id: Some("team-a".to_string()),
             name: "team-a".to_string(),
@@ -2210,7 +2210,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         &state,
         "team-b-provider",
         false,
-        vec![team_b_group.id.clone()],
+        team_b_group.id.clone(),
         vec![CreateMonoizeChannelInput {
             id: Some("team-b".to_string()),
             name: "team-b".to_string(),
@@ -2311,7 +2311,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
         &state,
         "team-a-provider",
         true,
-        vec![team_a_group.id.clone()],
+        team_a_group.id.clone(),
         vec![CreateMonoizeChannelInput {
             id: Some("team-a".to_string()),
             name: "team-a".to_string(),

@@ -60,7 +60,7 @@ export type ProviderForm = {
 	request_timeout_ms_override: string
 	extra_fields_whitelist: string
 	strip_cross_protocol_nested_extra: boolean | null
-	group_ids: string[]
+	group_id: string
 	priority?: number
 	channels: ChannelRow[]
 	transforms: TransformRuleConfig[]
@@ -140,7 +140,7 @@ export function emptyForm(): ProviderForm {
 		request_timeout_ms_override: '',
 		extra_fields_whitelist: '',
 		strip_cross_protocol_nested_extra: null,
-		group_ids: [],
+		group_id: '',
 		priority: undefined,
 		channels: [emptyChannelRow()],
 		transforms: [],
@@ -165,7 +165,7 @@ export function fromProvider(provider: Provider): ProviderForm {
 		request_timeout_ms_override: provider.request_timeout_ms_override == null ? '' : String(provider.request_timeout_ms_override),
 		extra_fields_whitelist: provider.extra_fields_whitelist?.join(', ') ?? '',
 		strip_cross_protocol_nested_extra: provider.strip_cross_protocol_nested_extra ?? null,
-		group_ids: provider.group_ids?.slice(0, 1) ?? [],
+		group_id: provider.group_id,
 		priority: provider.priority,
 		channels: provider.channels.slice(0, 1).map(channel => ({
 			...emptyChannelRow(),

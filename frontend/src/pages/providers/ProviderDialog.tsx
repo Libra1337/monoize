@@ -98,7 +98,6 @@ const providerTypes = Object.keys(PROVIDER_TYPE_CONFIG) as ProviderType[]
 function cloneForm(form: ProviderForm): ProviderForm {
 	return {
 		...form,
-		group_ids: [...form.group_ids],
 		channels: form.channels.map(channel => ({
 			...channel,
 			models: channel.models.map(model => ({ ...model }))
@@ -194,7 +193,7 @@ function buildInput(form: ProviderForm, c: (zhText: string, enText: string) => s
 			.map(value => value.trim())
 			.filter(Boolean),
 		strip_cross_protocol_nested_extra: form.strip_cross_protocol_nested_extra,
-		group_ids: form.group_ids.slice(0, 1)
+		group_id: form.group_id
 	}
 }
 
@@ -271,7 +270,6 @@ export function ProviderDialog({
 	}
 
 	const validate = () => {
-		if (form.group_ids.length > 1) return c('Provider group selection is singular', 'A provider can use only one serving group')
 		if (form.channels.length > 1) return c('Provider channel selection is singular', 'A provider can configure only one channel')
 		if (!form.name.trim()) return c('请输入 Provider 名称', 'Enter a provider name')
 		if (!form.channels.length) return c('至少需要一个 Channel', 'At least one channel is required')
@@ -486,10 +484,10 @@ function ProviderBasics({ form, setForm, c }: { form: ProviderForm; setForm: Rea
 			<Field label={c('名称', 'Name')} className='sm:col-span-2'><Input value={form.name} onChange={event => setForm(previous => ({ ...previous, name: event.target.value }))} placeholder='OpenAI production' /></Field>
 			<Field label={c('服务分组', 'Serving groups')} hint={c('留空保存时自动绑定系统默认分组。', 'Empty selections are bound to the system default group on save.')} className='sm:col-span-2'>
 				<GroupSingleSelect
-					value={form.group_ids[0] ?? ''}
+					value={form.group_id}
 					groups={groups}
 					loading={groupsLoading}
-					onChange={group_id => setForm(previous => ({ ...previous, group_ids: [group_id] }))}
+					onChange={group_id => setForm(previous => ({ ...previous, group_id }))}
 				/>
 			</Field>
 			<Field label={c('额外字段白名单', 'Extra fields allowlist')} hint={c('逗号分隔，应用到全部 Channel。', 'Comma-separated and shared by all channels.')}><Input value={form.extra_fields_whitelist} onChange={event => setForm(previous => ({ ...previous, extra_fields_whitelist: event.target.value }))} placeholder='service_tier, metadata' /></Field>

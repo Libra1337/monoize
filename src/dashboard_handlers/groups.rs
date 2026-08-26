@@ -44,6 +44,11 @@ fn map_group_error(error: GroupStoreError) -> AppError {
             "cannot_delete_default_group",
             "the default group cannot be deleted",
         ),
+        GroupStoreError::GroupInUse => AppError::new(
+            StatusCode::CONFLICT,
+            "group_in_use",
+            "the group is referenced by a Provider",
+        ),
         GroupStoreError::Storage(error) => {
             AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
         }
@@ -126,8 +131,7 @@ pub async fn delete_group(
         .await
         .map_err(map_group_error)?;
 
-    // GR-X6: provider group sets may have changed; force re-validation of
-    // in-flight affinity bindings and cached routing decisions.
+    // Group membership changes still invalidate cached routing decisions.
     state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
 
     Ok(Json(json!({ "success": true })))
@@ -293,6 +297,39 @@ mod tests {
         .await
         .expect_err("default delete must fail");
         assert_eq!(default_delete.status, axum::http::StatusCode::BAD_REQUEST);
+
+        let provider = state
+            .monoize_store
+            .create_provider(
+                serde_json::from_value(serde_json::json!({
+                    "name": "team-a-provider",
+                    "group_id": created.id,
+                    "channels": [{
+                        "name": "primary",
+                        "provider_type": "responses",
+                        "base_url": "https://example.invalid",
+                        "api_key": "secret",
+                        "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
+                    }]
+                }))
+                .expect("provider payload deserializes"),
+            )
+            .await
+            .expect("provider creates");
+        let in_use = super::delete_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Path(created.id.clone()),
+        )
+        .await
+        .expect_err("referenced group delete must fail");
+        assert_eq!(in_use.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(in_use.code, "group_in_use");
+        state
+            .monoize_store
+            .delete_provider(&provider.id)
+            .await
+            .expect("provider deletes");
 
         // Deleting a non-default group cascades and bumps the routing revision.
         let member = state

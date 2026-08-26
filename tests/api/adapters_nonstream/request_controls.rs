@@ -38,7 +38,7 @@ async fn set_messages_metadata_collision_transform(ctx: &TestContext) {
                 request_timeout_ms_override: None,
                 extra_fields_whitelist: None,
                 strip_cross_protocol_nested_extra: None,
-                group_ids: None,
+                group_id: None,
                 enabled: None,
                 priority: None,
             },

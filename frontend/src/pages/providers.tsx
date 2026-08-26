@@ -59,14 +59,14 @@ export function ProvidersPage() {
 		if (to < 0 || to >= providers.length || from === to) {
 			return
 		}
-		const groupId = providers[from]?.group_ids[0]
-		if (!groupId || providers[to]?.group_ids[0] !== groupId) return
+		const groupId = providers[from]?.group_id
+		if (!groupId || providers[to]?.group_id !== groupId) return
 		const next = [...providers]
 		const [item] = next.splice(from, 1)
 		next.splice(to, 0, item)
 		await applyReorder(
 			groupId,
-			next.filter(provider => provider.group_ids[0] === groupId).map(provider => provider.id)
+			next.filter(provider => provider.group_id === groupId).map(provider => provider.id)
 		)
 	}
 
@@ -80,8 +80,8 @@ export function ProvidersPage() {
 		if (from < 0 || to < 0) {
 			return
 		}
-		const groupId = next[from]?.group_ids[0]
-		if (!groupId || next[to]?.group_ids[0] !== groupId) {
+		const groupId = next[from]?.group_id
+		if (!groupId || next[to]?.group_id !== groupId) {
 			setDraggingProviderId(null)
 			return
 		}
@@ -90,7 +90,7 @@ export function ProvidersPage() {
 		setDraggingProviderId(null)
 		await applyReorder(
 			groupId,
-			next.filter(provider => provider.group_ids[0] === groupId).map(provider => provider.id)
+			next.filter(provider => provider.group_id === groupId).map(provider => provider.id)
 		)
 	}
 

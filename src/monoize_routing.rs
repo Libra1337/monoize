@@ -4,7 +4,6 @@ use crate::settings::{
     default_pricing_profile_model_patterns, default_reasoning_suffix_map, PricingProfilePattern,
 };
 use crate::transforms::{canonicalize_transform_rules, TransformRuleConfig};
-use crate::users::canonicalize_group_ids;
 use chrono::{DateTime, Utc};
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -184,8 +183,7 @@ pub struct MonoizeProvider {
     pub extra_fields_whitelist: Option<Vec<String>>,
     #[serde(default)]
     pub strip_cross_protocol_nested_extra: Option<bool>,
-    #[serde(default)]
-    pub group_ids: Vec<String>,
+    pub group_id: String,
     pub enabled: bool,
     pub priority: i32,
     pub created_at: DateTime<Utc>,
@@ -268,7 +266,7 @@ pub struct CreateMonoizeProviderInput {
     #[serde(default)]
     pub strip_cross_protocol_nested_extra: Option<bool>,
     #[serde(default)]
-    pub group_ids: Vec<String>,
+    pub group_id: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub priority: Option<i32>,
@@ -292,7 +290,7 @@ pub struct UpdateMonoizeProviderInput {
     pub request_timeout_ms_override: Option<Option<u64>>,
     pub extra_fields_whitelist: Option<Option<Vec<String>>>,
     pub strip_cross_protocol_nested_extra: Option<Option<bool>>,
-    pub group_ids: Option<Vec<String>>,
+    pub group_id: Option<String>,
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
 }
@@ -573,25 +571,6 @@ fn default_enabled() -> bool {
 
 fn default_channel_weight() -> i32 {
     1
-}
-
-fn decode_provider_group_ids_json(
-    provider_id: &str,
-    raw: Option<String>,
-) -> Result<Vec<String>, String> {
-    let Some(raw) = raw else {
-        return Ok(Vec::new());
-    };
-    if raw.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let group_ids = serde_json::from_str::<Vec<String>>(&raw)
-        .map_err(|error| format!("provider {provider_id} invalid group_ids JSON: {error}"))?;
-    Ok(canonicalize_group_ids(&group_ids))
-}
-
-fn serialize_provider_group_ids_json(group_ids: &[String]) -> Result<String, String> {
-    serde_json::to_string(&canonicalize_group_ids(group_ids)).map_err(|e| e.to_string())
 }
 
 fn decode_database_bool(
@@ -1004,15 +983,7 @@ fn decode_provider_row(
                 decode_database_bool("provider", &id, "strip_cross_protocol_nested_extra", value)
             })
             .transpose()?,
-        group_ids: if let Ok(group_id) = row.try_get::<String>("", "group_id") {
-            vec![group_id]
-        } else {
-            decode_provider_group_ids_json(
-                &id,
-                row.try_get::<Option<String>>("", "group_ids")
-                    .map_err(|e| format!("provider {id} invalid group_ids column: {e}"))?,
-            )?
-        },
+        group_id: row.try_get("", "group_id").map_err(|e| e.to_string())?,
         enabled: decode_database_bool(
             "provider",
             &id,
@@ -1030,38 +1001,22 @@ fn generate_channel_id() -> String {
     format!("mono_ch_{}", uuid::Uuid::new_v4().simple())
 }
 
-/// Build the provider projection expected by `decode_provider_row`.
-/// The flattened schema stores `group_id` and the historical schema stores
-/// `group_ids`; both projections expose the same decode aliases.
-fn provider_projection(alias: &str, flattened: bool) -> String {
+fn provider_projection(alias: &str) -> String {
     let p = if alias.is_empty() {
         String::new()
     } else {
         format!("{alias}.")
     };
-    if flattened {
-        format!(
-            "SELECT {p}id, {p}name, {p}channel_max_retries,
-                    {p}channel_retry_interval_ms, {p}circuit_breaker_enabled,
-                    {p}per_model_circuit_break, {p}transforms, {p}api_type_overrides,
-                    {p}active_probe_enabled_override, {p}active_probe_interval_seconds_override,
-                    {p}active_probe_success_threshold_override, {p}active_probe_model_override,
-                    {p}request_timeout_ms_override, {p}extra_fields_whitelist,
-                    {p}strip_cross_protocol_nested_extra, {p}group_id,
-                    {p}enabled, {p}priority, {p}created_at, {p}updated_at"
-        )
-    } else {
-        format!(
-            "SELECT {p}id, {p}name, {p}channel_max_retries,
-                    {p}channel_retry_interval_ms, {p}circuit_breaker_enabled,
-                    {p}per_model_circuit_break, {p}transforms, {p}api_type_overrides,
-                    {p}active_probe_enabled_override, {p}active_probe_interval_seconds_override,
-                    {p}active_probe_success_threshold_override, {p}active_probe_model_override,
-                    {p}request_timeout_ms_override, {p}extra_fields_whitelist,
-                    {p}strip_cross_protocol_nested_extra, {p}group_ids,
-                    {p}enabled, {p}priority, {p}created_at, {p}updated_at"
-        )
-    }
+    format!(
+        "SELECT {p}id, {p}name, {p}channel_max_retries,
+                {p}channel_retry_interval_ms, {p}circuit_breaker_enabled,
+                {p}per_model_circuit_break, {p}transforms, {p}api_type_overrides,
+                {p}active_probe_enabled_override, {p}active_probe_interval_seconds_override,
+                {p}active_probe_success_threshold_override, {p}active_probe_model_override,
+                {p}request_timeout_ms_override, {p}extra_fields_whitelist,
+                {p}strip_cross_protocol_nested_extra, {p}group_id,
+                {p}enabled, {p}priority, {p}created_at, {p}updated_at"
+    )
 }
 
 impl MonoizeRoutingStore {
@@ -1217,119 +1172,6 @@ impl MonoizeRoutingStore {
         &self,
         provider_id: Option<&str>,
     ) -> Result<HashMap<String, Vec<MonoizeChannel>>, String> {
-        if self.uses_flattened_provider_schema().await? {
-            return self.load_flattened_channels_bulk(provider_id).await;
-        }
-        let provider_filter = if provider_id.is_some() {
-            " WHERE provider_id = $1"
-        } else {
-            ""
-        };
-        let values = provider_id.map(|id| vec![id.into()]).unwrap_or_default();
-        let channel_rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(
-                &format!(
-                    "SELECT id, provider_id, name, base_url, api_key, weight, enabled,
-                            provider_type, passive_failure_count_threshold_override,
-                            passive_cooldown_seconds_override, passive_window_seconds_override,
-                            passive_rate_limit_cooldown_seconds_override,
-                            active_probe_enabled_override, active_probe_interval_seconds_override,
-                            active_probe_success_threshold_override, active_probe_model_override,
-                            affinity_enabled_override, affinity_idle_ttl_seconds_override,
-                            affinity_failback_mode_override, affinity_failback_delay_seconds_override,
-                            proxy_url, extra_headers, session_affinity_auto, allow_missing_usage
-                     FROM monoize_channels{provider_filter}
-                     ORDER BY created_at ASC"
-                ),
-                values,
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let (model_sql, model_values) = if let Some(provider_id) = provider_id {
-            (
-                "SELECT cm.channel_id, cm.model_name, cm.redirect, cm.multiplier
-                 FROM monoize_channel_models cm
-                 JOIN monoize_channels c ON c.id = cm.channel_id
-                 WHERE c.provider_id = $1
-                 ORDER BY cm.channel_id ASC, cm.model_name ASC",
-                vec![provider_id.into()],
-            )
-        } else {
-            (
-                "SELECT channel_id, model_name, redirect, multiplier
-                 FROM monoize_channel_models
-                 ORDER BY channel_id ASC, model_name ASC",
-                vec![],
-            )
-        };
-        let model_rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(model_sql, model_values))
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut models_by_channel: HashMap<String, HashMap<String, MonoizeModelEntry>> =
-            HashMap::new();
-        for row in model_rows {
-            let channel_id: String = row.try_get("", "channel_id").map_err(|e| e.to_string())?;
-            let model_name: String = row.try_get("", "model_name").map_err(|e| e.to_string())?;
-            let multiplier = row
-                .try_get::<String>("", "multiplier")
-                .map_err(|e| e.to_string())?
-                .parse()
-                .map_err(|e: String| format!("channel {channel_id} invalid multiplier: {e}"))?;
-            models_by_channel.entry(channel_id).or_default().insert(
-                model_name,
-                MonoizeModelEntry {
-                    redirect: row.try_get("", "redirect").map_err(|e| e.to_string())?,
-                    multiplier,
-                },
-            );
-        }
-
-        let mut channels_by_provider: HashMap<String, Vec<MonoizeChannel>> = HashMap::new();
-        for row in channel_rows {
-            let provider_id: String = row.try_get("", "provider_id").map_err(|e| e.to_string())?;
-            let channel_id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-            channels_by_provider
-                .entry(provider_id)
-                .or_default()
-                .push(decode_channel_row(
-                    &row,
-                    models_by_channel.remove(&channel_id).unwrap_or_default(),
-                )?);
-        }
-        Ok(channels_by_provider)
-    }
-
-    async fn uses_flattened_provider_schema(&self) -> Result<bool, String> {
-        let (sql, values) = if self.db.is_postgres() {
-            (
-                "SELECT 1 FROM information_schema.columns WHERE table_name = 'monoize_providers' AND column_name = 'channel_id' LIMIT 1",
-                vec![],
-            )
-        } else {
-            (
-                "SELECT 1 FROM pragma_table_info('monoize_providers') WHERE name = 'channel_id' LIMIT 1",
-                vec![],
-            )
-        };
-        Ok(self
-            .db
-            .read()
-            .query_one(self.db.stmt(sql, values))
-            .await
-            .map_err(|e| e.to_string())?
-            .is_some())
-    }
-
-    async fn load_flattened_channels_bulk(
-        &self,
-        provider_id: Option<&str>,
-    ) -> Result<HashMap<String, Vec<MonoizeChannel>>, String> {
         let filter = provider_id.map(|_| " WHERE id = $1").unwrap_or("");
         let values = provider_id.map(|id| vec![id.into()]).unwrap_or_default();
         let rows = self
@@ -1413,14 +1255,13 @@ impl MonoizeRoutingStore {
     }
 
     pub async fn list_providers(&self) -> Result<Vec<MonoizeProvider>, String> {
-        let flattened = self.uses_flattened_provider_schema().await?;
         let rows = self
             .db
             .read()
             .query_all(self.db.stmt(
                 &format!(
                     "{} FROM monoize_providers ORDER BY priority ASC, created_at ASC",
-                    provider_projection("", flattened)
+                    provider_projection("")
                 ),
                 vec![],
             ))
@@ -1450,29 +1291,18 @@ impl MonoizeRoutingStore {
             .into_iter()
             .collect::<Vec<_>>();
         let mut available = HashSet::new();
-        let flattened = self.uses_flattened_provider_schema().await?;
         const LOOKUP_CHUNK_SIZE: usize = 400;
         for chunk in candidates.chunks(LOOKUP_CHUNK_SIZE) {
             let placeholders = (0..chunk.len())
                 .map(|index| format!("${}", index + 1))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let sql = if flattened {
-                format!(
-                    "SELECT DISTINCT pm.model_name FROM monoize_provider_models pm
-                     JOIN monoize_providers p ON p.id = pm.provider_id
-                     WHERE p.enabled = 1 AND p.channel_enabled = 1
-                       AND pm.model_name IN ({placeholders})"
-                )
-            } else {
-                format!(
-                    "SELECT DISTINCT cm.model_name FROM monoize_channel_models cm
-                     JOIN monoize_channels c ON c.id = cm.channel_id
-                     JOIN monoize_providers p ON p.id = c.provider_id
-                     WHERE p.enabled = 1 AND c.enabled = 1 AND c.weight > 0
-                       AND cm.model_name IN ({placeholders})"
-                )
-            };
+            let sql = format!(
+                "SELECT DISTINCT pm.model_name FROM monoize_provider_models pm
+                 JOIN monoize_providers p ON p.id = pm.provider_id
+                 WHERE p.enabled = 1 AND p.channel_enabled = 1
+                   AND pm.model_name IN ({placeholders})"
+            );
             let rows = self
                 .db
                 .read()
@@ -1490,19 +1320,10 @@ impl MonoizeRoutingStore {
     }
 
     pub async fn list_available_model_names(&self) -> Result<Vec<String>, String> {
-        let flattened = self.uses_flattened_provider_schema().await?;
-        let sql = if flattened {
-            "SELECT DISTINCT pm.model_name FROM monoize_provider_models pm
-             JOIN monoize_providers p ON p.id = pm.provider_id
-             WHERE p.enabled = 1 AND p.channel_enabled = 1
-             ORDER BY pm.model_name ASC"
-        } else {
-            "SELECT DISTINCT cm.model_name FROM monoize_channel_models cm
-             JOIN monoize_channels c ON c.id = cm.channel_id
-             JOIN monoize_providers p ON p.id = c.provider_id
-             WHERE p.enabled = 1 AND c.enabled = 1 AND c.weight > 0
-             ORDER BY cm.model_name ASC"
-        };
+        let sql = "SELECT DISTINCT pm.model_name FROM monoize_provider_models pm
+                   JOIN monoize_providers p ON p.id = pm.provider_id
+                   WHERE p.enabled = 1 AND p.channel_enabled = 1
+                   ORDER BY pm.model_name ASC";
         let rows = self
             .db
             .read()
@@ -1518,210 +1339,35 @@ impl MonoizeRoutingStore {
         &self,
         model: &str,
     ) -> Result<Vec<MonoizeProvider>, String> {
-        if self.uses_flattened_provider_schema().await? {
-            let providers = self.list_providers().await?;
-            return Ok(providers
-                .into_iter()
-                .filter(|provider| {
-                    provider.enabled
-                        && provider.channels.iter().any(|channel| {
-                            channel.enabled
-                                && channel.weight > 0
-                                && channel.models.contains_key(model)
-                        })
-                })
-                .collect());
-        }
-        let provider_rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(
-                r#"SELECT DISTINCT p.id, p.name, p.channel_max_retries,
-                          p.channel_retry_interval_ms, p.circuit_breaker_enabled,
-                          p.per_model_circuit_break, p.transforms, p.api_type_overrides,
-                          p.active_probe_enabled_override, p.active_probe_interval_seconds_override,
-                          p.active_probe_success_threshold_override, p.active_probe_model_override,
-                          p.request_timeout_ms_override, p.extra_fields_whitelist,
-                          p.strip_cross_protocol_nested_extra, p.group_ids,
-                          p.enabled, p.priority, p.created_at, p.updated_at
-                   FROM monoize_providers p
-                   JOIN monoize_channels c ON c.provider_id = p.id
-                   JOIN monoize_channel_models cm ON cm.channel_id = c.id
-                   WHERE cm.model_name = $1
-                     AND p.enabled = 1
-                     AND c.enabled = 1
-                     AND c.weight > 0
-                   ORDER BY p.priority ASC, p.created_at ASC"#,
-                vec![model.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        if provider_rows.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let channel_rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(
-                r#"SELECT c.id, c.provider_id, c.name, c.base_url, c.api_key, c.weight, c.enabled,
-                          c.provider_type, c.passive_failure_count_threshold_override,
-                          c.passive_cooldown_seconds_override, c.passive_window_seconds_override,
-                          c.passive_rate_limit_cooldown_seconds_override,
-                          c.active_probe_enabled_override, c.active_probe_interval_seconds_override,
-                          c.active_probe_success_threshold_override, c.active_probe_model_override,
-                          c.affinity_enabled_override, c.affinity_idle_ttl_seconds_override,
-                          c.affinity_failback_mode_override, c.affinity_failback_delay_seconds_override,
-                          c.proxy_url,
-                          c.extra_headers,
-                          c.session_affinity_auto,
-                          c.allow_missing_usage,
-                          cm.redirect, cm.multiplier
-                   FROM monoize_channels c
-                   JOIN monoize_providers p ON p.id = c.provider_id
-                   JOIN monoize_channel_models cm ON cm.channel_id = c.id
-                   WHERE cm.model_name = $1
-                     AND p.enabled = 1
-                     AND c.enabled = 1
-                     AND c.weight > 0
-                   ORDER BY c.created_at ASC"#,
-                vec![model.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let mut channels_by_provider: HashMap<String, Vec<MonoizeChannel>> = HashMap::new();
-        for row in channel_rows {
-            let provider_id: String = row.try_get("", "provider_id").map_err(|e| e.to_string())?;
-            channels_by_provider
-                .entry(provider_id)
-                .or_default()
-                .push(decode_channel_model_row(&row, model)?);
-        }
-        provider_rows
-            .iter()
-            .map(|row| {
-                let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-                decode_provider_row(row, channels_by_provider.remove(&id).unwrap_or_default())
+        let providers = self.list_providers().await?;
+        Ok(providers
+            .into_iter()
+            .filter(|provider| {
+                provider.enabled
+                    && provider.channels.iter().any(|channel| {
+                        channel.enabled && channel.weight > 0 && channel.models.contains_key(model)
+                    })
             })
-            .collect()
+            .collect())
     }
 
     pub async fn list_active_probe_candidates(&self) -> Result<Vec<MonoizeProvider>, String> {
-        if self.uses_flattened_provider_schema().await? {
-            let providers = self.list_providers().await?;
-            return Ok(providers
-                .into_iter()
-                .filter(|provider| {
-                    provider.enabled
-                        && provider.circuit_breaker_enabled
-                        && provider.channels.iter().any(|channel| {
-                            channel.enabled && channel.weight > 0 && !channel.models.is_empty()
-                        })
-                })
-                .collect());
-        }
-        let provider_rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(
-                r#"SELECT id, name, channel_max_retries,
-                          channel_retry_interval_ms, circuit_breaker_enabled,
-                          per_model_circuit_break, transforms, api_type_overrides,
-                          active_probe_enabled_override, active_probe_interval_seconds_override,
-                          active_probe_success_threshold_override, active_probe_model_override,
-                          request_timeout_ms_override, extra_fields_whitelist,
-                          strip_cross_protocol_nested_extra, group_ids,
-                          enabled, priority, created_at, updated_at
-                   FROM monoize_providers
-                   WHERE circuit_breaker_enabled = 1
-                     AND enabled = 1
-                     AND EXISTS (
-                         SELECT 1
-                         FROM monoize_channels c
-                         WHERE c.provider_id = monoize_providers.id
-                           AND c.enabled = 1
-                           AND c.weight > 0
-                     )
-                   ORDER BY priority ASC, created_at ASC"#,
-                vec![],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        if provider_rows.is_empty() {
-            return Ok(Vec::new());
-        }
-        let channel_model_rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(
-                r#"SELECT c.id, c.provider_id, c.name, c.base_url, c.api_key, c.weight, c.enabled,
-                          c.provider_type, c.passive_failure_count_threshold_override,
-                          c.passive_cooldown_seconds_override, c.passive_window_seconds_override,
-                          c.passive_rate_limit_cooldown_seconds_override,
-                          c.active_probe_enabled_override, c.active_probe_interval_seconds_override,
-                          c.active_probe_success_threshold_override, c.active_probe_model_override,
-                          c.affinity_enabled_override, c.affinity_idle_ttl_seconds_override,
-                          c.affinity_failback_mode_override, c.affinity_failback_delay_seconds_override,
-                          c.proxy_url, c.extra_headers, c.session_affinity_auto,
-                          c.allow_missing_usage,
-                          cm.model_name, cm.redirect, cm.multiplier
-                   FROM monoize_channels c
-                   JOIN monoize_providers p ON p.id = c.provider_id
-                   JOIN monoize_channel_models cm ON cm.channel_id = c.id
-                   WHERE p.circuit_breaker_enabled = 1
-                     AND p.enabled = 1
-                     AND c.enabled = 1
-                     AND c.weight > 0
-                   ORDER BY c.created_at ASC, cm.model_name ASC"#,
-                vec![],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let mut channels_by_provider: HashMap<String, Vec<MonoizeChannel>> = HashMap::new();
-        let mut channel_positions: HashMap<(String, String), usize> = HashMap::new();
-        for row in channel_model_rows {
-            let provider_id: String = row.try_get("", "provider_id").map_err(|e| e.to_string())?;
-            let channel_id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-            let model_name: String = row.try_get("", "model_name").map_err(|e| e.to_string())?;
-            let channels = channels_by_provider.entry(provider_id.clone()).or_default();
-            if let Some(index) = channel_positions.get(&(provider_id.clone(), channel_id.clone())) {
-                let model_entry = decode_channel_model_row(&row, &model_name)?
-                    .models
-                    .remove(&model_name)
-                    .expect("decoded channel model row must contain its model");
-                channels[*index].models.insert(model_name, model_entry);
-            } else {
-                let index = channels.len();
-                channels.push(decode_channel_model_row(&row, &model_name)?);
-                channel_positions.insert((provider_id, channel_id), index);
-            }
-        }
-        provider_rows
-            .iter()
-            .map(|row| {
-                let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-                decode_provider_row(row, channels_by_provider.remove(&id).unwrap_or_default())
+        let providers = self.list_providers().await?;
+        Ok(providers
+            .into_iter()
+            .filter(|provider| {
+                provider.enabled
+                    && provider.circuit_breaker_enabled
+                    && provider.channels.iter().any(|channel| {
+                        channel.enabled && channel.weight > 0 && !channel.models.is_empty()
+                    })
             })
-            .collect()
+            .collect())
     }
 
-    /// GR-I2/GR-C3 for the provider group set: canonicalize, replace an empty
-    /// selection with the default group id, and require every id to reference
-    /// an existing registry row.
-    async fn resolve_provider_group_ids(
-        &self,
-        group_ids: &[String],
-    ) -> Result<Vec<String>, String> {
-        let group_ids = canonicalize_group_ids(group_ids);
-        if group_ids.len() > 1 {
-            return Err("a provider must belong to exactly one group".to_string());
-        }
-        if group_ids.len() > 32 {
-            return Err("at most 32 groups can be selected".to_string());
-        }
-        if group_ids.is_empty() {
+    async fn resolve_provider_group_id(&self, group_id: &str) -> Result<String, String> {
+        let group_id = group_id.trim();
+        if group_id.is_empty() {
             let row = self
                 .db
                 .read()
@@ -1733,60 +1379,29 @@ impl MonoizeRoutingStore {
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "default group row missing (GR-D2 violated)".to_string())?;
             let default_id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-            return Ok(vec![default_id]);
-        }
-        for id in &group_ids {
-            let row = self
-                .db
-                .read()
-                .query_one(self.db.stmt(
-                    "SELECT 1 AS one FROM monoize_groups WHERE id = $1",
-                    vec![id.clone().into()],
-                ))
-                .await
-                .map_err(|e| e.to_string())?;
-            if row.is_none() {
-                return Err(format!("unknown group id: {id}"));
-            }
-        }
-        Ok(group_ids)
-    }
-
-    pub async fn get_provider(&self, id: &str) -> Result<Option<MonoizeProvider>, String> {
-        if self.uses_flattened_provider_schema().await? {
-            return Ok(self
-                .list_providers()
-                .await?
-                .into_iter()
-                .find(|p| p.id == id));
+            return Ok(default_id);
         }
         let row = self
             .db
             .read()
             .query_one(self.db.stmt(
-                r#"SELECT id, name, channel_max_retries,
-                          channel_retry_interval_ms, circuit_breaker_enabled,
-                          per_model_circuit_break, transforms, api_type_overrides,
-                          active_probe_enabled_override, active_probe_interval_seconds_override,
-                          active_probe_success_threshold_override, active_probe_model_override,
-                          request_timeout_ms_override, extra_fields_whitelist,
-                          strip_cross_protocol_nested_extra, group_ids,
-                          enabled, priority, created_at, updated_at
-                   FROM monoize_providers
-                   WHERE id = $1"#,
-                vec![id.into()],
+                "SELECT 1 AS one FROM monoize_groups WHERE id = $1",
+                vec![group_id.into()],
             ))
             .await
             .map_err(|e| e.to_string())?;
+        if row.is_none() {
+            return Err(format!("unknown group id: {group_id}"));
+        }
+        Ok(group_id.to_string())
+    }
 
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let mut channels_by_provider = self.load_channels_bulk(Some(id)).await?;
-        Ok(Some(decode_provider_row(
-            &row,
-            channels_by_provider.remove(id).unwrap_or_default(),
-        )?))
+    pub async fn get_provider(&self, id: &str) -> Result<Option<MonoizeProvider>, String> {
+        Ok(self
+            .list_providers()
+            .await?
+            .into_iter()
+            .find(|provider| provider.id == id))
     }
 
     pub async fn create_provider(
@@ -1826,11 +1441,7 @@ impl MonoizeRoutingStore {
         // Resolve before begin_write: the registry lookup uses the read pool,
         // which on single-connection SQLite would deadlock behind our own
         // write transaction.
-        let resolved_group_ids = self.resolve_provider_group_ids(&input.group_ids).await?;
-        let group_id = resolved_group_ids
-            .first()
-            .cloned()
-            .ok_or_else(|| "provider group resolution returned no group".to_string())?;
+        let group_id = self.resolve_provider_group_id(&input.group_id).await?;
         let txn = self.db.begin_write().await.map_err(|e| e.to_string())?;
 
         let priority = match input.priority {
@@ -1972,7 +1583,6 @@ impl MonoizeRoutingStore {
         id: &str,
         input: UpdateMonoizeProviderInput,
     ) -> Result<MonoizeProvider, String> {
-        let flattened = self.uses_flattened_provider_schema().await?;
         if let Some(channels) = &input.channels {
             validate_channels(channels, false)?;
         }
@@ -2018,14 +1628,12 @@ impl MonoizeRoutingStore {
         };
         if let Some(value) = &input.name {
             push_value("name", value.clone().into());
-            if flattened {
-                let trimmed = value.trim();
-                push_value("public_name", trimmed.to_string().into());
-                push_value(
-                    "public_name_key",
-                    SeaValue::Bytes(Some(Box::new(trimmed.as_bytes().to_vec()))),
-                );
-            }
+            let trimmed = value.trim();
+            push_value("public_name", trimmed.to_string().into());
+            push_value(
+                "public_name_key",
+                SeaValue::Bytes(Some(Box::new(trimmed.as_bytes().to_vec()))),
+            );
         }
         if let Some(value) = input.channel_max_retries {
             push_value("channel_max_retries", SeaValue::Int(Some(value)));
@@ -2097,16 +1705,9 @@ impl MonoizeRoutingStore {
                 opt_bool_to_value(value),
             );
         }
-        if let Some(value) = &input.group_ids {
-            let resolved = self.resolve_provider_group_ids(value).await?;
-            if flattened {
-                push_value("group_id", resolved[0].clone().into());
-            } else {
-                push_value(
-                    "group_ids",
-                    serialize_provider_group_ids_json(&resolved)?.into(),
-                );
-            }
+        if let Some(value) = &input.group_id {
+            let resolved = self.resolve_provider_group_id(value).await?;
+            push_value("group_id", resolved.into());
         }
         if let Some(value) = input.enabled {
             push_value("enabled", SeaValue::Int(Some(if value { 1 } else { 0 })));
@@ -2254,8 +1855,7 @@ impl MonoizeRoutingStore {
         provider_id: &str,
         channels: &[CreateMonoizeChannelInput],
     ) -> Result<(), String> {
-        if self.uses_flattened_provider_schema().await? {
-            let channel = channels
+        let channel = channels
                 .first()
                 .ok_or_else(|| "a provider must define exactly one channel".to_string())?;
             let existing = conn
@@ -2367,196 +1967,6 @@ impl MonoizeRoutingStore {
                          entry.multiplier.to_string().into(), now.clone().into()],
                 )).await.map_err(|e| e.to_string())?;
             }
-            return Ok(());
-        }
-        let existing_rows = conn
-            .query_all(self.db.stmt(
-                "SELECT id, api_key
-                 FROM monoize_channels
-                 WHERE provider_id = $1",
-                vec![provider_id.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-
-        #[derive(Clone)]
-        struct ExistingChannel {
-            api_key: String,
-        }
-        let mut existing_channels: HashMap<String, ExistingChannel> = HashMap::new();
-        for row in &existing_rows {
-            let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-            existing_channels.insert(
-                id,
-                ExistingChannel {
-                    api_key: row.try_get("", "api_key").map_err(|e| e.to_string())?,
-                },
-            );
-        }
-
-        conn.execute(self.db.stmt(
-            "DELETE FROM monoize_channels WHERE provider_id = $1",
-            vec![provider_id.into()],
-        ))
-        .await
-        .map_err(|e| e.to_string())?;
-
-        struct PreparedChannel<'a> {
-            id: String,
-            api_key: String,
-            input: &'a CreateMonoizeChannelInput,
-            models: HashMap<String, MonoizeModelEntry>,
-        }
-
-        let mut prepared = Vec::with_capacity(channels.len());
-        for input in channels {
-            let id = input
-                .id
-                .clone()
-                .unwrap_or_else(|| format!("mono_ch_{}", uuid::Uuid::new_v4().simple()));
-
-            let api_key = match input.api_key.as_deref() {
-                Some(k) if !k.trim().is_empty() => k.to_string(),
-                _ => existing_channels
-                    .get(&id)
-                    .map(|c| c.api_key.clone())
-                    .ok_or_else(|| {
-                        format!(
-                            "channel api_key must not be empty for new channel '{}'",
-                            input.name
-                        )
-                    })?,
-            };
-            prepared.push(PreparedChannel {
-                id,
-                api_key,
-                input,
-                models: canonicalize_models(&input.models),
-            });
-        }
-
-        const CHANNEL_INSERT_CHUNK_SIZE: usize = 18;
-        let now = Utc::now().to_rfc3339();
-        for chunk in prepared.chunks(CHANNEL_INSERT_CHUNK_SIZE) {
-            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 26);
-            let mut rows = Vec::with_capacity(chunk.len());
-            for channel in chunk {
-                let start = values.len() + 1;
-                let input = channel.input;
-                values.extend([
-                    channel.id.clone().into(),
-                    provider_id.into(),
-                    input.name.as_str().into(),
-                    input.provider_type.as_str().into(),
-                    input.base_url.as_str().into(),
-                    channel.api_key.clone().into(),
-                    SeaValue::Int(Some(input.weight)),
-                    SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
-                    opt_u64_to_value(
-                        input
-                            .passive_failure_count_threshold_override
-                            .map(|value| value as u64),
-                    ),
-                    opt_u64_to_value(input.passive_cooldown_seconds_override),
-                    opt_u64_to_value(input.passive_window_seconds_override),
-                    opt_u64_to_value(input.passive_rate_limit_cooldown_seconds_override),
-                    opt_bool_to_value(input.active_probe_enabled_override),
-                    opt_u64_to_value(input.active_probe_interval_seconds_override),
-                    opt_u64_to_value(
-                        input
-                            .active_probe_success_threshold_override
-                            .map(|value| value as u64),
-                    ),
-                    input.active_probe_model_override.clone().into(),
-                    opt_bool_to_value(input.affinity_enabled_override),
-                    opt_u64_to_value(input.affinity_idle_ttl_seconds_override),
-                    input
-                        .affinity_failback_mode_override
-                        .map(|mode| mode.as_str().to_string())
-                        .into(),
-                    opt_u64_to_value(input.affinity_failback_delay_seconds_override),
-                    normalized_proxy_url(input.proxy_url.as_deref()).into(),
-                    normalized_extra_headers_json(input.extra_headers.as_ref()).into(),
-                    opt_bool_to_value(input.session_affinity_auto),
-                    SeaValue::Int(Some(if input.allow_missing_usage { 1 } else { 0 })),
-                    now.clone().into(),
-                    now.clone().into(),
-                ]);
-                rows.push(format!(
-                    "({})",
-                    (start..start + 26)
-                        .map(|index| format!("${index}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-            conn.execute(self.db.stmt(
-                &format!(
-                    "INSERT INTO monoize_channels
-                     (id, provider_id, name, provider_type, base_url, api_key, weight, enabled,
-                      passive_failure_count_threshold_override, passive_cooldown_seconds_override,
-                      passive_window_seconds_override, passive_rate_limit_cooldown_seconds_override,
-                      active_probe_enabled_override, active_probe_interval_seconds_override,
-                      active_probe_success_threshold_override, active_probe_model_override,
-                      affinity_enabled_override, affinity_idle_ttl_seconds_override,
-                      affinity_failback_mode_override, affinity_failback_delay_seconds_override,
-                      proxy_url,
-                      extra_headers,
-                      session_affinity_auto,
-                      allow_missing_usage,
-                      created_at, updated_at)
-                     VALUES {}",
-                    rows.join(", ")
-                ),
-                values,
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-
-        let model_rows = prepared
-            .iter()
-            .flat_map(|channel| {
-                channel
-                    .models
-                    .iter()
-                    .map(|(model, entry)| (channel.id.clone(), model.clone(), entry.clone()))
-            })
-            .collect::<Vec<_>>();
-        const MODEL_INSERT_CHUNK_SIZE: usize = 66;
-        for chunk in model_rows.chunks(MODEL_INSERT_CHUNK_SIZE) {
-            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 6);
-            let mut rows = Vec::with_capacity(chunk.len());
-            for (channel_id, model, entry) in chunk {
-                let start = values.len() + 1;
-                values.extend([
-                    format!("mono_ch_model_{}", uuid::Uuid::new_v4().simple()).into(),
-                    channel_id.clone().into(),
-                    model.clone().into(),
-                    entry.redirect.clone().into(),
-                    entry.multiplier.to_string().into(),
-                    now.clone().into(),
-                ]);
-                rows.push(format!(
-                    "({})",
-                    (start..start + 6)
-                        .map(|index| format!("${index}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-            conn.execute(self.db.stmt(
-                &format!(
-                    "INSERT INTO monoize_channel_models
-                     (id, channel_id, model_name, redirect, multiplier, created_at)
-                     VALUES {}",
-                    rows.join(", ")
-                ),
-                values,
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        }
         Ok(())
     }
 }
@@ -3591,7 +3001,7 @@ mod tests {
         assert_eq!(second.priority, 1);
         store
             .reorder_providers(ReorderProvidersInput {
-                group_id: created.group_ids[0].clone(),
+                group_id: created.group_id.clone(),
                 provider_ids: vec![second.id.clone(), created.id.clone()],
             })
             .await
@@ -3787,31 +3197,6 @@ mod tests {
         }])
         .expect_err("expected invalid empty override pattern");
         assert!(err.contains("api_type_overrides[0].pattern must not be empty"));
-    }
-
-    #[test]
-    fn decode_provider_group_ids_json_is_compatible_only_for_absent_and_empty_values() {
-        assert!(decode_provider_group_ids_json("provider-a", None)
-            .unwrap()
-            .is_empty());
-        assert!(
-            decode_provider_group_ids_json("provider-a", Some(String::new()))
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            decode_provider_group_ids_json("provider-a", Some("not-json".to_string())).is_err()
-        );
-        assert!(decode_provider_group_ids_json("provider-a", Some("[1]".to_string())).is_err());
-        // Ids are opaque: order and casing must survive, duplicates and empties drop (GR-C1).
-        assert_eq!(
-            decode_provider_group_ids_json(
-                "provider-a",
-                Some(r#"[" g-B ","g-a","g-a",""]"#.to_string())
-            )
-            .unwrap(),
-            vec!["g-B".to_string(), "g-a".to_string()]
-        );
     }
 
     #[test]

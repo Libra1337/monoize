@@ -5,8 +5,6 @@ pub mod billing_rate_records;
 pub mod file_bytes;
 pub mod model_metadata_records;
 pub mod model_registry_records;
-pub mod monoize_channel_models;
-pub mod monoize_channels;
 pub mod monoize_groups;
 pub mod monoize_provider_models;
 pub mod monoize_providers;
@@ -24,8 +22,6 @@ pub mod prelude {
     pub use super::file_bytes::Entity as FileBytes;
     pub use super::model_metadata_records::Entity as ModelMetadataRecords;
     pub use super::model_registry_records::Entity as ModelRegistryRecords;
-    pub use super::monoize_channel_models::Entity as MonoizeChannelModels;
-    pub use super::monoize_channels::Entity as MonoizeChannels;
     pub use super::monoize_groups::Entity as MonoizeGroups;
     pub use super::monoize_provider_models::Entity as MonoizeProviderModels;
     pub use super::monoize_providers::Entity as MonoizeProviders;

@@ -390,16 +390,15 @@ pub fn resolve_effective_groups(
     canonicalize_group_ids(&filtered)
 }
 
-/// R-GRP-1 eligibility: `None` means internal system traffic (all providers
-/// eligible); otherwise the provider's group-id set must intersect
-/// `effective_groups`.
+/// R-GRP-1 eligibility: `None` means internal system traffic (all Providers
+/// eligible); otherwise the Provider's Group must occur in `effective_groups`.
 pub fn is_provider_group_eligible(
-    provider_group_ids: &[String],
+    provider_group_id: &str,
     effective_groups: &Option<Vec<String>>,
 ) -> bool {
     match effective_groups {
         None => true,
-        Some(groups) => provider_group_ids.iter().any(|id| groups.contains(id)),
+        Some(groups) => groups.iter().any(|id| id == provider_group_id),
     }
 }
 
@@ -407,14 +406,14 @@ pub fn is_provider_group_eligible(
 /// by the provider. Callers must only rank group-eligible providers; a
 /// non-matching provider ranks last as a defensive fallback.
 pub fn provider_group_rank(
-    provider_group_ids: &[String],
+    provider_group_id: &str,
     effective_groups: &Option<Vec<String>>,
 ) -> usize {
     match effective_groups {
         None => 0,
         Some(groups) => groups
             .iter()
-            .position(|id| provider_group_ids.contains(id))
+            .position(|id| id == provider_group_id)
             .unwrap_or(usize::MAX),
     }
 }
@@ -836,23 +835,23 @@ mod tests {
     #[test]
     fn provider_group_eligibility_and_rank_follow_r_grp_rules() {
         // None = internal traffic: everything eligible at rank 0.
-        assert!(is_provider_group_eligible(&ids(&["g-1"]), &None));
-        assert_eq!(provider_group_rank(&ids(&["g-1"]), &None), 0);
+        assert!(is_provider_group_eligible("g-1", &None));
+        assert_eq!(provider_group_rank("g-1", &None), 0);
 
         // Empty effective groups: nothing eligible (R-GRP-1a).
         assert!(!is_provider_group_eligible(
-            &ids(&["g-1"]),
+            "g-1",
             &Some(Vec::new())
         ));
 
         let effective = Some(ids(&["g-2", "g-1"]));
-        assert!(is_provider_group_eligible(&ids(&["g-1"]), &effective));
-        assert!(!is_provider_group_eligible(&ids(&["g-9"]), &effective));
+        assert!(is_provider_group_eligible("g-1", &effective));
+        assert!(!is_provider_group_eligible("g-9", &effective));
 
         // Rank = earliest matching index in effective order (R-GRP-2).
-        assert_eq!(provider_group_rank(&ids(&["g-1"]), &effective), 1);
-        assert_eq!(provider_group_rank(&ids(&["g-1", "g-2"]), &effective), 0);
-        assert_eq!(provider_group_rank(&ids(&["g-9"]), &effective), usize::MAX);
+        assert_eq!(provider_group_rank("g-1", &effective), 1);
+        assert_eq!(provider_group_rank("g-2", &effective), 0);
+        assert_eq!(provider_group_rank("g-9", &effective), usize::MAX);
     }
 
     #[test]

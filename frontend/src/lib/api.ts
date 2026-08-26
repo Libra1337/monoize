@@ -352,7 +352,7 @@ export interface Provider {
   request_timeout_ms_override?: number | null;
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
-  group_ids: string[];
+  group_id: string;
   enabled: boolean;
   priority: number;
   created_at: string;
@@ -405,7 +405,7 @@ export interface CreateProviderInput {
   request_timeout_ms_override?: number | null;
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
-  group_ids?: string[];
+  group_id?: string;
   enabled?: boolean;
   priority?: number;
 }
@@ -426,7 +426,7 @@ export interface UpdateProviderInput {
   request_timeout_ms_override?: number | null;
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
-  group_ids?: string[];
+  group_id?: string;
   enabled?: boolean;
   priority?: number;
 }

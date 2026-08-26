@@ -210,7 +210,7 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
     // R-GRP-2: rank providers by the position of the first effective group they
     // serve; the stable sort keeps priority order within the same rank.
     providers.sort_by_key(|provider| {
-        crate::users::provider_group_rank(&provider.group_ids, &auth.effective_groups)
+        crate::users::provider_group_rank(&provider.group_id, &auth.effective_groups)
     });
     let mut attempts = Vec::new();
     for provider in providers {
@@ -577,7 +577,7 @@ pub(super) async fn collect_provider_attempts(
     if !provider.enabled {
         return;
     }
-    if !crate::users::is_provider_group_eligible(&provider.group_ids, effective_groups) {
+    if !crate::users::is_provider_group_eligible(&provider.group_id, effective_groups) {
         return;
     }
     let supporting_channels: Vec<crate::monoize_routing::MonoizeChannel> = provider

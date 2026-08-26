@@ -533,7 +533,7 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
                 pattern: "gpt-image-test".to_string(),
                 api_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             }],
-            group_ids: Vec::new(),
+            group_id: String::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("fisx-style-image-test-ch".to_string()),
                 name: "fisx-style-image-test-ch".to_string(),

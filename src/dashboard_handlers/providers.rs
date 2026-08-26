@@ -1304,7 +1304,7 @@ mod tests {
                 extra_headers: None,
                 session_affinity_auto: None,
             }],
-            group_ids: Vec::new(),
+            group_id: String::new(),
             transforms: Vec::new(),
             api_type_overrides: Vec::new(),
             active_probe_enabled_override: None,

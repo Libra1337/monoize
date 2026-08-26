@@ -143,7 +143,7 @@ export function ProviderCard({
 			).length,
 		[provider.model_runtime_statuses]
 	)
-	const { data: registryGroups = [] } = useDashboardGroups(provider.group_ids.length > 0)
+	const { data: registryGroups = [] } = useDashboardGroups(Boolean(provider.group_id))
 	const groupNameById = useMemo(
 		() => new Map(registryGroups.map(group => [group.id, group.name])),
 		[registryGroups]
@@ -211,10 +211,10 @@ export function ProviderCard({
 			})
 		}
 
-		for (const groupId of provider.group_ids) {
-			const label = groupNameById.get(groupId) ?? `${groupId.slice(0, 8)}…`
+		if (provider.group_id) {
+			const label = groupNameById.get(provider.group_id) ?? `${provider.group_id.slice(0, 8)}…`
 			items.push({
-				key: `group-${groupId}`,
+				key: `group-${provider.group_id}`,
 				collapsed: (
 					<Badge variant='outline' className='max-w-[10rem] text-xs'>
 						<span className='truncate'>{label}</span>
@@ -229,7 +229,7 @@ export function ProviderCard({
 		}
 
 		return items
-	}, [attentionModelCount, channelTypeLabelEntries, groupNameById, provider.enabled, provider.group_ids, t, unavailableModelCount])
+	}, [attentionModelCount, channelTypeLabelEntries, groupNameById, provider.enabled, provider.group_id, t, unavailableModelCount])
 
 	const handleQuickTest = async (channelId: string) => {
 		setQuickTestingChannelId(channelId)

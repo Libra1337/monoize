@@ -288,11 +288,7 @@ fn provider_group_names(
     provider: &MonoizeProvider,
     groups: &HashMap<String, String>,
 ) -> Vec<String> {
-    provider
-        .group_ids
-        .iter()
-        .filter_map(|id| groups.get(id).cloned())
-        .collect()
+    groups.get(&provider.group_id).cloned().into_iter().collect()
 }
 
 fn channels_for_model<'a>(provider: &'a MonoizeProvider, model: &str) -> Vec<&'a MonoizeChannel> {

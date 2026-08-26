@@ -204,7 +204,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "override-threshold-provider".to_string(),
             api_type_overrides: Vec::new(),
-            group_ids: Vec::new(),
+            group_id: String::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("override-threshold-ch".to_string()),
                 name: "override-threshold-ch".to_string(),
@@ -299,7 +299,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
         name: "mono-transform-original-model-match".to_string(),
         api_type_overrides: Vec::new(),
-        group_ids: Vec::new(),
+        group_id: String::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-transform-original-model-match-ch1".to_string()),
             name: "mono-transform-original-model-match-ch1".to_string(),
@@ -410,7 +410,7 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
             pattern: "gpt-5.4-fast".to_string(),
             api_type: monoize::monoize_routing::MonoizeProviderType::Responses,
         }],
-        group_ids: Vec::new(),
+        group_id: String::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-provider-redirect-api-type-override-ch1".to_string()),
             name: "mono-provider-redirect-api-type-override-ch1".to_string(),
