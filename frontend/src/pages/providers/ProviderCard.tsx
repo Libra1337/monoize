@@ -516,8 +516,7 @@ export function ProviderCard({
 															</button>
 														</span>
 														<span className='text-xs text-muted-foreground'>
-															{Object.keys(channel.models).length}M ·{' '}
-															W:{channel.weight}
+															{Object.keys(channel.models).length}M
 														</span>
 														<StatusBadge variant={channel.enabled ? 'success' : 'info'}>
 															{channel.enabled ?

@@ -206,7 +206,7 @@ fn build_provider_model_runtime_statuses(
             let eligible_channels: Vec<&MonoizeChannel> = mapped_channels
                 .iter()
                 .copied()
-                .filter(|channel| channel.enabled && channel.weight > 0)
+                .filter(|channel| channel.enabled)
                 .collect();
             let mut breaker_channels: Vec<ModelRuntimeChannel> = eligible_channels
                 .iter()
@@ -1245,7 +1245,6 @@ mod tests {
                 provider_type: MonoizeProviderType::ChatCompletion,
                 base_url,
                 api_key: Some("stored-secret".to_string()),
-                weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
                 passive_failure_count_threshold_override: None,

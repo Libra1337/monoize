@@ -130,7 +130,6 @@ function channelInput(channel: ChannelRow, c: (zhText: string, enText: string) =
 		provider_type: channel.provider_type,
 		base_url: channel.base_url.trim(),
 		api_key: channel.api_key.trim() || undefined,
-		weight: Number(channel.weight),
 		enabled: channel.enabled,
 		allow_missing_usage: channel.allow_missing_usage,
 		models: modelMap(channel.models),
@@ -544,7 +543,6 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 				<Field label={c('接口类型', 'API type')}><Select value={activeChannel.provider_type} onValueChange={(provider_type: ProviderType) => updateChannel(selectedChannel, { provider_type })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{providerTypes.map(type => <SelectItem key={type} value={type}>{PROVIDER_TYPE_CONFIG[type].label}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
 				<Field label='Base URL' className='sm:col-span-2'><Input value={activeChannel.base_url} onChange={event => updateChannel(selectedChannel, { base_url: event.target.value })} onBlur={onBaseUrlBlur} placeholder='https://api.openai.com' className='font-mono' /></Field>
 				<Field label='API Key' hint={form.id && activeChannel.id ? c('留空保留现有密钥。', 'Leave blank to preserve the stored key.') : undefined}><Input type='password' autoComplete='new-password' value={activeChannel.api_key} onChange={event => updateChannel(selectedChannel, { api_key: event.target.value })} placeholder={form.id && activeChannel.id ? '••••••••••••' : 'sk-…'} className='font-mono' /></Field>
-				<Field label={c('流量权重', 'Traffic weight')}><Input type='number' min='0' value={activeChannel.weight} onChange={event => updateChannel(selectedChannel, { weight: event.target.value })} /></Field>
 				<FieldGroup className='sm:col-span-2'>
 					<FormField orientation='horizontal' className='rounded-lg border p-4'>
 						<FieldContent>

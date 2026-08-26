@@ -23,7 +23,6 @@ export type ChannelRow = {
 	provider_type: ProviderType
 	base_url: string
 	api_key: string
-	weight: string
 	enabled: boolean
 	allow_missing_usage: boolean
 	models: ModelRow[]
@@ -101,7 +100,6 @@ export function emptyChannelRow(): ChannelRow {
 		provider_type: 'chat_completion',
 		base_url: '',
 		api_key: '',
-		weight: '1',
 		enabled: true,
 		allow_missing_usage: false,
 		models: [],
@@ -173,7 +171,6 @@ export function fromProvider(provider: Provider): ProviderForm {
 			name: provider.channel.name,
 			provider_type: provider.channel.provider_type,
 			base_url: provider.channel.base_url,
-			weight: String(provider.channel.weight),
 			enabled: provider.channel.enabled,
 			allow_missing_usage: provider.channel.allow_missing_usage ?? false,
 			models: Object.entries(provider.channel.models).map(([model, entry]) => ({

@@ -285,7 +285,6 @@ export interface MonoizeChannel {
   name: string;
   provider_type: ProviderType;
   base_url: string;
-  weight: number;
   enabled: boolean;
   allow_missing_usage: boolean;
   passive_failure_count_threshold_override?: number | null;
@@ -368,7 +367,6 @@ export interface CreateMonoizeChannelInput {
   provider_type: ProviderType;
   base_url: string;
   api_key?: string;
-  weight?: number;
   enabled?: boolean;
   allow_missing_usage?: boolean;
   passive_failure_count_threshold_override?: number | null;
@@ -733,7 +731,6 @@ export interface AdminOverviewChannelHealth {
   channel_id: string;
   channel_name: string;
   enabled: boolean;
-  weight: number;
   session_affinity_auto: boolean;
   healthy: boolean;
   last_success_at?: number | null;

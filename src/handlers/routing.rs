@@ -53,7 +53,7 @@ fn origin_peer_channel_ids(
 ) -> Vec<String> {
     channels
         .iter()
-        .filter(|channel| channel.enabled && channel.weight > 0)
+        .filter(|channel| channel.enabled)
         .filter(|channel| channel_origin_key(&channel.base_url).as_deref() == Some(origin_key))
         .map(|channel| channel.id.clone())
         .collect()
@@ -603,7 +603,7 @@ pub(super) async fn collect_provider_attempts(
         return;
     }
 
-    let ordered = weighted_shuffle_channels(channels);
+    let ordered = channels;
     let runtime = state.monoize_runtime.read().await;
     for channel in ordered {
         let origin_key = channel_origin_key(&channel.base_url);
@@ -781,7 +781,7 @@ pub(super) async fn filter_eligible_channels(
     let health = state.channel_health.lock().await;
     let mut out = Vec::new();
     for channel in channels {
-        if !channel.enabled || channel.weight <= 0 {
+        if !channel.enabled {
             continue;
         }
         if !circuit_breaker_enabled {
@@ -831,45 +831,6 @@ pub(super) async fn is_attempt_channel_healthy(state: &AppState, attempt: &Monoi
         .cloned()
         .unwrap_or_else(crate::monoize_routing::ChannelHealthState::new)
         .healthy
-}
-
-pub(super) fn weighted_shuffle_channels(
-    mut channels: Vec<crate::monoize_routing::MonoizeChannel>,
-) -> Vec<crate::monoize_routing::MonoizeChannel> {
-    let mut ordered = Vec::with_capacity(channels.len());
-    while !channels.is_empty() {
-        let total_weight: u64 = channels.iter().map(|c| c.weight.max(1) as u64).sum();
-        if total_weight == 0 {
-            ordered.append(&mut channels);
-            break;
-        }
-        let target = random_u64(total_weight);
-        let mut cumulative = 0u64;
-        let mut chosen = 0usize;
-        for (idx, channel) in channels.iter().enumerate() {
-            cumulative += channel.weight.max(1) as u64;
-            if target < cumulative {
-                chosen = idx;
-                break;
-            }
-        }
-        ordered.push(channels.swap_remove(chosen));
-    }
-    ordered
-}
-
-pub(super) fn random_u64(bound: u64) -> u64 {
-    if bound <= 1 {
-        return 0;
-    }
-    // Rejection sampling to avoid modulo bias
-    let limit = u64::MAX - (u64::MAX % bound);
-    loop {
-        let sample = uuid::Uuid::new_v4().as_u128() as u64;
-        if sample < limit {
-            return sample % bound;
-        }
-    }
 }
 
 pub(super) fn build_channel_provider_config(attempt: &MonoizeAttempt) -> ProviderConfig {

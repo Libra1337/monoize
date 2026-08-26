@@ -151,7 +151,6 @@ pub async fn get_admin_overview(
                 "channel_id": channel.id,
                 "channel_name": channel.name,
                 "enabled": channel.enabled,
-                "weight": channel.weight,
                 "session_affinity_auto": channel.session_affinity_auto.unwrap_or(false),
                 "healthy": healthy,
                 "last_success_at": last_success_at,

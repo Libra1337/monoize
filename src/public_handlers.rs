@@ -294,7 +294,7 @@ fn provider_group_names(
 fn channels_for_model<'a>(provider: &'a MonoizeProvider, model: &str) -> Vec<&'a MonoizeChannel> {
     std::iter::once(&provider.channel)
         .filter(|channel| {
-            channel.enabled && channel.weight > 0 && channel.models.contains_key(model)
+            channel.enabled && channel.models.contains_key(model)
         })
         .collect()
 }
@@ -380,7 +380,7 @@ pub async fn list_marketplace(
                 continue;
             }
             for channel in std::iter::once(&provider.channel) {
-                if !channel.enabled || channel.weight <= 0 {
+                if !channel.enabled {
                     continue;
                 }
                 for (model, entry) in &channel.models {

@@ -540,7 +540,6 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
                 provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
                 base_url,
                 api_key: Some("upstream-key".to_string()),
-                weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
                 passive_failure_count_threshold_override: None,

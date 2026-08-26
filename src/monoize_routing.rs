@@ -107,8 +107,6 @@ pub struct MonoizeChannel {
     pub base_url: String,
     #[serde(skip_serializing)]
     pub api_key: String,
-    #[serde(default = "default_channel_weight")]
-    pub weight: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
@@ -200,8 +198,6 @@ pub struct CreateMonoizeChannelInput {
     pub base_url: String,
     #[serde(default)]
     pub api_key: Option<String>,
-    #[serde(default = "default_channel_weight")]
-    pub weight: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
@@ -569,10 +565,6 @@ fn default_enabled() -> bool {
     true
 }
 
-fn default_channel_weight() -> i32 {
-    1
-}
-
 fn decode_database_bool(
     entity: &str,
     entity_id: &str,
@@ -737,7 +729,6 @@ fn decode_channel_row(
         provider_type,
         base_url: row.try_get("", "base_url").map_err(|e| e.to_string())?,
         api_key: row.try_get("", "api_key").map_err(|e| e.to_string())?,
-        weight: row.try_get("", "weight").map_err(|e| e.to_string())?,
         enabled: decode_database_bool(
             "channel",
             &id,
@@ -1181,7 +1172,7 @@ impl MonoizeRoutingStore {
                 &format!(
                     "SELECT channel_id AS id, id AS provider_id, channel_name AS name,
                             channel_provider_type AS provider_type, channel_base_url AS base_url,
-                            channel_api_key AS api_key, 1 AS weight, channel_enabled AS enabled,
+                            channel_api_key AS api_key, channel_enabled AS enabled,
                             channel_passive_failure_count_threshold_override AS passive_failure_count_threshold_override,
                             channel_passive_cooldown_seconds_override AS passive_cooldown_seconds_override,
                             channel_passive_window_seconds_override AS passive_window_seconds_override,
@@ -1348,7 +1339,6 @@ impl MonoizeRoutingStore {
             .filter(|provider| {
                 provider.enabled
                     && provider.channel.enabled
-                    && provider.channel.weight > 0
                     && provider.channel.models.contains_key(model)
             })
             .collect())
@@ -1362,7 +1352,6 @@ impl MonoizeRoutingStore {
                 provider.enabled
                     && provider.circuit_breaker_enabled
                     && provider.channel.enabled
-                    && provider.channel.weight > 0
                     && !provider.channel.models.is_empty()
             })
             .collect())
@@ -2051,9 +2040,6 @@ fn validate_channel(channel: &CreateMonoizeChannelInput, require_api_key: bool) 
             if key.trim().is_empty() {
                 return Err("channel api_key must not be empty".to_string());
             }
-        }
-        if c.weight < 0 {
-            return Err("channel weight must be >= 0".to_string());
         }
         if let Some(headers) = &c.extra_headers {
             validate_channel_extra_headers(&c.name, headers)?;
@@ -2997,8 +2983,7 @@ mod tests {
             .expect("active probe candidates reload")
             .iter()
             .all(|provider| provider.enabled
-                && provider.channel.enabled
-                && provider.channel.weight > 0));
+                && provider.channel.enabled));
 
         db.write()
             .await

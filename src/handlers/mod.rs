@@ -939,7 +939,7 @@ struct MonoizeAttempt {
     session_affinity_value: Option<String>,
     /// RTA-6c: `scheme://host:port` from Channel `base_url`, when parseable.
     origin_key: Option<String>,
-    /// Enabled positive-weight Channels of this Provider that share `origin_key`.
+    /// Enabled Channels of this Provider that share `origin_key`.
     origin_peer_channel_ids: Vec<String>,
 }
 

@@ -234,7 +234,6 @@ fn dashboard_provider_response_includes_group_and_channel_hides_api_key() {
         provider_type: MonoizeProviderType::Responses,
         base_url: "https://example.com".to_string(),
         api_key: "secret".to_string(),
-        weight: 1,
         enabled: true,
         allow_missing_usage: false,
         passive_failure_count_threshold_override: None,

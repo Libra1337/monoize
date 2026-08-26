@@ -1565,7 +1565,6 @@ mod tests {
             "eligible-z",
             "shared",
             "disabled-channel",
-            "zero-weight",
             "disabled-provider",
             "metadata-only",
         ] {

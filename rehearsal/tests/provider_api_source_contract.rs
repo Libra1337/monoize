@@ -110,3 +110,18 @@ fn provider_channel_contract_is_singular() {
     assert!(provider.contains("channel: MonoizeChannel;"));
     assert!(!provider.contains("channels: MonoizeChannel[];"));
 }
+
+#[test]
+fn channel_weight_is_removed_from_management_and_runtime_contracts() {
+    for declaration in ["pub struct MonoizeChannel", "pub struct CreateMonoizeChannelInput"] {
+        let start = ROUTING_SOURCE.find(declaration).expect("Channel declaration");
+        let body = &ROUTING_SOURCE[start..start + 1_800];
+        assert!(!body.contains("pub weight:"));
+    }
+    let frontend_start = FRONTEND_API_SOURCE
+        .find("export interface MonoizeChannel {")
+        .expect("frontend Channel declaration");
+    let frontend = &FRONTEND_API_SOURCE[frontend_start..frontend_start + 1_800];
+    assert!(!frontend.contains("weight:"));
+    assert!(!frontend.contains("weight?:"));
+}

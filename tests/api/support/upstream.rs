@@ -5092,7 +5092,6 @@ async fn create_test_provider(
                 provider_type,
                 base_url: base_url.to_string(),
                 api_key: Some(api_key.to_string()),
-                weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
                 passive_failure_count_threshold_override: None,

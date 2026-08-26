@@ -726,7 +726,6 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
                 api_key: Some("upstream-key".to_string()),
-                weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
                 passive_failure_count_threshold_override: None,
