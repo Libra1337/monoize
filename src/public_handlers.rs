@@ -153,6 +153,17 @@ fn canonical_text(value: &str, max_bytes: usize, field: &str) -> Result<String, 
     Ok(trimmed.to_string())
 }
 
+fn optional_search(value: Option<&str>) -> Result<Option<String>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    canonical_text(trimmed, 128, "q").map(Some)
+}
+
 fn ascii_search_key(value: &str) -> Vec<u8> {
     value
         .as_bytes()
@@ -300,11 +311,7 @@ pub async fn list_marketplace(
     if !(1..=50).contains(&limit) {
         return Err(invalid("limit must be between 1 and 50"));
     }
-    let search = query
-        .q
-        .as_deref()
-        .map(|value| canonical_text(value, 128, "q"))
-        .transpose()?;
+    let search = optional_search(query.q.as_deref())?;
     let search_key = search.as_deref().map(ascii_search_key);
     let group_filter = query
         .group
@@ -415,6 +422,13 @@ pub async fn marketplace_offers(
 ) -> AppResult<impl IntoResponse> {
     if !crate::public_api::admit(&headers) {
         return Ok(crate::public_api::rate_limited_response());
+    }
+    if query
+        .cursor
+        .as_deref()
+        .is_some_and(|cursor| !cursor.is_empty())
+    {
+        return Err(invalid("cursor pagination is not available yet"));
     }
     let group = query
         .group
