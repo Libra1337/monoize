@@ -32,7 +32,7 @@ SB-P-1. `store_products` MUST contain: `id`, `kind`, `name`, `description`, `pri
 
 SB-P-2. `kind` MUST be `balance` or `plan`. `price_currency` MUST be `CNY` or `USD`. `price_minor` MUST be a canonical integer string greater than zero. `name` after trimming MUST contain 1 to 100 characters. `description` after trimming MUST contain at most 500 characters.
 
-SB-P-3. `group_ids` MUST follow `groups-registry.spec.md` GR-C1 through GR-C3. A balance product MUST store `[]`. A plan product MAY store `[]`, which means no additional Group restriction.
+SB-P-3. `group_ids` MUST follow `groups-registry.spec.md` GR-C1 through GR-C3. Product writes MUST trim each id, remove empty ids, and remove later duplicates while preserving first-occurrence order. The canonical list MUST contain at most 32 ids. Every canonical id MUST exist in `monoize_groups` in the same write transaction that persists the product. A balance product MUST store `[]`. A plan product MAY store `[]`, which means no additional Group restriction.
 
 SB-P-4. A balance product MUST have `duration_seconds = NULL`. A plan product MUST have `duration_seconds` between `3600` and `31_536_000` inclusive.
 
@@ -44,7 +44,7 @@ SB-P-6. `store_balance_products` MUST contain one row for each balance product: 
 
 SB-P-7. Actual received MUST equal `recharge_minor + bonus_minor` with checked integer addition. Clients MUST NOT submit actual received as a writable field.
 
-SB-P-8. A custom recharge request MUST use an admin-configured minimum and maximum in the selected payment currency. Its bonus is zero. The default minimum is 1000 minor units and the default maximum is 100000000 minor units.
+SB-P-8. A custom recharge request MUST use an admin-configured minimum and maximum in the selected payment currency. Its bonus is zero. `StoreSettings` MUST contain canonical integer strings named `custom_recharge_cny_min_minor`, `custom_recharge_cny_max_minor`, `custom_recharge_usd_min_minor`, and `custom_recharge_usd_max_minor`. The values MUST use `system_settings` keys with the same field name prefixed by `store.`. Each missing key MUST read as `1000` for a minimum or `100000000` for a maximum. A settings write MUST reject a zero minimum, a zero maximum, or a minimum greater than its same-currency maximum.
 
 ### 2.3 Plan Products And Quotas
 
@@ -56,6 +56,8 @@ SB-P-11. `quota_fen_cny` MUST be a canonical integer string greater than zero. A
 
 SB-P-12. Plan quotas use CNY as the stored base. User display in CNY MUST show `round_half_away_from_zero(quota_fen_cny / 100)`. USD display MUST first convert with the current exchange rate, then round half away from zero to a whole USD amount. Plan quota display MUST contain no decimal separator.
 
+SB-P-13. Admin product reads MUST include enabled and disabled products. Deleting a missing product MUST return `not_found`. Deleting a product referenced by an order MUST return `conflict` and MUST NOT delete it.
+
 ## 3. Payment Channels
 
 SB-C-1. `store_payment_channels` MUST contain: `id`, `kind`, `name`, `mode`, `endpoint`, `icon_kind`, `icon_value`, `config_secret`, `sort_order`, `enabled`, `created_at`, and `updated_at`.
@@ -64,11 +66,13 @@ SB-C-2. `kind` MUST be `alipay`, `wechat`, or `custom`. `mode` MUST be `redirect
 
 SB-C-3. The first migration MUST seed one disabled Alipay channel and one disabled WeChat channel. Both seeded rows MAY be edited or enabled. Neither row MAY be hard-coded as available.
 
-SB-C-4. `icon_kind` MUST be `builtin`, `url`, or `upload`. A URL icon MUST use HTTPS. An uploaded icon MUST be PNG, JPEG, WebP, or SVG and at most 2 MiB. The response MUST expose a same-origin icon URL, not raw uploaded bytes.
+SB-C-4. `icon_kind` MUST be `builtin`, `url`, or `upload`. A URL icon MUST use HTTPS. An uploaded icon MUST be PNG, JPEG, WebP, or SVG and at most 2 MiB. An `upload` channel write MUST use an `icon_value` that starts with `/api/dashboard/store/icons/`. The response MUST expose this same-origin path, not raw uploaded bytes.
 
 SB-C-5. A Store read MUST return enabled channels only. An admin read MUST return all channels. Neither response MUST contain `config_secret`.
 
-SB-C-6. If zero payment channels are enabled, order creation MUST return HTTP `409` with code `no_payment_channel`.
+SB-C-6. Order creation MUST count enabled payment channels before validating the selected channel. If the count is zero, it MUST return HTTP `409` with code `no_payment_channel`. If the count is nonzero and the selected channel is missing or disabled, it MUST return HTTP `400` with code `invalid_payment_channel`.
+
+SB-C-7. Admin payment channel reads MUST include enabled and disabled channels and MUST omit `config_secret`. Deleting a missing channel MUST return `not_found`. Deleting a channel referenced by an order MUST return `conflict` and MUST NOT delete it.
 
 ## 4. Orders And Fulfillment
 
