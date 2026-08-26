@@ -214,6 +214,13 @@ MM-S5. List query MUST select at most `limit + 1` distinct Group/model rows afte
 and keyset filtering, load their visible offers in one set-based query, and load rates and
 metadata in set-based batches.
 
+MM-S5.1. A stable Marketplace generation MAY build one immutable Group/model candidate
+projection. The projection MUST contain one row per visible Group/model pair and MUST contain
+no Provider secret, upstream URL, internal credential, or price. A List cache-miss MUST read at
+most `limit + 1` rows from this projection before it counts visible offers. It MUST count offers
+only for the selected candidate keys. A zero-candidate page executes one candidate statement.
+A non-empty page executes one candidate statement and one set-based offer-count statement.
+
 MM-S6. Offer query MUST select at most `limit + 1` visible offers after the keyset and load
 rates and metadata in set-based batches. Query count may grow only through bounded SQLite
 bind chunks, not by returned row count.
@@ -303,6 +310,22 @@ for one backend MUST use one transaction. A failed batch MUST leave zero committ
 rows. Qualification timing MUST start after fixture load, commit, read-back hashing, and
 `ANALYZE` complete.
 
+MM-Q2.6. The isolated read benchmark MUST build the MM-S5.1 projection in the same fixture
+transaction. The source hash and source row counts MUST exclude the projection. SQLite and
+PostgreSQL MUST analyze the projection before qualification timing starts.
+
+MM-Q2.6.1. In the isolated read fixture, one mapping is priced if and only if at least one
+`billing_rate_records` row for its logical model has `public_repeat_count > 0`. All mappings
+for one logical model have the same fixture pricing state. Projection construction, List
+offer counts, and Offers queries MUST apply this same predicate. Projection construction MUST
+occur after rate insertion. Rebuilding the projection after a rate transaction MUST add a
+newly priced Group/model pair and remove a newly unpriced Group/model pair.
+
+MM-Q2.7. Each SQLite qualification worker connection MUST set `PRAGMA cache_size = -8192`.
+The 32 worker page-cache budget MUST therefore be at most 256 MiB. The fixture-load and smoke
+connections MAY use the existing 64 MiB cache. The fixture-load connection MUST close before
+qualification RSS sampling starts.
+
 MM-Q3. List latency MUST be p95 at most 500 ms and p99 at most 1,000 ms. Offers MUST be p95
 at most 400 ms and p99 at most 800 ms. Application resident-memory increase MUST be at most
 512 MiB. An uncompressed response MUST satisfy MM-S4.
@@ -330,7 +353,9 @@ DDL. The benchmark MUST drop and recreate only the
 `public` schema. Its connection MUST set `search_path` to `lynshen_marketplace_benchmark`
 before creating a benchmark table. Reset, table creation, and index creation MUST run in one
 transaction. A failure MUST restore the pre-run benchmark schema. PostgreSQL `ANALYZE` MUST
-name the five schema-qualified benchmark tables. It MUST NOT analyze another schema.
+name exactly these six schema-qualified tables: `monoize_groups`, `monoize_providers`,
+`monoize_provider_models`, `marketplace_group_models`, `billing_rate_records`, and
+`model_metadata_records`. It MUST NOT analyze another schema.
 
 MM-Q8. The rehearsal CLI MUST accept `sqlite`, `postgres`, and `paired` as benchmark
 backends. The `postgres` and `paired` backends MUST read

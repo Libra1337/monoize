@@ -23,4 +23,5 @@ pub use generation::{
 pub use query::{
     ListKey, ListPage, MarketplaceQuery, MarketplaceRow, OfferItem, OfferKey, OfferPage,
     OfferQueryInput, QueryInput, create_postgres_query_fixture, create_sqlite_query_fixture,
+    rebuild_postgres_group_models, rebuild_sqlite_group_models,
 };

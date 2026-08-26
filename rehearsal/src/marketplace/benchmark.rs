@@ -1,3 +1,4 @@
+use super::query::{insert_postgres_group_models, insert_sqlite_group_models};
 use super::{
     EndpointKind, Envelope, FixtureManifest, ListCursor, ListKey, MarketplaceQuery, OfferCursor,
     OfferKey, OfferQueryInput, QueryCase, QueryInput, QueryKind, canonical_filter_digest,
@@ -322,6 +323,7 @@ pub async fn run_sqlite_benchmark(config: BenchmarkConfig) -> anyhow::Result<Ben
     let cursor_key = [0x4c; 32];
     let prepared_queries = prepare_queries(&query_set, &fixture_manifest)?;
     if config.mode == BenchmarkMode::Qualification {
+        database.close().await?;
         let (rss_before_bytes, cpu_before_milliseconds) = process_sample()?;
         let (run, peak_rss_bytes) = sample_peak_rss(
             rss_before_bytes,
@@ -527,7 +529,7 @@ pub async fn run_postgres_benchmark(
     let loaded_fixture = load_postgres_fixture(&mut database, &fixture_manifest).await?;
     database
         .execute(
-            "ANALYZE lynshen_marketplace_benchmark.monoize_groups, lynshen_marketplace_benchmark.monoize_providers, lynshen_marketplace_benchmark.monoize_provider_models, lynshen_marketplace_benchmark.billing_rate_records, lynshen_marketplace_benchmark.model_metadata_records",
+            "ANALYZE lynshen_marketplace_benchmark.monoize_groups, lynshen_marketplace_benchmark.monoize_providers, lynshen_marketplace_benchmark.monoize_provider_models, lynshen_marketplace_benchmark.marketplace_group_models, lynshen_marketplace_benchmark.billing_rate_records, lynshen_marketplace_benchmark.model_metadata_records",
         )
         .await?;
 
@@ -944,7 +946,7 @@ async fn run_sqlite_qualification_with_profile(
     let mut connections = Vec::with_capacity(usize::from(profile.workers));
     for _ in 0..profile.workers {
         let mut connection = SqliteConnection::connect_with(&options).await?;
-        configure_sqlite(&mut connection).await?;
+        configure_sqlite_qualification_worker(&mut connection).await?;
         connections.push(connection);
     }
     let mut workers = JoinSet::new();
@@ -1317,7 +1319,7 @@ async fn execute_list_sample(
         },
     )
     .await?;
-    let mut statements = 1_u64;
+    let mut statements = page.statement_count;
     let model_names = page
         .items
         .iter()
@@ -1411,7 +1413,7 @@ async fn execute_list_sample_postgres(
         },
     )
     .await?;
-    let mut statements = 1_u64;
+    let mut statements = page.statement_count;
     let model_names = page
         .items
         .iter()
@@ -1859,11 +1861,20 @@ async fn configure_sqlite(database: &mut SqliteConnection) -> Result<(), sqlx::E
     Ok(())
 }
 
+async fn configure_sqlite_qualification_worker(
+    database: &mut SqliteConnection,
+) -> Result<(), sqlx::Error> {
+    configure_sqlite(database).await?;
+    database.execute("PRAGMA cache_size = -8192").await?;
+    Ok(())
+}
+
 async fn create_sqlite_schema(database: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     for statement in [
         "CREATE TABLE monoize_groups (id TEXT PRIMARY KEY, public_name TEXT NOT NULL UNIQUE, sort_order INTEGER NOT NULL)",
         "CREATE TABLE monoize_providers (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, public_name TEXT NOT NULL, public_name_key BLOB NOT NULL, priority INTEGER NOT NULL, enabled INTEGER NOT NULL, channel_public_name TEXT NOT NULL, channel_public_name_key BLOB NOT NULL, channel_enabled INTEGER NOT NULL)",
         "CREATE TABLE monoize_provider_models (provider_id TEXT NOT NULL, model_name TEXT NOT NULL, model_name_key BLOB NOT NULL, model_search_key BLOB NOT NULL, PRIMARY KEY(provider_id, model_name_key))",
+        "CREATE TABLE marketplace_group_models (group_id TEXT NOT NULL, group_sort_order INTEGER NOT NULL, group_public_name TEXT NOT NULL, model_name TEXT NOT NULL, model_name_key BLOB NOT NULL, model_search_key BLOB NOT NULL, PRIMARY KEY(group_id, model_name_key), UNIQUE(group_sort_order, model_name_key))",
         "CREATE TABLE billing_rate_records (id TEXT PRIMARY KEY, model_name TEXT NOT NULL, usage_class TEXT NOT NULL, unit_price TEXT NOT NULL, public_repeat_count INTEGER NOT NULL)",
         "CREATE TABLE model_metadata_records (id TEXT PRIMARY KEY, model_name TEXT NOT NULL, capability TEXT NOT NULL)",
         "CREATE INDEX idx_marketplace_provider_group ON monoize_providers(group_id, enabled, channel_enabled, priority, public_name_key)",
@@ -1881,7 +1892,7 @@ async fn create_postgres_schema(database: &mut PgConnection) -> Result<(), sqlx:
     let mut transaction = database.begin().await?;
     transaction
         .execute(
-            "DROP TABLE IF EXISTS lynshen_marketplace_benchmark.model_metadata_records, lynshen_marketplace_benchmark.billing_rate_records, lynshen_marketplace_benchmark.monoize_provider_models, lynshen_marketplace_benchmark.monoize_providers, lynshen_marketplace_benchmark.monoize_groups RESTRICT",
+            "DROP TABLE IF EXISTS lynshen_marketplace_benchmark.marketplace_group_models, lynshen_marketplace_benchmark.model_metadata_records, lynshen_marketplace_benchmark.billing_rate_records, lynshen_marketplace_benchmark.monoize_provider_models, lynshen_marketplace_benchmark.monoize_providers, lynshen_marketplace_benchmark.monoize_groups RESTRICT",
         )
         .await?;
     transaction
@@ -1897,6 +1908,7 @@ async fn create_postgres_schema(database: &mut PgConnection) -> Result<(), sqlx:
         "CREATE TABLE monoize_groups (id TEXT PRIMARY KEY, public_name TEXT NOT NULL UNIQUE, sort_order BIGINT NOT NULL)",
         "CREATE TABLE monoize_providers (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, public_name TEXT NOT NULL, public_name_key BYTEA NOT NULL, priority INTEGER NOT NULL, enabled INTEGER NOT NULL, channel_public_name TEXT NOT NULL, channel_public_name_key BYTEA NOT NULL, channel_enabled INTEGER NOT NULL)",
         "CREATE TABLE monoize_provider_models (provider_id TEXT NOT NULL, model_name TEXT NOT NULL, model_name_key BYTEA NOT NULL, model_search_key BYTEA NOT NULL, PRIMARY KEY(provider_id, model_name_key))",
+        "CREATE TABLE marketplace_group_models (group_id TEXT NOT NULL, group_sort_order BIGINT NOT NULL, group_public_name TEXT NOT NULL, model_name TEXT NOT NULL, model_name_key BYTEA NOT NULL, model_search_key BYTEA NOT NULL, PRIMARY KEY(group_id, model_name_key), UNIQUE(group_sort_order, model_name_key))",
         "CREATE TABLE billing_rate_records (id TEXT PRIMARY KEY, model_name TEXT NOT NULL, usage_class TEXT NOT NULL, unit_price TEXT NOT NULL, public_repeat_count INTEGER NOT NULL)",
         "CREATE TABLE model_metadata_records (id TEXT PRIMARY KEY, model_name TEXT NOT NULL, capability TEXT NOT NULL)",
         "CREATE INDEX idx_marketplace_provider_group ON monoize_providers(group_id, enabled, channel_enabled, priority, public_name_key)",
@@ -2018,6 +2030,7 @@ async fn load_sqlite_fixture(
         });
         query.build().execute(&mut *transaction).await?;
     }
+    insert_sqlite_group_models(&mut transaction).await?;
     transaction.commit().await?;
     observe_loaded_fixture(database).await
 }
@@ -2126,6 +2139,7 @@ async fn load_postgres_fixture(
         });
         query.build().execute(&mut *transaction).await?;
     }
+    insert_postgres_group_models(&mut transaction).await?;
     transaction.commit().await?;
     observe_loaded_fixture_postgres(database).await
 }
@@ -2462,6 +2476,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn qualification_sqlite_connection_uses_an_eight_mebibyte_page_cache() {
+        let mut database = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+
+        configure_sqlite_qualification_worker(&mut database)
+            .await
+            .unwrap();
+
+        let cache_size = sqlx::query_scalar::<_, i64>("PRAGMA cache_size")
+            .fetch_one(&mut database)
+            .await
+            .unwrap();
+        assert_eq!(cache_size, -8192);
+    }
+
+    #[tokio::test]
     async fn short_postgres_profile_runs_concurrent_workers_and_complete_query_cycles() {
         let Ok(url) = std::env::var("LYNSHEN_REHEARSAL_POSTGRES_URL") else {
             return;
@@ -2475,7 +2504,7 @@ mod tests {
             .unwrap();
         database
             .execute(
-                "ANALYZE lynshen_marketplace_benchmark.monoize_groups, lynshen_marketplace_benchmark.monoize_providers, lynshen_marketplace_benchmark.monoize_provider_models, lynshen_marketplace_benchmark.billing_rate_records, lynshen_marketplace_benchmark.model_metadata_records",
+                "ANALYZE lynshen_marketplace_benchmark.monoize_groups, lynshen_marketplace_benchmark.monoize_providers, lynshen_marketplace_benchmark.monoize_provider_models, lynshen_marketplace_benchmark.marketplace_group_models, lynshen_marketplace_benchmark.billing_rate_records, lynshen_marketplace_benchmark.model_metadata_records",
             )
             .await
             .unwrap();
