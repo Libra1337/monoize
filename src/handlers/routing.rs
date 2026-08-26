@@ -233,7 +233,15 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
 
     let pricing_inputs = attempts
         .iter()
-        .map(|attempt| (attempt.upstream_model.clone(), attempt.provider_type))
+        .filter_map(|attempt| {
+            attempt.pricing_profile.as_ref().map(|profile| {
+                (
+                    attempt.upstream_model.clone(),
+                    attempt.provider_type,
+                    profile.clone(),
+                )
+            })
+        })
         .collect::<Vec<_>>();
     let pricing_snapshot =
         build_billing_rate_resolution_snapshot(state, &pricing_inputs, &urp.model).await?;
@@ -253,18 +261,22 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
             attempt.upstream_model.clone(),
             urp.model.clone(),
             format!(
-                "{}:{tools_key}",
-                reasoning_envelope_provider_type(attempt.provider_type)
+                "{}:{}:{tools_key}",
+                reasoning_envelope_provider_type(attempt.provider_type),
+                attempt.pricing_profile.as_deref().unwrap_or("")
             ),
         );
         let pricing = if let Some(cached) = pricing_cache.get(&cache_key) {
             cached.clone()
         } else {
-            let priced = match pricing_snapshot.resolve(
-                &attempt.upstream_model,
-                &urp.model,
-                attempt.provider_type,
-            ) {
+            let priced = match attempt.pricing_profile.as_deref().and_then(|profile| {
+                pricing_snapshot.resolve(
+                    &attempt.upstream_model,
+                    &urp.model,
+                    attempt.provider_type,
+                    profile,
+                )
+            }) {
                 Some(resolution) => {
                     let allowed = billing_rate_matrix_allows_request(
                         &resolution,
@@ -582,14 +594,16 @@ pub(super) async fn collect_provider_attempts(
     }
     let supporting_channels: Vec<crate::monoize_routing::MonoizeChannel> =
         std::iter::once(&provider.channel)
-        .filter(|channel| {
-            channel.models.get(&urp.model).is_some_and(|entry| {
-                urp.max_multiplier
-                    .is_none_or(|maximum| entry.multiplier <= maximum)
+            .filter(|channel| {
+                channel.models.get(&urp.model).is_some_and(|entry| {
+                    urp.max_multiplier.is_none_or(|maximum| {
+                        crate::monoize_routing::effective_model_multiplier(provider, entry)
+                            <= maximum
+                    })
+                })
             })
-        })
-        .cloned()
-        .collect();
+            .cloned()
+            .collect();
     let channels = filter_eligible_channels(
         state,
         &supporting_channels,
@@ -616,6 +630,11 @@ pub(super) async fn collect_provider_attempts(
             .get(&urp.model)
             .expect("eligible channel must retain its model entry");
         let upstream_model = resolve_upstream_model(&urp.model, model_entry);
+        let pricing_profile =
+            crate::monoize_routing::effective_pricing_profile(provider, model_entry)
+                .map(str::to_string);
+        let model_multiplier =
+            crate::monoize_routing::effective_model_multiplier(provider, model_entry);
         let effective_provider_type = crate::monoize_routing::resolve_effective_api_type(
             &provider.api_type_overrides,
             channel.provider_type,
@@ -664,7 +683,8 @@ pub(super) async fn collect_provider_attempts(
             api_key: channel.api_key.clone(),
             logical_model: urp.model.clone(),
             upstream_model,
-            model_multiplier: model_entry.multiplier,
+            pricing_profile,
+            model_multiplier,
             server_tool_usage_classes: urp.server_tool_usage_classes.clone(),
             provider_transforms: provider.transforms.clone(),
             passive_failure_count_threshold,
@@ -1241,10 +1261,10 @@ pub(super) fn classify_channel_health_failure(
     }
 
     if has_signal(&[
-            "rate_limit_error",
-            "rate_limit_exceeded",
-            "too_many_requests",
-        ]) {
+        "rate_limit_error",
+        "rate_limit_exceeded",
+        "too_many_requests",
+    ]) {
         return Some(RetryableFailureClass::RateLimited);
     }
 

@@ -54,12 +54,12 @@ The [protocol test matrix](spec/urp-v2-flat-protocol-test-matrix.spec.md) define
 
 ### It retries before it commits a stream
 
-A logical model can match several ordered Providers. Each Provider can contain several weighted Channels.
+A logical model can match several ordered Providers. Each Provider contains one Channel.
 
 Monoize tries these routes as a bounded waterfall:
 
 1. Select the first matching Provider.
-2. Select an eligible Channel by weight and affinity.
+2. Use the Provider's Channel when it is eligible and satisfies affinity.
 3. Retry retryable failures within the configured budgets.
 4. When the current route is exhausted, move forward to the next eligible route.
 5. Stop fallback after the first downstream response byte.
@@ -138,7 +138,7 @@ Every forwarding endpoint also has an `/api/v1/...` alias.
 | `openai_image` | OpenAI-compatible image API |
 | `replicate` | Replicate predictions |
 
-Providers define routing order, retry budgets, and health policy. Channels hold the actual upstream type, base URL, credential, model mapping, weight, and timeout.
+Providers define Group-local routing order, pricing defaults, retry settings, and health policy. Each Provider's Channel holds the upstream type, Base URL, credential, and model mappings.
 
 ## Request path
 
@@ -149,7 +149,7 @@ Client protocol
 Decode to typed URP v2
     │
     ▼
-Provider waterfall ──► weighted Channel ──► circuit breaker / affinity
+Provider waterfall ──► embedded Channel ──► circuit breaker / affinity
     │                                           │
     │                                retry or fail forward
     │                                before the first byte

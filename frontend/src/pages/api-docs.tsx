@@ -87,7 +87,7 @@ export function ApiDocsPage() {
           <section className="mt-12 grid gap-4 md:grid-cols-2" aria-label={t("publicSite.docs.behaviorTitle")}>
             <Card className="p-6"><KeyRound className="text-primary" /><h2 className="mt-4 text-lg font-semibold">{t("publicSite.docs.authenticationTitle")}</h2><p className="mt-2 leading-7 text-muted-foreground">{t("publicSite.docs.authentication")}</p></Card>
             <Card className="p-6"><Radio className="text-primary" /><h2 className="mt-4 text-lg font-semibold">{t("publicSite.docs.streamingTitle")}</h2><p className="mt-2 leading-7 text-muted-foreground">{t("publicSite.docs.streaming")}</p></Card>
-            <Card className="p-6"><Terminal className="text-primary" /><h2 className="mt-4 text-lg font-semibold">{t("publicSite.docs.errorsTitle")}</h2><p className="mt-2 leading-7 text-muted-foreground">{t("publicSite.docs.errors")}</p><ul className="mt-4 space-y-2 font-mono text-xs"><li>401 · unauthorized</li><li>403 · forbidden</li><li>429 · rate_limited</li><li>400 · model_pricing_required</li></ul></Card>
+            <Card className="p-6"><Terminal className="text-primary" /><h2 className="mt-4 text-lg font-semibold">{t("publicSite.docs.errorsTitle")}</h2><p className="mt-2 leading-7 text-muted-foreground">{t("publicSite.docs.errors")}</p><ul className="mt-4 space-y-2 font-mono text-xs"><li>401 · unauthorized</li><li>403 · forbidden</li><li>429 · rate_limited</li><li>403 · model_pricing_required</li></ul></Card>
             <Card className="p-6"><AlertTriangle className="text-warning" /><h2 className="mt-4 text-lg font-semibold">{t("publicSite.docs.pricingTitle")}</h2><p className="mt-2 leading-7 text-muted-foreground">{t("publicSite.docs.pricing")}</p></Card>
           </section>
         </div>

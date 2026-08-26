@@ -313,6 +313,11 @@ and ETag remain stable for the bucket. Browser SWR refresh is 30 seconds.
 PST-P9. If PST-R8 is true, the response MUST set `data_complete = false`. The UI MUST show
 a public data-quality warning and MUST NOT present affected percentages as complete.
 
+PST-P10. A public Status source read or response serialization failure MUST return HTTP
+`503` with code `status_source_invalid` and a fixed public message. The server MUST log the
+underlying error. The response MUST NOT contain SQL, a table or constraint name, an
+internal ID, or the underlying error text.
+
 ## 9. Qualification and release gate
 
 PST-G1. Each intended node MUST have approved positive event-rate and simultaneous-dispatch

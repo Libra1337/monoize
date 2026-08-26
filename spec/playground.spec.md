@@ -8,7 +8,7 @@ response as an authorization or routing catalog.
 
 PG-MIG-2. The model catalog MUST include only mappings that are structurally eligible and
 priced under `provider-pricing.spec.md`. A submitted model that has only unpriced mappings
-MUST receive `503 model_pricing_required` without an upstream dispatch.
+MUST receive `403 model_pricing_required` without an upstream dispatch.
 
 PG-MIG-3. The Playground request shape and API-key selection remain unchanged. It MUST NOT
 ask a user to choose a Channel because one Provider has exactly one embedded Channel.

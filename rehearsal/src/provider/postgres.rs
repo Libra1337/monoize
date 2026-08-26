@@ -44,7 +44,8 @@ const TARGET_DDL: &[&str] = &[
         multiplier_override TEXT NULL,
         created_at TEXT NOT NULL,
         PRIMARY KEY(provider_id, model_name_key),
-        CHECK((pricing_profile_mode = 'override') = (pricing_profile_override IS NOT NULL))
+        CHECK((pricing_profile_mode = 'override' AND pricing_profile_override IS NOT NULL AND length(trim(pricing_profile_override)) > 0)
+           OR (pricing_profile_mode IN ('inherit', 'unpriced') AND pricing_profile_override IS NULL))
     )"#,
     "CREATE INDEX IF NOT EXISTS idx_provider_models_lookup ON monoize_provider_models(model_name_key, provider_id)",
 ];
@@ -224,7 +225,16 @@ fn target_ddl() -> Vec<String> {
     TARGET_DDL
         .iter()
         .map(|statement| {
-            statement.replace("model_search_key BYTEA NOT NULL,", search_check.as_str())
+            statement
+                .replace("model_search_key BYTEA NOT NULL,", search_check.as_str())
+                .replace(
+                    "multiplier TEXT NOT NULL,",
+                    "multiplier TEXT NOT NULL CHECK(multiplier ~ '^(0\\.[0-9]{0,8}[1-9]|[1-9][0-9]*(\\.[0-9]{0,8}[1-9])?)$'),",
+                )
+                .replace(
+                    "multiplier_override TEXT NULL,",
+                    "multiplier_override TEXT NULL CHECK(multiplier_override IS NULL OR multiplier_override ~ '^(0\\.[0-9]{0,8}[1-9]|[1-9][0-9]*(\\.[0-9]{0,8}[1-9])?)$'),",
+                )
         })
         .collect()
 }

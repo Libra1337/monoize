@@ -14,7 +14,9 @@ import type {
 export type ModelRow = {
 	model: string
 	redirect: string
-	multiplier: string
+	pricing_profile_mode: 'inherit' | 'override' | 'unpriced'
+	pricing_profile_override: string
+	multiplier_override: string
 }
 
 export type ChannelRow = {
@@ -48,6 +50,8 @@ export type ProviderForm = {
 	id?: string
 	name: string
 	enabled: boolean
+	pricing_profile: string
+	multiplier: string
 	channel_max_retries: number
 	channel_retry_interval_ms: number
 	circuit_breaker_enabled: boolean
@@ -90,7 +94,13 @@ const BUILTIN_REASONING_SUFFIXES = [
 ]
 
 export function emptyModelRow(): ModelRow {
-	return { model: '', redirect: '', multiplier: '1' }
+	return {
+		model: '',
+		redirect: '',
+		pricing_profile_mode: 'inherit',
+		pricing_profile_override: '',
+		multiplier_override: ''
+	}
 }
 
 export function emptyChannelRow(): ChannelRow {
@@ -127,6 +137,8 @@ export function emptyForm(): ProviderForm {
 		id: '',
 		name: '',
 		enabled: true,
+		pricing_profile: '',
+		multiplier: '1',
 		channel_max_retries: 0,
 		channel_retry_interval_ms: 0,
 		circuit_breaker_enabled: true,
@@ -152,6 +164,8 @@ export function fromProvider(provider: Provider): ProviderForm {
 		id: provider.id,
 		name: provider.name,
 		enabled: provider.enabled,
+		pricing_profile: provider.pricing_profile ?? '',
+		multiplier: provider.multiplier,
 		channel_max_retries: provider.channel_max_retries ?? 0,
 		channel_retry_interval_ms: provider.channel_retry_interval_ms ?? 0,
 		circuit_breaker_enabled: provider.circuit_breaker_enabled ?? true,
@@ -176,7 +190,9 @@ export function fromProvider(provider: Provider): ProviderForm {
 			models: Object.entries(provider.channel.models).map(([model, entry]) => ({
 				model,
 				redirect: entry.redirect ?? '',
-				multiplier: String(entry.multiplier)
+				pricing_profile_mode: entry.pricing_profile_mode,
+				pricing_profile_override: entry.pricing_profile_override ?? '',
+				multiplier_override: entry.multiplier_override ?? ''
 			})),
 			passive_failure_count_threshold_override: provider.channel.passive_failure_count_threshold_override == null ? '' : String(provider.channel.passive_failure_count_threshold_override),
 			passive_cooldown_seconds_override: provider.channel.passive_cooldown_seconds_override == null ? '' : String(provider.channel.passive_cooldown_seconds_override),

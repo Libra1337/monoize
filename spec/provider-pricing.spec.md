@@ -147,6 +147,11 @@ PP-N2. Each public-name key MUST equal the exact UTF-8 bytes of the normalized n
 SQLite MUST use BLOB and enforce `key = CAST(name AS BLOB)`. PostgreSQL MUST use BYTEA and
 enforce `key = convert_to(name, 'UTF8')`. SQLite database encoding MUST be UTF-8.
 
+PP-N2.1. Group `public_name` and `public_name_key` MUST be non-null after migration.
+PostgreSQL MUST enforce both properties with column and CHECK constraints. SQLite MUST
+reject each insert or update that makes either value null or makes the key differ from the
+UTF-8 bytes of the public name.
+
 PP-N3. The application MUST derive public-name keys. A management request that contains a
 key MUST return HTTP `400` with code `invalid_request`.
 
@@ -204,6 +209,16 @@ model mapping set in one transaction. A failure MUST preserve the preceding stat
 PP-A6. Successful create and update responses MUST return structured pricing warnings by
 logical model name and missing usage class. An unpriced mapping is a warning, not a
 structural validation failure.
+
+PP-A6.1. Each warning MUST contain exactly `logical_model: string` and
+`missing_usage_classes: string[]`. The array MUST contain unique usage-class names in
+ascending UTF-8 byte order. It MUST contain `input_uncached` and `output` when a mapping
+has no effective Profile or uses `unpriced` mode. An incomplete Profile MUST report each
+required token usage class that prevents selection of a complete rate matrix.
+
+PP-A6.2. The create or update response MUST otherwise preserve the Provider response
+shape and add `pricing_warnings`. The array MUST be empty when every mapping has a complete
+effective rate matrix.
 
 PP-A7. Group create and update requests MUST apply PP-N7 and PP-N8. Group deletion while a
 Provider references the Group MUST return HTTP `409` with code `group_in_use`.
@@ -279,6 +294,22 @@ PP-X5. Preflight MUST NOT claim routing equivalence for a semantic-change Provid
 PP-X6. Preflight MUST emit a reviewed public-name manifest containing normalized text and
 hexadecimal binary keys for every Group, Provider, and Channel target.
 
+PP-X6.1. The approved manifest MUST use schema version `1`. It MUST identify each Group by
+source Group ID. It MUST identify each Provider and Channel target by source Provider ID,
+source Channel ID, target Group ID, target Provider ID, and target Channel ID. Each entry
+MUST contain the approved normalized public name and its lowercase hexadecimal UTF-8 key.
+The complete entry set MUST equal the complete deterministic migration target set.
+
+PP-X6.2. Before product migration starts, the operator MUST store the approved manifest as
+the `state_records` value whose key is `('system', 'provider_pricing_migration',
+'approved_manifest_v1')`. The value MUST be the exact reviewed JSON document. Migration
+MUST reject a missing, malformed, duplicate, incomplete, or additional entry.
+
+PP-X6.3. A fresh database MAY omit the manifest only when it contains zero legacy
+Providers and exactly one Group whose internal name is the built-in value `default`. In
+that case migration MUST set the Group public name to `Default`. Another zero-Provider
+database MUST satisfy PP-X6.2.
+
 PP-X7. The manifest fingerprint MUST cover every migration-relevant field. For an API key,
 proxy credential, or other secret, it MUST include
 `HMAC-SHA-256(comparison_key, field_tag || secret_value)` and MUST NOT include the secret or
@@ -286,6 +317,21 @@ an unkeyed digest. The comparison key MUST be external to the manifest.
 
 PP-X8. After writes stop, final preflight MUST reproduce the approved fingerprint before
 migration begins.
+
+PP-X8.1. Product migration MUST read the comparison key from the owner-readable file named
+by `MONOIZE_PROVIDER_MIGRATION_COMPARISON_KEY_FILE`. A missing variable, unreadable file,
+empty key, or file longer than 4096 bytes MUST abort migration before a schema write.
+
+PP-X8.2. Product migration MUST recompute the source fingerprint inside its migration
+transaction before a schema write. It MUST compare the lowercase hexadecimal result with
+the manifest `source_fingerprint`. A mismatch MUST abort the transaction. The fingerprint
+input MUST include every Group, Provider, Channel, model mapping, pricing setting,
+model-metadata Profile, and enabled Billing Rate field read by the transformation. It MUST
+replace API keys, proxy URLs, and extra headers with HMAC-SHA-256 values keyed by the
+comparison key before hashing the canonical field stream.
+
+PP-X8.3. Product migration MUST persist only manifest public names. It MUST NOT derive a
+public name from an internal Group, Provider, or Channel name.
 
 ## 10. Migration transformation
 

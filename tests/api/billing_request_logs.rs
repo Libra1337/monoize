@@ -1525,17 +1525,21 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
         "alias-route-model".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: Some("gpt-5-mini".to_string()),
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "alias-route-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("alias-route-ch".to_string()),
                 name: "alias-route-ch".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
@@ -1572,7 +1576,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-	                enabled: true,
+            enabled: true,
             priority: Some(-50),
         })
         .await
@@ -1676,17 +1680,21 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
         "alias-fallback-model".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: Some("gpt-5-unpriced-upstream".to_string()),
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "alias-fallback-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("alias-fallback-ch".to_string()),
                 name: "alias-fallback-ch".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
@@ -1827,17 +1835,21 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
         "gpt-5-mini-thinking".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "suffix-pricing-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("suffix-pricing-ch".to_string()),
                 name: "suffix-pricing-ch".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,

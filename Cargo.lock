@@ -2408,6 +2408,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "unicode-normalization",
  "uuid",
  "webp",
  "xxhash-rust",

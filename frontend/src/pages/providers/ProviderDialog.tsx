@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
 	Dialog,
 	DialogContent,
@@ -69,6 +70,7 @@ import type {
 } from '@/lib/api'
 import {
 	createProviderOptimistic,
+	useBillingRates,
 	useDashboardGroups,
 	useProviderDetail,
 	updateProviderOptimistic
@@ -113,7 +115,12 @@ function modelMap(rows: ModelRow[]) {
 			row.model.trim(),
 			{
 				redirect: row.redirect.trim() || null,
-				multiplier: normalizeMultiplier(row.multiplier) ?? row.multiplier.trim()
+				pricing_profile_mode: row.pricing_profile_mode,
+				pricing_profile_override:
+					row.pricing_profile_mode === 'override' ? row.pricing_profile_override.trim() : null,
+				multiplier_override: row.multiplier_override.trim() ?
+					normalizeMultiplier(row.multiplier_override) ?? row.multiplier_override.trim()
+				: null
 			}
 		])
 	)
@@ -125,7 +132,6 @@ function optionalPositiveInteger(value: string): number | null {
 
 function channelInput(channel: ChannelRow, c: (zhText: string, enText: string) => string) {
 	return {
-		id: channel.id || undefined,
 		name: channel.name.trim(),
 		provider_type: channel.provider_type,
 		base_url: channel.base_url.trim(),
@@ -170,10 +176,13 @@ function parseExtraHeaders(raw: string, c: (zhText: string, enText: string) => s
 	return Object.keys(out).length > 0 ? out : null
 }
 
-function buildInput(form: ProviderForm, c: (zhText: string, enText: string) => string): CreateProviderInput {
+function buildInput(form: ProviderForm, confirmPublicExposure: boolean, c: (zhText: string, enText: string) => string): CreateProviderInput {
 	return {
 		name: form.name.trim(),
+		confirm_public_exposure: confirmPublicExposure,
 		enabled: form.enabled,
+		pricing_profile: form.pricing_profile.trim() || null,
+		multiplier: normalizeMultiplier(form.multiplier) ?? form.multiplier.trim(),
 		priority: form.priority,
 		channel_max_retries: form.channel_max_retries,
 		channel_retry_interval_ms: form.channel_retry_interval_ms,
@@ -219,7 +228,7 @@ export function ProviderDialog({
 	reasoningSuffixMap: Record<string, string>
 	settings?: SystemSettings
 }) {
-	const { i18n } = useTranslation()
+	const { i18n, t } = useTranslation()
 	const zh = i18n.language.startsWith('zh')
 	const c = (zhText: string, enText: string) => zh ? zhText : enText
 	const isEdit = mode === 'edit'
@@ -228,11 +237,13 @@ export function ProviderDialog({
 	const [selectedChannel, setSelectedChannel] = useState(0)
 	const [mobileChannelOpen, setMobileChannelOpen] = useState(false)
 	const [saving, setSaving] = useState(false)
+	const [publicExposureConfirmed, setPublicExposureConfirmed] = useState(false)
 	const [pickerOpen, setPickerOpen] = useState(false)
 	const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
 	const [removeV1Open, setRemoveV1Open] = useState(false)
 	const [v1ChannelIndex, setV1ChannelIndex] = useState<number | null>(null)
 	const initialSnapshot = useRef('')
+	const { data: billingRates = [] } = useBillingRates({ revalidateOnFocus: false })
 
 	const { data: detail, error: detailError, isLoading: detailLoading } = useProviderDetail(
 		open && isEdit && current ? current.id : null,
@@ -249,14 +260,23 @@ export function ProviderDialog({
 		setSelectedChannel(0)
 		setSection('channels')
 		setMobileChannelOpen(false)
+		setPublicExposureConfirmed(false)
 	}, [open, isEdit, detail, detailError, current])
 
 	const dirty = JSON.stringify(form) !== initialSnapshot.current
 	const activeChannel = form.channel
+	const canonicalPublicName = (value: string) => value.trim().normalize('NFC')
+	const publicExposureConfirmationRequired = !isEdit || !current
+		|| canonicalPublicName(form.name) !== canonicalPublicName(current.name)
+		|| canonicalPublicName(form.channel.name) !== canonicalPublicName(current.channel.name)
 	const pricedModels = useMemo(() => buildPricedModelIdSet(modelMetadata), [modelMetadata])
 	const metadataProvider = useMemo(
 		() => new Map(modelMetadata.map(item => [item.model_id, item.models_dev_provider])),
 		[modelMetadata]
+	)
+	const pricingProfiles = useMemo(
+		() => Array.from(new Set(billingRates.map(rate => rate.pricing_profile))).sort(),
+		[billingRates]
 	)
 
 	const updateChannel = (index: number, patch: Partial<ChannelRow>) => {
@@ -267,9 +287,12 @@ export function ProviderDialog({
 	}
 
 	const validate = () => {
+		if (normalizeMultiplier(form.multiplier) == null) {
+			return c('Provider 倍率必须大于 0', 'Provider multiplier must be greater than zero')
+		}
 		if (!form.name.trim()) return c('请输入 Provider 名称', 'Enter a provider name')
-		if (form.channel.models.length === 0) {
-			return c('至少为 Channel 添加一个模型', 'Add at least one model to the channel')
+		if (publicExposureConfirmationRequired && !publicExposureConfirmed) {
+			return t('groups.providerPublicExposureRequired')
 		}
 		for (const [index, channel] of [form.channel].entries()) {
 			if (!channel.name.trim() || !channel.base_url.trim()) {
@@ -282,7 +305,15 @@ export function ProviderDialog({
 			if (names.some(name => !name) || new Set(names).size !== names.length) {
 				return c(`Channel ${index + 1} 存在空白或重复模型`, `Channel ${index + 1} has blank or duplicate models`)
 			}
-			if (channel.models.some(model => normalizeMultiplier(model.multiplier) == null)) {
+			if (channel.models.some(model =>
+				model.pricing_profile_mode === 'override' && !model.pricing_profile_override.trim()
+			)) {
+				return c(`Channel ${index + 1} 的模型覆盖需要 Profile`, `Channel ${index + 1} model overrides require a Profile`)
+			}
+			if (channel.models.some(model =>
+				model.multiplier_override.trim()
+				&& normalizeMultiplier(model.multiplier_override) == null
+			)) {
 				return c(`Channel ${index + 1} 的倍率必须大于 0`, `Channel ${index + 1} multipliers must be greater than zero`)
 			}
 		}
@@ -299,13 +330,20 @@ export function ProviderDialog({
 		}
 		setSaving(true)
 		try {
-			const input = buildInput(form, c)
+			const input = buildInput(form, publicExposureConfirmed, c)
+			let saved: Provider
 			if (isEdit && current) {
-				await updateProviderOptimistic(current.id, input, providers)
+				saved = await updateProviderOptimistic(current.id, input, providers)
 			} else {
-				await createProviderOptimistic(input, providers)
+				saved = await createProviderOptimistic(input, providers)
 			}
 			toast.success(c('Provider 已保存', 'Provider saved'))
+			if (saved.pricing_warnings?.length) {
+				const details = saved.pricing_warnings
+					.map(warning => `${warning.logical_model}: ${warning.missing_usage_classes.join(', ')}`)
+					.join('; ')
+				toast.warning(t('providers.pricingWarnings', { details }))
+			}
 			initialSnapshot.current = JSON.stringify(form)
 			onOpenChange(false)
 		} catch (error) {
@@ -404,6 +442,7 @@ export function ProviderDialog({
 											pricedModels={pricedModels}
 											metadataProvider={metadataProvider}
 											reasoningSuffixMap={reasoningSuffixMap}
+											pricingProfiles={pricingProfiles}
 											settings={settings}
 											c={c}
 											onBaseUrlBlur={() => {
@@ -414,7 +453,7 @@ export function ProviderDialog({
 											}}
 										/>
 									) : section === 'provider' ? (
-										<ProviderBasics form={form} setForm={setForm} c={c} />
+										<ProviderBasics form={form} setForm={setForm} pricingProfiles={pricingProfiles} publicExposureConfirmed={publicExposureConfirmed} setPublicExposureConfirmed={setPublicExposureConfirmed} publicExposureLabel={t('groups.providerPublicExposureConfirm')} c={c} />
 									) : section === 'routing' ? (
 										<RoutingSettings form={form} setForm={setForm} settings={settings} c={c} />
 									) : section === 'transforms' ? (
@@ -448,7 +487,13 @@ export function ProviderDialog({
 				onConfirm={selected => {
 					if (!activeChannel) return
 					const existing = new Map(activeChannel.models.map(model => [model.model, model]))
-					updateChannel(selectedChannel, { models: selected.sort().map(model => existing.get(model) ?? { model, redirect: '', multiplier: '1' }) })
+					updateChannel(selectedChannel, { models: selected.sort().map(model => existing.get(model) ?? {
+						model,
+						redirect: '',
+						pricing_profile_mode: 'inherit',
+						pricing_profile_override: '',
+						multiplier_override: ''
+					}) })
 				}}
 			/>
 
@@ -471,7 +516,7 @@ function Field({ label, hint, children, className }: { label: string; hint?: str
 	return <div className={cn('flex flex-col gap-2', className)}><Label>{label}</Label>{children}{hint ? <p className='text-xs text-muted-foreground'>{hint}</p> : null}</div>
 }
 
-function ProviderBasics({ form, setForm, c }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>>; c: (zh: string, en: string) => string }) {
+function ProviderBasics({ form, setForm, pricingProfiles, publicExposureConfirmed, setPublicExposureConfirmed, publicExposureLabel, c }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>>; pricingProfiles: string[]; publicExposureConfirmed: boolean; setPublicExposureConfirmed: (value: boolean) => void; publicExposureLabel: string; c: (zh: string, en: string) => string }) {
 	const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups()
 	return <div className='mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 sm:p-6'>
 		<SectionHeading title={c('Provider 基础信息', 'Provider basics')} description={c('Provider 负责公共路由策略；模型和上游地址在 Channel 中配置。', 'Providers own shared routing policy. Models and upstream endpoints are configured per channel.')} />
@@ -486,6 +531,19 @@ function ProviderBasics({ form, setForm, c }: { form: ProviderForm; setForm: Rea
 				/>
 			</Field>
 			<Field label={c('额外字段白名单', 'Extra fields allowlist')} hint={c('逗号分隔，应用到全部 Channel。', 'Comma-separated and shared by all channels.')}><Input value={form.extra_fields_whitelist} onChange={event => setForm(previous => ({ ...previous, extra_fields_whitelist: event.target.value }))} placeholder='service_tier, metadata' /></Field>
+			<Field label={c('默认 Billing Profile', 'Default Billing Profile')} hint={c('模型使用继承模式时使用此 Profile。', 'Models in inherit mode use this Profile.')}>
+				<Select value={form.pricing_profile || 'none'} onValueChange={value => setForm(previous => ({ ...previous, pricing_profile: value === 'none' ? '' : value }))}>
+					<SelectTrigger><SelectValue /></SelectTrigger>
+					<SelectContent><SelectGroup><SelectItem value='none'>{c('不定价', 'No default Profile')}</SelectItem>{pricingProfiles.map(profile => <SelectItem key={profile} value={profile}>{profile}</SelectItem>)}</SelectGroup></SelectContent>
+				</Select>
+			</Field>
+			<Field label={c('默认倍率', 'Default multiplier')} hint={c('模型没有倍率覆盖时使用此值。', 'Models without an override use this value.')}>
+				<Input type='text' inputMode='decimal' value={form.multiplier} onChange={event => setForm(previous => ({ ...previous, multiplier: event.target.value }))} />
+			</Field>
+			<div className='flex items-start gap-3 rounded-md border p-3 sm:col-span-2'>
+				<Checkbox id='provider-public-exposure' checked={publicExposureConfirmed} onCheckedChange={checked => setPublicExposureConfirmed(checked === true)} />
+				<Label htmlFor='provider-public-exposure' className='text-sm font-normal leading-5'>{publicExposureLabel}</Label>
+			</div>
 		</div>
 	</div>
 }
@@ -503,6 +561,7 @@ type WorkbenchProps = {
 	pricedModels: Set<string>
 	metadataProvider: Map<string, string | undefined>
 	reasoningSuffixMap: Record<string, string>
+	pricingProfiles: string[]
 	settings?: SystemSettings
 	c: (zh: string, en: string) => string
 	onBaseUrlBlur: () => void
@@ -527,7 +586,7 @@ function ChannelsWorkbench(props: WorkbenchProps) {
 	</div>
 }
 
-function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelOpen, updateChannel, openPicker, pricedModels, metadataProvider, reasoningSuffixMap, settings, c, onBaseUrlBlur }: WorkbenchProps) {
+function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelOpen, updateChannel, openPicker, pricedModels, metadataProvider, reasoningSuffixMap, pricingProfiles, settings, c, onBaseUrlBlur }: WorkbenchProps) {
 	if (!activeChannel) return null
 	const allowMissingUsageId = `channel-${activeChannel.id || selectedChannel}-allow-missing-usage`
 	return <div className='mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-8 sm:p-6'>
@@ -563,6 +622,9 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 			pricedModels={pricedModels}
 			metadataProvider={metadataProvider}
 			reasoningSuffixMap={reasoningSuffixMap}
+			pricingProfiles={pricingProfiles}
+			providerPricingProfile={form.pricing_profile}
+			providerMultiplier={form.multiplier}
 			c={c}
 		/>
 

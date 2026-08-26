@@ -4311,6 +4311,7 @@ mod tests {
 
         let hidden = store
             .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
                 name: "hidden".to_string(),
                 description: String::new(),
                 user_selectable: false,
@@ -4320,6 +4321,7 @@ mod tests {
             .expect("hidden group created");
         let open = store
             .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
                 name: "open".to_string(),
                 description: String::new(),
                 user_selectable: true,

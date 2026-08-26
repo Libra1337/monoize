@@ -95,6 +95,11 @@ public-name key. Name comparisons use exact UTF-8 byte order.
 MM-O5. The response MUST NOT contain Billing Profile names, multipliers, rate row IDs,
 internal IDs or names, Base URLs, API keys, proxy URLs, custom headers, or internal errors.
 
+MM-O6. A Marketplace source read or response serialization failure MUST return HTTP `503`
+with code `marketplace_source_invalid` and a fixed public message. The server MUST log the
+underlying error. The response MUST NOT contain SQL, a table or constraint name, an
+internal ID, or the underlying error text.
+
 ## 3. Cursor contract
 
 MM-C1. Migration MUST create one random 32-byte cursor HMAC key, store its unpadded

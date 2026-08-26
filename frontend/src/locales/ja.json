@@ -376,6 +376,7 @@
 	"providers": {
 		"title": "プロバイダー",
 		"description": "設定済みの上流プロバイダーを表示",
+		"pricingWarnings": "保存しましたが、次の価格設定が不完全です: {{details}}",
 		"upstreamProviders": "上流プロバイダー",
 		"providersConfigured": "{{count}} 件のプロバイダーを設定済み",
 		"providersConfigured_plural": "{{count}} 件のプロバイダーを設定済み",
@@ -1073,6 +1074,10 @@
 		"loadFailed": "システム概要の読み込みに失敗"
 	},
 	"groups": {
+		"publicExposureConfirm": "この Group 名が公開ページに表示されることを確認します。",
+		"publicExposureRequired": "公開 Group 名を確認してから保存してください。",
+		"providerPublicExposureConfirm": "Provider 名と Channel 名が公開 Marketplace に表示されることを確認します。",
+		"providerPublicExposureRequired": "公開 Provider 名と Channel 名を確認してから保存してください。",
 		"title": "グループ管理",
 		"description": "ルーティンググループの名前・説明・可視性を管理します。",
 		"create": "グループを作成",

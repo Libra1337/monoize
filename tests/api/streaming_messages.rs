@@ -580,17 +580,21 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
         "gpt-5-mini".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "mono-transform-summary-messages".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("mono-transform-summary-messages-ch1".to_string()),
                 name: "mono-transform-summary-messages-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
@@ -621,7 +625,7 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
                 transform: "reasoning_content_to_summary".to_string(),
-	                enabled: true,
+                enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
                 config: json!({}),
@@ -1258,17 +1262,21 @@ async fn messages_stream_passthrough_transform_preserves_plaintext_reasoning_chu
         "chunked-msg-transform".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: Some("gpt-5-mini-msg".to_string()),
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "mono-transform-chunked-messages".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("mono-transform-chunked-messages-ch1".to_string()),
                 name: "mono-transform-chunked-messages-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Messages,
                 base_url,

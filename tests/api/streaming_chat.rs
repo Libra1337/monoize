@@ -1210,17 +1210,21 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
         "gpt-5-mini".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "mono-transform-summary-chat".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("mono-transform-summary-chat-ch1".to_string()),
                 name: "mono-transform-summary-chat-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
@@ -1251,7 +1255,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
                 transform: "reasoning_content_to_summary".to_string(),
-	                enabled: true,
+                enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
                 config: json!({}),
@@ -1314,17 +1318,21 @@ async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reaso
         "gpt-5-mini".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "mono-transform-summary-chat-encrypted".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("mono-transform-summary-chat-encrypted-ch1".to_string()),
                 name: "mono-transform-summary-chat-encrypted-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,

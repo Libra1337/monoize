@@ -1,4 +1,3 @@
-
 #[tokio::test]
 async fn responses_upstream_requests_include_encrypted_reasoning_content() {
     let ctx = setup().await;
@@ -53,10 +52,7 @@ async fn responses_nonstream_preserves_thinking_signature_invalid_after_route_ex
 
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let error: Value = serde_json::from_str(&body).expect("error response JSON");
-    assert_eq!(
-        error["error"]["code"],
-        json!("thinking_signature_invalid")
-    );
+    assert_eq!(error["error"]["code"], json!("thinking_signature_invalid"));
     assert_eq!(
         error["error"]["upstream_code"],
         json!("thinking_signature_invalid")
@@ -116,7 +112,10 @@ async fn responses_replay_does_not_invent_typed_input_item_ids() {
             "upstream item {index} acquired a synthetic id: {item}"
         );
     }
-    assert_eq!(input[0]["encrypted_content"], json!("complete_opaque_snapshot"));
+    assert_eq!(
+        input[0]["encrypted_content"],
+        json!("complete_opaque_snapshot")
+    );
     assert_eq!(input[1]["call_id"], json!("call_replay"));
     assert_eq!(input[2]["call_id"], json!("call_replay"));
     assert_eq!(input[3]["content"][0]["text"], json!("continue"));
@@ -522,12 +521,17 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
         "gpt-image-test".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: Some("gpt-5-mini".to_string()),
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "fisx-style-image-test".to_string(),
             api_type_overrides: vec![monoize::monoize_routing::ApiTypeOverride {
                 pattern: "gpt-image-test".to_string(),
@@ -535,7 +539,6 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
             }],
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("fisx-style-image-test-ch".to_string()),
                 name: "fisx-style-image-test-ch".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
                 base_url,
@@ -555,10 +558,10 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
                 affinity_idle_ttl_seconds_override: None,
                 affinity_failback_mode_override: None,
                 affinity_failback_delay_seconds_override: None,
-            
-            proxy_url: None,
-            extra_headers: None,
-            session_affinity_auto: None,
+
+                proxy_url: None,
+                extra_headers: None,
+                session_affinity_auto: None,
             },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -608,7 +611,9 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
     assert_eq!(image["id"].as_str(), Some("ig_mock"));
     assert_eq!(image["output_format"].as_str(), Some("webp"));
     assert!(
-        image["result"].as_str().is_some_and(|data| !data.is_empty()),
+        image["result"]
+            .as_str()
+            .is_some_and(|data| !data.is_empty()),
         "{body}"
     );
     assert!(!body.contains("output_image"), "{body}");
@@ -778,7 +783,12 @@ async fn image_edits_to_openai_image_use_multipart_edits_endpoint_with_image_byt
     let mut req_body = Vec::new();
     req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-edit-route-test\r\n").as_bytes());
     req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nedit this image\r\n").as_bytes());
-    req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"size\"\r\n\r\n1024x1024\r\n").as_bytes());
+    req_body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"size\"\r\n\r\n1024x1024\r\n"
+        )
+        .as_bytes(),
+    );
     req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"one.png\"\r\nContent-Type: image/png\r\n\r\n").as_bytes());
     req_body.extend_from_slice(&image);
     req_body.extend_from_slice(b"\r\n");
@@ -809,13 +819,32 @@ async fn image_edits_to_openai_image_use_multipart_edits_endpoint_with_image_byt
         .find(|(name, _)| name == "image_edits")
         .map(|(_, body)| body.clone())
         .expect("image edits upstream body");
-    assert_eq!(upstream["model"].as_str(), Some("gpt-image-edit-route-test"));
+    assert_eq!(
+        upstream["model"].as_str(),
+        Some("gpt-image-edit-route-test")
+    );
     assert_eq!(upstream["prompt"].as_str(), Some("edit this image"));
     assert_eq!(upstream["size"].as_str(), Some("1024x1024"));
-    assert_eq!(upstream["images"][0]["content_type"].as_str(), Some("image/png"), "{upstream}");
-    assert_eq!(upstream["images"][0]["b64"].as_str(), Some(image_b64), "{upstream}");
-    assert_eq!(upstream["masks"][0]["content_type"].as_str(), Some("image/png"), "{upstream}");
-    assert_eq!(upstream["masks"][0]["b64"].as_str(), Some(mask_b64), "{upstream}");
+    assert_eq!(
+        upstream["images"][0]["content_type"].as_str(),
+        Some("image/png"),
+        "{upstream}"
+    );
+    assert_eq!(
+        upstream["images"][0]["b64"].as_str(),
+        Some(image_b64),
+        "{upstream}"
+    );
+    assert_eq!(
+        upstream["masks"][0]["content_type"].as_str(),
+        Some("image/png"),
+        "{upstream}"
+    );
+    assert_eq!(
+        upstream["masks"][0]["b64"].as_str(),
+        Some(mask_b64),
+        "{upstream}"
+    );
     assert!(
         captured_bodies
             .lock()

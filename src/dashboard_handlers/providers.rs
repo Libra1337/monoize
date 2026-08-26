@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::billing_rate_store::{DbBillingRateRecord, glob_matches, select_pricing_profile};
+use crate::billing_rate_store::{DbBillingRateRecord, glob_matches};
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
 use crate::handlers::routing::health_key;
@@ -111,54 +111,54 @@ async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) 
     }
     let health = state.channel_health.lock().await;
     let channel = &mut provider.channel;
-        let mut unhealthy_models = Vec::new();
-        let mut probing_models = Vec::new();
-        let states: Vec<ChannelHealthState> = if provider.per_model_circuit_break {
-            let mut model_ids: Vec<&String> = channel.models.keys().collect();
-            model_ids.sort();
-            model_ids
-                .into_iter()
-                .map(|model| {
-                    let state = health
-                        .get(&health_key(&channel.id, Some(model)))
-                        .cloned()
-                        .unwrap_or_else(ChannelHealthState::new);
-                    match state.status(now) {
-                        "unhealthy" => unhealthy_models.push(model.clone()),
-                        "probing" => probing_models.push(model.clone()),
-                        _ => {}
-                    }
-                    state
-                })
-                .collect()
-        } else {
-            vec![
-                health
-                    .get(&health_key(&channel.id, None))
+    let mut unhealthy_models = Vec::new();
+    let mut probing_models = Vec::new();
+    let states: Vec<ChannelHealthState> = if provider.per_model_circuit_break {
+        let mut model_ids: Vec<&String> = channel.models.keys().collect();
+        model_ids.sort();
+        model_ids
+            .into_iter()
+            .map(|model| {
+                let state = health
+                    .get(&health_key(&channel.id, Some(model)))
                     .cloned()
-                    .unwrap_or_else(ChannelHealthState::new),
-            ]
-        };
-        let state = states
-            .iter()
-            .find(|state| state.status(now) == "unhealthy")
-            .or_else(|| states.iter().find(|state| state.status(now) == "probing"))
-            .or_else(|| states.first())
-            .cloned()
-            .unwrap_or_else(ChannelHealthState::new);
-        let cooldown_until = states
-            .iter()
-            .filter(|state| state.status(now) == "unhealthy")
-            .filter_map(|state| state.cooldown_until)
-            .max();
-        apply_channel_runtime(
-            channel,
-            &state,
-            unhealthy_models,
-            probing_models,
-            cooldown_until,
-            now,
-        );
+                    .unwrap_or_else(ChannelHealthState::new);
+                match state.status(now) {
+                    "unhealthy" => unhealthy_models.push(model.clone()),
+                    "probing" => probing_models.push(model.clone()),
+                    _ => {}
+                }
+                state
+            })
+            .collect()
+    } else {
+        vec![
+            health
+                .get(&health_key(&channel.id, None))
+                .cloned()
+                .unwrap_or_else(ChannelHealthState::new),
+        ]
+    };
+    let state = states
+        .iter()
+        .find(|state| state.status(now) == "unhealthy")
+        .or_else(|| states.iter().find(|state| state.status(now) == "probing"))
+        .or_else(|| states.first())
+        .cloned()
+        .unwrap_or_else(ChannelHealthState::new);
+    let cooldown_until = states
+        .iter()
+        .filter(|state| state.status(now) == "unhealthy")
+        .filter_map(|state| state.cooldown_until)
+        .max();
+    apply_channel_runtime(
+        channel,
+        &state,
+        unhealthy_models,
+        probing_models,
+        cooldown_until,
+        now,
+    );
     provider
 }
 
@@ -323,105 +323,222 @@ fn parse_u64_value(value: &Value) -> Option<u64> {
         .or_else(|| value.as_str().and_then(|s| s.parse::<u64>().ok()))
 }
 
-pub(super) fn provider_dashboard_rate_matrix_is_complete(rates: &[DbBillingRateRecord]) -> bool {
-    let has_input = rates
-        .iter()
-        .any(|r| r.rate_kind == "token" && r.usage_class == "input_uncached");
-    let has_output = rates
-        .iter()
-        .any(|r| r.rate_kind == "token" && r.usage_class == "output");
-    if !has_input || !has_output {
-        return false;
-    }
-
-    let context_tiers: HashSet<&str> = rates
-        .iter()
-        .filter_map(|r| r.context_tier.as_deref())
-        .filter(|tier| *tier != "default")
-        .collect();
-    if context_tiers.is_empty() {
-        return true;
-    }
-
-    let has_threshold = rates
-        .iter()
-        .filter_map(|r| r.match_json.get("context_threshold_tokens"))
-        .any(|value| parse_u64_value(value).is_some());
-    if !has_threshold {
-        return false;
-    }
-
-    context_tiers.iter().all(|tier| {
-        ["input_uncached", "output"].iter().all(|usage_class| {
-            rates.iter().any(|r| {
-                r.rate_kind == "token"
-                    && r.usage_class == *usage_class
-                    && r.context_tier.as_deref() == Some(*tier)
-            })
-        })
-    })
+pub(crate) fn provider_dashboard_rate_matrix_is_complete(rates: &[DbBillingRateRecord]) -> bool {
+    crate::handlers::billing_rates_form_complete_matrix(rates)
 }
 
-fn dashboard_candidate_profiles(
-    pricing_patterns: &[crate::settings::PricingProfilePattern],
-    metadata_profiles: &HashMap<String, String>,
-    model: &str,
-) -> Vec<String> {
-    let mut candidate_profiles = Vec::new();
-    if let Some(pricing_profile) = select_pricing_profile(pricing_patterns, model) {
-        candidate_profiles.push(pricing_profile.to_string());
+fn missing_required_usage_classes(rates: &[DbBillingRateRecord]) -> Vec<String> {
+    let mut missing = HashSet::new();
+    let canonical_price = |rate: &DbBillingRateRecord| {
+        rate.unit_price_nano()
+            .is_ok_and(|value| value >= 0 && value.to_string() == rate.unit_price_nano_usd)
+    };
+    let has_fallback = |usage_class: &str, context_tier: Option<&str>| {
+        rates.iter().any(|rate| {
+            rate.rate_kind == "token"
+                && rate.usage_class == usage_class
+                && rate.modality.is_none()
+                && rate.cache_ttl.is_none()
+                && rate
+                    .service_tier
+                    .as_deref()
+                    .is_none_or(|tier| tier == "default")
+                && match context_tier {
+                    Some(tier) => rate.context_tier.as_deref() == Some(tier),
+                    None => rate
+                        .context_tier
+                        .as_deref()
+                        .is_none_or(|tier| tier == "default"),
+                }
+                && canonical_price(rate)
+        })
+    };
+    let context_tiers = rates
+        .iter()
+        .filter_map(|rate| rate.context_tier.as_deref())
+        .filter(|tier| *tier != "default")
+        .collect::<HashSet<_>>();
+    let has_threshold = rates
+        .iter()
+        .filter_map(|rate| rate.match_json.get("context_threshold_tokens"))
+        .any(|value| parse_u64_value(value).is_some());
+    for rate in rates.iter().filter(|rate| !canonical_price(rate)) {
+        if matches!(rate.usage_class.as_str(), "input_uncached" | "output") {
+            missing.insert(rate.usage_class.clone());
+        } else {
+            missing.extend(["input_uncached".to_string(), "output".to_string()]);
+        }
     }
-    if let Some(metadata_profile) = metadata_profiles.get(model)
-        && !candidate_profiles
-            .iter()
-            .any(|candidate| candidate == metadata_profile)
-    {
-        candidate_profiles.push(metadata_profile.clone());
+    if context_tiers.is_empty() {
+        for usage_class in ["input_uncached", "output"] {
+            if !has_fallback(usage_class, None) {
+                missing.insert(usage_class.to_string());
+            }
+        }
+    } else if !has_threshold {
+        missing.extend(["input_uncached".to_string(), "output".to_string()]);
+    } else {
+        for tier in context_tiers {
+            for usage_class in ["input_uncached", "output"] {
+                if !has_fallback(usage_class, Some(tier)) {
+                    missing.insert(usage_class.to_string());
+                }
+            }
+        }
     }
-    candidate_profiles
+
+    let mut missing = missing.into_iter().collect::<Vec<_>>();
+    missing.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    missing
+}
+
+#[derive(Debug, Serialize)]
+struct PricingWarning {
+    logical_model: String,
+    missing_usage_classes: Vec<String>,
+}
+
+async fn provider_pricing_warnings(
+    state: &AppState,
+    provider: &MonoizeProvider,
+) -> AppResult<Vec<PricingWarning>> {
+    let reasoning_suffix_map = {
+        let runtime = state.monoize_runtime.read().await;
+        runtime.reasoning_suffix_map.clone()
+    };
+    let mut models = provider.channel.models.iter().collect::<Vec<_>>();
+    models.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    let mut warnings = Vec::new();
+
+    for (logical_model, model_entry) in models {
+        let Some(profile) =
+            crate::monoize_routing::effective_pricing_profile(provider, model_entry)
+        else {
+            warnings.push(PricingWarning {
+                logical_model: logical_model.clone(),
+                missing_usage_classes: vec!["input_uncached".to_string(), "output".to_string()],
+            });
+            continue;
+        };
+        let provider_type = crate::monoize_routing::resolve_effective_api_type(
+            &provider.api_type_overrides,
+            provider.channel.provider_type,
+            logical_model,
+        );
+        let upstream_model = normalize_pricing_model_key(
+            provider_pricing_model(logical_model, model_entry),
+            &reasoning_suffix_map,
+        );
+        let logical_pricing_model =
+            normalize_pricing_model_key(logical_model, &reasoning_suffix_map);
+        let upstream_rates = state
+            .billing_rate_store
+            .list_matching_rates(profile, Some(provider_type.as_str()), &upstream_model)
+            .await
+            .map_err(|error| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+            })?;
+        if provider_dashboard_rate_matrix_is_complete(&upstream_rates) {
+            continue;
+        }
+        let upstream_missing = missing_required_usage_classes(&upstream_rates);
+        let logical_missing = if upstream_model != logical_pricing_model {
+            let rates = state
+                .billing_rate_store
+                .list_matching_rates(
+                    profile,
+                    Some(provider_type.as_str()),
+                    &logical_pricing_model,
+                )
+                .await
+                .map_err(|error| {
+                    AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+                })?;
+            if provider_dashboard_rate_matrix_is_complete(&rates) {
+                continue;
+            }
+            missing_required_usage_classes(&rates)
+        } else {
+            upstream_missing.clone()
+        };
+        let missing_usage_classes = if logical_missing.len() < upstream_missing.len() {
+            logical_missing
+        } else {
+            upstream_missing
+        };
+        warnings.push(PricingWarning {
+            logical_model: logical_model.clone(),
+            missing_usage_classes,
+        });
+    }
+    Ok(warnings)
+}
+
+async fn provider_write_response(state: &AppState, provider: MonoizeProvider) -> AppResult<Value> {
+    let warnings = provider_pricing_warnings(state, &provider).await?;
+    let provider = provider_with_runtime(state, provider).await;
+    let mut response = serde_json::to_value(provider).map_err(|error| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            error.to_string(),
+        )
+    })?;
+    if let Value::Object(object) = &mut response {
+        object.insert(
+            "pricing_warnings".to_string(),
+            serde_json::to_value(warnings).unwrap_or_else(|_| Value::Array(Vec::new())),
+        );
+    }
+    Ok(response)
 }
 
 pub(super) fn build_dashboard_rate_matrix_cache(
-    pairs: &HashSet<(String, String)>,
-    pricing_patterns: &[crate::settings::PricingProfilePattern],
-    metadata_profiles: &HashMap<String, String>,
+    pairs: &HashSet<(String, String, String)>,
     candidate_rates: &[DbBillingRateRecord],
-) -> HashMap<(String, String), bool> {
+) -> HashMap<(String, String, String), bool> {
     let mut cache = HashMap::with_capacity(pairs.len());
-    for (model, provider_type) in pairs {
-        let available = dashboard_candidate_profiles(pricing_patterns, metadata_profiles, model)
-            .into_iter()
-            .any(|profile| {
-                let rates = candidate_rates
-                    .iter()
-                    .filter(|rate| {
-                        rate.pricing_profile == profile
-                            && rate
-                                .provider_type
-                                .as_deref()
-                                .is_none_or(|value| value == provider_type)
-                            && rate
-                                .model_pattern
-                                .as_deref()
-                                .is_none_or(|pattern| glob_matches(pattern, model))
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
-                provider_dashboard_rate_matrix_is_complete(&rates)
-            });
-        cache.insert((model.clone(), provider_type.clone()), available);
+    for (model, provider_type, pricing_profile) in pairs {
+        let rates = candidate_rates
+            .iter()
+            .filter(|rate| {
+                rate.pricing_profile == *pricing_profile
+                    && rate
+                        .provider_type
+                        .as_deref()
+                        .is_none_or(|value| value == provider_type)
+                    && rate
+                        .model_pattern
+                        .as_deref()
+                        .is_none_or(|pattern| glob_matches(pattern, model))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        cache.insert(
+            (
+                model.clone(),
+                provider_type.clone(),
+                pricing_profile.clone(),
+            ),
+            provider_dashboard_rate_matrix_is_complete(&rates),
+        );
     }
     cache
 }
 
 fn channel_model_has_billable_rate_matrix(
-    cache: &HashMap<(String, String), bool>,
+    cache: &HashMap<(String, String, String), bool>,
     provider: &MonoizeProvider,
     channel: &MonoizeChannel,
     logical_model: &str,
     model_entry: &crate::monoize_routing::MonoizeModelEntry,
     reasoning_suffix_map: &HashMap<String, String>,
 ) -> bool {
+    let Some(pricing_profile) =
+        crate::monoize_routing::effective_pricing_profile(provider, model_entry)
+    else {
+        return false;
+    };
     let upstream_model = provider_pricing_model(logical_model, model_entry);
     let normalized_upstream_model =
         normalize_pricing_model_key(upstream_model, reasoning_suffix_map);
@@ -433,7 +550,11 @@ fn channel_model_has_billable_rate_matrix(
     );
     let provider_type = effective_type.as_str().to_string();
     if cache
-        .get(&(normalized_upstream_model.clone(), provider_type.clone()))
+        .get(&(
+            normalized_upstream_model.clone(),
+            provider_type.clone(),
+            pricing_profile.to_string(),
+        ))
         .copied()
         .unwrap_or(false)
     {
@@ -441,7 +562,11 @@ fn channel_model_has_billable_rate_matrix(
     }
     normalized_upstream_model != normalized_logical_model
         && cache
-            .get(&(normalized_logical_model, provider_type))
+            .get(&(
+                normalized_logical_model,
+                provider_type,
+                pricing_profile.to_string(),
+            ))
             .copied()
             .unwrap_or(false)
 }
@@ -458,17 +583,19 @@ pub async fn list_providers(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    let (reasoning_suffix_map, pricing_patterns) = {
+    let reasoning_suffix_map = {
         let runtime = state.monoize_runtime.read().await;
-        (
-            runtime.reasoning_suffix_map.clone(),
-            runtime.pricing_profile_model_patterns.clone(),
-        )
+        runtime.reasoning_suffix_map.clone()
     };
     let mut pricing_pairs = HashSet::new();
     for provider in &providers {
         for channel in std::iter::once(&provider.channel) {
             for (logical_model, model_entry) in &channel.models {
+                let Some(pricing_profile) =
+                    crate::monoize_routing::effective_pricing_profile(provider, model_entry)
+                else {
+                    continue;
+                };
                 let normalized_upstream_model = normalize_pricing_model_key(
                     provider_pricing_model(logical_model, model_entry),
                     &reasoning_suffix_map,
@@ -482,35 +609,30 @@ pub async fn list_providers(
                 )
                 .as_str()
                 .to_string();
-                pricing_pairs.insert((normalized_upstream_model.clone(), provider_type.clone()));
+                pricing_pairs.insert((
+                    normalized_upstream_model.clone(),
+                    provider_type.clone(),
+                    pricing_profile.to_string(),
+                ));
                 if normalized_upstream_model != normalized_logical_model {
-                    pricing_pairs.insert((normalized_logical_model, provider_type));
+                    pricing_pairs.insert((
+                        normalized_logical_model,
+                        provider_type,
+                        pricing_profile.to_string(),
+                    ));
                 }
             }
         }
     }
-    let mut pricing_models = pricing_pairs
+    let mut candidate_profiles = pricing_pairs
         .iter()
-        .map(|(model, _)| model.clone())
-        .collect::<Vec<_>>();
-    pricing_models.sort();
-    pricing_models.dedup();
-    let metadata_profiles = state
-        .model_registry_store
-        .list_model_metadata_pricing_profiles(&pricing_models)
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    let mut candidate_profiles = pricing_models
-        .iter()
-        .flat_map(|model| {
-            dashboard_candidate_profiles(&pricing_patterns, &metadata_profiles, model)
-        })
+        .map(|(_, _, pricing_profile)| pricing_profile.clone())
         .collect::<Vec<_>>();
     candidate_profiles.sort();
     candidate_profiles.dedup();
     let mut provider_types = pricing_pairs
         .iter()
-        .map(|(_, provider_type)| provider_type.clone())
+        .map(|(_, provider_type, _)| provider_type.clone())
         .collect::<Vec<_>>();
     provider_types.sort();
     provider_types.dedup();
@@ -519,12 +641,7 @@ pub async fn list_providers(
         .list_candidate_rates_for_profiles_and_provider_types(&candidate_profiles, &provider_types)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    let rate_matrix_cache = build_dashboard_rate_matrix_cache(
-        &pricing_pairs,
-        &pricing_patterns,
-        &metadata_profiles,
-        &candidate_rates,
-    );
+    let rate_matrix_cache = build_dashboard_rate_matrix_cache(&pricing_pairs, &candidate_rates);
 
     let mut out = Vec::with_capacity(providers.len());
     for provider in providers {
@@ -612,6 +729,67 @@ fn validate_channel_proxy_url(
     Ok(())
 }
 
+async fn validate_pricing_profiles(
+    state: &AppState,
+    provider_profile: Option<&str>,
+    channel: Option<&crate::monoize_routing::CreateMonoizeChannelInput>,
+) -> AppResult<()> {
+    let mut requested = HashSet::new();
+    if let Some(profile) = provider_profile
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        requested.insert(profile.to_string());
+    }
+    if let Some(channel) = channel {
+        requested.extend(channel.models.values().filter_map(|entry| {
+            (entry.pricing_profile_mode == crate::monoize_routing::PricingProfileMode::Override)
+                .then(|| entry.pricing_profile_override.as_deref().map(str::trim))
+                .flatten()
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        }));
+    }
+    if requested.is_empty() {
+        return Ok(());
+    }
+    let known = state
+        .billing_rate_store
+        .list_billing_rates()
+        .await
+        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
+        .into_iter()
+        .map(|rate| rate.pricing_profile)
+        .collect::<HashSet<_>>();
+    let mut unknown = requested.difference(&known).cloned().collect::<Vec<_>>();
+    unknown.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    if let Some(profile) = unknown.first() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            format!("unknown pricing_profile: {profile}"),
+        ));
+    }
+    Ok(())
+}
+
+fn map_provider_write_error(error: String) -> AppError {
+    if error == "public_exposure_confirmation_required:provider" {
+        return AppError::new(
+            StatusCode::BAD_REQUEST,
+            "public_exposure_confirmation_required",
+            "Provider and Channel public name exposure requires confirmation",
+        );
+    }
+    if let Some(detail) = error.strip_prefix("public_name_conflict:") {
+        return AppError::new(StatusCode::CONFLICT, "public_name_conflict", detail);
+    }
+    if error.contains("not found") {
+        return AppError::new(StatusCode::NOT_FOUND, "not_found", error);
+    }
+    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", error)
+}
+
 pub async fn create_provider(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -619,18 +797,19 @@ pub async fn create_provider(
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
     validate_channel_proxy_url(&body.channel)?;
+    validate_pricing_profiles(&state, body.pricing_profile.as_deref(), Some(&body.channel)).await?;
 
     let provider = state
         .monoize_store
         .create_provider(body)
         .await
-        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
+        .map_err(map_provider_write_error)?;
 
     advance_routing_config_revision(&state);
 
     Ok((
         StatusCode::CREATED,
-        Json(provider_with_runtime(&state, provider).await),
+        Json(provider_write_response(&state, provider).await?),
     ))
 }
 
@@ -644,6 +823,14 @@ pub async fn update_provider(
     if let Some(channel) = body.channel.as_ref() {
         validate_channel_proxy_url(channel)?;
     }
+    validate_pricing_profiles(
+        &state,
+        body.pricing_profile
+            .as_ref()
+            .and_then(|profile| profile.as_deref()),
+        body.channel.as_ref(),
+    )
+    .await?;
 
     let prev_provider = state
         .monoize_store
@@ -656,27 +843,21 @@ pub async fn update_provider(
         .monoize_store
         .update_provider(&provider_id, body)
         .await
-        .map_err(|e| {
-            if e.contains("not found") {
-                AppError::new(StatusCode::NOT_FOUND, "not_found", e)
-            } else {
-                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e)
-            }
-        })?;
+        .map_err(map_provider_write_error)?;
 
     let affected_channel_ids: Vec<String> = [
         prev_provider.channel.id.clone(),
         provider.channel.id.clone(),
     ]
-        .into_iter()
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
+    .into_iter()
+    .collect::<HashSet<_>>()
+    .into_iter()
+    .collect();
     advance_routing_config_revision(&state);
     prune_provider_channel_health(&state, &affected_channel_ids).await;
     prune_provider_channel_affinity(&state, &affected_channel_ids).await;
 
-    Ok(Json(provider_with_runtime(&state, provider).await))
+    Ok(Json(provider_write_response(&state, provider).await?))
 }
 
 pub async fn delete_provider(
@@ -1232,6 +1413,9 @@ mod tests {
 
     fn test_provider_input(base_url: String) -> CreateMonoizeProviderInput {
         CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: None,
+            multiplier: Default::default(),
             name: "provider".to_string(),
             enabled: true,
             priority: Some(0),
@@ -1240,7 +1424,6 @@ mod tests {
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             channel: CreateMonoizeChannelInput {
-                id: None,
                 name: "channel".to_string(),
                 provider_type: MonoizeProviderType::ChatCompletion,
                 base_url,
@@ -1255,7 +1438,9 @@ mod tests {
                     "alpha-model".to_string(),
                     MonoizeModelEntry {
                         redirect: None,
-                        multiplier: crate::exact_decimal::Multiplier::ONE,
+                        pricing_profile_mode: Default::default(),
+                        pricing_profile_override: None,
+                        multiplier_override: Some(crate::exact_decimal::Multiplier::ONE),
                     },
                 )]),
                 active_probe_enabled_override: None,

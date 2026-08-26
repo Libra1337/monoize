@@ -108,7 +108,8 @@ async fn messages_nonstream_error_uses_anthropic_envelope_and_request_id() {
     assert!(
         body["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("upstream status 422 Unprocessable Entity: invalid request")),
+            .is_some_and(|message| message
+                .contains("upstream status 422 Unprocessable Entity: invalid request")),
         "final exhausted error must retain the upstream detail: {body}"
     );
     assert_eq!(
@@ -711,17 +712,21 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
         "gpt-5-mini".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "mono-transform-markdown-images".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("mono-transform-markdown-images-ch1".to_string()),
                 name: "mono-transform-markdown-images-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
@@ -741,10 +746,10 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
                 affinity_idle_ttl_seconds_override: None,
                 affinity_failback_mode_override: None,
                 affinity_failback_delay_seconds_override: None,
-            
-            proxy_url: None,
-            extra_headers: None,
-            session_affinity_auto: None,
+
+                proxy_url: None,
+                extra_headers: None,
+                session_affinity_auto: None,
             },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -893,7 +898,10 @@ async fn messages_programmatic_tool_calling_round_trips_same_family() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let upstream = last_captured_body(&ctx, "messages");
     assert_eq!(upstream["container"], container);
-    assert_eq!(upstream["tools"][0]["type"], json!("code_execution_20260120"));
+    assert_eq!(
+        upstream["tools"][0]["type"],
+        json!("code_execution_20260120")
+    );
     assert_eq!(
         upstream["tools"][1]["allowed_callers"],
         json!(["code_execution_20260120"])
@@ -902,9 +910,14 @@ async fn messages_programmatic_tool_calling_round_trips_same_family() {
 
     let response: Value = serde_json::from_str(&body).expect("Messages PTC response JSON");
     assert_eq!(response["container"]["id"], json!("container_ptc_1"));
-    let content = response["content"].as_array().expect("Messages PTC content");
+    let content = response["content"]
+        .as_array()
+        .expect("Messages PTC content");
     assert_eq!(
-        content.iter().map(|block| block["type"].as_str().unwrap()).collect::<Vec<_>>(),
+        content
+            .iter()
+            .map(|block| block["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
         vec!["server_tool_use", "tool_use", "code_execution_tool_result"]
     );
     assert_eq!(
@@ -956,7 +969,9 @@ async fn messages_tool_search_lifecycle_round_trips_same_family() {
     assert_eq!(upstream["tools"][2]["defer_loading"], json!(true));
 
     let response: Value = serde_json::from_str(&body).expect("Messages tool search response");
-    let content = response["content"].as_array().expect("Messages tool search content");
+    let content = response["content"]
+        .as_array()
+        .expect("Messages tool search content");
     assert_eq!(content[0]["type"], json!("server_tool_use"));
     assert_eq!(content[1]["type"], json!("tool_search_tool_result"));
     assert_eq!(content[1]["content"][0]["type"], json!("tool_reference"));

@@ -40,7 +40,8 @@ const TARGET_DDL: &[&str] = &[
         multiplier_override TEXT NULL,
         created_at TEXT NOT NULL,
         PRIMARY KEY(provider_id, model_name_key),
-        CHECK((pricing_profile_mode = 'override') = (pricing_profile_override IS NOT NULL))
+        CHECK((pricing_profile_mode = 'override' AND pricing_profile_override IS NOT NULL AND length(trim(pricing_profile_override)) > 0)
+           OR (pricing_profile_mode IN ('inherit', 'unpriced') AND pricing_profile_override IS NULL))
     )"#,
     "CREATE INDEX IF NOT EXISTS idx_provider_models_lookup ON monoize_provider_models(model_name_key, provider_id)",
 ];
@@ -227,9 +228,38 @@ fn target_ddl() -> Vec<String> {
     TARGET_DDL
         .iter()
         .map(|statement| {
-            statement.replace("model_search_key BLOB NOT NULL,", search_check.as_str())
+            statement
+                .replace("model_search_key BLOB NOT NULL,", search_check.as_str())
+                .replace(
+                    "multiplier TEXT NOT NULL,",
+                    &format!(
+                        "multiplier TEXT NOT NULL CHECK({}),",
+                        canonical_decimal_check("multiplier")
+                    ),
+                )
+                .replace(
+                    "multiplier_override TEXT NULL,",
+                    &format!(
+                        "multiplier_override TEXT NULL CHECK(multiplier_override IS NULL OR ({})),",
+                        canonical_decimal_check("multiplier_override")
+                    ),
+                )
         })
         .collect()
+}
+
+fn canonical_decimal_check(column: &str) -> String {
+    format!(
+        "length({column}) >= 1 \
+         AND {column} NOT GLOB '*[^0-9.]*' \
+         AND substr({column}, 1, 1) <> '.' \
+         AND substr({column}, -1, 1) <> '.' \
+         AND length({column}) - length(replace({column}, '.', '')) <= 1 \
+         AND (length({column}) = 1 OR substr({column}, 1, 1) <> '0' OR substr({column}, 2, 1) = '.') \
+         AND (instr({column}, '.') = 0 OR length({column}) - instr({column}, '.') BETWEEN 1 AND 9) \
+         AND (instr({column}, '.') = 0 OR substr({column}, -1, 1) <> '0') \
+         AND CAST({column} AS NUMERIC) > 0"
+    )
 }
 
 fn ascii_fold_expression(column: &str) -> String {

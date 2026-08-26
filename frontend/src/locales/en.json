@@ -422,6 +422,7 @@
 	"providers": {
 		"title": "Providers",
 		"description": "View configured upstream providers",
+		"pricingWarnings": "Saved with incomplete pricing: {{details}}",
 		"upstreamProviders": "Upstream Providers",
 		"providersConfigured": "{{count}} provider configured",
 		"providersConfigured_plural": "{{count}} providers configured",
@@ -1120,6 +1121,10 @@
 		"loadFailed": "Failed to load system overview"
 	},
 	"groups": {
+		"publicExposureConfirm": "I confirm that this Group name will appear on public pages.",
+		"publicExposureRequired": "Confirm public Group name exposure before saving.",
+		"providerPublicExposureConfirm": "I confirm that Provider and Channel names will appear in the public Marketplace.",
+		"providerPublicExposureRequired": "Confirm public Provider and Channel name exposure before saving.",
 		"title": "Groups",
 		"description": "Manage routing groups: names, descriptions, and visibility.",
 		"create": "New Group",

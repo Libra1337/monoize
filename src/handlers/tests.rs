@@ -43,7 +43,7 @@ fn test_rate(
         cache_ttl: cache_ttl.map(str::to_string),
         match_json,
         priority: 0,
-	        enabled: true,
+        enabled: true,
         raw_json: serde_json::json!({}),
         updated_at: chrono::Utc::now(),
     }
@@ -72,7 +72,7 @@ fn test_meter_rate(
         cache_ttl: None,
         match_json,
         priority: 0,
-	                enabled: true,
+        enabled: true,
         raw_json: serde_json::json!({}),
         updated_at: chrono::Utc::now(),
     }
@@ -382,6 +382,9 @@ async fn seed_group_routing_provider(
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: name.to_string(),
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -396,7 +399,7 @@ async fn seed_group_routing_provider(
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-	                enabled: true,
+            enabled: true,
             priority: Some(0),
             group_id,
             channel,
@@ -441,7 +444,6 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
     seed_model_pricing(&state, "channel-owned-model").await;
 
     let channel = |id: &str, multiplier: &str, redirect: &str| CreateMonoizeChannelInput {
-        id: Some(id.to_string()),
         name: id.to_string(),
         provider_type: MonoizeProviderType::Responses,
         base_url: format!("https://{id}.example.com"),
@@ -456,7 +458,9 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
             "channel-owned-model".to_string(),
             MonoizeModelEntry {
                 redirect: Some(redirect.to_string()),
-                multiplier: multiplier.parse().unwrap(),
+                pricing_profile_mode: Default::default(),
+                pricing_profile_override: None,
+                multiplier_override: Some(multiplier.parse().unwrap()),
             },
         )]),
         active_probe_enabled_override: None,
@@ -476,6 +480,9 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "channel-owned-models".to_string(),
             channel: channel("cheap", "1", "cheap-upstream"),
             channel_max_retries: 0,
@@ -492,7 +499,7 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
-	                enabled: true,
+            enabled: true,
             priority: Some(0),
         })
         .await
@@ -1504,6 +1511,9 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: None,
+            multiplier: Default::default(),
             name: "OpenAI".to_string(),
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -1519,10 +1529,9 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
-	                enabled: true,
+            enabled: true,
             priority: Some(0),
             channel: CreateMonoizeChannelInput {
-                id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::Responses,
                 base_url: "https://example.com".to_string(),
@@ -1537,7 +1546,9 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
                     "gpt-5-mini".to_string(),
                     MonoizeModelEntry {
                         redirect: None,
-                        multiplier: Multiplier::ONE,
+                        pricing_profile_mode: Default::default(),
+                        pricing_profile_override: None,
+                        multiplier_override: Some(Multiplier::ONE),
                     },
                 )]),
                 active_probe_enabled_override: None,
@@ -1593,7 +1604,9 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
 fn resolve_upstream_model_prefers_non_empty_redirect() {
     let entry = MonoizeModelEntry {
         redirect: Some("  gpt-5-target  ".to_string()),
-        multiplier: Multiplier::ONE,
+        pricing_profile_mode: Default::default(),
+        pricing_profile_override: None,
+        multiplier_override: Some(Multiplier::ONE),
     };
     assert_eq!(
         resolve_upstream_model("gpt-5-logical", &entry),
@@ -1605,7 +1618,9 @@ fn resolve_upstream_model_prefers_non_empty_redirect() {
 fn resolve_upstream_model_falls_back_to_requested_when_redirect_blank() {
     let entry = MonoizeModelEntry {
         redirect: Some("   ".to_string()),
-        multiplier: Multiplier::ONE,
+        pricing_profile_mode: Default::default(),
+        pricing_profile_override: None,
+        multiplier_override: Some(Multiplier::ONE),
     };
     assert_eq!(
         resolve_upstream_model("gpt-5-logical", &entry),
@@ -1628,6 +1643,9 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: None,
+            multiplier: Default::default(),
             name: "OpenAI".to_string(),
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -1643,10 +1661,9 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
-	            enabled: true,
+            enabled: true,
             priority: Some(0),
             channel: CreateMonoizeChannelInput {
-                id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::Responses,
                 base_url: "https://example.com".to_string(),
@@ -1661,7 +1678,9 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
                     "gpt-unpriced".to_string(),
                     MonoizeModelEntry {
                         redirect: Some("gpt-unpriced-upstream".to_string()),
-                        multiplier: Multiplier::ONE,
+                        pricing_profile_mode: Default::default(),
+                        pricing_profile_override: None,
+                        multiplier_override: Some(Multiplier::ONE),
                     },
                 )]),
                 active_probe_enabled_override: None,
@@ -1707,6 +1726,9 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: None,
+            multiplier: Default::default(),
             name: "OpenAI".to_string(),
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -1722,10 +1744,9 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
-	            enabled: true,
+            enabled: true,
             priority: Some(0),
             channel: CreateMonoizeChannelInput {
-                id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::Responses,
                 base_url: "https://example.com".to_string(),
@@ -1740,7 +1761,9 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
                     "gpt-unpriced".to_string(),
                     MonoizeModelEntry {
                         redirect: Some("gpt-unpriced-upstream".to_string()),
-                        multiplier: Multiplier::ONE,
+                        pricing_profile_mode: Default::default(),
+                        pricing_profile_override: None,
+                        multiplier_override: Some(Multiplier::ONE),
                     },
                 )]),
                 active_probe_enabled_override: None,
@@ -1785,6 +1808,9 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "OpenAI".to_string(),
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -1803,7 +1829,6 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
             enabled: true,
             priority: Some(0),
             channel: CreateMonoizeChannelInput {
-                id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::Responses,
                 base_url: "https://example.com".to_string(),
@@ -1818,7 +1843,9 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
                     "gpt-priced".to_string(),
                     MonoizeModelEntry {
                         redirect: None,
-                        multiplier: Multiplier::ONE,
+                        pricing_profile_mode: Default::default(),
+                        pricing_profile_override: None,
+                        multiplier_override: Some(Multiplier::ONE),
                     },
                 )]),
                 active_probe_enabled_override: None,
@@ -1866,6 +1893,9 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "OpenAI".to_string(),
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -1884,7 +1914,6 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
             enabled: true,
             priority: Some(0),
             channel: CreateMonoizeChannelInput {
-                id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::Responses,
                 base_url: "https://example.com".to_string(),
@@ -1899,7 +1928,9 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
                     "gpt-fallback-src".to_string(),
                     MonoizeModelEntry {
                         redirect: Some("gpt-fallback-dest".to_string()),
-                        multiplier: Multiplier::ONE,
+                        pricing_profile_mode: Default::default(),
+                        pricing_profile_override: None,
+                        multiplier_override: Some(Multiplier::ONE),
                     },
                 )]),
                 active_probe_enabled_override: None,
@@ -1964,6 +1995,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
         "gpt-fallback-dest",
         "gpt-fallback-src",
         ProviderType::Responses,
+        "openai",
     )
     .await
     .expect("pricing lookup")
@@ -1981,7 +2013,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
 }
 
 #[tokio::test]
-async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
+async fn build_monoize_attempts_does_not_use_metadata_pricing_profile_fallback() {
     let runtime = RuntimeConfig {
         listen: "127.0.0.1:0".to_string(),
         metrics_path: "/metrics".to_string(),
@@ -1995,6 +2027,9 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: None,
+            multiplier: Default::default(),
             name: "Gateway".to_string(),
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -2013,7 +2048,6 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
             enabled: true,
             priority: Some(0),
             channel: CreateMonoizeChannelInput {
-                id: None,
                 name: "primary".to_string(),
                 provider_type: MonoizeProviderType::ChatCompletion,
                 base_url: "https://example.com".to_string(),
@@ -2028,7 +2062,9 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
                     "claude-sonnet-4.6".to_string(),
                     MonoizeModelEntry {
                         redirect: None,
-                        multiplier: Multiplier::ONE,
+                        pricing_profile_mode: Default::default(),
+                        pricing_profile_override: None,
+                        multiplier_override: Some(Multiplier::ONE),
                     },
                 )]),
                 active_probe_enabled_override: None,
@@ -2070,12 +2106,11 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
 
     let req = build_test_routing_request("claude-sonnet-4.6");
     let auth = build_test_auth(None);
-    let attempts = build_monoize_attempts(&state, &req, &auth)
+    let error = build_monoize_attempts(&state, &req, &auth)
         .await
-        .expect("metadata-profile fallback should be allowed");
-
-    assert_eq!(attempts.len(), 1);
-    assert_eq!(attempts[0].upstream_model, "claude-sonnet-4.6");
+        .expect_err("metadata Profile must not make an unpriced mapping routable");
+    assert_eq!(error.status, StatusCode::FORBIDDEN);
+    assert_eq!(error.code, "model_pricing_required");
 }
 
 #[tokio::test]
@@ -2097,6 +2132,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
     let team_a_group = state
         .user_store
         .create_group(crate::users::CreateGroupInput {
+            confirm_public_exposure: true,
             name: "team-a".to_string(),
             description: String::new(),
             user_selectable: true,
@@ -2107,6 +2143,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
     let team_b_group = state
         .user_store
         .create_group(crate::users::CreateGroupInput {
+            confirm_public_exposure: true,
             name: "team-b".to_string(),
             description: String::new(),
             user_selectable: true,
@@ -2122,7 +2159,6 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         false,
         String::new(),
         CreateMonoizeChannelInput {
-            id: Some("public".to_string()),
             name: "public".to_string(),
             provider_type: MonoizeProviderType::Responses,
             base_url: "https://public.example.com".to_string(),
@@ -2137,7 +2173,9 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
                 GROUP_ROUTING_MODEL.to_string(),
                 MonoizeModelEntry {
                     redirect: None,
-                    multiplier: Multiplier::ONE,
+                    pricing_profile_mode: Default::default(),
+                    pricing_profile_override: None,
+                    multiplier_override: Some(Multiplier::ONE),
                 },
             )]),
             active_probe_enabled_override: None,
@@ -2161,7 +2199,6 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         false,
         team_a_group.id.clone(),
         CreateMonoizeChannelInput {
-            id: Some("team-a".to_string()),
             name: "team-a".to_string(),
             provider_type: MonoizeProviderType::Responses,
             base_url: "https://team-a.example.com".to_string(),
@@ -2176,7 +2213,9 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
                 GROUP_ROUTING_MODEL.to_string(),
                 MonoizeModelEntry {
                     redirect: None,
-                    multiplier: Multiplier::ONE,
+                    pricing_profile_mode: Default::default(),
+                    pricing_profile_override: None,
+                    multiplier_override: Some(Multiplier::ONE),
                 },
             )]),
             active_probe_enabled_override: None,
@@ -2200,7 +2239,6 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         false,
         team_b_group.id.clone(),
         CreateMonoizeChannelInput {
-            id: Some("team-b".to_string()),
             name: "team-b".to_string(),
             provider_type: MonoizeProviderType::Responses,
             base_url: "https://team-b.example.com".to_string(),
@@ -2215,7 +2253,9 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
                 GROUP_ROUTING_MODEL.to_string(),
                 MonoizeModelEntry {
                     redirect: None,
-                    multiplier: Multiplier::ONE,
+                    pricing_profile_mode: Default::default(),
+                    pricing_profile_override: None,
+                    multiplier_override: Some(Multiplier::ONE),
                 },
             )]),
             active_probe_enabled_override: None,
@@ -2276,6 +2316,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
     let team_a_group = state
         .user_store
         .create_group(crate::users::CreateGroupInput {
+            confirm_public_exposure: true,
             name: "team-a".to_string(),
             description: String::new(),
             user_selectable: true,
@@ -2286,6 +2327,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
     let team_b_group = state
         .user_store
         .create_group(crate::users::CreateGroupInput {
+            confirm_public_exposure: true,
             name: "team-b".to_string(),
             description: String::new(),
             user_selectable: true,
@@ -2300,7 +2342,6 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
         true,
         team_a_group.id.clone(),
         CreateMonoizeChannelInput {
-            id: Some("team-a".to_string()),
             name: "team-a".to_string(),
             provider_type: MonoizeProviderType::Responses,
             base_url: "https://team-a.example.com".to_string(),
@@ -2315,7 +2356,9 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
                 GROUP_ROUTING_MODEL.to_string(),
                 MonoizeModelEntry {
                     redirect: None,
-                    multiplier: Multiplier::ONE,
+                    pricing_profile_mode: Default::default(),
+                    pricing_profile_override: None,
+                    multiplier_override: Some(Multiplier::ONE),
                 },
             )]),
             active_probe_enabled_override: None,
@@ -2796,11 +2839,7 @@ fn midstream_terminal_failure_class_maps_breaker_relevant_signals() {
         Some(routing::RetryableFailureClass::Transient)
     );
     assert_eq!(
-        routing::midstream_terminal_failure_class(
-            403,
-            Some("rate_limit_exceeded"),
-            None
-        ),
+        routing::midstream_terminal_failure_class(403, Some("rate_limit_exceeded"), None),
         Some(routing::RetryableFailureClass::Persistent)
     );
     assert_eq!(
@@ -2855,7 +2894,11 @@ fn upstream_adapter_failure_classification_uses_upstream_prefix() {
         let err = AppError::new(StatusCode::BAD_GATEWAY, code, "adapter failure");
         assert!(routing::is_upstream_adapter_failure(&err), "{code}");
     }
-    for code in ["invalid_upstream_response", "encode_error", "internal_error"] {
+    for code in [
+        "invalid_upstream_response",
+        "encode_error",
+        "internal_error",
+    ] {
         let err = AppError::new(StatusCode::BAD_GATEWAY, code, "internal failure");
         assert!(!routing::is_upstream_adapter_failure(&err), "{code}");
     }
@@ -3158,8 +3201,10 @@ async fn midstream_terminal_failure_samples_health_and_clears_affinity_only_on_t
     attempt.affinity_hit = Some(true);
     attempt.affinity_key = Some("v1|api_key:k|model:gpt-affinity|prefix:mid".to_string());
     attempt.origin_key = routing::channel_origin_key("https://midstream.example");
-    attempt.origin_peer_channel_ids =
-        vec!["midstream-channel".to_string(), "midstream-peer".to_string()];
+    attempt.origin_peer_channel_ids = vec![
+        "midstream-channel".to_string(),
+        "midstream-peer".to_string(),
+    ];
     attempt.routing_config_revision = state
         .routing_config_revision
         .load(std::sync::atomic::Ordering::Acquire);

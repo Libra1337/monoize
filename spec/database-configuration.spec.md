@@ -135,8 +135,7 @@ DBT2. On startup, the server MUST ensure the following model-registry tables exi
 DBT3. On startup, the server MUST ensure the following Monoize routing tables exist:
 
 - `monoize_providers`
-- `monoize_channels`
-- `monoize_channel_models`
+- `monoize_provider_models`
 
 DBT4. On startup, the server MUST NOT create legacy provider tables:
 
@@ -166,9 +165,12 @@ DBO2. `model_registry_records` is the authoritative source of dashboard-managed 
 
 DBO2.1. `model_metadata_records` is the persistent source of per-model pricing/capability metadata used by billing and dashboard diagnostics.
 
-DBO3. `monoize_providers`, `monoize_channels`, and `monoize_channel_models` are the primary source of truth for provider/channel routing configuration.
+DBO3. `monoize_providers` and `monoize_provider_models` are the primary source of truth for
+Provider, embedded Channel, and Provider-model routing configuration.
 
-DBO3.0. `monoize_provider_models` MUST NOT exist after migration. Channel model rows are the only persistent owner of logical model, redirect, and multiplier configuration.
+DBO3.0. `monoize_channels` and `monoize_channel_models` MUST NOT exist after migration.
+`monoize_provider_models` is the only persistent owner of logical model, redirect, Profile
+mode, Profile override, and multiplier override configuration.
 
 DBO3.1. `billing_ledger` is append-only request charge / admin adjustment history. A ledger row MUST remain after its referenced user or API key is deleted. `billing_ledger.user_id` stores the historical user identifier and MUST NOT have a cascading foreign key to `users`.
 
@@ -212,7 +214,7 @@ DB23a. One dashboard settings update MUST write all changed `system_settings` ro
 
 DB23b. After the transaction commits, Monoize MUST construct and publish `monoize_runtime` from the committed values before returning success. The supported writer model is one `primary`-role process per deployment, defined by `unified_responses_proxy.spec.md` C6; replicas obtain equivalent snapshots via `primary-replica-deployment.spec.md` E3.
 
-DB23c. `monoize_runtime` MUST contain the committed `reasoning_suffix_map`, `pricing_profile_model_patterns`, and `codex_model_ids`. A forwarding request MUST clone the suffix and pricing values from one runtime read and MUST NOT query `system_settings` for either value. `GET /v1/models` MUST clone `codex_model_ids` from the runtime snapshot and MUST NOT load all settings. The dedicated pricing-pattern mutation MUST publish its committed pattern list before returning success.
+DB23c. `monoize_runtime` MUST contain the committed `reasoning_suffix_map`, `pricing_profile_model_patterns`, and `codex_model_ids`. A forwarding request MUST clone the suffix map from one runtime read and MUST NOT use `pricing_profile_model_patterns` for runtime Profile selection. `GET /v1/models` MUST clone `codex_model_ids` from the runtime snapshot and MUST NOT load all settings. The dedicated pricing-pattern mutation MUST publish its committed administrative suggestion list before returning success.
 
 DB23d. Authentication code that needs only `session_ttl_days`, and API-key creation code that needs only `api_key_max_per_user`, MUST execute one point lookup for that key. It MUST NOT call `get_all()` or parse unrelated setting payloads. A missing, malformed, or non-positive point value MUST resolve to `7` and `1000`, respectively. A database error from either point lookup MUST return HTTP `500`; authentication MUST NOT create a session and API-key creation MUST NOT insert a key after that error.
 
@@ -234,4 +236,7 @@ DB24b. `system_settings` MUST persist `global_model_redirects` as a JSON array
 of `ModelRedirectRule` objects defined by `spec/api-key-model-redirects.spec.md`.
 A missing, invalid, or non-array value MUST resolve to `[]`.
 
-DB25. `monoize_channels` MUST persist nullable `affinity_enabled_override`, `affinity_idle_ttl_seconds_override`, `affinity_failback_mode_override`, and `affinity_failback_delay_seconds_override` columns.
+DB25. `monoize_providers` MUST persist nullable embedded-Channel columns
+`channel_affinity_enabled_override`, `channel_affinity_idle_ttl_seconds_override`,
+`channel_affinity_failback_mode_override`, and
+`channel_affinity_failback_delay_seconds_override`.

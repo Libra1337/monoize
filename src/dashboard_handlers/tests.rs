@@ -14,7 +14,7 @@ use crate::monoize_routing::{
     AffinityFailbackMode, CreateMonoizeProviderInput, MonoizeChannel, MonoizeModelEntry,
     MonoizeProvider, MonoizeProviderType, MonoizeRoutingStore, UpdateMonoizeProviderInput,
 };
-use crate::settings::{PricingProfilePattern, SettingsStore};
+use crate::settings::SettingsStore;
 use crate::transforms::{Phase, TransformRuleConfig};
 use crate::users::{
     CreateApiKeyInput, ModelRedirectRule, RequestLogAffinity, RequestLogApiKey, RequestLogBilling,
@@ -50,7 +50,9 @@ fn build_models_list_url_avoids_duplicate_v1_suffix() {
 fn provider_pricing_model_uses_redirect_when_present() {
     let entry = MonoizeModelEntry {
         redirect: Some("  gpt-5-target  ".to_string()),
-        multiplier: crate::exact_decimal::Multiplier::ONE,
+        pricing_profile_mode: Default::default(),
+        pricing_profile_override: None,
+        multiplier_override: Some(crate::exact_decimal::Multiplier::ONE),
     };
     assert_eq!(
         provider_pricing_model("gpt-5-logical", &entry),
@@ -62,7 +64,9 @@ fn provider_pricing_model_uses_redirect_when_present() {
 fn provider_pricing_model_falls_back_to_logical_when_redirect_blank() {
     let entry = MonoizeModelEntry {
         redirect: Some("   ".to_string()),
-        multiplier: crate::exact_decimal::Multiplier::ONE,
+        pricing_profile_mode: Default::default(),
+        pricing_profile_override: None,
+        multiplier_override: Some(crate::exact_decimal::Multiplier::ONE),
     };
     assert_eq!(
         provider_pricing_model("gpt-5-logical", &entry),
@@ -116,17 +120,55 @@ fn provider_dashboard_rate_matrix_requires_complete_tiered_billing_rates() {
 }
 
 #[test]
+fn provider_dashboard_rate_matrix_requires_canonical_dimensionless_fallbacks() {
+    let mut dimensioned_input = dashboard_rate("input", "input_uncached", None);
+    dimensioned_input.modality = Some("image".to_string());
+    assert!(!provider_dashboard_rate_matrix_is_complete(&[
+        dimensioned_input,
+        dashboard_rate("output", "output", None),
+    ]));
+
+    let mut non_default_service_tier = dashboard_rate("input", "input_uncached", None);
+    non_default_service_tier.service_tier = Some("flex".to_string());
+    assert!(!provider_dashboard_rate_matrix_is_complete(&[
+        non_default_service_tier,
+        dashboard_rate("output", "output", None),
+    ]));
+
+    let mut cache_specific = dashboard_rate("input", "input_uncached", None);
+    cache_specific.cache_ttl = Some("5m".to_string());
+    assert!(!provider_dashboard_rate_matrix_is_complete(&[
+        cache_specific,
+        dashboard_rate("output", "output", None),
+    ]));
+
+    let mut non_canonical = dashboard_rate("input", "input_uncached", None);
+    non_canonical.unit_price_nano_usd = "01".to_string();
+    assert!(!provider_dashboard_rate_matrix_is_complete(&[
+        non_canonical,
+        dashboard_rate("output", "output", None),
+    ]));
+}
+
+#[test]
 fn provider_dashboard_rate_matrix_cache_filters_bulk_candidates_in_memory() {
     let pairs = HashSet::from([
-        ("gpt-test".to_string(), "responses".to_string()),
-        ("gpt-test".to_string(), "messages".to_string()),
-        ("metadata-model".to_string(), "messages".to_string()),
+        (
+            "gpt-test".to_string(),
+            "responses".to_string(),
+            "openai".to_string(),
+        ),
+        (
+            "gpt-test".to_string(),
+            "messages".to_string(),
+            "openai".to_string(),
+        ),
+        (
+            "metadata-model".to_string(),
+            "messages".to_string(),
+            "anthropic".to_string(),
+        ),
     ]);
-    let patterns = vec![PricingProfilePattern {
-        pattern: "gpt-*".to_string(),
-        pricing_profile: "openai".to_string(),
-    }];
-    let metadata = HashMap::from([("metadata-model".to_string(), "anthropic".to_string())]);
     let mut rates = vec![
         dashboard_rate("openai-input", "input_uncached", None),
         dashboard_rate("openai-output", "output", None),
@@ -143,17 +185,29 @@ fn provider_dashboard_rate_matrix_cache_filters_bulk_candidates_in_memory() {
     metadata_output.usage_class = "output".to_string();
     rates.extend([metadata_input, metadata_output]);
 
-    let cache = build_dashboard_rate_matrix_cache(&pairs, &patterns, &metadata, &rates);
+    let cache = build_dashboard_rate_matrix_cache(&pairs, &rates);
     assert_eq!(
-        cache.get(&("gpt-test".to_string(), "responses".to_string())),
+        cache.get(&(
+            "gpt-test".to_string(),
+            "responses".to_string(),
+            "openai".to_string()
+        )),
         Some(&true)
     );
     assert_eq!(
-        cache.get(&("gpt-test".to_string(), "messages".to_string())),
+        cache.get(&(
+            "gpt-test".to_string(),
+            "messages".to_string(),
+            "openai".to_string()
+        )),
         Some(&false)
     );
     assert_eq!(
-        cache.get(&("metadata-model".to_string(), "messages".to_string())),
+        cache.get(&(
+            "metadata-model".to_string(),
+            "messages".to_string(),
+            "anthropic".to_string()
+        )),
         Some(&true)
     );
 }
@@ -188,7 +242,10 @@ fn dashboard_create_provider_rejects_obsolete_channels_field() {
         }
     }));
 
-    assert!(result.is_err(), "plural channels field must not be accepted");
+    assert!(
+        result.is_err(),
+        "plural channels field must not be accepted"
+    );
 }
 
 #[test]
@@ -244,7 +301,9 @@ fn dashboard_provider_response_includes_group_and_channel_hides_api_key() {
             "gpt-5".to_string(),
             crate::monoize_routing::MonoizeModelEntry {
                 redirect: None,
-                multiplier: crate::exact_decimal::Multiplier::ONE,
+                pricing_profile_mode: Default::default(),
+                pricing_profile_override: None,
+                multiplier_override: Some(crate::exact_decimal::Multiplier::ONE),
             },
         )]),
         active_probe_enabled_override: None,
@@ -268,6 +327,8 @@ fn dashboard_provider_response_includes_group_and_channel_hides_api_key() {
     };
 
     let provider = MonoizeProvider {
+        pricing_profile: None,
+        multiplier: Default::default(),
         id: "mono_provider_123".to_string(),
         name: "provider".to_string(),
         channel,
@@ -363,10 +424,7 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
     assert_eq!(created.group_id, "g-beta");
     assert_eq!(created.channel.api_key, "secret");
     assert_eq!(created.channel.affinity_enabled_override, Some(true));
-    assert_eq!(
-        created.channel.affinity_idle_ttl_seconds_override,
-        Some(90)
-    );
+    assert_eq!(created.channel.affinity_idle_ttl_seconds_override, Some(90));
     assert_eq!(
         created.channel.affinity_failback_mode_override,
         Some(AffinityFailbackMode::PreferHigherPriority)
@@ -512,6 +570,7 @@ async fn dashboard_user_group_id_round_trip_through_store_and_response() {
     let default_group_id = store.default_group_id().await.expect("default exists");
     let team = store
         .create_group(crate::users::CreateGroupInput {
+            confirm_public_exposure: true,
             name: "team".to_string(),
             description: "team routing".to_string(),
             user_selectable: true,
@@ -632,6 +691,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
     let store = UserStore::new(db, log_tx).await.expect("store creates");
     let alpha = store
         .create_group(crate::users::CreateGroupInput {
+            confirm_public_exposure: true,
             name: "alpha".to_string(),
             description: String::new(),
             user_selectable: true,
@@ -641,6 +701,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         .expect("alpha group created");
     let beta = store
         .create_group(crate::users::CreateGroupInput {
+            confirm_public_exposure: true,
             name: "beta".to_string(),
             description: String::new(),
             user_selectable: true,
@@ -982,6 +1043,7 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
     let store = UserStore::new(db, log_tx).await.expect("store creates");
     let hidden = store
         .create_group(crate::users::CreateGroupInput {
+            confirm_public_exposure: true,
             name: "hidden".to_string(),
             description: String::new(),
             user_selectable: false,

@@ -14,8 +14,11 @@ async fn set_messages_metadata_collision_transform(ctx: &TestContext) {
         .update_provider(
             &provider.id,
             monoize::monoize_routing::UpdateMonoizeProviderInput {
+                confirm_public_exposure: false,
                 name: None,
                 channel: None,
+                pricing_profile: None,
+                multiplier: None,
                 channel_max_retries: None,
                 channel_retry_interval_ms: None,
                 circuit_breaker_enabled: None,
@@ -169,7 +172,10 @@ async fn chat_and_responses_verbosity_map_in_both_directions() {
     let responses_upstream = last_captured_body(&to_responses, "responses");
     assert_eq!(responses_upstream["text"]["verbosity"], json!("low"));
     assert_eq!(responses_upstream["user"], json!("chat-responses-user"));
-    assert!(responses_upstream.get("stop").is_none(), "{responses_upstream}");
+    assert!(
+        responses_upstream.get("stop").is_none(),
+        "{responses_upstream}"
+    );
     assert!(
         responses_upstream.get("stop_sequences").is_none(),
         "{responses_upstream}"
@@ -220,10 +226,7 @@ async fn messages_metadata_siblings_survive_and_typed_user_wins() {
 
     let upstream = last_captured_body(&ctx, "messages");
     assert_eq!(upstream["metadata"]["user_id"], json!("typed-source-user"));
-    assert_eq!(
-        upstream["metadata"]["trace_id"],
-        json!("trace-same-family")
-    );
+    assert_eq!(upstream["metadata"]["trace_id"], json!("trace-same-family"));
     assert_eq!(
         upstream["metadata"]["future_metadata"],
         json!({ "enabled": true })

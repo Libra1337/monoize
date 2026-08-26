@@ -71,7 +71,10 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 lock.push(("x-goog-api-key".to_string(), v.to_string()));
             }
         }
-        if let Some(v) = headers.get("x-session-affinity").and_then(|h| h.to_str().ok()) {
+        if let Some(v) = headers
+            .get("x-session-affinity")
+            .and_then(|h| h.to_str().ok())
+        {
             if let Ok(mut lock) = captured_headers.lock() {
                 lock.push(("x-session-affinity".to_string(), v.to_string()));
             }
@@ -2593,7 +2596,10 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 lock.push(("x-goog-api-key".to_string(), v.to_string()));
             }
         }
-        if let Some(v) = headers.get("x-session-affinity").and_then(|h| h.to_str().ok()) {
+        if let Some(v) = headers
+            .get("x-session-affinity")
+            .and_then(|h| h.to_str().ok())
+        {
             if let Ok(mut lock) = captured_headers.lock() {
                 lock.push(("x-session-affinity".to_string(), v.to_string()));
             }
@@ -2918,8 +2924,8 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 stream_mode,
                 Some("chat_reasoning_opaque_fragments" | "chat_reasoning_opaque_terminal_replace")
             ) {
-                let terminal_message = (stream_mode == Some("chat_reasoning_opaque_terminal_replace"))
-                    .then(|| {
+                let terminal_message =
+                    (stream_mode == Some("chat_reasoning_opaque_terminal_replace")).then(|| {
                         json!({
                             "role": "assistant",
                             "content": "answer",
@@ -3696,7 +3702,10 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 lock.push(("x-goog-api-key".to_string(), v.to_string()));
             }
         }
-        if let Some(v) = headers.get("x-session-affinity").and_then(|h| h.to_str().ok()) {
+        if let Some(v) = headers
+            .get("x-session-affinity")
+            .and_then(|h| h.to_str().ok())
+        {
             if let Ok(mut lock) = captured_headers.lock() {
                 lock.push(("x-session-affinity".to_string(), v.to_string()));
             }
@@ -4749,7 +4758,10 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 lock.push(("x-goog-api-key".to_string(), v.to_string()));
             }
         }
-        if let Some(v) = headers.get("x-session-affinity").and_then(|h| h.to_str().ok()) {
+        if let Some(v) = headers
+            .get("x-session-affinity")
+            .and_then(|h| h.to_str().ok())
+        {
             if let Ok(mut lock) = captured_headers.lock() {
                 lock.push(("x-session-affinity".to_string(), v.to_string()));
             }
@@ -5072,22 +5084,35 @@ async fn create_test_provider(
     base_url: &str,
     api_key: &str,
 ) -> monoize::monoize_routing::MonoizeProvider {
+    let pricing_profile = if logical_model.starts_with("gpt-") || logical_model.starts_with('o') {
+        "openai"
+    } else if logical_model.starts_with("claude-") {
+        "anthropic"
+    } else if logical_model.starts_with("grok-") {
+        "xai"
+    } else {
+        "default"
+    };
     let mut models = HashMap::new();
     models.insert(
         logical_model.to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some(pricing_profile.to_string()),
+            multiplier: Default::default(),
             name: name.to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: None,
                 name: format!("{name}-channel"),
                 provider_type,
                 base_url: base_url.to_string(),
@@ -5107,11 +5132,11 @@ async fn create_test_provider(
                 affinity_idle_ttl_seconds_override: None,
                 affinity_failback_mode_override: None,
                 affinity_failback_delay_seconds_override: None,
-            
+
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-                },
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
@@ -5201,9 +5226,7 @@ async fn seed_test_server_tool_meter_rates(state: &monoize::app::AppState) {
 }
 
 async fn seed_test_priority_token_rates(state: &monoize::app::AppState) {
-    for (usage_class, unit_price_nano_usd) in
-        [("input_uncached", "2000"), ("output", "3000")]
-    {
+    for (usage_class, unit_price_nano_usd) in [("input_uncached", "2000"), ("output", "3000")] {
         state
             .billing_rate_store
             .upsert_billing_rate(
@@ -5233,9 +5256,7 @@ async fn seed_test_priority_token_rates(state: &monoize::app::AppState) {
 }
 
 async fn seed_test_fast_token_rates(state: &monoize::app::AppState) {
-    for (usage_class, unit_price_nano_usd) in
-        [("input_uncached", "2000"), ("output", "3000")]
-    {
+    for (usage_class, unit_price_nano_usd) in [("input_uncached", "2000"), ("output", "3000")] {
         state
             .billing_rate_store
             .upsert_billing_rate(
@@ -5302,8 +5323,9 @@ async fn setup_with_unknown_fields() -> TestContext {
         metrics_path: "/metrics".to_string(),
         database_dsn: format!("sqlite://{}", db_path.display()),
         request_log_spool_dir: Some(temp_dir.path().join("request-log-spool")),
-    
-            node: monoize::node_config::NodeSettings::primary_default(),})
+
+        node: monoize::node_config::NodeSettings::primary_default(),
+    })
     .await
     .expect("load state");
     state.cap_verifier = start_test_cap_verifier().await;
@@ -5448,10 +5470,7 @@ async fn mock_nonstream_usage_can_be_explicitly_omitted_for_negative_billing_tes
 
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
     let error: Value = serde_json::from_str(&body).expect("error response JSON");
-    assert_eq!(
-        error["error"]["code"],
-        json!("upstream_usage_required")
-    );
+    assert_eq!(error["error"]["code"], json!("upstream_usage_required"));
     assert_eq!(
         error["error"]["upstream_code"],
         json!("upstream_usage_required")

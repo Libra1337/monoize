@@ -173,6 +173,7 @@ mod tests {
         let store = make_user_store().await;
         let team_a = store
             .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
                 name: "team-a".to_string(),
                 description: String::new(),
                 user_selectable: false,
@@ -182,6 +183,7 @@ mod tests {
             .expect("group created");
         let team_b = store
             .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
                 name: "team-b".to_string(),
                 description: String::new(),
                 user_selectable: false,

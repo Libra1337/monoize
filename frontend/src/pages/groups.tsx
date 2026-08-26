@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowDown, ArrowUp, Boxes, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -45,6 +46,7 @@ interface GroupFormState {
   description: string;
   user_selectable: boolean;
   sort_order: string;
+  confirm_public_exposure: boolean;
 }
 
 const EMPTY_FORM: GroupFormState = {
@@ -52,6 +54,7 @@ const EMPTY_FORM: GroupFormState = {
   description: "",
   user_selectable: true,
   sort_order: "0",
+  confirm_public_exposure: false,
 };
 
 function formFromGroup(group: Group): GroupFormState {
@@ -60,6 +63,7 @@ function formFromGroup(group: Group): GroupFormState {
     description: group.description,
     user_selectable: group.user_selectable,
     sort_order: String(group.sort_order),
+    confirm_public_exposure: false,
   };
 }
 
@@ -98,7 +102,7 @@ export function GroupsPage() {
     setCreateOpen(true);
   };
 
-  const validateForm = (): { name: string; description: string; sort_order: number } | null => {
+  const validateForm = (): { name: string; description: string; sort_order: number; confirm_public_exposure: boolean } | null => {
     const name = form.name.trim();
     if (!name || name.length > 64) {
       toast.error(t("groups.invalidName"));
@@ -114,7 +118,12 @@ export function GroupsPage() {
       toast.error(t("groups.invalidSortOrder"));
       return null;
     }
-    return { name, description, sort_order: sortOrder };
+    const nameChanged = !editTarget || name.normalize("NFC") !== editTarget.name.trim().normalize("NFC");
+    if (nameChanged && !form.confirm_public_exposure) {
+      toast.error(t("groups.publicExposureRequired"));
+      return null;
+    }
+    return { name, description, sort_order: sortOrder, confirm_public_exposure: form.confirm_public_exposure };
   };
 
   const handleCreate = async () => {
@@ -247,6 +256,10 @@ export function GroupsPage() {
             placeholder={t("groups.descriptionPlaceholder")}
           />
           <p className="text-xs text-muted-foreground">{t("groups.descriptionHelp")}</p>
+        </div>
+        <div className="flex items-start gap-3 rounded-md border p-3">
+          <Checkbox id="group-public-exposure" checked={form.confirm_public_exposure} onCheckedChange={(checked) => setForm({ ...form, confirm_public_exposure: checked === true })} />
+          <Label htmlFor="group-public-exposure" className="text-sm font-normal leading-5">{t("groups.publicExposureConfirm")}</Label>
         </div>
         <div className="grid gap-2">
           <Label htmlFor="group-sort-order">{t("groups.sortOrder")}</Label>

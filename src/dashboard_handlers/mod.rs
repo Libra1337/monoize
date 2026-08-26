@@ -51,6 +51,7 @@ pub use model_registry::{
     list_marketplace_models, list_model_metadata, list_models, sync_model_metadata_models_dev,
     update_model, upsert_model_metadata,
 };
+pub(crate) use providers::provider_dashboard_rate_matrix_is_complete;
 pub use request_captures::{RequestCaptureQuery, get_request_capture};
 
 pub use providers::{

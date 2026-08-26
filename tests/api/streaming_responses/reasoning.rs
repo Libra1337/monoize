@@ -1,4 +1,3 @@
-
 #[tokio::test]
 async fn responses_streaming_omits_empty_reasoning_and_compacts_output_indices() {
     let ctx = setup().await;
@@ -83,11 +82,13 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "mono-empty-reasoning-filter".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("mono-empty-reasoning-filter-ch1".to_string()),
                 name: "mono-empty-reasoning-filter-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
@@ -102,7 +103,9 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
                     model.to_string(),
                     monoize::monoize_routing::MonoizeModelEntry {
                         redirect: None,
-                        multiplier: monoize::exact_decimal::Multiplier::ONE,
+                        pricing_profile_mode: Default::default(),
+                        pricing_profile_override: None,
+                        multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
                     },
                 )]),
                 active_probe_enabled_override: None,
@@ -113,18 +116,18 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
                 affinity_idle_ttl_seconds_override: None,
                 affinity_failback_mode_override: None,
                 affinity_failback_delay_seconds_override: None,
-            
+
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-                },
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
                 transform: "reasoning_strip_encrypted".to_string(),
-	            enabled: true,
+                enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
                 config: json!({}),
@@ -136,7 +139,7 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-	            enabled: true,
+            enabled: true,
             priority: Some(-1),
         })
         .await
@@ -301,15 +304,19 @@ async fn responses_streaming_applies_response_transform_from_provider() {
         "gpt-5-mini".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
+        confirm_public_exposure: true,
+        pricing_profile: Some("openai".to_string()),
+        multiplier: Default::default(),
         name: "mono-transform-strip".to_string(),
         api_type_overrides: Vec::new(),
         group_id: String::new(),
         channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-            id: Some("mono-transform-strip-ch1".to_string()),
             name: "mono-transform-strip-ch1".to_string(),
             provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
             base_url,
@@ -329,11 +336,11 @@ async fn responses_streaming_applies_response_transform_from_provider() {
             affinity_idle_ttl_seconds_override: None,
             affinity_failback_mode_override: None,
             affinity_failback_delay_seconds_override: None,
-        
-                proxy_url: None,
-                extra_headers: None,
-                session_affinity_auto: None,
-                },
+
+            proxy_url: None,
+            extra_headers: None,
+            session_affinity_auto: None,
+        },
         channel_max_retries: 0,
         channel_retry_interval_ms: 0,
         circuit_breaker_enabled: true,
@@ -398,15 +405,19 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
         "gpt-5-mini".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
+        confirm_public_exposure: true,
+        pricing_profile: Some("openai".to_string()),
+        multiplier: Default::default(),
         name: "mono-transform-sse-split".to_string(),
         api_type_overrides: Vec::new(),
         group_id: String::new(),
         channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-            id: Some("mono-transform-sse-split-ch1".to_string()),
             name: "mono-transform-sse-split-ch1".to_string(),
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             base_url,
@@ -426,11 +437,11 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
             affinity_idle_ttl_seconds_override: None,
             affinity_failback_mode_override: None,
             affinity_failback_delay_seconds_override: None,
-        
-                proxy_url: None,
-                extra_headers: None,
-                session_affinity_auto: None,
-                },
+
+            proxy_url: None,
+            extra_headers: None,
+            session_affinity_auto: None,
+        },
         channel_max_retries: 0,
         channel_retry_interval_ms: 0,
         circuit_breaker_enabled: true,

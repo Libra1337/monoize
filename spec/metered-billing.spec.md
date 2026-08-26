@@ -90,25 +90,25 @@ MB-P2. Pattern matching MUST use case-insensitive glob semantics with `*` matchi
 
 MB-P2a. Pattern matching MUST compare ASCII bytes without recursion. It MUST use `O(1)` call-stack space and `O(1)` auxiliary space for every pattern and value length. Its worst-case comparison count MUST be `O(pattern_bytes * value_bytes)`. A pattern or value with at least `200000` bytes and a pattern containing multiple `*` operators MUST not cause call-stack growth proportional to input length.
 
-MB-P3. Pricing-profile selection MUST use the first pattern whose `pattern` matches the normalized pricing model key.
+MB-P3. After the Provider pricing migration, pattern matching is an administrative suggestion only. Runtime pricing MUST use the effective Profile from `provider-pricing.spec.md` section 7.
 
-MB-P4. If no pattern matches, the request has no billable pricing.
+MB-P4. A mapping without an effective Profile has no billable pricing.
 
 MB-P5. Migration `m20260619_000020_default_pricing_profile` MUST rename stored pricing profile value `legacy` to `default` in `billing_rate_records.pricing_profile` and in the `pricing_profile_model_patterns` system setting. Runtime pricing selection MUST NOT treat `legacy` as an alias for `default`.
 
-MB-P6. When the selected profile has no complete eligible rate matrix for a normalized pricing model, Monoize MAY try one additional fallback profile from `model_metadata_records.models_dev_provider` for the same normalized model. The fallback MUST be used only when it differs from the selected profile. The fallback MUST use the same `provider_type`, `model_pattern`, context-tier, meter-rate, and completeness rules as the selected profile. Monoize MUST persist the profile that actually matched in `billing_breakdown_json`.
+MB-P6. Runtime pricing MUST NOT use `model_metadata_records.models_dev_provider` as a fallback Profile after the Provider pricing migration.
 
-MB-P7. When MB-P6 yields more than one candidate profile, rate rows for all candidate profiles MUST be loaded in one set-based database query for that model and provider type.
+MB-P7. Rate rows for all effective Profiles in one request MUST be loaded in one set-based database query.
 
 MB-P8. Provider-attempt preflight MUST attach the complete selected rate-matrix snapshot to the attempt. Settlement of that attempt MUST reuse the attached snapshot and MUST NOT repeat profile selection, metadata lookup, or rate-row lookup.
 
-MB-P9. One active-probe scheduler tick MUST read the reasoning-suffix map once and pricing-profile patterns once. It MUST bulk-read metadata pricing profiles at most once and candidate Billing Rate rows at most once for all probe candidate model and Provider-type pairs in that tick.
+MB-P9. One active-probe scheduler tick MUST read the reasoning-suffix map once. It MUST use Provider-model effective Profiles and bulk-read candidate Billing Rate rows at most once for all probe candidate model, Provider-type, and Profile tuples in that tick.
 
-MB-P10. Active-probe pricing resolution MUST preserve ordered profile precedence: Settings pattern first, model metadata second. Within one profile it MUST preserve Billing Rate priority order, Provider-type matching, model-pattern matching, and dimensionless token-rate selection.
+MB-P10. Active-probe pricing resolution MUST use the mapping's effective Profile. Within that Profile it MUST preserve Billing Rate priority order, Provider-type matching, model-pattern matching, and dimensionless token-rate selection.
 
 MB-P11. Each active-probe request-log task MUST receive its pricing resolution from the scheduler-tick snapshot. The task MUST NOT query Settings, model metadata, or Billing Rates.
 
-MB-P12. One forwarding request MUST clone the reasoning-suffix map and pricing-profile patterns once from the process runtime snapshot before pricing its eligible attempts. It MUST execute no `system_settings` query for those values. It MUST bulk-read metadata pricing profiles at most once and candidate Billing Rate rows at most once for all distinct normalized model and effective Provider-type pairs in that request. Pricing resolution for each attempt MUST then use only this request-local snapshot. The runtime MUST NOT execute pricing queries per attempt, Provider, or Channel.
+MB-P12. One forwarding request MUST clone the reasoning-suffix map once before pricing its eligible attempts. It MUST execute no `system_settings` or model-metadata query for Profile selection. It MUST bulk-read candidate Billing Rate rows at most once for all distinct normalized model, effective Provider-type, and effective Profile tuples in that request. Pricing resolution for each attempt MUST then use only this request-local snapshot. The runtime MUST NOT execute pricing queries per attempt, Provider, or Channel.
 
 ## 3. Rate Selection
 

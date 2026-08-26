@@ -22,6 +22,8 @@ pub struct Group {
 pub struct CreateGroupInput {
     pub name: String,
     #[serde(default)]
+    pub confirm_public_exposure: bool,
+    #[serde(default)]
     pub description: String,
     #[serde(default)]
     pub user_selectable: bool,
@@ -32,6 +34,8 @@ pub struct CreateGroupInput {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct UpdateGroupInput {
     pub name: Option<String>,
+    #[serde(default)]
+    pub confirm_public_exposure: bool,
     pub description: Option<String>,
     pub user_selectable: Option<bool>,
     pub sort_order: Option<i32>,
@@ -45,7 +49,8 @@ pub struct ReorderGroupsInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupStoreError {
     NotFound,
-    NameExists,
+    PublicNameConflict(String),
+    PublicExposureConfirmationRequired,
     InvalidName,
     InvalidDescription,
     InvalidReorder(String),
@@ -62,11 +67,9 @@ fn storage(error: impl std::fmt::Display) -> GroupStoreError {
 }
 
 fn validate_name(raw: &str) -> Result<String, GroupStoreError> {
-    let name = raw.trim().to_string();
-    if name.is_empty() || name.chars().count() > 64 {
-        return Err(GroupStoreError::InvalidName);
-    }
-    Ok(name)
+    crate::public_name::canonicalize_public_name(raw)
+        .map(|name| name.value)
+        .map_err(|_| GroupStoreError::InvalidName)
 }
 
 fn validate_description(raw: &str) -> Result<String, GroupStoreError> {
@@ -170,23 +173,29 @@ impl UserStore {
 
     pub async fn create_group(&self, input: CreateGroupInput) -> Result<Group, GroupStoreError> {
         let name = validate_name(&input.name)?;
+        if !input.confirm_public_exposure {
+            return Err(GroupStoreError::PublicExposureConfirmationRequired);
+        }
+        let public_name = crate::public_name::canonicalize_public_name(&name)
+            .map_err(|_| GroupStoreError::InvalidName)?;
         let description = validate_description(&input.description)?;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
 
         if self.group_name_exists(None, &name).await? {
-            return Err(GroupStoreError::NameExists);
+            return Err(GroupStoreError::PublicNameConflict(name));
         }
         let result = self
             .db
             .write()
             .await
             .execute(self.db.stmt(
-                "INSERT INTO monoize_groups (id, name, description, is_default, user_selectable, sort_order, created_at, updated_at) \
-                 VALUES ($1, $2, $3, 0, $4, $5, $6, $6)",
+                "INSERT INTO monoize_groups (id, name, public_name, public_name_key, description, is_default, user_selectable, sort_order, created_at, updated_at) \
+                 VALUES ($1, $2, $2, $3, $4, 0, $5, $6, $7, $7)",
                 vec![
                     id.clone().into(),
                     name.clone().into(),
+                    SeaValue::Bytes(Some(Box::new(public_name.key))),
                     description.clone().into(),
                     SeaValue::Int(Some(if input.user_selectable { 1 } else { 0 })),
                     SeaValue::Int(Some(input.sort_order)),
@@ -197,7 +206,7 @@ impl UserStore {
         if let Err(error) = result {
             let message = error.to_string();
             if is_name_unique_violation(&message) {
-                return Err(GroupStoreError::NameExists);
+                return Err(GroupStoreError::PublicNameConflict(name));
             }
             return Err(GroupStoreError::Storage(message));
         }
@@ -232,10 +241,16 @@ impl UserStore {
             .map_err(GroupStoreError::Storage)?
             .ok_or(GroupStoreError::NotFound)?;
 
+        if name.as_ref().is_some_and(|name| name != &existing.name)
+            && !input.confirm_public_exposure
+        {
+            return Err(GroupStoreError::PublicExposureConfirmationRequired);
+        }
+
         if let Some(name) = &name
             && self.group_name_exists(Some(id), name).await?
         {
-            return Err(GroupStoreError::NameExists);
+            return Err(GroupStoreError::PublicNameConflict(name.clone()));
         }
 
         let mut set_clauses = Vec::new();
@@ -244,6 +259,12 @@ impl UserStore {
         if let Some(name) = &name {
             set_clauses.push(format!("name = ${idx}"));
             values.push(name.clone().into());
+            idx += 1;
+            set_clauses.push(format!("public_name = ${idx}"));
+            values.push(name.clone().into());
+            idx += 1;
+            set_clauses.push(format!("public_name_key = ${idx}"));
+            values.push(SeaValue::Bytes(Some(Box::new(name.as_bytes().to_vec()))));
             idx += 1;
         }
         if let Some(description) = &description {
@@ -285,7 +306,9 @@ impl UserStore {
         if let Err(error) = result {
             let message = error.to_string();
             if is_name_unique_violation(&message) {
-                return Err(GroupStoreError::NameExists);
+                return Err(GroupStoreError::PublicNameConflict(
+                    name.clone().unwrap_or_else(|| existing.name.clone()),
+                ));
             }
             return Err(GroupStoreError::Storage(message));
         }
@@ -502,14 +525,15 @@ impl UserStore {
         exclude_id: Option<&str>,
         name: &str,
     ) -> Result<bool, GroupStoreError> {
+        let key = name.as_bytes().to_vec();
         let (sql, values): (&str, Vec<SeaValue>) = match exclude_id {
             Some(id) => (
-                "SELECT COUNT(*) AS cnt FROM monoize_groups WHERE lower(name) = lower($1) AND id != $2",
-                vec![name.into(), id.into()],
+                "SELECT COUNT(*) AS cnt FROM monoize_groups WHERE public_name_key = $1 AND id != $2",
+                vec![SeaValue::Bytes(Some(Box::new(key))), id.into()],
             ),
             None => (
-                "SELECT COUNT(*) AS cnt FROM monoize_groups WHERE lower(name) = lower($1)",
-                vec![name.into()],
+                "SELECT COUNT(*) AS cnt FROM monoize_groups WHERE public_name_key = $1",
+                vec![SeaValue::Bytes(Some(Box::new(key)))],
             ),
         };
         let row = self

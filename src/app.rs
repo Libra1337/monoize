@@ -14,7 +14,7 @@ use crate::monoize_routing::{
 };
 use crate::node_config::{HttpClients, NodeRole, NodeSettings};
 use crate::request_capture::RequestCaptureStore;
-use crate::settings::{PricingProfilePattern, SettingsStore, normalize_pricing_model_key};
+use crate::settings::{SettingsStore, normalize_pricing_model_key};
 use crate::transforms::TransformRegistry;
 use crate::users::{InsertRequestLog, UserRole, UserStore};
 use axum::Router;
@@ -489,7 +489,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     let probe_health = channel_health.clone();
     let probe_routing_config_revision = routing_config_revision.clone();
     let probe_user_store = user_store.clone();
-    let probe_model_registry_store = model_registry_store.clone();
     let probe_billing_rate_store = billing_rate_store.clone();
     let probe_user_id = active_probe_user_id;
     let probe_shutdown = background_shutdown.clone();
@@ -517,7 +516,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             let rt_snap = probe_runtime.read().await.clone();
             let pricing_snapshot = match build_active_probe_pricing_snapshot(
                 &probe_billing_rate_store,
-                &probe_model_registry_store,
                 &providers,
                 &rt_snap,
             )
@@ -536,7 +534,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                 if !provider.circuit_breaker_enabled {
                     continue;
                 }
-                for channel in [provider.channel] {
+                for channel in std::iter::once(&provider.channel) {
                     if probe_shutdown.load(Ordering::Acquire) {
                         break 'scheduler;
                     }
@@ -615,9 +613,18 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                     let Some(ref model_name) = probe_model else {
                         continue;
                     };
-                    if !channel.models.contains_key(model_name) {
+                    let Some(model_entry) = channel.models.get(model_name) else {
                         continue;
-                    }
+                    };
+                    let model_multiplier =
+                        crate::monoize_routing::effective_model_multiplier(&provider, model_entry);
+                    let pricing_profile =
+                        crate::monoize_routing::effective_pricing_profile(&provider, model_entry);
+                    let pricing_provider_type = crate::monoize_routing::resolve_effective_api_type(
+                        &provider.api_type_overrides,
+                        channel.provider_type,
+                        model_name,
+                    );
 
                     let probe_http =
                         match probe_http_clients.for_channel_proxy(channel.proxy_url.as_deref()) {
@@ -668,7 +675,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                         &provider.id,
                         &provider.name,
                         channel.provider_type,
-                        channel.models.get(model_name).map(|entry| entry.multiplier),
+                        Some(model_multiplier),
                         &channel.id,
                         &channel.name,
                         model_name,
@@ -706,7 +713,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                     let probe_started_at = std::time::Instant::now();
                     let probe_outcome = probe_channel_completion(
                         &probe_http,
-                        &channel,
+                        channel,
                         rt_snap.request_timeout_ms,
                         &upstream_model,
                         channel.provider_type,
@@ -738,7 +745,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                             provider.id.clone(),
                             provider.name.clone(),
                             channel.provider_type,
-                            channel.models.get(model_name).map(|entry| entry.multiplier),
+                            Some(model_multiplier),
                             channel.id.clone(),
                             channel.name.clone(),
                             model_name.to_string(),
@@ -746,7 +753,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                             pricing_snapshot.resolve(
                                 &upstream_model,
                                 model_name,
-                                channel.provider_type.as_str(),
+                                pricing_provider_type.as_str(),
+                                pricing_profile.unwrap_or(""),
                             ),
                             usage_snapshot,
                             probe_started_at.elapsed().as_millis() as u64,
@@ -1102,50 +1110,34 @@ fn first_dimensionless_probe_rate(
 }
 
 fn resolve_active_probe_rates_for_model(
-    patterns: &[PricingProfilePattern],
-    metadata_profiles: &HashMap<String, String>,
     candidate_rates: &[DbBillingRateRecord],
     pricing_model: &str,
     provider_type: &str,
+    pricing_profile: &str,
 ) -> Result<Option<ActiveProbeRateResolution>, String> {
-    let mut candidate_profiles = Vec::new();
-    if let Some(profile) =
-        crate::billing_rate_store::select_pricing_profile(patterns, pricing_model)
-    {
-        candidate_profiles.push(profile.to_string());
-    }
-    if let Some(metadata_profile) = metadata_profiles.get(pricing_model)
-        && !candidate_profiles.contains(metadata_profile)
-    {
-        candidate_profiles.push(metadata_profile.clone());
-    }
-
-    for pricing_profile in candidate_profiles {
-        let rates = candidate_rates
-            .iter()
-            .filter(|rate| {
-                rate.pricing_profile == pricing_profile
-                    && rate
-                        .provider_type
-                        .as_deref()
-                        .is_none_or(|value| value == provider_type)
-                    && rate.model_pattern.as_deref().is_none_or(|pattern| {
-                        crate::billing_rate_store::glob_matches(pattern, pricing_model)
-                    })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let input_rate_nano = first_dimensionless_probe_rate(&rates, "input_uncached")?;
-        let output_rate_nano = first_dimensionless_probe_rate(&rates, "output")?;
-        if let (Some(input_rate_nano), Some(output_rate_nano)) = (input_rate_nano, output_rate_nano)
-        {
-            return Ok(Some(ActiveProbeRateResolution {
-                pricing_profile,
-                pricing_model: pricing_model.to_string(),
-                input_rate_nano,
-                output_rate_nano,
-            }));
-        }
+    let rates = candidate_rates
+        .iter()
+        .filter(|rate| {
+            rate.pricing_profile == pricing_profile
+                && rate
+                    .provider_type
+                    .as_deref()
+                    .is_none_or(|value| value == provider_type)
+                && rate.model_pattern.as_deref().is_none_or(|pattern| {
+                    crate::billing_rate_store::glob_matches(pattern, pricing_model)
+                })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let input_rate_nano = first_dimensionless_probe_rate(&rates, "input_uncached")?;
+    let output_rate_nano = first_dimensionless_probe_rate(&rates, "output")?;
+    if let (Some(input_rate_nano), Some(output_rate_nano)) = (input_rate_nano, output_rate_nano) {
+        return Ok(Some(ActiveProbeRateResolution {
+            pricing_profile: pricing_profile.to_string(),
+            pricing_model: pricing_model.to_string(),
+            input_rate_nano,
+            output_rate_nano,
+        }));
     }
     Ok(None)
 }
@@ -1153,7 +1145,8 @@ fn resolve_active_probe_rates_for_model(
 #[derive(Debug, Clone, Default)]
 struct ActiveProbePricingSnapshot {
     reasoning_suffix_map: HashMap<String, String>,
-    resolutions: HashMap<(String, String), Result<Option<ActiveProbeRateResolution>, String>>,
+    resolutions:
+        HashMap<(String, String, String), Result<Option<ActiveProbeRateResolution>, String>>,
 }
 
 impl ActiveProbePricingSnapshot {
@@ -1162,12 +1155,20 @@ impl ActiveProbePricingSnapshot {
         upstream_model: &str,
         logical_model: &str,
         provider_type: &str,
+        pricing_profile: &str,
     ) -> Result<Option<ActiveProbeRateResolution>, String> {
+        if pricing_profile.is_empty() {
+            return Ok(None);
+        }
         let normalized_upstream_model =
             normalize_pricing_model_key(upstream_model, &self.reasoning_suffix_map);
         let upstream = self
             .resolutions
-            .get(&(normalized_upstream_model.clone(), provider_type.to_string()))
+            .get(&(
+                normalized_upstream_model.clone(),
+                provider_type.to_string(),
+                pricing_profile.to_string(),
+            ))
             .cloned()
             .unwrap_or(Ok(None))?;
         if upstream.is_some() {
@@ -1179,7 +1180,11 @@ impl ActiveProbePricingSnapshot {
             return Ok(None);
         }
         self.resolutions
-            .get(&(normalized_logical_model, provider_type.to_string()))
+            .get(&(
+                normalized_logical_model,
+                provider_type.to_string(),
+                pricing_profile.to_string(),
+            ))
             .cloned()
             .unwrap_or(Ok(None))
     }
@@ -1187,72 +1192,76 @@ impl ActiveProbePricingSnapshot {
 
 async fn build_active_probe_pricing_snapshot(
     billing_rate_store: &BillingRateStore,
-    model_registry_store: &ModelRegistryStore,
     providers: &[crate::monoize_routing::MonoizeProvider],
     runtime: &MonoizeRuntimeConfig,
 ) -> Result<ActiveProbePricingSnapshot, String> {
     let reasoning_suffix_map = runtime.reasoning_suffix_map.clone();
-    let patterns = runtime.pricing_profile_model_patterns.clone();
     let mut pairs = std::collections::HashSet::new();
     for provider in providers {
         for channel in std::iter::once(&provider.channel) {
             if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate {
                 continue;
             }
-            let configured_model = channel
+            let mut collect_model =
+                |logical_model: &str, model_entry: &crate::monoize_routing::MonoizeModelEntry| {
+                    let Some(pricing_profile) =
+                        crate::monoize_routing::effective_pricing_profile(provider, model_entry)
+                    else {
+                        return;
+                    };
+                    let upstream_model = model_entry
+                        .redirect
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or(logical_model);
+                    let provider_type = crate::monoize_routing::resolve_effective_api_type(
+                        &provider.api_type_overrides,
+                        channel.provider_type,
+                        logical_model,
+                    )
+                    .as_str()
+                    .to_string();
+                    pairs.insert((
+                        normalize_pricing_model_key(upstream_model, &reasoning_suffix_map),
+                        provider_type.clone(),
+                        pricing_profile.to_string(),
+                    ));
+                    pairs.insert((
+                        normalize_pricing_model_key(logical_model, &reasoning_suffix_map),
+                        provider_type,
+                        pricing_profile.to_string(),
+                    ));
+                };
+            if provider.per_model_circuit_break {
+                for (logical_model, model_entry) in &channel.models {
+                    collect_model(logical_model, model_entry);
+                }
+                continue;
+            }
+            let logical_model = channel
                 .active_probe_model_override
                 .as_ref()
                 .or(provider.active_probe_model_override.as_ref())
                 .or(runtime.active_probe_model.as_ref())
-                .cloned();
-            let logical_model = configured_model.or_else(|| channel.models.keys().min().cloned());
-            let Some(logical_model) = logical_model else {
-                continue;
-            };
-            if !channel.models.contains_key(&logical_model) {
-                continue;
+                .cloned()
+                .or_else(|| channel.models.keys().min().cloned());
+            if let Some(logical_model) = logical_model
+                && let Some(model_entry) = channel.models.get(&logical_model)
+            {
+                collect_model(&logical_model, model_entry);
             }
-            let upstream_model = channel
-                .models
-                .get(&logical_model)
-                .and_then(|entry| entry.redirect.as_deref())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(&logical_model);
-            let provider_type = channel.provider_type.as_str().to_string();
-            pairs.insert((
-                normalize_pricing_model_key(upstream_model, &reasoning_suffix_map),
-                provider_type.clone(),
-            ));
-            pairs.insert((
-                normalize_pricing_model_key(&logical_model, &reasoning_suffix_map),
-                provider_type,
-            ));
         }
     }
-    let mut models = pairs
+    let mut profiles = pairs
         .iter()
-        .map(|(model, _)| model.clone())
+        .map(|(_, _, pricing_profile)| pricing_profile.clone())
         .collect::<Vec<_>>();
-    models.sort();
-    models.dedup();
-    let metadata_profiles = model_registry_store
-        .list_model_metadata_pricing_profiles(&models)
-        .await?;
-    let mut profiles = Vec::new();
-    for model in &models {
-        if let Some(profile) = crate::billing_rate_store::select_pricing_profile(&patterns, model) {
-            profiles.push(profile.to_string());
-        }
-        if let Some(profile) = metadata_profiles.get(model) {
-            profiles.push(profile.clone());
-        }
-    }
     profiles.sort();
     profiles.dedup();
     let mut provider_types = pairs
         .iter()
-        .map(|(_, provider_type)| provider_type.clone())
+        .map(|(_, provider_type, _)| provider_type.clone())
         .collect::<Vec<_>>();
     provider_types.sort();
     provider_types.dedup();
@@ -1261,15 +1270,14 @@ async fn build_active_probe_pricing_snapshot(
         .await?;
     let resolutions = pairs
         .into_iter()
-        .map(|(model, provider_type)| {
+        .map(|(model, provider_type, pricing_profile)| {
             let resolution = resolve_active_probe_rates_for_model(
-                &patterns,
-                &metadata_profiles,
                 &candidate_rates,
                 &model,
                 &provider_type,
+                &pricing_profile,
             );
-            ((model, provider_type), resolution)
+            ((model, provider_type, pricing_profile), resolution)
         })
         .collect();
     Ok(ActiveProbePricingSnapshot {
@@ -1662,15 +1670,9 @@ mod active_probe_billing_tests {
     }
 
     #[test]
-    fn probe_bulk_snapshot_preserves_profile_and_model_fallback_order() {
-        let patterns = vec![PricingProfilePattern {
-            pattern: "upstream-*".to_string(),
-            pricing_profile: "settings-profile".to_string(),
-        }];
-        let metadata =
-            HashMap::from([("logical-model".to_string(), "metadata-profile".to_string())]);
+    fn probe_rate_selection_uses_explicit_profile() {
         let mut input = rate("input", "input_uncached", "11", None);
-        input.pricing_profile = "metadata-profile".to_string();
+        input.pricing_profile = "provider-profile".to_string();
         input.model_pattern = Some("logical-*".to_string());
         input.provider_type = Some("responses".to_string());
         let mut output = input.clone();
@@ -1678,24 +1680,22 @@ mod active_probe_billing_tests {
         output.usage_class = "output".to_string();
         let candidate_rates = vec![input, output];
         let upstream = resolve_active_probe_rates_for_model(
-            &patterns,
-            &metadata,
             &candidate_rates,
             "upstream-model",
             "responses",
+            "provider-profile",
         )
         .unwrap();
         assert!(upstream.is_none());
         let logical = resolve_active_probe_rates_for_model(
-            &patterns,
-            &metadata,
             &candidate_rates,
             "logical-model",
             "responses",
+            "provider-profile",
         )
         .unwrap()
-        .expect("metadata profile resolves");
-        assert_eq!(logical.pricing_profile, "metadata-profile");
+        .expect("explicit profile resolves");
+        assert_eq!(logical.pricing_profile, "provider-profile");
         assert_eq!(logical.input_rate_nano, 11);
     }
 

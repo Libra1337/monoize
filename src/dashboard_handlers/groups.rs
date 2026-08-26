@@ -21,10 +21,15 @@ fn map_group_error(error: GroupStoreError) -> AppError {
         GroupStoreError::NotFound => {
             AppError::new(StatusCode::NOT_FOUND, "not_found", "group not found")
         }
-        GroupStoreError::NameExists => AppError::new(
+        GroupStoreError::PublicNameConflict(name) => AppError::new(
             StatusCode::CONFLICT,
-            "group_name_exists",
-            "a group with this name already exists",
+            "public_name_conflict",
+            format!("group:{name}"),
+        ),
+        GroupStoreError::PublicExposureConfirmationRequired => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "public_exposure_confirmation_required",
+            "group public name exposure requires confirmation",
         ),
         GroupStoreError::InvalidName => AppError::new(
             StatusCode::BAD_REQUEST,
@@ -197,6 +202,7 @@ mod tests {
             State(state.clone()),
             admin_headers.clone(),
             Json(CreateGroupInput {
+                confirm_public_exposure: true,
                 name: " Team-A ".to_string(),
                 description: " premium routing ".to_string(),
                 user_selectable: true,
@@ -247,6 +253,7 @@ mod tests {
             State(state.clone()),
             admin_headers.clone(),
             Json(CreateGroupInput {
+                confirm_public_exposure: true,
                 name: "team-a".to_string(),
                 description: String::new(),
                 user_selectable: false,
@@ -262,6 +269,7 @@ mod tests {
             State(state.clone()),
             reader_headers.clone(),
             Json(CreateGroupInput {
+                confirm_public_exposure: true,
                 name: "team-b".to_string(),
                 description: String::new(),
                 user_selectable: false,
@@ -278,6 +286,7 @@ mod tests {
             admin_headers.clone(),
             Path(default_id.clone()),
             Json(UpdateGroupInput {
+                confirm_public_exposure: true,
                 name: Some("общий".to_string()),
                 description: Some("system default".to_string()),
                 ..Default::default()

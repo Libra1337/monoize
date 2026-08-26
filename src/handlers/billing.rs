@@ -13,7 +13,7 @@ pub(super) struct BillingRateResolution {
 #[derive(Debug, Clone, Default)]
 pub(super) struct BillingRateResolutionSnapshot {
     reasoning_suffix_map: HashMap<String, String>,
-    resolutions: HashMap<(String, String), Option<BillingRateResolution>>,
+    resolutions: HashMap<(String, String, String), Option<BillingRateResolution>>,
 }
 
 impl BillingRateResolutionSnapshot {
@@ -22,13 +22,18 @@ impl BillingRateResolutionSnapshot {
         upstream_model: &str,
         logical_model: &str,
         provider_type: ProviderType,
+        pricing_profile: &str,
     ) -> Option<BillingRateResolution> {
         let provider_type = reasoning_envelope_provider_type(provider_type).to_string();
         let normalized_upstream =
             normalize_pricing_model_key(upstream_model, &self.reasoning_suffix_map);
         if let Some(resolution) = self
             .resolutions
-            .get(&(normalized_upstream.clone(), provider_type.clone()))
+            .get(&(
+                normalized_upstream.clone(),
+                provider_type.clone(),
+                pricing_profile.to_string(),
+            ))
             .cloned()
             .flatten()
             && billing_rate_matrix_allows_request(&resolution, &[]).is_ok_and(|complete| complete)
@@ -41,7 +46,11 @@ impl BillingRateResolutionSnapshot {
             return None;
         }
         self.resolutions
-            .get(&(normalized_logical, provider_type))
+            .get(&(
+                normalized_logical,
+                provider_type,
+                pricing_profile.to_string(),
+            ))
             .cloned()
             .flatten()
     }
@@ -397,64 +406,60 @@ pub(super) async fn resolve_billing_rate_matrix(
     upstream_model: &str,
     logical_model: &str,
     provider_type: ProviderType,
+    pricing_profile: &str,
 ) -> AppResult<Option<BillingRateResolution>> {
     let snapshot = build_billing_rate_resolution_snapshot(
         state,
-        &[(upstream_model.to_string(), provider_type)],
+        &[(
+            upstream_model.to_string(),
+            provider_type,
+            pricing_profile.to_string(),
+        )],
         logical_model,
     )
     .await?;
-    Ok(snapshot.resolve(upstream_model, logical_model, provider_type))
+    Ok(snapshot.resolve(
+        upstream_model,
+        logical_model,
+        provider_type,
+        pricing_profile,
+    ))
 }
 
 pub(super) async fn build_billing_rate_resolution_snapshot(
     state: &AppState,
-    attempts: &[(String, ProviderType)],
+    attempts: &[(String, ProviderType, String)],
     logical_model: &str,
 ) -> AppResult<BillingRateResolutionSnapshot> {
-    let (reasoning_suffix_map, patterns) = {
+    let reasoning_suffix_map = {
         let runtime = state.monoize_runtime.read().await;
-        (
-            runtime.reasoning_suffix_map.clone(),
-            runtime.pricing_profile_model_patterns.clone(),
-        )
+        runtime.reasoning_suffix_map.clone()
     };
 
     let normalized_logical = normalize_pricing_model_key(logical_model, &reasoning_suffix_map);
     let mut pairs = std::collections::HashSet::new();
-    for (upstream_model, provider_type) in attempts {
+    for (upstream_model, provider_type, pricing_profile) in attempts {
         let provider_type = reasoning_envelope_provider_type(*provider_type).to_string();
         pairs.insert((
             normalize_pricing_model_key(upstream_model, &reasoning_suffix_map),
             provider_type.clone(),
+            pricing_profile.clone(),
         ));
-        pairs.insert((normalized_logical.clone(), provider_type));
+        pairs.insert((
+            normalized_logical.clone(),
+            provider_type,
+            pricing_profile.clone(),
+        ));
     }
-    let mut models = pairs
+    let mut candidate_profiles = attempts
         .iter()
-        .map(|(model, _)| model.clone())
+        .map(|(_, _, profile)| profile.clone())
         .collect::<Vec<_>>();
-    models.sort();
-    models.dedup();
-    let metadata_profiles = state
-        .model_registry_store
-        .list_model_metadata_pricing_profiles(&models)
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    let mut candidate_profiles = Vec::new();
-    for model in &models {
-        if let Some(profile) = crate::billing_rate_store::select_pricing_profile(&patterns, model) {
-            candidate_profiles.push(profile.to_string());
-        }
-        if let Some(profile) = metadata_profiles.get(model) {
-            candidate_profiles.push(profile.clone());
-        }
-    }
     candidate_profiles.sort();
     candidate_profiles.dedup();
     let mut provider_types = pairs
         .iter()
-        .map(|(_, provider_type)| provider_type.clone())
+        .map(|(_, provider_type, _)| provider_type.clone())
         .collect::<Vec<_>>();
     provider_types.sort();
     provider_types.dedup();
@@ -465,15 +470,14 @@ pub(super) async fn build_billing_rate_resolution_snapshot(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     let resolutions = pairs
         .into_iter()
-        .map(|(model, provider_type)| {
+        .map(|(model, provider_type, pricing_profile)| {
             let resolution = resolve_billing_rate_matrix_from_snapshot(
-                &patterns,
-                &metadata_profiles,
                 &candidate_rates,
                 &model,
                 &provider_type,
+                &pricing_profile,
             );
-            ((model, provider_type), resolution)
+            ((model, provider_type, pricing_profile), resolution)
         })
         .collect();
     Ok(BillingRateResolutionSnapshot {
@@ -483,55 +487,31 @@ pub(super) async fn build_billing_rate_resolution_snapshot(
 }
 
 fn resolve_billing_rate_matrix_from_snapshot(
-    patterns: &[crate::settings::PricingProfilePattern],
-    metadata_profiles: &HashMap<String, String>,
     candidate_rates: &[DbBillingRateRecord],
     model: &str,
     provider_type: &str,
+    pricing_profile: &str,
 ) -> Option<BillingRateResolution> {
-    let mut candidate_profiles = Vec::new();
-    if let Some(profile) = crate::billing_rate_store::select_pricing_profile(patterns, model) {
-        candidate_profiles.push(profile.to_string());
-    }
-    if let Some(profile) = metadata_profiles.get(model)
-        && !candidate_profiles
-            .iter()
-            .any(|candidate| candidate == profile)
-    {
-        candidate_profiles.push(profile.clone());
-    }
-    let mut first_non_empty = None;
-    for pricing_profile in candidate_profiles {
-        let profile_rates = candidate_rates
-            .iter()
-            .filter(|rate| {
-                rate.pricing_profile == pricing_profile
-                    && rate
-                        .provider_type
-                        .as_deref()
-                        .is_none_or(|value| value == provider_type)
-                    && rate.model_pattern.as_deref().is_none_or(|pattern| {
-                        crate::billing_rate_store::glob_matches(pattern, model)
-                    })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if profile_rates.is_empty() {
-            continue;
-        }
-        let resolution = BillingRateResolution {
-            pricing_profile,
-            pricing_model: model.to_string(),
-            rates: profile_rates,
-        };
-        if billing_rate_matrix_allows_request(&resolution, &[]).unwrap_or(false) {
-            return Some(resolution);
-        }
-        if first_non_empty.is_none() {
-            first_non_empty = Some(resolution);
-        }
-    }
-    first_non_empty
+    let profile_rates = candidate_rates
+        .iter()
+        .filter(|rate| {
+            rate.pricing_profile == pricing_profile
+                && rate
+                    .provider_type
+                    .as_deref()
+                    .is_none_or(|value| value == provider_type)
+                && rate
+                    .model_pattern
+                    .as_deref()
+                    .is_none_or(|pattern| crate::billing_rate_store::glob_matches(pattern, model))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    (!profile_rates.is_empty()).then(|| BillingRateResolution {
+        pricing_profile: pricing_profile.to_string(),
+        pricing_model: model.to_string(),
+        rates: profile_rates,
+    })
 }
 
 pub(super) fn billing_rate_matrix_allows_request(
@@ -631,6 +611,15 @@ pub(super) fn billing_rate_matrix_allows_request(
         }
     }
     Ok(true)
+}
+
+pub(crate) fn billing_rates_form_complete_matrix(rates: &[DbBillingRateRecord]) -> bool {
+    let resolution = BillingRateResolution {
+        pricing_profile: String::new(),
+        pricing_model: String::new(),
+        rates: rates.to_vec(),
+    };
+    billing_rate_matrix_allows_request(&resolution, &[]).is_ok_and(|complete| complete)
 }
 
 fn determine_context_tier(
@@ -1611,15 +1600,19 @@ async fn maybe_charge_usage_with_output(
 ) -> AppResult<ChargeComputation> {
     let resolution = match attempt.billing_rate_resolution.clone() {
         Some(resolution) => Some(resolution),
-        None => {
-            resolve_billing_rate_matrix(
-                state,
-                &attempt.upstream_model,
-                logical_model,
-                attempt.provider_type,
-            )
-            .await?
-        }
+        None => match attempt.pricing_profile.as_deref() {
+            Some(profile) => {
+                resolve_billing_rate_matrix(
+                    state,
+                    &attempt.upstream_model,
+                    logical_model,
+                    attempt.provider_type,
+                    profile,
+                )
+                .await?
+            }
+            None => None,
+        },
     };
     let resolution = match resolution {
         Some(v) => v,

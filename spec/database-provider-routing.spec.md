@@ -32,7 +32,7 @@ tables and their indexes MUST be absent.
 
 R-MIG-7. Routing and billing MUST use the exact effective multiplier from
 `provider-pricing.spec.md` PP-E1. A structurally eligible request for which every mapping
-is unpriced MUST return `503 model_pricing_required` as defined by PP-U3.
+is unpriced MUST return `403 model_pricing_required` as defined by PP-U3.
 
 ## 0. Status
 

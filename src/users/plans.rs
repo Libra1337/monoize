@@ -643,6 +643,7 @@ mod tests {
     async fn make_group(store: &UserStore, name: &str) -> crate::users::Group {
         store
             .create_group(crate::users::CreateGroupInput {
+                confirm_public_exposure: true,
                 name: name.to_string(),
                 description: String::new(),
                 user_selectable: false,

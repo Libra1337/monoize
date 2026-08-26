@@ -152,7 +152,8 @@ C1.2. Pricing model resolution for billing:
 
 - Before each pricing lookup candidate in this section, Monoize MUST normalize that candidate to a `pricing_model_key` by removing at most one recognized reasoning-tier suffix from the end of the model ID. If no recognized suffix matches, `pricing_model_key` MUST equal the original candidate.
 - Recognized reasoning-tier suffixes MUST use the same suffix set and longest-suffix-first matching rule as `reasoning_suffix_map` plus the built-in effort suffixes defined in `model-metadata-dashboard.spec.md` § 8.
-- For each candidate key, Monoize MUST select the pricing profile via ordered `pricing_profile_model_patterns` from `metered-billing.spec.md` § 2.
+- Monoize MUST use the selected Provider-model mapping's effective Profile from `provider-pricing.spec.md` section 7 for both candidate keys.
+- Monoize MUST NOT select a runtime Profile from `pricing_profile_model_patterns` or model metadata.
 - Monoize MUST first look up eligible rate rows for the normalized `upstream_model` key derived from C1.1.
 - If `upstream_model` came from a non-empty `redirect` and that normalized lookup does not yield complete rates, Monoize MUST retry rate lookup with the normalized requested logical model key.
 - If the normalized requested logical model key equals the normalized `upstream_model` key, Monoize MUST NOT perform a second lookup.

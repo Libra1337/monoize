@@ -391,6 +391,7 @@
 	"providers": {
 		"title": "服务提供者",
 		"description": "查看已配置的上游提供者",
+		"pricingWarnings": "已保存，但以下定价不完整：{{details}}",
 		"upstreamProviders": "上游提供者",
 		"providersConfigured": "已配置 {{count}} 个提供者",
 		"providersConfigured_plural": "已配置 {{count}} 个提供者",
@@ -1089,6 +1090,10 @@
 		"loadFailed": "系统概览加载失败"
 	},
 	"groups": {
+		"publicExposureConfirm": "我确认此 Group 名称会显示在公开页面中。",
+		"publicExposureRequired": "请先确认公开 Group 名称，再保存。",
+		"providerPublicExposureConfirm": "我确认 Provider 和 Channel 名称会显示在公开模型广场中。",
+		"providerPublicExposureRequired": "请先确认公开 Provider 和 Channel 名称，再保存。",
 		"title": "分组管理",
 		"description": "管理路由分组：名称、描述与可见性。",
 		"create": "新建分组",

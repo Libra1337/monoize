@@ -7,7 +7,7 @@ description: 逻辑模型、上游重定向、元数据与定价。
 
 客户端请求的是逻辑模型名。Monoize 把这个名字解析到你的 Provider 和 Channel。客户端看到的名字不需要与上游厂商的名字一致。
 
-一个逻辑模型可以映射到多个 Provider 下的多个 Channel。客户端无需任何修改即可获得故障转移和流量分配。
+一个逻辑模型可以映射到多个 Provider 各自的 Channel。客户端无需任何修改即可获得故障转移。
 
 ![模型数据库](/images/zh/models.webp)
 
@@ -15,16 +15,17 @@ description: 逻辑模型、上游重定向、元数据与定价。
 
 Channel 的模型条目可以用 `redirect` 指定真实的上游模型名。
 
-示例：客户端调用 `my-fast-model`。Channel A 将其重定向到 `gpt-4o-mini`，Channel B 将其重定向到 `claude-3-5-haiku-20241022`。计费和日志始终显示逻辑名。
+示例：客户端调用 `my-fast-model`。一个 Provider 将其重定向到 `gpt-4o-mini`，另一个 Provider 将其重定向到 `claude-3-5-haiku-20241022`。计费和日志始终显示逻辑名。
 
 ## 模型元数据与定价
 
-**模型数据库**页面存储模型元数据：上下文窗口、能力和每 Token 价格。Monoize 从 [Models.dev](https://models.dev) 导入元数据和价格。
+**模型数据库**页面存储模型元数据和 Billing Profile 费率记录。Monoize 从 [Models.dev](https://models.dev) 导入元数据和价格建议。
 
 计费规则：
 
-1. 取元数据表中的模型基础价格；
-2. 乘以 Channel 模型条目的 `multiplier`。
+1. 选择模型映射的有效 Billing Profile；
+2. 为上游模型或逻辑模型选择完整费率矩阵；
+3. 应用模型倍率覆盖或 Provider 倍率。
 
 费用以纳美元（nano-dollar）为单位累计到每个用户的流水账。
 

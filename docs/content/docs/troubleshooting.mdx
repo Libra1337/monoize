@@ -30,14 +30,10 @@ The client IP is not in the key's IP whitelist. Add the address or CIDR range, o
 
 All eligible routes failed, or no route serves the model. Check in this order:
 
-1. **No route exists.** Confirm at least one enabled Provider has an enabled Channel with weight above zero that maps the model.
+1. **No route exists.** Confirm an enabled Provider has an enabled Channel that maps the model with a complete Billing Profile.
 2. **Groups do not intersect.** The key's groups must share at least one group with the Provider. See [API Keys](/en/docs/dashboard/api-keys).
 3. **All Channels unhealthy.** The circuit breaker skips unhealthy Channels during cooldown. Read the failed attempts on the log row to find the root upstream error.
 4. **Multiplier cap.** A key with `max_multiplier` skips model entries priced above the cap.
-
-### Requests always hit one Channel
-
-Weighted selection is random per request. Small samples can look unbalanced. Check also whether session affinity binds the conversation to one Channel on purpose.
 
 ## Billing errors
 
@@ -47,7 +43,7 @@ The user balance, or the key's sub-account balance, is zero or negative. Top up 
 
 ### Charges look wrong
 
-Charge = base model price × Channel model `multiplier`. Confirm the model has metadata prices on the **Models** page, and check the multiplier on the Channel model entry.
+Charge = the selected Billing Profile rate × the effective multiplier. Check the Provider default Profile and multiplier. Then check the model Profile and multiplier overrides.
 
 ## Streaming problems
 

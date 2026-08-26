@@ -138,7 +138,7 @@ browser origin uses HTTPS, the page MUST use `<browser-origin>/v1`. If the setti
 and the origin is not HTTPS, the page MUST show a configuration error and disable copy
 actions.
 
-PS-D4. The page MUST document `model_pricing_required`, authentication failures, the
+PS-D4. The page MUST document HTTP `403 model_pricing_required`, authentication failures, the
 PS-A4 through PS-A7 rate limit, and streaming termination.
 
 PS-D5. The page MUST state that Marketplace per-unit prices are informational. Billing

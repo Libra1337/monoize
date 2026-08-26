@@ -257,7 +257,8 @@ ISM4.9. `monoize_providers` columns:
 - `created_at` TEXT NOT NULL
 - `updated_at` TEXT NOT NULL
 
-ISM4.10. `monoize_provider_models` MUST NOT be created by the baseline migration and MUST NOT exist after all migrations complete.
+ISM4.10. `monoize_provider_models` MUST NOT be created by the baseline migration. The
+Provider pricing migration MUST create it, and it MUST exist after all migrations complete.
 
 ISM4.11. `monoize_channels` columns:
 

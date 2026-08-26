@@ -1,4 +1,3 @@
-
 #[tokio::test]
 async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events() {
     let ctx = setup().await;
@@ -10,17 +9,21 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
         "gpt-5-mini".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "mono-transform-summary".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("mono-transform-summary-ch1".to_string()),
                 name: "mono-transform-summary-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
@@ -40,18 +43,18 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
                 affinity_idle_ttl_seconds_override: None,
                 affinity_failback_mode_override: None,
                 affinity_failback_delay_seconds_override: None,
-            
+
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-                },
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
                 transform: "reasoning_content_to_summary".to_string(),
-	                enabled: true,
+                enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
                 config: json!({}),
@@ -155,7 +158,11 @@ async fn responses_streaming_completed_snapshot_merges_reasoning_slot_once() {
         reasoning_items[0]["summary"],
         json!([{ "type": "summary_text", "text": "mock_summary" }])
     );
-    assert!(output.iter().any(|item| item["type"].as_str() == Some("message")));
+    assert!(
+        output
+            .iter()
+            .any(|item| item["type"].as_str() == Some("message"))
+    );
     assert!(
         output
             .iter()
@@ -258,7 +265,9 @@ async fn responses_streaming_completed_snapshot_conflict_fails_stream() {
         "expected responses_terminal_conflict failure: {text}"
     );
     assert!(
-        !frames.iter().any(|(event, _)| event == "response.completed"),
+        !frames
+            .iter()
+            .any(|(event, _)| event == "response.completed"),
         "conflicting stream must not emit response.completed: {text}"
     );
     assert!(text.trim_end().ends_with("data: [DONE]"));
@@ -275,17 +284,21 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
         "gpt-5-mini".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     );
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "mono-transform-streaming-markdown-images".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: Some("mono-transform-streaming-markdown-images-ch1".to_string()),
                 name: "mono-transform-streaming-markdown-images-ch1".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
@@ -305,11 +318,11 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
                 affinity_idle_ttl_seconds_override: None,
                 affinity_failback_mode_override: None,
                 affinity_failback_delay_seconds_override: None,
-            
+
                 proxy_url: None,
                 extra_headers: None,
                 session_affinity_auto: None,
-                },
+            },
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,

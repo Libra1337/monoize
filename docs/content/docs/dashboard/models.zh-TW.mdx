@@ -7,7 +7,7 @@ description: 邏輯模型、上游重新導向、中繼資料與定價。
 
 客戶端請求的是邏輯模型名稱。Monoize 把這個名稱解析到你的 Provider 和 Channel。客戶端看到的名稱不需要與上游廠商的名稱一致。
 
-一個邏輯模型可以對應到多個 Provider 下的多個 Channel。客戶端無需任何修改即可獲得容錯移轉和流量分配。
+一個邏輯模型可以對應到多個 Provider 各自的 Channel。客戶端無需任何修改即可獲得容錯移轉。
 
 ![模型資料庫](/images/en/models.webp)
 
@@ -15,16 +15,17 @@ description: 邏輯模型、上游重新導向、中繼資料與定價。
 
 Channel 的模型條目可以用 `redirect` 指定真實的上游模型名稱。
 
-範例：客戶端呼叫 `my-fast-model`。Channel A 將其重新導向到 `gpt-4o-mini`，Channel B 將其重新導向到 `claude-3-5-haiku-20241022`。計費和日誌始終顯示邏輯名稱。
+範例：客戶端呼叫 `my-fast-model`。一個 Provider 將其重新導向到 `gpt-4o-mini`，另一個 Provider 將其重新導向到 `claude-3-5-haiku-20241022`。計費和日誌始終顯示邏輯名稱。
 
 ## 模型中繼資料與定價
 
-**模型資料庫**頁面儲存模型中繼資料：上下文視窗、能力和每 Token 價格。Monoize 從 [Models.dev](https://models.dev) 匯入中繼資料和價格。
+**模型資料庫**頁面儲存模型中繼資料和 Billing Profile 費率記錄。Monoize 從 [Models.dev](https://models.dev) 匯入中繼資料和價格建議。
 
 計費規則：
 
-1. 取中繼資料表中的模型基礎價格；
-2. 乘以 Channel 模型條目的 `multiplier`。
+1. 選擇模型對應的有效 Billing Profile；
+2. 為上游模型或邏輯模型選擇完整費率矩陣；
+3. 套用模型倍率覆寫或 Provider 倍率。
 
 費用以奈米美元（nano-dollar）為單位累計到每個使用者的流水帳。
 

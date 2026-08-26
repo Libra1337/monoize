@@ -12,7 +12,7 @@ Monoize 转换的是协议语义，而不是字段名。它先把每个请求解
 ## 核心能力
 
 - **协议转换。** 任何受支持的下游端点都可以调用任何已配置的上游类型。Monoize 在流式与非流式模式下转换 Responses、Chat Completions、Messages、Gemini 和图像协议。
-- **路由与可靠性。** 一个逻辑模型可以匹配多个有序的 Provider（服务提供者）。每个 Provider 包含带权重的 Channel。Monoize 重试可重试的失败，前进到下一条路由，并在发出第一个响应字节后停止回退。参见[路由与可靠性](/zh/docs/routing)。
+- **路由与可靠性。** 一个逻辑模型可以匹配多个有序的 Provider（服务提供者）。每个 Provider 拥有一个 Channel。Monoize 重试可重试的失败，前进到下一个 Provider，并在发出第一个响应字节后停止回退。参见[路由与可靠性](/zh/docs/routing)。
 - **变换（Transform）。** 33 个内置变换可按 Provider、API 密钥或全局范围修改请求和响应。参见[变换](/zh/docs/transforms)。
 - **请求捕获。** 捕获功能默认关闭，开启后会保存每次上游尝试的完整报文。结构化查看器展示每一跳。参见[请求日志](/zh/docs/request-logs)。
 - **仪表盘。** 内嵌的 Web 仪表盘管理 Provider、Channel、模型、API 密钥、用户、计费和日志。参见[仪表盘](/zh/docs/dashboard)。

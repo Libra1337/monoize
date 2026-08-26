@@ -17,8 +17,9 @@ description: 用 Group 内有序的 Provider 和内嵌 Channel 定义上游路�
 1. 在侧边栏打开**服务提供者**。
 2. 点击创建按钮并输入名称。
 3. 选择一个 Group，并配置内嵌 Channel。
-4. 默认值不合适时，设置 `channel_max_retries` 和 `channel_retry_interval_ms`。
-5. 除非有明确理由，保持 `circuit_breaker_enabled` 开启。
+4. 确认 Provider 和 Channel 名称可以显示在公开页面中。
+5. 默认值不合适时，设置 `channel_max_retries` 和 `channel_retry_interval_ms`。
+6. 除非有明确理由，保持 `circuit_breaker_enabled` 开启。
 
 ## 配置 Channel
 
@@ -39,6 +40,8 @@ description: 用 Group 内有序的 Provider 和内嵌 Channel 定义上游路�
 
 只有当 Channel 已启用且模型映射具有完整价格时，该模型才会路由到这个 Provider。
 
+出现定价警告时仍可保存 Provider。检查每条警告中的逻辑模型和缺失 usage class。发送流量前添加缺失费率。
+
 ## Provider 变换
 
 Provider 可以持有一组有序的变换规则。它们在 Provider 选定之后、上游编码之前，作用于该 Provider 服务的每个请求。参见[变换](/zh/docs/transforms)。
@@ -46,3 +49,5 @@ Provider 可以持有一组有序的变换规则。它们在 Provider 选定之�
 ## 分组
 
 每个 Provider 只属于一个 Group。API 密钥只会路由到其允许 Group 中的 Provider。使用 Group 区分用户等级或环境。
+
+创建或重命名 Group 时确认公开显示。公开模型广场和状态页会显示已确认的 Group、Provider 和 Channel 名称。

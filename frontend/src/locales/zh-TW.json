@@ -376,6 +376,7 @@
 	"providers": {
 		"title": "服務供應商",
 		"description": "檢視已設定的上游供應商",
+		"pricingWarnings": "已儲存，但以下定價不完整：{{details}}",
 		"upstreamProviders": "上游供應商",
 		"providersConfigured": "已設定 {{count}} 個供應商",
 		"providersConfigured_plural": "已設定 {{count}} 個供應商",
@@ -1074,6 +1075,10 @@
 		"loadFailed": "系統概覽載入失敗"
 	},
 	"groups": {
+		"publicExposureConfirm": "我確認此 Group 名稱會顯示在公開頁面中。",
+		"publicExposureRequired": "請先確認公開 Group 名稱，再儲存。",
+		"providerPublicExposureConfirm": "我確認 Provider 和 Channel 名稱會顯示在公開模型廣場中。",
+		"providerPublicExposureRequired": "請先確認公開 Provider 和 Channel 名稱，再儲存。",
 		"title": "群組管理",
 		"description": "管理路由群組：名稱、描述與可見性。",
 		"create": "新增群組",

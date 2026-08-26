@@ -21,6 +21,14 @@ import {
 	FieldLabel
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import {
+	Select,
+	SelectContent,
+	SelectGroup,
+	SelectItem,
+	SelectTrigger,
+	SelectValue
+} from '@/components/ui/select'
 import { normalizeMultiplier } from '@/lib/exact-decimal'
 import {
 	hasBillablePricingModelId,
@@ -34,6 +42,7 @@ type ModelEditorState = {
 	draft: ModelRow
 	errors: {
 		model?: string
+		pricing_profile?: string
 		multiplier?: string
 	}
 }
@@ -45,13 +54,18 @@ type ChannelModelEditorProps = {
 	pricedModels: Set<string>
 	metadataProvider: Map<string, string | undefined>
 	reasoningSuffixMap: Record<string, string>
+	pricingProfiles: string[]
+	providerPricingProfile: string
+	providerMultiplier: string
 	c: Copy
 }
 
 const emptyModel = (): ModelRow => ({
 	model: '',
 	redirect: '',
-	multiplier: '1'
+	pricing_profile_mode: 'inherit',
+	pricing_profile_override: '',
+	multiplier_override: ''
 })
 
 export function ChannelModelEditor({
@@ -61,6 +75,9 @@ export function ChannelModelEditor({
 	pricedModels,
 	metadataProvider,
 	reasoningSuffixMap,
+	pricingProfiles,
+	providerPricingProfile,
+	providerMultiplier,
 	c
 }: ChannelModelEditorProps) {
 	const [editor, setEditor] = useState<ModelEditorState | null>(null)
@@ -84,7 +101,8 @@ export function ChannelModelEditor({
 				errors: {
 					...current.errors,
 					...(patch.model !== undefined ? { model: undefined } : {}),
-					...(patch.multiplier !== undefined ? { multiplier: undefined } : {})
+					...(patch.pricing_profile_mode !== undefined || patch.pricing_profile_override !== undefined ? { pricing_profile: undefined } : {}),
+					...(patch.multiplier_override !== undefined ? { multiplier: undefined } : {})
 				}
 			}
 		})
@@ -93,7 +111,7 @@ export function ChannelModelEditor({
 	const saveModel = () => {
 		if (!editor) return
 		const model = editor.draft.model.trim()
-		const multiplier = editor.draft.multiplier.trim()
+		const multiplierOverride = editor.draft.multiplier_override.trim()
 		const errors: ModelEditorState['errors'] = {}
 
 		if (!model) {
@@ -102,12 +120,16 @@ export function ChannelModelEditor({
 			errors.model = c('当前 Channel 已存在同名模型。', 'This channel already contains that model.')
 		}
 
-		const normalizedMultiplier = normalizeMultiplier(multiplier)
-		if (normalizedMultiplier == null) {
+		if (editor.draft.pricing_profile_mode === 'override' && !editor.draft.pricing_profile_override.trim()) {
+			errors.pricing_profile = c('请选择 Billing Profile。', 'Select a Billing Profile.')
+		}
+
+		const normalizedMultiplier = multiplierOverride ? normalizeMultiplier(multiplierOverride) : null
+		if (multiplierOverride && normalizedMultiplier == null) {
 			errors.multiplier = c('倍率必须是大于 0 的数字。', 'Multiplier must be a number greater than zero.')
 		}
 
-		if (errors.model || errors.multiplier) {
+		if (errors.model || errors.pricing_profile || errors.multiplier) {
 			setEditor(current => current ? { ...current, errors } : current)
 			return
 		}
@@ -115,7 +137,9 @@ export function ChannelModelEditor({
 		const nextModel: ModelRow = {
 			model,
 			redirect: editor.draft.redirect.trim(),
-			multiplier: normalizedMultiplier ?? multiplier
+			pricing_profile_mode: editor.draft.pricing_profile_mode,
+			pricing_profile_override: editor.draft.pricing_profile_mode === 'override' ? editor.draft.pricing_profile_override.trim() : '',
+			multiplier_override: normalizedMultiplier ?? ''
 		}
 		onChange(
 			editor.index === null ?
@@ -165,12 +189,16 @@ export function ChannelModelEditor({
 			: 	<StackedModelList>
 					{models.map((model, index) => {
 						const modelName = model.model.trim()
-						const unpriced = Boolean(modelName) && !hasBillablePricingModelId(
+						const effectiveProfile = model.pricing_profile_mode === 'override' ?
+							model.pricing_profile_override.trim()
+						: model.pricing_profile_mode === 'inherit' ? providerPricingProfile.trim() : ''
+						const effectiveMultiplier = model.multiplier_override.trim() || providerMultiplier
+						const unpriced = !effectiveProfile || (Boolean(modelName) && !hasBillablePricingModelId(
 							pricedModels,
 							modelName,
 							model.redirect,
 							reasoningSuffixMap
-						)
+						))
 						return (
 							<Button
 								key={`${modelName}-${index}`}
@@ -183,11 +211,12 @@ export function ChannelModelEditor({
 								<ModelBadge
 									model={modelName}
 									provider={metadataProvider.get(modelName)}
-									multiplier={model.multiplier}
+									multiplier={effectiveMultiplier}
 									redirect={model.redirect}
 									highlightUnpriced={unpriced}
 									className='pointer-events-none'
 								/>
+								<span className='sr-only'>{effectiveProfile || c('不定价', 'Unpriced')}</span>
 							</Button>
 						)
 					})}
@@ -233,16 +262,42 @@ export function ChannelModelEditor({
 									<FieldDescription>{c('留空时使用逻辑模型名称。', 'Leave empty to use the logical model name.')}</FieldDescription>
 								</Field>
 
+								<Field data-invalid={Boolean(editor.errors.pricing_profile)}>
+									<FieldLabel htmlFor='channel-model-pricing-mode'>{c('定价模式', 'Pricing mode')}</FieldLabel>
+									<Select value={editor.draft.pricing_profile_mode} onValueChange={(pricing_profile_mode: ModelRow['pricing_profile_mode']) => updateDraft({ pricing_profile_mode })}>
+										<SelectTrigger id='channel-model-pricing-mode'><SelectValue /></SelectTrigger>
+										<SelectContent><SelectGroup>
+											<SelectItem value='inherit'>{c('继承 Provider', 'Inherit Provider')}</SelectItem>
+											<SelectItem value='override'>{c('覆盖 Profile', 'Override Profile')}</SelectItem>
+											<SelectItem value='unpriced'>{c('不定价', 'Unpriced')}</SelectItem>
+										</SelectGroup></SelectContent>
+									</Select>
+									<FieldDescription>{editor.draft.pricing_profile_mode === 'inherit' ? (providerPricingProfile || c('Provider 未设置 Profile', 'Provider has no Profile')) : undefined}</FieldDescription>
+								</Field>
+
+								{editor.draft.pricing_profile_mode === 'override' ?
+									<Field data-invalid={Boolean(editor.errors.pricing_profile)}>
+										<FieldLabel htmlFor='channel-model-pricing-profile'>Billing Profile</FieldLabel>
+										<Select value={editor.draft.pricing_profile_override || undefined} onValueChange={pricing_profile_override => updateDraft({ pricing_profile_override })}>
+											<SelectTrigger id='channel-model-pricing-profile'><SelectValue placeholder={c('选择 Profile', 'Select Profile')} /></SelectTrigger>
+											<SelectContent><SelectGroup>{pricingProfiles.map(profile => <SelectItem key={profile} value={profile}>{profile}</SelectItem>)}</SelectGroup></SelectContent>
+										</Select>
+										<FieldError>{editor.errors.pricing_profile}</FieldError>
+									</Field>
+								: null}
+
 								<Field data-invalid={Boolean(editor.errors.multiplier)}>
 									<FieldLabel htmlFor='channel-model-multiplier'>{c('倍率', 'Multiplier')}</FieldLabel>
 									<Input
 										id='channel-model-multiplier'
 										type='text'
 										inputMode='decimal'
-										value={editor.draft.multiplier}
-										onChange={event => updateDraft({ multiplier: event.target.value })}
+										value={editor.draft.multiplier_override}
+										placeholder={providerMultiplier}
+										onChange={event => updateDraft({ multiplier_override: event.target.value })}
 										aria-invalid={Boolean(editor.errors.multiplier)}
 									/>
+									<FieldDescription>{c('留空时继承 Provider 倍率。', 'Leave empty to inherit the Provider multiplier.')}</FieldDescription>
 									<FieldError>{editor.errors.multiplier}</FieldError>
 								</Field>
 							</FieldGroup>

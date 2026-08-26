@@ -260,7 +260,9 @@ async fn channel_extra_headers_are_sent_to_upstream() {
         "cf-affinity-model".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
             redirect: None,
-            multiplier: monoize::exact_decimal::Multiplier::ONE,
+            pricing_profile_mode: Default::default(),
+            pricing_profile_override: None,
+            multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
         },
     )]);
     let upstream_addr = {
@@ -275,11 +277,13 @@ async fn channel_extra_headers_are_sent_to_upstream() {
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "up-cf-affinity".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: None,
                 name: "cf-affinity-channel".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
                 base_url: upstream_addr,
@@ -318,7 +322,7 @@ async fn channel_extra_headers_are_sent_to_upstream() {
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-	                enabled: true,
+            enabled: true,
             priority: None,
         })
         .await
@@ -360,11 +364,13 @@ async fn auto_session_affinity_is_stable_per_conversation_and_distinct_across_se
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
             name: "up-cf-auto-affinity".to_string(),
             api_type_overrides: Vec::new(),
             group_id: String::new(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
-                id: None,
                 name: "cf-auto-channel".to_string(),
                 provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
                 base_url: upstream_addr,
@@ -379,7 +385,9 @@ async fn auto_session_affinity_is_stable_per_conversation_and_distinct_across_se
                     "cf-auto-model".to_string(),
                     monoize::monoize_routing::MonoizeModelEntry {
                         redirect: None,
-                        multiplier: monoize::exact_decimal::Multiplier::ONE,
+                        pricing_profile_mode: Default::default(),
+                        pricing_profile_override: None,
+                        multiplier_override: Some(monoize::exact_decimal::Multiplier::ONE),
                     },
                 )]),
                 active_probe_enabled_override: None,

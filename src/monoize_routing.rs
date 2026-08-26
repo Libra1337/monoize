@@ -1,15 +1,15 @@
 use crate::db::DbPool;
 use crate::exact_decimal::Multiplier;
 use crate::settings::{
-    default_pricing_profile_model_patterns, default_reasoning_suffix_map, PricingProfilePattern,
+    PricingProfilePattern, default_pricing_profile_model_patterns, default_reasoning_suffix_map,
 };
-use crate::transforms::{canonicalize_transform_rules, TransformRuleConfig};
+use crate::transforms::{TransformRuleConfig, canonicalize_transform_rules};
 use chrono::{DateTime, Utc};
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use sea_orm::{ConnectionTrait, QueryResult, Value as SeaValue};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -94,9 +94,42 @@ pub struct ApiTypeOverride {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MonoizeModelEntry {
     pub redirect: Option<String>,
-    pub multiplier: Multiplier,
+    #[serde(default)]
+    pub pricing_profile_mode: PricingProfileMode,
+    #[serde(default)]
+    pub pricing_profile_override: Option<String>,
+    #[serde(default)]
+    pub multiplier_override: Option<Multiplier>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PricingProfileMode {
+    #[default]
+    Inherit,
+    Override,
+    Unpriced,
+}
+
+pub fn effective_pricing_profile<'a>(
+    provider: &'a MonoizeProvider,
+    entry: &'a MonoizeModelEntry,
+) -> Option<&'a str> {
+    match entry.pricing_profile_mode {
+        PricingProfileMode::Inherit => provider.pricing_profile.as_deref(),
+        PricingProfileMode::Override => entry.pricing_profile_override.as_deref(),
+        PricingProfileMode::Unpriced => None,
+    }
+}
+
+pub fn effective_model_multiplier(
+    provider: &MonoizeProvider,
+    entry: &MonoizeModelEntry,
+) -> Multiplier {
+    entry.multiplier_override.unwrap_or(provider.multiplier)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +197,8 @@ pub struct MonoizeProvider {
     pub id: String,
     pub name: String,
     pub channel: MonoizeChannel,
+    pub pricing_profile: Option<String>,
+    pub multiplier: Multiplier,
     pub channel_max_retries: i32,
     pub channel_retry_interval_ms: i32,
     pub circuit_breaker_enabled: bool,
@@ -191,8 +226,6 @@ pub struct MonoizeProvider {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateMonoizeChannelInput {
-    #[serde(skip_deserializing)]
-    pub id: Option<String>,
     pub name: String,
     pub provider_type: MonoizeProviderType,
     pub base_url: String,
@@ -241,6 +274,12 @@ pub struct CreateMonoizeProviderInput {
     pub name: String,
     pub channel: CreateMonoizeChannelInput,
     #[serde(default)]
+    pub confirm_public_exposure: bool,
+    #[serde(default)]
+    pub pricing_profile: Option<String>,
+    #[serde(default)]
+    pub multiplier: Multiplier,
+    #[serde(default)]
     pub channel_max_retries: i32,
     #[serde(default)]
     pub channel_retry_interval_ms: i32,
@@ -273,6 +312,10 @@ pub struct CreateMonoizeProviderInput {
 pub struct UpdateMonoizeProviderInput {
     pub name: Option<String>,
     pub channel: Option<CreateMonoizeChannelInput>,
+    #[serde(default)]
+    pub confirm_public_exposure: bool,
+    pub pricing_profile: Option<Option<String>>,
+    pub multiplier: Option<Multiplier>,
     pub channel_max_retries: Option<i32>,
     pub channel_retry_interval_ms: Option<i32>,
     pub circuit_breaker_enabled: Option<bool>,
@@ -580,12 +623,8 @@ fn decode_database_bool(
     }
 }
 
-fn generate_short_id() -> String {
-    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let bytes = uuid::Uuid::new_v4().into_bytes();
-    (0..8)
-        .map(|i| CHARSET[bytes[i] as usize % CHARSET.len()] as char)
-        .collect()
+fn generate_provider_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// CP-INV-14: trim and treat empty as NULL (follow-global).
@@ -694,23 +733,6 @@ fn decode_extra_headers(raw: Option<String>) -> Result<Option<BTreeMap<String, S
     serde_json::from_str(&text)
         .map(Some)
         .map_err(|e| format!("invalid stored extra_headers JSON: {e}"))
-}
-
-fn decode_channel_model_row(row: &QueryResult, model: &str) -> Result<MonoizeChannel, String> {
-    let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-    let multiplier = row
-        .try_get::<String>("", "multiplier")
-        .map_err(|e| e.to_string())?
-        .parse()
-        .map_err(|e: String| format!("channel {id} invalid multiplier: {e}"))?;
-    let models = HashMap::from([(
-        model.to_string(),
-        MonoizeModelEntry {
-            redirect: row.try_get("", "redirect").map_err(|e| e.to_string())?,
-            multiplier,
-        },
-    )]);
-    decode_channel_row(row, models)
 }
 
 fn decode_channel_row(
@@ -898,6 +920,13 @@ fn decode_provider_row(
         id: id.clone(),
         name: row.try_get("", "name").map_err(|e| e.to_string())?,
         channel,
+        pricing_profile: row
+            .try_get("", "pricing_profile")
+            .map_err(|e| e.to_string())?,
+        multiplier: row
+            .try_get::<String>("", "multiplier")
+            .map_err(|e| e.to_string())?
+            .parse()?,
         channel_max_retries: row
             .try_get("", "channel_max_retries")
             .map_err(|e| e.to_string())?,
@@ -989,7 +1018,7 @@ fn decode_provider_row(
 }
 
 fn generate_channel_id() -> String {
-    format!("mono_ch_{}", uuid::Uuid::new_v4().simple())
+    uuid::Uuid::new_v4().to_string()
 }
 
 fn provider_projection(alias: &str) -> String {
@@ -999,7 +1028,7 @@ fn provider_projection(alias: &str) -> String {
         format!("{alias}.")
     };
     format!(
-        "SELECT {p}id, {p}name, {p}channel_max_retries,
+        "SELECT {p}id, {p}name, {p}pricing_profile, {p}multiplier, {p}channel_max_retries,
                 {p}channel_retry_interval_ms, {p}circuit_breaker_enabled,
                 {p}per_model_circuit_break, {p}transforms, {p}api_type_overrides,
                 {p}active_probe_enabled_override, {p}active_probe_interval_seconds_override,
@@ -1205,7 +1234,8 @@ impl MonoizeRoutingStore {
             .query_all(self.db.stmt(
                 &format!(
                     "SELECT p.channel_id, pm.model_name, pm.redirect,
-                            COALESCE(pm.multiplier_override, p.multiplier) AS multiplier
+                            pm.pricing_profile_mode, pm.pricing_profile_override,
+                            pm.multiplier_override
                      FROM monoize_provider_models pm
                      JOIN monoize_providers p ON p.id = pm.provider_id{model_filter}
                      ORDER BY p.channel_id ASC, pm.model_name ASC"
@@ -1218,15 +1248,30 @@ impl MonoizeRoutingStore {
         for row in model_rows {
             let channel_id: String = row.try_get("", "channel_id").map_err(|e| e.to_string())?;
             let model_name: String = row.try_get("", "model_name").map_err(|e| e.to_string())?;
-            let multiplier: Multiplier = row
-                .try_get::<String>("", "multiplier")
+            let pricing_profile_mode = match row
+                .try_get::<String>("", "pricing_profile_mode")
                 .map_err(|e| e.to_string())?
-                .parse()?;
+                .as_str()
+            {
+                "inherit" => PricingProfileMode::Inherit,
+                "override" => PricingProfileMode::Override,
+                "unpriced" => PricingProfileMode::Unpriced,
+                value => return Err(format!("invalid pricing_profile_mode: {value}")),
+            };
+            let multiplier_override = row
+                .try_get::<Option<String>>("", "multiplier_override")
+                .map_err(|e| e.to_string())?
+                .map(|value| value.parse())
+                .transpose()?;
             models_by_channel.entry(channel_id).or_default().insert(
                 model_name,
                 MonoizeModelEntry {
                     redirect: row.try_get("", "redirect").map_err(|e| e.to_string())?,
-                    multiplier,
+                    pricing_profile_mode,
+                    pricing_profile_override: row
+                        .try_get("", "pricing_profile_override")
+                        .map_err(|e| e.to_string())?,
+                    multiplier_override,
                 },
             );
         }
@@ -1239,7 +1284,9 @@ impl MonoizeRoutingStore {
                 models_by_channel.remove(&channel_id).unwrap_or_default(),
             )?;
             if result.insert(provider_id.clone(), channel).is_some() {
-                return Err(format!("provider {provider_id} returned multiple embedded channels"));
+                return Err(format!(
+                    "provider {provider_id} returned multiple embedded channels"
+                ));
             }
         }
         Ok(result)
@@ -1401,6 +1448,12 @@ impl MonoizeRoutingStore {
         input: CreateMonoizeProviderInput,
     ) -> Result<MonoizeProvider, String> {
         validate_provider_input(&input.name, &input.channel, &input.api_type_overrides)?;
+        if !input.confirm_public_exposure {
+            return Err("public_exposure_confirmation_required:provider".to_string());
+        }
+        let public_name = crate::public_name::canonicalize_public_name(&input.name)?;
+        let channel_public_name =
+            crate::public_name::canonicalize_public_name(&input.channel.name)?;
         if let Some(v) = input.active_probe_interval_seconds_override {
             if !(1..=i32::MAX as u64).contains(&v) {
                 return Err(
@@ -1428,8 +1481,9 @@ impl MonoizeRoutingStore {
             return Err("channel_retry_interval_ms must be >= 0".to_string());
         }
 
-        let id = generate_short_id();
+        let id = generate_provider_id();
         let now = Utc::now();
+        let pricing_profile = normalize_pricing_profile(input.pricing_profile.as_deref())?;
         // Resolve before begin_write: the registry lookup uses the read pool,
         // which on single-connection SQLite would deadlock behind our own
         // write transaction.
@@ -1481,8 +1535,6 @@ impl MonoizeRoutingStore {
         let strip_cross_proto = input.strip_cross_protocol_nested_extra;
 
         let channel = &input.channel;
-        let public_name = input.name.trim();
-        let channel_public_name = channel.name.trim();
         txn.execute(self.db.stmt(
                 r#"INSERT INTO monoize_providers (
                      id, group_id, name, public_name, public_name_key, priority, enabled,
@@ -1513,15 +1565,15 @@ impl MonoizeRoutingStore {
                     id.clone().into(),
                     group_id.into(),
                     input.name.clone().into(),
-                    public_name.to_string().into(),
-                    SeaValue::Bytes(Some(Box::new(public_name.as_bytes().to_vec()))),
+                    public_name.value.clone().into(),
+                    SeaValue::Bytes(Some(Box::new(public_name.key))),
                     SeaValue::Int(Some(priority)),
                     SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
                     now.to_rfc3339().into(),
-                    channel.id.clone().unwrap_or_else(generate_channel_id).into(),
+                    generate_channel_id().into(),
                     channel.name.clone().into(),
-                    channel_public_name.to_string().into(),
-                    SeaValue::Bytes(Some(Box::new(channel_public_name.as_bytes().to_vec()))),
+                    channel_public_name.value.clone().into(),
+                    SeaValue::Bytes(Some(Box::new(channel_public_name.key))),
                     channel.provider_type.as_str().into(),
                     channel.base_url.clone().into(),
                     channel.api_key.clone().unwrap_or_default().into(),
@@ -1556,10 +1608,24 @@ impl MonoizeRoutingStore {
                     SeaValue::Int(Some(if input.per_model_circuit_break { 1 } else { 0 })),
                     SeaValue::Int(Some(input.channel_retry_interval_ms)),
                 ],
-            )).await.map_err(|e| e.to_string())?;
+            )).await.map_err(|error| map_provider_public_name_write_error(
+                &error.to_string(),
+                &public_name.value,
+                &channel_public_name.value,
+            ))?;
 
-        self.replace_channel_on(&*txn, &id, &input.channel)
-            .await?;
+        txn.execute(self.db.stmt(
+            "UPDATE monoize_providers SET pricing_profile = $1, multiplier = $2 WHERE id = $3",
+            vec![
+                pricing_profile.into(),
+                input.multiplier.to_string().into(),
+                id.clone().into(),
+            ],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+
+        self.replace_channel_on(&*txn, &id, &input.channel).await?;
         txn.commit().await.map_err(|e| e.to_string())?;
 
         self.get_provider(&id)
@@ -1572,8 +1638,35 @@ impl MonoizeRoutingStore {
         id: &str,
         input: UpdateMonoizeProviderInput,
     ) -> Result<MonoizeProvider, String> {
+        let existing_provider = self
+            .get_provider(id)
+            .await?
+            .ok_or_else(|| "provider not found".to_string())?;
         if let Some(channel) = &input.channel {
             validate_channel(channel, false)?;
+        }
+        let provider_public_name = input
+            .name
+            .as_deref()
+            .map(crate::public_name::canonicalize_public_name)
+            .transpose()?;
+        let channel_public_name = input
+            .channel
+            .as_ref()
+            .map(|channel| crate::public_name::canonicalize_public_name(&channel.name))
+            .transpose()?;
+        let existing_public_name =
+            crate::public_name::canonicalize_public_name(&existing_provider.name)?;
+        let existing_channel_public_name =
+            crate::public_name::canonicalize_public_name(&existing_provider.channel.name)?;
+        let changes_public_name = provider_public_name
+            .as_ref()
+            .is_some_and(|name| name.value != existing_public_name.value)
+            || channel_public_name
+                .as_ref()
+                .is_some_and(|name| name.value != existing_channel_public_name.value);
+        if changes_public_name && !input.confirm_public_exposure {
+            return Err("public_exposure_confirmation_required:provider".to_string());
         }
         if let Some(Some(v)) = input.active_probe_interval_seconds_override {
             if !(1..=i32::MAX as u64).contains(&v) {
@@ -1617,11 +1710,13 @@ impl MonoizeRoutingStore {
         };
         if let Some(value) = &input.name {
             push_value("name", value.clone().into());
-            let trimmed = value.trim();
-            push_value("public_name", trimmed.to_string().into());
+            let public_name = provider_public_name
+                .as_ref()
+                .expect("input name has canonical public name");
+            push_value("public_name", public_name.value.clone().into());
             push_value(
                 "public_name_key",
-                SeaValue::Bytes(Some(Box::new(trimmed.as_bytes().to_vec()))),
+                SeaValue::Bytes(Some(Box::new(public_name.key.clone()))),
             );
         }
         if let Some(value) = input.channel_max_retries {
@@ -1704,8 +1799,18 @@ impl MonoizeRoutingStore {
         if let Some(value) = input.priority {
             push_value("priority", SeaValue::Int(Some(value)));
         }
+        if let Some(value) = &input.pricing_profile {
+            push_value(
+                "pricing_profile",
+                normalize_pricing_profile(value.as_deref())?.into(),
+            );
+        }
+        if let Some(value) = input.multiplier {
+            push_value("multiplier", value.to_string().into());
+        }
         push_value("updated_at", Utc::now().to_rfc3339().into());
         drop(push_value);
+        set_clauses.push("configuration_generation = configuration_generation + 1".to_string());
 
         let id_index = values.len() + 1;
         values.push(id.into());
@@ -1719,7 +1824,17 @@ impl MonoizeRoutingStore {
                 values,
             ))
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| {
+                let public_name = provider_public_name
+                    .as_ref()
+                    .map(|name| name.value.as_str())
+                    .unwrap_or(existing_public_name.value.as_str());
+                map_provider_public_name_write_error(
+                    &error.to_string(),
+                    public_name,
+                    existing_channel_public_name.value.as_str(),
+                )
+            })?;
         if result.rows_affected() == 0 {
             return Err("provider not found".to_string());
         }
@@ -1827,7 +1942,9 @@ impl MonoizeRoutingStore {
         txn.execute(self.db.stmt(
             &format!(
                 "UPDATE monoize_providers
-                 SET priority = CASE id {} END, updated_at = ${updated_at_index}
+                 SET priority = CASE id {} END,
+                     updated_at = ${updated_at_index},
+                     configuration_generation = configuration_generation + 1
                  WHERE group_id = ${group_id_index}",
                 cases.join(" ")
             ),
@@ -1852,22 +1969,20 @@ impl MonoizeRoutingStore {
                 .await
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "provider not found".to_string())?;
-            let channel_id: String = channel
-                .id
-                .clone()
-                .or_else(|| existing.try_get("", "channel_id").ok())
-                .unwrap_or_else(generate_channel_id);
-            let api_key = channel
-                .api_key
-                .as_deref()
-                .filter(|key| !key.trim().is_empty())
-                .map(str::to_string)
-                .or_else(|| existing.try_get("", "channel_api_key").ok())
-                .ok_or_else(|| "channel api_key must not be empty".to_string())?;
-            let public_name = channel.name.trim().to_string();
-            let now = Utc::now().to_rfc3339();
-            conn.execute(self.db.stmt(
-                "UPDATE monoize_providers SET
+        let channel_id: String = existing
+            .try_get("", "channel_id")
+            .map_err(|e| e.to_string())?;
+        let api_key = channel
+            .api_key
+            .as_deref()
+            .filter(|key| !key.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| existing.try_get("", "channel_api_key").ok())
+            .ok_or_else(|| "channel api_key must not be empty".to_string())?;
+        let public_name = crate::public_name::canonicalize_public_name(&channel.name)?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(self.db.stmt(
+            "UPDATE monoize_providers SET
                     channel_id = $1, channel_name = $2, channel_public_name = $3,
                     channel_public_name_key = $4, channel_provider_type = $5,
                     channel_base_url = $6, channel_api_key = $7, channel_enabled = $8,
@@ -1887,11 +2002,11 @@ impl MonoizeRoutingStore {
                     channel_proxy_url = $22, channel_extra_headers = $23,
                     channel_session_affinity_auto = $24, channel_allow_missing_usage = $25,
                     updated_at = $26 WHERE id = $27",
-                vec![
+            vec![
                         channel_id.into(),
                         channel.name.clone().into(),
-                        public_name.clone().into(),
-                        SeaValue::Bytes(Some(Box::new(public_name.as_bytes().to_vec()))),
+                        public_name.value.clone().into(),
+                        SeaValue::Bytes(Some(Box::new(public_name.key))),
                         channel.provider_type.as_str().into(),
                         channel.base_url.clone().into(),
                         api_key.into(),
@@ -1930,29 +2045,38 @@ impl MonoizeRoutingStore {
                         now.into(),
                         provider_id.into(),
                     ],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
+        ))
+        .await
+        .map_err(|error| {
+            map_provider_public_name_write_error(
+                &error.to_string(),
+                "unchanged",
+                &public_name.value,
+            )
+        })?;
+        conn.execute(self.db.stmt(
+            "DELETE FROM monoize_provider_models WHERE provider_id = $1",
+            vec![provider_id.into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+        let now = Utc::now().to_rfc3339();
+        for (model, entry) in canonicalize_models(&channel.models)? {
+            let key = model.as_bytes().to_vec();
+            let search = model.to_ascii_lowercase().into_bytes();
             conn.execute(self.db.stmt(
-                "DELETE FROM monoize_provider_models WHERE provider_id = $1",
-                vec![provider_id.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-            let now = Utc::now().to_rfc3339();
-            for (model, entry) in canonicalize_models(&channel.models) {
-                let key = model.as_bytes().to_vec();
-                let search = model.to_ascii_lowercase().into_bytes();
-                conn.execute(self.db.stmt(
                     "INSERT INTO monoize_provider_models
                      (provider_id, model_name, model_name_key, model_search_key, redirect,
                       pricing_profile_mode, pricing_profile_override, multiplier_override, created_at)
-                     VALUES ($1,$2,$3,$4,$5,'override',NULL,$6,$7)",
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
                     vec![provider_id.into(), model.into(), SeaValue::Bytes(Some(Box::new(key))),
                          SeaValue::Bytes(Some(Box::new(search))), entry.redirect.into(),
-                         entry.multiplier.to_string().into(), now.clone().into()],
+                         pricing_profile_mode_name(entry.pricing_profile_mode).into(),
+                         entry.pricing_profile_override.into(),
+                         entry.multiplier_override.map(|value| value.to_string()).into(),
+                         now.clone().into()],
                 )).await.map_err(|e| e.to_string())?;
-            }
+        }
         Ok(())
     }
 }
@@ -1992,15 +2116,12 @@ fn decode_nonnegative_u64(provider_id: &str, field: &str, value: i64) -> Result<
 
 fn canonicalize_models(
     models: &HashMap<String, MonoizeModelEntry>,
-) -> HashMap<String, MonoizeModelEntry> {
+) -> Result<HashMap<String, MonoizeModelEntry>, String> {
     let mut out = HashMap::new();
     for (model, entry) in models {
-        let model = model.trim();
-        if model.is_empty() {
-            continue;
-        }
+        let model = canonical_model_name(model)?;
         out.insert(
-            model.to_string(),
+            model,
             MonoizeModelEntry {
                 redirect: entry
                     .redirect
@@ -2008,116 +2129,188 @@ fn canonicalize_models(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(str::to_string),
-                multiplier: entry.multiplier,
+                pricing_profile_mode: entry.pricing_profile_mode,
+                pricing_profile_override: entry
+                    .pricing_profile_override
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_string),
+                multiplier_override: entry.multiplier_override,
             },
         );
     }
-    out
+    Ok(out)
+}
+
+fn canonical_model_name(value: &str) -> Result<String, String> {
+    let model = value.trim_matches(char::is_whitespace);
+    let bytes = model.as_bytes();
+    if !(1..=256).contains(&bytes.len()) {
+        return Err("model name must contain 1 through 256 UTF-8 bytes".to_string());
+    }
+    if bytes.iter().any(|byte| matches!(*byte, 0x00..=0x1f | 0x7f)) {
+        return Err("model name must not contain C0 or DEL control characters".to_string());
+    }
+    Ok(model.to_string())
+}
+
+fn map_provider_public_name_write_error(
+    error: &str,
+    provider_public_name: &str,
+    channel_public_name: &str,
+) -> String {
+    let lower = error.to_ascii_lowercase();
+    if !(lower.contains("unique") || lower.contains("duplicate")) {
+        return error.to_string();
+    }
+    if lower.contains("channel_public_name") || lower.contains("uq_monoize_channel_public_name") {
+        return format!("public_name_conflict:channel:{channel_public_name}");
+    }
+    if lower.contains("public_name") || lower.contains("uq_monoize_provider_public_name") {
+        return format!("public_name_conflict:provider:{provider_public_name}");
+    }
+    error.to_string()
+}
+
+fn normalize_pricing_profile(profile: Option<&str>) -> Result<Option<String>, String> {
+    profile
+        .map(str::trim)
+        .map(|value| {
+            if value.is_empty() {
+                Err("pricing_profile must be null or non-empty".to_string())
+            } else {
+                Ok(value.to_string())
+            }
+        })
+        .transpose()
+}
+
+fn pricing_profile_mode_name(mode: PricingProfileMode) -> &'static str {
+    match mode {
+        PricingProfileMode::Inherit => "inherit",
+        PricingProfileMode::Override => "override",
+        PricingProfileMode::Unpriced => "unpriced",
+    }
 }
 
 fn validate_models(models: &HashMap<String, MonoizeModelEntry>) -> Result<(), String> {
-    for model in models.keys() {
-        if model.trim().is_empty() {
-            return Err("model key must not be empty".to_string());
+    for (model, entry) in models {
+        canonical_model_name(model)?;
+        let profile_override =
+            normalize_pricing_profile(entry.pricing_profile_override.as_deref())?;
+        match entry.pricing_profile_mode {
+            PricingProfileMode::Override if profile_override.is_none() => {
+                return Err(format!(
+                    "model {model} override mode requires pricing_profile_override"
+                ));
+            }
+            PricingProfileMode::Inherit | PricingProfileMode::Unpriced
+                if profile_override.is_some() =>
+            {
+                return Err(format!(
+                    "model {model} pricing_profile_override requires override mode"
+                ));
+            }
+            _ => {}
         }
     }
     Ok(())
 }
 
-fn validate_channel(channel: &CreateMonoizeChannelInput, require_api_key: bool) -> Result<(), String> {
-    if channel.models.is_empty() {
-        return Err("the channel must define at least one model".to_string());
-    }
+fn validate_channel(
+    channel: &CreateMonoizeChannelInput,
+    require_api_key: bool,
+) -> Result<(), String> {
     let c = channel;
-        if c.name.trim().is_empty() {
-            return Err("channel name must not be empty".to_string());
+    if c.name.trim().is_empty() {
+        return Err("channel name must not be empty".to_string());
+    }
+    if c.base_url.trim().is_empty() {
+        return Err("channel base_url must not be empty".to_string());
+    }
+    if require_api_key {
+        let key = c.api_key.as_deref().unwrap_or("");
+        if key.trim().is_empty() {
+            return Err("channel api_key must not be empty".to_string());
         }
-        if c.base_url.trim().is_empty() {
-            return Err("channel base_url must not be empty".to_string());
+    }
+    if let Some(headers) = &c.extra_headers {
+        validate_channel_extra_headers(&c.name, headers)?;
+    }
+    if let Some(v) = c.passive_failure_count_threshold_override {
+        if !(1..=i32::MAX as u32).contains(&v) {
+            return Err(
+                "channel passive_failure_count_threshold_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if require_api_key {
-            let key = c.api_key.as_deref().unwrap_or("");
-            if key.trim().is_empty() {
-                return Err("channel api_key must not be empty".to_string());
-            }
+    }
+    if let Some(v) = c.passive_cooldown_seconds_override {
+        if !(1..=i32::MAX as u64).contains(&v) {
+            return Err(
+                "channel passive_cooldown_seconds_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(headers) = &c.extra_headers {
-            validate_channel_extra_headers(&c.name, headers)?;
+    }
+    if let Some(v) = c.passive_window_seconds_override {
+        if !(1..=i32::MAX as u64).contains(&v) {
+            return Err(
+                "channel passive_window_seconds_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = c.passive_failure_count_threshold_override {
-            if !(1..=i32::MAX as u32).contains(&v) {
-                return Err(
-                    "channel passive_failure_count_threshold_override must be between 1 and 2147483647".to_string(),
-                );
-            }
-        }
-        if let Some(v) = c.passive_cooldown_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "channel passive_cooldown_seconds_override must be between 1 and 2147483647"
-                        .to_string(),
-                );
-            }
-        }
-        if let Some(v) = c.passive_window_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "channel passive_window_seconds_override must be between 1 and 2147483647"
-                        .to_string(),
-                );
-            }
-        }
-        if let Some(v) = c.passive_rate_limit_cooldown_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
+    }
+    if let Some(v) = c.passive_rate_limit_cooldown_seconds_override {
+        if !(1..=i32::MAX as u64).contains(&v) {
+            return Err(
                     "channel passive_rate_limit_cooldown_seconds_override must be between 1 and 2147483647".to_string(),
                 );
-            }
         }
-        if let Some(v) = c.active_probe_interval_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "channel active_probe_interval_seconds_override must be between 1 and 2147483647".to_string(),
-                );
-            }
+    }
+    if let Some(v) = c.active_probe_interval_seconds_override {
+        if !(1..=i32::MAX as u64).contains(&v) {
+            return Err(
+                "channel active_probe_interval_seconds_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = c.active_probe_success_threshold_override {
-            if !(1..=i32::MAX as u32).contains(&v) {
-                return Err(
-                    "channel active_probe_success_threshold_override must be between 1 and 2147483647".to_string(),
-                );
-            }
+    }
+    if let Some(v) = c.active_probe_success_threshold_override {
+        if !(1..=i32::MAX as u32).contains(&v) {
+            return Err(
+                "channel active_probe_success_threshold_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = c.affinity_idle_ttl_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "channel affinity_idle_ttl_seconds_override must be between 1 and 2147483647"
-                        .to_string(),
-                );
-            }
+    }
+    if let Some(v) = c.affinity_idle_ttl_seconds_override {
+        if !(1..=i32::MAX as u64).contains(&v) {
+            return Err(
+                "channel affinity_idle_ttl_seconds_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = c.affinity_failback_delay_seconds_override {
-            if v > i32::MAX as u64 {
-                return Err(
-                    "channel affinity_failback_delay_seconds_override must be between 0 and 2147483647"
-                        .to_string(),
-                );
-            }
+    }
+    if let Some(v) = c.affinity_failback_delay_seconds_override {
+        if v > i32::MAX as u64 {
+            return Err(
+                "channel affinity_failback_delay_seconds_override must be between 0 and 2147483647"
+                    .to_string(),
+            );
         }
-        validate_models(&c.models)?;
-        let mut model_seen = HashSet::new();
-        for model in c.models.keys() {
-            let model = model.trim();
-            if model.is_empty() {
-                return Err("channel model keys must not be empty".to_string());
-            }
-            if !model_seen.insert(model.to_string()) {
-                return Err(format!(
-                    "channel '{}' has duplicate model '{}'",
-                    c.name, model
-                ));
-            }
+    }
+    validate_models(&c.models)?;
+    let mut model_seen = HashSet::new();
+    for model in c.models.keys() {
+        let model = canonical_model_name(model)?;
+        if !model_seen.insert(model.clone()) {
+            return Err(format!(
+                "channel '{}' has duplicate model '{}'",
+                c.name, model
+            ));
         }
+    }
     Ok(())
 }
 
@@ -2837,10 +3030,7 @@ mod tests {
             .expect("store creates");
         let default_group_id: String = db
             .read()
-            .query_one(db.stmt(
-                "SELECT id FROM monoize_groups WHERE is_default = 1",
-                vec![],
-            ))
+            .query_one(db.stmt("SELECT id FROM monoize_groups WHERE is_default = 1", vec![]))
             .await
             .expect("default Group query succeeds")
             .expect("default Group exists")
@@ -2882,9 +3072,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .available_model_names(&[
-                    "model-z".to_string(),
-                ])
+                .available_model_names(&["model-z".to_string(),])
                 .await
                 .expect("candidate availability loads"),
             HashSet::from(["model-z".to_string()])
@@ -2972,18 +3160,21 @@ mod tests {
             .create_provider(disabled_provider)
             .await
             .expect("disabled provider creates");
-        assert!(store
-            .list_providers_for_model("model-disabled-provider")
-            .await
-            .expect("disabled provider lookup")
-            .is_empty());
-        assert!(store
-            .list_active_probe_candidates()
-            .await
-            .expect("active probe candidates reload")
-            .iter()
-            .all(|provider| provider.enabled
-                && provider.channel.enabled));
+        assert!(
+            store
+                .list_providers_for_model("model-disabled-provider")
+                .await
+                .expect("disabled provider lookup")
+                .is_empty()
+        );
+        assert!(
+            store
+                .list_active_probe_candidates()
+                .await
+                .expect("active probe candidates reload")
+                .iter()
+                .all(|provider| provider.enabled && provider.channel.enabled)
+        );
 
         db.write()
             .await
@@ -2993,11 +3184,13 @@ mod tests {
             ))
             .await
             .expect("corrupt whitelist writes");
-        assert!(store
-            .get_provider(&created.id)
-            .await
-            .expect_err("invalid whitelist must fail provider decoding")
-            .contains("invalid extra_fields_whitelist JSON"));
+        assert!(
+            store
+                .get_provider(&created.id)
+                .await
+                .expect_err("invalid whitelist must fail provider decoding")
+                .contains("invalid extra_fields_whitelist JSON")
+        );
     }
 
     #[test]
@@ -3184,9 +3377,11 @@ mod tests {
     #[test]
     fn extra_headers_decode_roundtrips_and_rejects_garbage() {
         assert!(decode_extra_headers(None).unwrap().is_none());
-        assert!(decode_extra_headers(Some("  ".to_string()))
-            .unwrap()
-            .is_none());
+        assert!(
+            decode_extra_headers(Some("  ".to_string()))
+                .unwrap()
+                .is_none()
+        );
         let decoded = decode_extra_headers(Some(r#"{"X-A":"1"}"#.to_string()));
         assert!(decoded.is_ok());
         assert!(decode_extra_headers(Some("not-json".to_string())).is_err());

@@ -30,6 +30,7 @@ export interface Group {
 
 export interface CreateGroupInput {
   name: string;
+  confirm_public_exposure?: boolean;
   description?: string;
   user_selectable?: boolean;
   sort_order?: number;
@@ -37,6 +38,7 @@ export interface CreateGroupInput {
 
 export interface UpdateGroupInput {
   name?: string;
+  confirm_public_exposure?: boolean;
   description?: string;
   user_selectable?: boolean;
   sort_order?: number;
@@ -277,7 +279,9 @@ export interface ConfigOverview {
 
 export interface MonoizeModelEntry {
   redirect: string | null;
-  multiplier: string;
+  pricing_profile_mode: "inherit" | "override" | "unpriced";
+  pricing_profile_override?: string | null;
+  multiplier_override?: string | null;
 }
 
 export interface MonoizeChannel {
@@ -327,6 +331,11 @@ export interface ProviderModelRuntimeStatus {
   unpriced_channels: ProviderModelRuntimeChannel[];
 }
 
+export interface ProviderPricingWarning {
+  logical_model: string;
+  missing_usage_classes: string[];
+}
+
 export type ProviderType = "responses" | "chat_completion" | "messages" | "gemini" | "openai_image" | "replicate";
 export type AffinityFailbackMode = "sticky" | "prefer_higher_priority";
 
@@ -338,6 +347,8 @@ export interface Provider {
   id: string;
   name: string;
   channel: MonoizeChannel;
+  pricing_profile?: string | null;
+  multiplier: string;
   channel_max_retries: number;
   channel_retry_interval_ms: number;
   circuit_breaker_enabled: boolean;
@@ -359,10 +370,10 @@ export interface Provider {
   unpriced_model_count?: number;
   unpriced_model_ids?: string[];
   model_runtime_statuses?: ProviderModelRuntimeStatus[];
+  pricing_warnings?: ProviderPricingWarning[];
 }
 
 export interface CreateMonoizeChannelInput {
-  id?: string;
   name: string;
   provider_type: ProviderType;
   base_url: string;
@@ -390,6 +401,9 @@ export interface CreateMonoizeChannelInput {
 export interface CreateProviderInput {
   name: string;
   channel: CreateMonoizeChannelInput;
+  confirm_public_exposure?: boolean;
+  pricing_profile?: string | null;
+  multiplier?: string;
   channel_max_retries?: number;
   channel_retry_interval_ms?: number;
   circuit_breaker_enabled?: boolean;
@@ -411,6 +425,9 @@ export interface CreateProviderInput {
 export interface UpdateProviderInput {
   name?: string;
   channel?: CreateMonoizeChannelInput;
+  confirm_public_exposure?: boolean;
+  pricing_profile?: string | null;
+  multiplier?: string;
   channel_max_retries?: number;
   channel_retry_interval_ms?: number;
   circuit_breaker_enabled?: boolean;

@@ -17,8 +17,9 @@ description: Group 内で順序付けた Provider と内蔵 Channel で上流ル
 1. サイドバーの**プロバイダー**を開きます。
 2. 作成ボタンをクリックして名前を入力します。
 3. 1 つの Group を選択し、内蔵 Channel を設定します。
-4. 既定値が合わない場合は `channel_max_retries` と `channel_retry_interval_ms` を設定します。
-5. 明確な理由がない限り、`circuit_breaker_enabled` は有効のままにします。
+4. Provider 名と Channel 名を公開ページに表示できることを確認します。
+5. 既定値が合わない場合は `channel_max_retries` と `channel_retry_interval_ms` を設定します。
+6. 明確な理由がない限り、`circuit_breaker_enabled` は有効のままにします。
 
 ## Channel を設定
 
@@ -39,6 +40,8 @@ description: Group 内で順序付けた Provider と内蔵 Channel で上流ル
 
 Channel が有効で、モデル対応付けに完全な価格がある場合のみ、そのモデルはその Provider にルーティングされます。
 
+価格警告が表示されても Provider を保存できます。各警告の論理モデルと不足している usage class を確認します。トラフィックを送る前に不足レートを追加します。
+
 ## Provider の変換
 
 Provider は順序付き変換ルールのリストを保持できます。Provider の選択後、上流エンコードの前に、その Provider が処理するすべてのリクエストに適用されます。[変換](/ja/docs/transforms)を参照してください。
@@ -46,3 +49,5 @@ Provider は順序付き変換ルールのリストを保持できます。Provi
 ## グループ
 
 各 Provider は 1 つの Group に属します。API キーは許可された Group の Provider のみにルーティングされます。Group を使ってユーザー層や環境を分離します。
+
+Group を作成または改名するときは、公開表示を確認します。公開モデルマーケットとステータスページには、確認済みの Group、Provider、Channel 名が表示されます。
