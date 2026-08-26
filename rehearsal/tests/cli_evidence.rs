@@ -37,6 +37,20 @@ fn summary_distinguishes_passed_executed_and_blocked_gates() {
     );
     assert!(!summary.product_integration_authorized);
     assert!(!summary.production_deployment_authorized);
+    assert!(
+        !summary
+            .components
+            .status_primitives
+            .note
+            .contains("full directory fsync")
+    );
+    assert!(
+        summary
+            .components
+            .status_primitives
+            .note
+            .contains("directory fsync probe")
+    );
 }
 
 #[test]

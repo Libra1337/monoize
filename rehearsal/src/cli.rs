@@ -158,7 +158,7 @@ pub fn build_gate_summary(input: GateSummaryInput) -> GateSummary {
             ),
             status_primitives: component(
                 input.sqlite_tests_passed,
-                "capacity, logical spool lifecycle, dispatch, replay, aggregation suite; full platform fsync and fault profiles remain Gate D blockers",
+                "capacity, cross-platform allocation/free-byte probe, directory fsync probe, fail-closed unknown file slots, spool scan, dispatch, replay, aggregation suite; full load and fault profiles remain Gate D blockers",
             ),
             postgres_rehearsal: if input.postgres_rehearsal_passed {
                 component(

@@ -826,6 +826,7 @@ dependencies = [
  "chrono",
  "hex",
  "hmac",
+ "libc",
  "rand",
  "rust_decimal",
  "serde",
@@ -836,6 +837,7 @@ dependencies = [
  "tokio",
  "unicode-normalization",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -2,6 +2,7 @@ mod aggregate;
 mod capacity;
 mod dispatch;
 mod event;
+mod filesystem;
 mod sink;
 mod spool;
 
@@ -15,5 +16,9 @@ pub use capacity::{
 };
 pub use dispatch::{DispatchError, DispatchGate, DispatchGuard, DispatchPath};
 pub use event::{EventOutcome, FailureClass, UpstreamCallEvent};
+pub use filesystem::{
+    Admission, FileSlotCapacity, FilesystemCapacity, FilesystemProbe, SpoolScan,
+    assess_startup_admission, probe_filesystem, scan_spool,
+};
 pub use sink::StatusSink;
 pub use spool::{NodeState, Spool, SpoolConfig, SpoolError};
