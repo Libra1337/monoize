@@ -343,7 +343,8 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
 
 ### 3.8 Test channel liveness
 
-- Method/Path: `POST /api/dashboard/providers/{provider_id}/channels/{channel_id}/test`
+- Method/Path: `POST /api/dashboard/providers/{provider_id}/channel/test`
+- The handler MUST test the Provider's embedded Channel. The request MUST NOT contain a Channel ID.
 - Body: `{ "model"?: string, "stream"?: boolean }`
 - If `stream` is omitted, it MUST default to `true`.
 - If `model` is provided, it MUST be a key in the Channel `models` object.

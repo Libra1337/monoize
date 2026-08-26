@@ -952,7 +952,7 @@ pub struct TestChannelRequest {
 pub async fn test_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((provider_id, channel_id)): Path<(String, String)>,
+    Path(provider_id): Path<String>,
     body: Option<Json<TestChannelRequest>>,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
@@ -967,9 +967,9 @@ pub async fn test_channel(
 
     let channel = provider
         .channels
-        .iter()
-        .find(|c| c.id == channel_id)
+        .first()
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "channel not found"))?;
+    let channel_id = channel.id.clone();
 
     let (requested_model, stream) = body
         .map(|body| (body.model.clone(), body.stream.unwrap_or(true)))
@@ -1265,7 +1265,7 @@ mod tests {
     fn test_provider_input(base_url: String) -> CreateMonoizeProviderInput {
         CreateMonoizeProviderInput {
             name: "provider".to_string(),
-	                enabled: true,
+            enabled: true,
             priority: Some(0),
             max_retries: -1,
             channel_max_retries: 0,

@@ -53,7 +53,6 @@ type ChannelTestDialogProps = {
 	open: boolean
 	onOpenChange: (open: boolean) => void
 	providerId: string
-	channelId: string
 	channelName: string
 	providerName: string
 	providerType: ProviderType
@@ -64,7 +63,6 @@ export function ChannelTestDialog({
 	open,
 	onOpenChange,
 	providerId,
-	channelId,
 	channelName,
 	providerName,
 	providerType,
@@ -96,7 +94,6 @@ export function ChannelTestDialog({
 		try {
 			const result: ChannelTestResult = await api.testChannel(
 				providerId,
-				channelId,
 				model,
 				streamMode
 			)

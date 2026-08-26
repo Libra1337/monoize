@@ -236,7 +236,6 @@ export function ProviderCard({
 		try {
 			const result: ChannelTestResult = await api.testChannel(
 				provider.id,
-				channelId,
 				undefined,
 				false
 			)
@@ -547,7 +546,6 @@ export function ProviderCard({
 						if (!open) setTestDialogChannel(null)
 					}}
 					providerId={provider.id}
-					channelId={testDialogChannel.id}
 					channelName={testDialogChannel.name}
 					providerName={provider.name}
 					models={testDialogChannel.models}

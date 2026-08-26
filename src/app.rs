@@ -2203,7 +2203,7 @@ fn build_dashboard_api_router() -> Router<AppState> {
                 .delete(crate::dashboard_handlers::delete_model_metadata),
         )
         .route(
-            "/dashboard/providers/{provider_id}/channels/{channel_id}/test",
+            "/dashboard/providers/{provider_id}/channel/test",
             post(crate::dashboard_handlers::test_channel),
         )
         .route(

@@ -1243,11 +1243,10 @@ class ApiClient {
 
   async testChannel(
     providerId: string,
-    channelId: string,
     model?: string,
     stream = true
   ): Promise<ChannelTestResult> {
-    return this.request(`/providers/${providerId}/channels/${channelId}/test`, {
+    return this.request(`/providers/${providerId}/channel/test`, {
       method: "POST",
       body: JSON.stringify({ ...(model ? { model } : {}), stream }),
     });
