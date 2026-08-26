@@ -2,6 +2,7 @@ use crate::app::AppState;
 use crate::billing_rate_store::{DbBillingRateRecord, select_pricing_profile};
 use crate::error::{AppError, AppResult};
 use crate::exact_decimal::Multiplier;
+use crate::model_registry::ModelCapabilities;
 use crate::monoize_routing::{MonoizeChannel, MonoizeProvider};
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -292,6 +293,32 @@ fn channels_for_model<'a>(provider: &'a MonoizeProvider, model: &str) -> Vec<&'a
         .collect()
 }
 
+fn capability_labels(capabilities: &ModelCapabilities) -> Vec<String> {
+    let mut labels = Vec::new();
+    if capabilities.supports_streaming {
+        labels.push("streaming".to_string());
+    }
+    if capabilities.supports_tools {
+        labels.push("tools".to_string());
+    }
+    if capabilities.supports_structured_output {
+        labels.push("structured_output".to_string());
+    }
+    if capabilities.supports_reasoning_controls.supported {
+        labels.push("reasoning".to_string());
+    }
+    if capabilities.supports_image_input.supported {
+        labels.push("image_input".to_string());
+    }
+    if capabilities.supports_file_input.supported {
+        labels.push("file_input".to_string());
+    }
+    if capabilities.supports_image_output.supported {
+        labels.push("image_output".to_string());
+    }
+    labels
+}
+
 pub async fn list_marketplace(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -328,6 +355,19 @@ pub async fn list_marketplace(
         .map_err(|error| {
             AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
         })?;
+    let model_capabilities = state
+        .model_registry_store
+        .list_models()
+        .await
+        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
+        .into_iter()
+        .map(|record| {
+            (
+                record.logical_model,
+                capability_labels(&record.capabilities),
+            )
+        })
+        .collect::<HashMap<_, _>>();
     let mut items: BTreeMap<(String, String), Vec<(String, String, Vec<PublicRate>)>> =
         BTreeMap::new();
     for provider in providers {
@@ -372,15 +412,7 @@ pub async fn list_marketplace(
             .iter()
             .flat_map(|offer| offer.2.clone())
             .collect::<Vec<_>>();
-        let capabilities = state
-            .model_registry_store
-            .get_model_metadata(&model)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|metadata| metadata.mode)
-            .into_iter()
-            .collect();
+        let capabilities = model_capabilities.get(&model).cloned().unwrap_or_default();
         output.push(MarketplaceItem {
             public_group_name: group_name,
             model,
