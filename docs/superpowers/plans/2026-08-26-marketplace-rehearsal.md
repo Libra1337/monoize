@@ -250,7 +250,7 @@ Expected: FAIL because deterministic fixture generation is absent.
 
 - [ ] **Step 3: Implement smoke and qualification envelopes**
 
-Use one fixed seed. `SMOKE` has 8 Groups, 128 Providers, 4,096 mappings, 2,048 distinct rows, 2,048 metadata rows, and 8,192 rates. `QUALIFICATION` has exactly 128 Groups, 5,000 Providers, 250,000 mappings, 100,000 distinct rows, 100,000 metadata rows, and 500,000 rates. Generate the 5,000-offer hot model and more than 256 canonical query sets.
+Use one fixed seed. `SMOKE` has 8 Groups, 128 Providers, 4,096 mappings, 2,048 distinct model rows, 2,048 metadata rows, 8,192 rates, and 32,768 offers. `QUALIFICATION` has exactly 128 Groups, 5,000 Providers, 250,000 mappings, 100,000 distinct model rows, 250,000 metadata rows, 1,000,000 rates, and 2,000,000 offers. Generate the 5,000-offer hot model and more than 256 canonical query sets.
 
 - [ ] **Step 4: Run smoke benchmark**
 
