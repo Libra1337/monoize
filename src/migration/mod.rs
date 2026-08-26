@@ -50,6 +50,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260824_000041_request_capture_records::Migration),
             Box::new(m20260825_000042_groups_registry::Migration),
             Box::new(m20260825_000043_channel_allow_missing_usage::Migration),
+            Box::new(m20260826_000044_provider_pricing_flatten::Migration),
         ]
     }
 }

@@ -168,9 +168,9 @@ export function fromProvider(provider: Provider): ProviderForm {
 		request_timeout_ms_override: provider.request_timeout_ms_override == null ? '' : String(provider.request_timeout_ms_override),
 		extra_fields_whitelist: provider.extra_fields_whitelist?.join(', ') ?? '',
 		strip_cross_protocol_nested_extra: provider.strip_cross_protocol_nested_extra ?? null,
-		group_ids: provider.group_ids ?? [],
+		group_ids: provider.group_ids?.slice(0, 1) ?? [],
 		priority: provider.priority,
-		channels: provider.channels.map(channel => ({
+		channels: provider.channels.slice(0, 1).map(channel => ({
 			...emptyChannelRow(),
 			id: channel.id,
 			name: channel.name,

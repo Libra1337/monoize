@@ -1,5 +1,5 @@
-use sea_orm::DeriveRelation;
 use sea_orm::entity::prelude::*;
+use sea_orm::DeriveRelation;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "monoize_providers")]
@@ -23,6 +23,8 @@ pub struct Model {
     pub configuration_generation: i64,
     #[sea_orm(column_type = "Text")]
     pub created_at: String,
+    #[sea_orm(column_type = "Text")]
+    pub updated_at: String,
     #[sea_orm(unique)]
     #[sea_orm(column_type = "Text")]
     pub channel_id: String,
@@ -40,6 +42,22 @@ pub struct Model {
     pub channel_api_key: String,
     pub channel_enabled: i32,
     pub channel_max_retries: i32,
+    pub channel_passive_failure_count_threshold_override: Option<i32>,
+    pub channel_passive_cooldown_seconds_override: Option<i32>,
+    pub channel_passive_window_seconds_override: Option<i32>,
+    pub channel_passive_rate_limit_cooldown_seconds_override: Option<i32>,
+    pub channel_active_probe_enabled_override: Option<i32>,
+    pub channel_active_probe_interval_seconds_override: Option<i32>,
+    pub channel_active_probe_success_threshold_override: Option<i32>,
+    pub channel_active_probe_model_override: Option<String>,
+    pub channel_affinity_enabled_override: Option<i32>,
+    pub channel_affinity_idle_ttl_seconds_override: Option<i32>,
+    pub channel_affinity_failback_mode_override: Option<String>,
+    pub channel_affinity_failback_delay_seconds_override: Option<i32>,
+    pub channel_proxy_url: Option<String>,
+    pub channel_extra_headers: Option<String>,
+    pub channel_session_affinity_auto: Option<i32>,
+    pub channel_allow_missing_usage: i32,
     pub transforms: String,
     pub api_type_overrides: String,
     pub active_probe_enabled_override: Option<i32>,

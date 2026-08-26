@@ -5,7 +5,6 @@ import {
 	Braces,
 	ChevronRight,
 	CircleGauge,
-	Copy,
 	GitBranch,
 	Layers3,
 	Plus,
@@ -74,14 +73,13 @@ import {
 	useProviderDetail,
 	updateProviderOptimistic
 } from '@/lib/swr'
-import { GroupMultiSelect } from '@/components/groups/GroupPicker'
+import { GroupSingleSelect } from '@/components/groups/GroupPicker'
 import { cn } from '@/lib/utils'
 import { normalizeMultiplier } from '@/lib/exact-decimal'
 import { ChannelModelEditor } from './ChannelModelEditor'
 import { ModelPickerDialog } from './ModelPickerDialog'
 import {
 	buildPricedModelIdSet,
-	emptyChannelRow,
 	emptyForm,
 	fromProvider,
 	hasTrailingV1,
@@ -184,7 +182,7 @@ function buildInput(form: ProviderForm, c: (zhText: string, enText: string) => s
 		channel_retry_interval_ms: form.channel_retry_interval_ms,
 		circuit_breaker_enabled: form.circuit_breaker_enabled,
 		per_model_circuit_break: form.per_model_circuit_break,
-		channels: form.channels.map(channel => channelInput(channel, c)),
+		channels: form.channels.slice(0, 1).map(channel => channelInput(channel, c)),
 		transforms: form.transforms,
 		api_type_overrides: form.api_type_overrides,
 		active_probe_enabled_override: form.active_probe_enabled_override,
@@ -197,7 +195,7 @@ function buildInput(form: ProviderForm, c: (zhText: string, enText: string) => s
 			.map(value => value.trim())
 			.filter(Boolean),
 		strip_cross_protocol_nested_extra: form.strip_cross_protocol_nested_extra,
-		group_ids: form.group_ids
+		group_ids: form.group_ids.slice(0, 1)
 	}
 }
 
@@ -274,6 +272,8 @@ export function ProviderDialog({
 	}
 
 	const validate = () => {
+		if (form.group_ids.length > 1) return c('Provider group selection is singular', 'A provider can use only one serving group')
+		if (form.channels.length > 1) return c('Provider channel selection is singular', 'A provider can configure only one channel')
 		if (!form.name.trim()) return c('请输入 Provider 名称', 'Enter a provider name')
 		if (!form.channels.length) return c('至少需要一个 Channel', 'At least one channel is required')
 		if (!form.channels.some(channel => channel.models.length > 0)) {
@@ -328,33 +328,6 @@ export function ProviderDialog({
 		else onOpenChange(false)
 	}
 
-	const addChannel = () => {
-		setForm(previous => ({ ...previous, channels: [...previous.channels, emptyChannelRow()] }))
-		setSelectedChannel(form.channels.length)
-		setSection('channels')
-		setMobileChannelOpen(true)
-	}
-
-	const duplicateChannel = () => {
-		if (!activeChannel) return
-		const duplicate = {
-			...activeChannel,
-			id: '',
-			name: `${activeChannel.name} ${c('副本', 'copy')}`,
-			api_key: '',
-			models: activeChannel.models.map(model => ({ ...model }))
-		}
-		setForm(previous => ({ ...previous, channels: [...previous.channels, duplicate] }))
-		setSelectedChannel(form.channels.length)
-	}
-
-	const removeChannel = () => {
-		if (!activeChannel || form.channels.length === 1) return
-		setForm(previous => ({ ...previous, channels: previous.channels.filter((_, index) => index !== selectedChannel) }))
-		setSelectedChannel(Math.max(0, selectedChannel - 1))
-		setMobileChannelOpen(false)
-	}
-
 	const pickerInfo: FetchChannelModelsInput | undefined = activeChannel?.base_url.trim() && (
 		activeChannel.api_key.trim() || (isEdit && current && activeChannel.id)
 	) ? {
@@ -367,7 +340,7 @@ export function ProviderDialog({
 
 	const sections: Array<{ id: Section; icon: typeof Server; label: string; summary: string }> = [
 		{ id: 'provider', icon: Server, label: 'Provider', summary: form.name || c('未命名', 'Untitled') },
-		{ id: 'channels', icon: Layers3, label: 'Channels', summary: `${form.channels.length}` },
+		{ id: 'channels', icon: Layers3, label: 'Channel', summary: `${Math.min(form.channels.length, 1)}` },
 		{ id: 'routing', icon: GitBranch, label: c('路由', 'Routing'), summary: `${form.max_retries === -1 ? '∞' : form.max_retries + 1} attempts` },
 		{ id: 'transforms', icon: Braces, label: c('转换', 'Transforms'), summary: `${form.transforms.length}` },
 		{ id: 'protocol', icon: Settings2, label: c('协议', 'Protocol'), summary: `${form.api_type_overrides.length}` }
@@ -432,9 +405,6 @@ export function ProviderDialog({
 											setSelectedChannel={setSelectedChannel}
 											updateChannel={updateChannel}
 											setForm={setForm}
-											addChannel={addChannel}
-											duplicateChannel={duplicateChannel}
-											removeChannel={removeChannel}
 											openPicker={() => {
 												if (!pickerInfo) toast.error(c('请先填写 Base URL 和 API Key', 'Enter a base URL and API key first'))
 												else setPickerOpen(true)
@@ -516,11 +486,11 @@ function ProviderBasics({ form, setForm, c }: { form: ProviderForm; setForm: Rea
 		<div className='grid gap-5 rounded-xl border bg-card p-4 sm:grid-cols-2 sm:p-5'>
 			<Field label={c('名称', 'Name')} className='sm:col-span-2'><Input value={form.name} onChange={event => setForm(previous => ({ ...previous, name: event.target.value }))} placeholder='OpenAI production' /></Field>
 			<Field label={c('服务分组', 'Serving groups')} hint={c('留空保存时自动绑定系统默认分组。', 'Empty selections are bound to the system default group on save.')} className='sm:col-span-2'>
-				<GroupMultiSelect
-					value={form.group_ids}
+				<GroupSingleSelect
+					value={form.group_ids[0] ?? ''}
 					groups={groups}
 					loading={groupsLoading}
-					onChange={group_ids => setForm(previous => ({ ...previous, group_ids }))}
+					onChange={group_id => setForm(previous => ({ ...previous, group_ids: [group_id] }))}
 				/>
 			</Field>
 			<Field label={c('额外字段白名单', 'Extra fields allowlist')} hint={c('逗号分隔，应用到全部 Channel。', 'Comma-separated and shared by all channels.')}><Input value={form.extra_fields_whitelist} onChange={event => setForm(previous => ({ ...previous, extra_fields_whitelist: event.target.value }))} placeholder='service_tier, metadata' /></Field>
@@ -537,9 +507,6 @@ type WorkbenchProps = {
 	setSelectedChannel: (index: number) => void
 	updateChannel: (index: number, patch: Partial<ChannelRow>) => void
 	setForm: React.Dispatch<React.SetStateAction<ProviderForm>>
-	addChannel: () => void
-	duplicateChannel: () => void
-	removeChannel: () => void
 	openPicker: () => void
 	pricedModels: Set<string>
 	metadataProvider: Map<string, string | undefined>
@@ -550,12 +517,12 @@ type WorkbenchProps = {
 }
 
 function ChannelsWorkbench(props: WorkbenchProps) {
-	const { form, activeChannel, selectedChannel, mobileChannelOpen, setMobileChannelOpen, setSelectedChannel, addChannel, c } = props
+	const { form, activeChannel, selectedChannel, mobileChannelOpen, setMobileChannelOpen, setSelectedChannel, c } = props
 	return <div className='h-full lg:grid lg:grid-cols-[300px_minmax(0,1fr)]'>
 		<div className={cn('h-full border-r bg-muted/10', mobileChannelOpen ? 'hidden lg:block' : 'block')}>
-			<div className='flex items-center justify-between border-b px-4 py-3'><div><h3 className='font-semibold'>Channels</h3><p className='text-xs text-muted-foreground'>{c('每个上游独立配置模型能力', 'Models are configured per upstream')}</p></div><Button size='icon' variant='outline' className='size-11 touch-manipulation sm:size-9' onClick={addChannel} aria-label={c('添加 Channel', 'Add channel')}><Plus data-icon /></Button></div>
+			<div className='border-b px-4 py-3'><h3 className='font-semibold'>Channel</h3><p className='text-xs text-muted-foreground'>{c('配置该 Provider 的唯一上游', 'Configure the provider upstream')}</p></div>
 			<div className='flex flex-col gap-1 p-2'>
-				{form.channels.map((channel, index) => <button type='button' key={channel.id || index} onClick={() => { setSelectedChannel(index); setMobileChannelOpen(true) }} className={cn('flex min-h-16 items-center gap-3 rounded-lg border-l-2 px-3 py-2 text-left transition-colors', selectedChannel === index ? 'border-l-primary bg-primary/10' : 'border-l-transparent hover:bg-muted')}>
+				{form.channels.slice(0, 1).map((channel, index) => <button type='button' key={channel.id || index} onClick={() => { setSelectedChannel(index); setMobileChannelOpen(true) }} className={cn('flex min-h-16 items-center gap-3 rounded-lg border-l-2 px-3 py-2 text-left transition-colors', selectedChannel === index ? 'border-l-primary bg-primary/10' : 'border-l-transparent hover:bg-muted')}>
 					<div className='min-w-0 flex-1'><div className='flex items-center gap-2'><span className='truncate text-sm font-medium'>{channel.name || c('未命名 Channel', 'Untitled channel')}</span>{!channel.enabled ? <Badge variant='secondary'>{c('停用', 'Off')}</Badge> : null}</div><p className='mt-1 truncate font-mono text-xs text-muted-foreground'>{channel.base_url || c('尚未填写 Base URL', 'No base URL')}</p><p className='mt-1 text-xs text-muted-foreground'>{PROVIDER_TYPE_CONFIG[channel.provider_type].label} · {channel.models.length} {c('个模型', 'models')}</p></div>
 					<ChevronRight className='size-4 shrink-0 text-muted-foreground' />
 				</button>)}
@@ -568,13 +535,13 @@ function ChannelsWorkbench(props: WorkbenchProps) {
 	</div>
 }
 
-function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelOpen, updateChannel, duplicateChannel, removeChannel, openPicker, pricedModels, metadataProvider, reasoningSuffixMap, settings, c, onBaseUrlBlur }: WorkbenchProps) {
+function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelOpen, updateChannel, openPicker, pricedModels, metadataProvider, reasoningSuffixMap, settings, c, onBaseUrlBlur }: WorkbenchProps) {
 	if (!activeChannel) return null
 	const allowMissingUsageId = `channel-${activeChannel.id || selectedChannel}-allow-missing-usage`
 	return <div className='mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-8 sm:p-6'>
 		<div className='flex items-start justify-between gap-3'>
 			<div className='flex min-w-0 items-start gap-2'><Button size='icon' variant='ghost' className='-ml-2 size-11 touch-manipulation sm:size-9 lg:hidden' onClick={() => setMobileChannelOpen(false)} aria-label={c('返回 Channel 列表', 'Back to channels')}><ArrowLeft data-icon /></Button><div className='min-w-0'><h3 className='truncate text-lg font-semibold'>{activeChannel.name || c('未命名 Channel', 'Untitled channel')}</h3><div className='mt-1'>{activeChannel._health_status ? statusBadge(activeChannel._health_status) : <Badge variant='secondary'>{c('未保存', 'Unsaved')}</Badge>}</div></div></div>
-			<div className='flex items-center gap-1'><Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' onClick={duplicateChannel} aria-label={c('复制 Channel', 'Duplicate channel')}><Copy data-icon /></Button><Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' disabled={form.channels.length === 1} onClick={removeChannel} aria-label={c('删除 Channel', 'Delete channel')}><Trash2 data-icon /></Button><Switch checked={activeChannel.enabled} onCheckedChange={enabled => updateChannel(selectedChannel, { enabled })} /></div>
+			<Switch checked={activeChannel.enabled} onCheckedChange={enabled => updateChannel(selectedChannel, { enabled })} />
 		</div>
 
 		<section className='flex flex-col gap-4 rounded-xl border bg-card p-4 sm:p-5'>
