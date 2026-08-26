@@ -3,6 +3,9 @@ use sea_orm::{
     ConnectionTrait, DatabaseTransaction, DbBackend, Statement, TransactionTrait, Value,
 };
 use sea_orm_migration::prelude::*;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::fmt::Write;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -92,8 +95,9 @@ async fn migrate_up(tx: &DatabaseTransaction, backend: DbBackend) -> Result<(), 
 
     let providers = tx.query_all(Statement::from_string(
         backend,
-        "SELECT id, name, max_retries, channel_max_retries, channel_retry_interval_ms, circuit_breaker_enabled, per_model_circuit_break, transforms, api_type_overrides, active_probe_enabled_override, active_probe_interval_seconds_override, active_probe_success_threshold_override, active_probe_model_override, request_timeout_ms_override, extra_fields_whitelist, strip_cross_protocol_nested_extra, group_ids, enabled, priority, created_at, updated_at FROM monoize_providers_legacy_flatten ORDER BY id".to_string(),
+        "SELECT id, name, max_retries, channel_max_retries, channel_retry_interval_ms, circuit_breaker_enabled, per_model_circuit_break, transforms, api_type_overrides, active_probe_enabled_override, active_probe_interval_seconds_override, active_probe_success_threshold_override, active_probe_model_override, request_timeout_ms_override, extra_fields_whitelist, strip_cross_protocol_nested_extra, group_ids, enabled, priority, created_at, updated_at FROM monoize_providers_legacy_flatten ORDER BY priority, created_at, id".to_string(),
     )).await?;
+    let mut next_priority = HashMap::<String, i32>::new();
     for provider in providers {
         let old_id: String = provider.try_get("", "id")?;
         let groups = decode_groups(
@@ -108,26 +112,38 @@ async fn migrate_up(tx: &DatabaseTransaction, backend: DbBackend) -> Result<(), 
         };
         let channels = tx.query_all(Statement::from_sql_and_values(
             backend,
-            numbered(backend, "SELECT id, name, provider_type, base_url, api_key, weight, enabled, passive_failure_count_threshold_override, passive_cooldown_seconds_override, passive_window_seconds_override, passive_rate_limit_cooldown_seconds_override, active_probe_enabled_override, active_probe_interval_seconds_override, active_probe_success_threshold_override, active_probe_model_override, affinity_enabled_override, affinity_idle_ttl_seconds_override, affinity_failback_mode_override, affinity_failback_delay_seconds_override, proxy_url, extra_headers, session_affinity_auto, allow_missing_usage FROM monoize_channels_legacy_flatten WHERE provider_id = ? ORDER BY id"), vec![old_id.clone().into()],
+            numbered(backend, "SELECT id, name, provider_type, base_url, api_key, weight, enabled, created_at, passive_failure_count_threshold_override, passive_cooldown_seconds_override, passive_window_seconds_override, passive_rate_limit_cooldown_seconds_override, active_probe_enabled_override, active_probe_interval_seconds_override, active_probe_success_threshold_override, active_probe_model_override, affinity_enabled_override, affinity_idle_ttl_seconds_override, affinity_failback_mode_override, affinity_failback_delay_seconds_override, proxy_url, extra_headers, session_affinity_auto, allow_missing_usage FROM monoize_channels_legacy_flatten WHERE provider_id = ? ORDER BY created_at, id"), vec![old_id.clone().into()],
         )).await?;
         if channels.is_empty() {
             return Err(DbErr::Custom(format!("provider {old_id} has no channel")));
         }
         for (group_index, group_id) in groups.iter().enumerate() {
+            let group_name = group_name(tx, backend, group_id).await?;
             for (channel_index, channel) in channels.iter().enumerate() {
-                let provider_id = if groups.len() == 1 && channels.len() == 1 {
+                let first_pair = group_index == 0 && channel_index == 0;
+                let legacy_channel_id: String = channel.try_get("", "id")?;
+                let provider_id = if first_pair {
                     old_id.clone()
                 } else {
-                    format!("mono_flat_{old_id}_{group_index}_{channel_index}")
+                    deterministic_id("provider", &old_id, group_id, &legacy_channel_id)
                 };
-                let legacy_channel_id: String = channel.try_get("", "id")?;
-                let channel_id = if groups.len() == 1 && channels.len() == 1 {
+                let channel_id = if group_index == 0 {
                     legacy_channel_id.clone()
                 } else {
-                    format!("mono_flat_{legacy_channel_id}_{group_index}")
+                    deterministic_id("channel", &old_id, group_id, &legacy_channel_id)
                 };
                 let name: String = provider.try_get("", "name")?;
                 let channel_name: String = channel.try_get("", "name")?;
+                let target_name = if first_pair {
+                    name.clone()
+                } else {
+                    format!("{name} / {group_name} / {channel_name}")
+                };
+                let priority = next_priority.entry(group_id.clone()).or_default();
+                let target_priority = *priority;
+                *priority = priority
+                    .checked_add(1)
+                    .ok_or_else(|| DbErr::Custom("group priority overflow".to_string()))?;
                 insert_provider(
                     tx,
                     backend,
@@ -135,9 +151,10 @@ async fn migrate_up(tx: &DatabaseTransaction, backend: DbBackend) -> Result<(), 
                     group_id,
                     &provider_id,
                     &channel_id,
-                    &name,
+                    &target_name,
                     &channel_name,
                     channel,
+                    target_priority,
                     &now,
                 )
                 .await?;
@@ -180,6 +197,7 @@ async fn insert_provider(
     name: &str,
     channel_name: &str,
     channel: &sea_orm::QueryResult,
+    priority: i32,
     now: &str,
 ) -> Result<(), DbErr> {
     let value = |column: &str| row.try_get::<String>("", column).unwrap_or_default();
@@ -197,7 +215,7 @@ async fn insert_provider(
         name.into(),
         public_name.clone().into(),
         bytes(backend, public_name.as_bytes()),
-        row.try_get::<i32>("", "priority")?.into(),
+        priority.into(),
         row.try_get::<i32>("", "enabled")?.into(),
         now.into(),
         now.into(),
@@ -208,7 +226,11 @@ async fn insert_provider(
         channel.try_get::<String>("", "provider_type")?.into(),
         channel.try_get::<String>("", "base_url")?.into(),
         channel.try_get::<String>("", "api_key")?.into(),
-        channel.try_get::<i32>("", "enabled")?.into(),
+        i32::from(
+            channel.try_get::<i32>("", "enabled")? != 0
+                && channel.try_get::<i32>("", "weight")? > 0,
+        )
+        .into(),
         row.try_get::<i32>("", "channel_max_retries")?.into(),
     ];
     for col in [
@@ -316,6 +338,45 @@ async fn default_group(tx: &DatabaseTransaction, backend: DbBackend) -> Result<S
     .await?
     .ok_or_else(|| DbErr::Custom("default group row missing".to_string()))
     .and_then(|row| row.try_get("", "id"))
+}
+
+async fn group_name(
+    tx: &DatabaseTransaction,
+    backend: DbBackend,
+    group_id: &str,
+) -> Result<String, DbErr> {
+    tx.query_one(Statement::from_sql_and_values(
+        backend,
+        numbered(
+            backend,
+            "SELECT name FROM monoize_groups WHERE id = ? LIMIT 1",
+        ),
+        vec![group_id.into()],
+    ))
+    .await?
+    .ok_or_else(|| DbErr::Custom(format!("provider references unknown group {group_id}")))
+    .and_then(|row| row.try_get("", "name"))
+}
+
+fn deterministic_id(kind: &str, provider_id: &str, group_id: &str, channel_id: &str) -> String {
+    let mut digest = Sha256::new();
+    for component in [
+        "lynshen-provider-migration-v1",
+        kind,
+        provider_id,
+        group_id,
+        channel_id,
+    ] {
+        let bytes = component.as_bytes();
+        digest.update((bytes.len() as u64).to_be_bytes());
+        digest.update(bytes);
+    }
+    let mut encoded = String::with_capacity(32);
+    for byte in &digest.finalize()[..16] {
+        write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    let prefix = if kind == "provider" { "p_" } else { "c_" };
+    format!("{prefix}{encoded}")
 }
 
 fn bytes(backend: DbBackend, value: &[u8]) -> Value {
