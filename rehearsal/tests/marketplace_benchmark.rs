@@ -1,5 +1,6 @@
 use monoize_lynshen_rehearsal::marketplace::{
-    BenchmarkConfig, BenchmarkMode, Envelope, compare_benchmark_reports, run_postgres_benchmark,
+    BenchmarkConfig, BenchmarkMode, Envelope, OperationMetrics, QualificationObservation,
+    compare_benchmark_reports, evaluate_read_qualification, run_postgres_benchmark,
     run_sqlite_benchmark, write_benchmark_report,
 };
 use sqlx::{Connection, Executor, PgConnection, Row};
@@ -266,6 +267,93 @@ fn qualification_config_rejects_a_smoke_envelope() {
     .validate()
     .unwrap_err();
     assert_eq!(error.to_string(), "qualification_requires_maximum_envelope");
+}
+
+#[test]
+fn qualification_config_rejects_a_query_limit() {
+    let error = BenchmarkConfig {
+        seed: 0x004c_594e_5348_454e,
+        envelope: Envelope::Qualification,
+        mode: BenchmarkMode::Qualification,
+        query_limit: Some(400),
+        git_commit: "test-commit".to_owned(),
+    }
+    .validate()
+    .unwrap_err();
+    assert_eq!(error.to_string(), "qualification_rejects_query_limit");
+}
+
+#[test]
+fn read_qualification_pass_does_not_approve_gate_b() {
+    let metrics = OperationMetrics {
+        samples: 10_000,
+        failed_samples: 0,
+        statement_count: 30_000,
+        response_bytes: 10_000,
+        max_response_bytes: 1_048_576,
+        p50_microseconds: 100_000,
+        p95_microseconds: 300_000,
+        p99_microseconds: 700_000,
+    };
+    let evaluation = evaluate_read_qualification(&QualificationObservation {
+        workers: 32,
+        warmup_seconds: 300,
+        measured_seconds: 600,
+        rss_delta_bytes: 512 * 1024 * 1024,
+        source_counts_match: true,
+        list: metrics.clone(),
+        offers: metrics,
+    });
+    assert!(evaluation.read_qualification_passed);
+    assert!(!evaluation.gate_b_qualified);
+    assert_eq!(
+        evaluation.blockers,
+        [
+            "write_qualification_not_run".to_owned(),
+            "production_copy_not_rehearsed".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn read_qualification_reports_each_failed_threshold() {
+    let metrics = OperationMetrics {
+        samples: 9_999,
+        failed_samples: 1,
+        statement_count: 0,
+        response_bytes: 0,
+        max_response_bytes: 1_048_577,
+        p50_microseconds: 0,
+        p95_microseconds: 501_000,
+        p99_microseconds: 1_001_000,
+    };
+    let evaluation = evaluate_read_qualification(&QualificationObservation {
+        workers: 31,
+        warmup_seconds: 299,
+        measured_seconds: 599,
+        rss_delta_bytes: 512 * 1024 * 1024 + 1,
+        source_counts_match: false,
+        list: metrics.clone(),
+        offers: metrics,
+    });
+    assert!(!evaluation.read_qualification_passed);
+    for blocker in [
+        "insufficient_workers",
+        "warmup_duration_not_met",
+        "measurement_duration_not_met",
+        "minimum_list_samples_not_met",
+        "minimum_offer_samples_not_met",
+        "failed_samples_present",
+        "list_latency_limit_exceeded",
+        "offer_latency_limit_exceeded",
+        "memory_limit_exceeded",
+        "response_size_limit_exceeded",
+        "source_counts_mismatch",
+        "write_qualification_not_run",
+        "production_copy_not_rehearsed",
+    ] {
+        assert!(evaluation.blockers.contains(&blocker.to_owned()));
+    }
 }
 
 #[test]

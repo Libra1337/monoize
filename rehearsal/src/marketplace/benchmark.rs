@@ -9,8 +9,13 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, Executor, PgConnection, QueryBuilder, Row, Sqlite, SqliteConnection};
 use std::collections::BTreeMap;
 use std::str::FromStr;
-use std::time::Instant;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use sysinfo::{ProcessesToUpdate, System, get_current_pid};
+use tokio::sync::{Barrier, watch};
+use tokio::task::JoinSet;
 
 use crate::public_contract::{
     MarketplaceItem, MarketplaceListResponse, OfferRate, OfferResponse, ProviderOffer, RateRange,
@@ -97,6 +102,24 @@ pub struct BenchmarkComparisonReport {
     pub postgres: BenchmarkReport,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QualificationObservation {
+    pub workers: u16,
+    pub warmup_seconds: u64,
+    pub measured_seconds: u64,
+    pub rss_delta_bytes: i64,
+    pub source_counts_match: bool,
+    pub list: OperationMetrics,
+    pub offers: OperationMetrics,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QualificationEvaluation {
+    pub read_qualification_passed: bool,
+    pub gate_b_qualified: bool,
+    pub blockers: Vec<String>,
+}
+
 #[derive(Default)]
 struct OperationAccumulator {
     latencies: Vec<u64>,
@@ -116,6 +139,7 @@ struct LoadedFixture {
     materialized_offer_rate_entries: u64,
 }
 
+#[derive(Clone)]
 struct PreparedQuery {
     query: QueryCase,
     list_after: Option<ListKey>,
@@ -124,20 +148,99 @@ struct PreparedQuery {
     expected_offers: Option<ExpectedOfferPage>,
 }
 
+#[derive(Clone)]
 struct ExpectedListPage {
     items: Vec<MarketplaceItem>,
     next_key: Option<ListKey>,
 }
 
+#[derive(Clone)]
 struct ExpectedOfferPage {
     offers: Vec<ProviderOffer>,
     next_key: Option<OfferKey>,
+}
+
+struct QualificationRun {
+    list_metrics: OperationAccumulator,
+    offer_metrics: OperationAccumulator,
+    elapsed: Duration,
+    warmup_seconds: u64,
+    measured_seconds: u64,
+}
+
+struct WorkerRun {
+    list_metrics: OperationAccumulator,
+    offer_metrics: OperationAccumulator,
+}
+
+struct QualificationCoordinator {
+    start: Arc<Barrier>,
+    measurement_ready: Arc<Barrier>,
+    measurement_start: Arc<Barrier>,
+    warmup_started: Arc<OnceLock<Instant>>,
+    measurement_started: Arc<OnceLock<Instant>>,
+    list_samples: Arc<AtomicU64>,
+    offer_samples: Arc<AtomicU64>,
+}
+
+#[derive(Clone, Copy)]
+struct QualificationProfile {
+    workers: u16,
+    warmup: Duration,
+    measurement: Duration,
+    minimum_samples: u64,
+}
+
+const QUALIFICATION_WORKERS: u16 = 32;
+const QUALIFICATION_WARMUP: Duration = Duration::from_secs(300);
+const QUALIFICATION_MEASUREMENT: Duration = Duration::from_secs(600);
+const QUALIFICATION_MIN_SAMPLES: u64 = 10_000;
+const FIXTURE_BATCH_ROWS: usize = 500;
+
+const QUALIFICATION_PROFILE: QualificationProfile = QualificationProfile {
+    workers: QUALIFICATION_WORKERS,
+    warmup: QUALIFICATION_WARMUP,
+    measurement: QUALIFICATION_MEASUREMENT,
+    minimum_samples: QUALIFICATION_MIN_SAMPLES,
+};
+
+impl QualificationCoordinator {
+    fn new(profile: QualificationProfile) -> Self {
+        let worker_count = usize::from(profile.workers);
+        let participants = worker_count + 1;
+        Self {
+            start: Arc::new(Barrier::new(participants)),
+            measurement_ready: Arc::new(Barrier::new(worker_count)),
+            measurement_start: Arc::new(Barrier::new(worker_count)),
+            warmup_started: Arc::new(OnceLock::new()),
+            measurement_started: Arc::new(OnceLock::new()),
+            list_samples: Arc::new(AtomicU64::new(0)),
+            offer_samples: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+impl Clone for QualificationCoordinator {
+    fn clone(&self) -> Self {
+        Self {
+            start: Arc::clone(&self.start),
+            measurement_ready: Arc::clone(&self.measurement_ready),
+            measurement_start: Arc::clone(&self.measurement_start),
+            warmup_started: Arc::clone(&self.warmup_started),
+            measurement_started: Arc::clone(&self.measurement_started),
+            list_samples: Arc::clone(&self.list_samples),
+            offer_samples: Arc::clone(&self.offer_samples),
+        }
+    }
 }
 
 impl BenchmarkConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.mode == BenchmarkMode::Qualification && self.envelope != Envelope::Qualification {
             bail!("qualification_requires_maximum_envelope");
+        }
+        if self.mode == BenchmarkMode::Qualification && self.query_limit.is_some() {
+            bail!("qualification_rejects_query_limit");
         }
         if self.query_limit == Some(0) {
             bail!("query_limit_must_be_positive");
@@ -146,6 +249,58 @@ impl BenchmarkConfig {
             bail!("git_commit_is_required");
         }
         Ok(())
+    }
+}
+
+pub fn evaluate_read_qualification(
+    observation: &QualificationObservation,
+) -> QualificationEvaluation {
+    let mut blockers = Vec::new();
+    if observation.workers != 32 {
+        blockers.push("insufficient_workers".to_owned());
+    }
+    if observation.warmup_seconds < 300 {
+        blockers.push("warmup_duration_not_met".to_owned());
+    }
+    if observation.measured_seconds < 600 {
+        blockers.push("measurement_duration_not_met".to_owned());
+    }
+    if observation.list.samples < 10_000 {
+        blockers.push("minimum_list_samples_not_met".to_owned());
+    }
+    if observation.offers.samples < 10_000 {
+        blockers.push("minimum_offer_samples_not_met".to_owned());
+    }
+    if observation.list.failed_samples > 0 || observation.offers.failed_samples > 0 {
+        blockers.push("failed_samples_present".to_owned());
+    }
+    if observation.list.p95_microseconds > 500_000 || observation.list.p99_microseconds > 1_000_000
+    {
+        blockers.push("list_latency_limit_exceeded".to_owned());
+    }
+    if observation.offers.p95_microseconds > 400_000
+        || observation.offers.p99_microseconds > 800_000
+    {
+        blockers.push("offer_latency_limit_exceeded".to_owned());
+    }
+    if observation.rss_delta_bytes > 512 * 1024 * 1024 {
+        blockers.push("memory_limit_exceeded".to_owned());
+    }
+    if observation.list.max_response_bytes > 1_048_576
+        || observation.offers.max_response_bytes > 1_048_576
+    {
+        blockers.push("response_size_limit_exceeded".to_owned());
+    }
+    if !observation.source_counts_match {
+        blockers.push("source_counts_mismatch".to_owned());
+    }
+    let read_qualification_passed = blockers.is_empty();
+    blockers.push("write_qualification_not_run".to_owned());
+    blockers.push("production_copy_not_rehearsed".to_owned());
+    QualificationEvaluation {
+        read_qualification_passed,
+        gate_b_qualified: false,
+        blockers,
     }
 }
 
@@ -166,6 +321,32 @@ pub async fn run_sqlite_benchmark(config: BenchmarkConfig) -> anyhow::Result<Ben
 
     let cursor_key = [0x4c; 32];
     let prepared_queries = prepare_queries(&query_set, &fixture_manifest)?;
+    if config.mode == BenchmarkMode::Qualification {
+        let (rss_before_bytes, cpu_before_milliseconds) = process_sample()?;
+        let (run, peak_rss_bytes) = sample_peak_rss(
+            rss_before_bytes,
+            run_sqlite_qualification(options, prepared_queries),
+        )
+        .await?;
+        let (_, cpu_after_milliseconds) = process_sample()?;
+        return build_report(
+            "sqlite",
+            config,
+            fixture_manifest,
+            loaded_fixture,
+            query_set_sha256,
+            run.list_metrics,
+            run.offer_metrics,
+            run.elapsed,
+            QUALIFICATION_WORKERS,
+            run.warmup_seconds,
+            run.measured_seconds,
+            rss_before_bytes,
+            peak_rss_bytes,
+            cpu_before_milliseconds,
+            cpu_after_milliseconds,
+        );
+    }
     let (rss_before_bytes, cpu_before_milliseconds) = process_sample()?;
     let started = Instant::now();
     let mut list_metrics = OperationAccumulator::default();
@@ -222,6 +403,9 @@ pub async fn run_sqlite_benchmark(config: BenchmarkConfig) -> anyhow::Result<Ben
         list_metrics,
         offer_metrics,
         elapsed,
+        1,
+        0,
+        elapsed.as_secs(),
         rss_before_bytes,
         rss_after_bytes,
         cpu_before_milliseconds,
@@ -239,6 +423,9 @@ fn build_report(
     mut list_metrics: OperationAccumulator,
     mut offer_metrics: OperationAccumulator,
     elapsed: std::time::Duration,
+    workers: u16,
+    warmup_seconds: u64,
+    measured_seconds: u64,
     rss_before_bytes: u64,
     rss_after_bytes: u64,
     cpu_before_milliseconds: u64,
@@ -253,7 +440,31 @@ fn build_report(
     let mut combined_latencies = list_metrics.latencies;
     combined_latencies.extend(offer_metrics.latencies);
     combined_latencies.sort_unstable();
-    let qualification_blockers = qualification_blockers(config.mode);
+    let source_counts_match = loaded_fixture.groups == fixture_manifest.groups
+        && loaded_fixture.providers == fixture_manifest.providers
+        && loaded_fixture.provider_models == fixture_manifest.provider_models
+        && loaded_fixture.rate_rows == fixture_manifest.rate_rows
+        && loaded_fixture.metadata_rows == fixture_manifest.metadata_rows
+        && loaded_fixture.materialized_offer_rate_entries == fixture_manifest.offer_rate_entries;
+    let rss_delta_bytes = benchmark_rss_delta(config.mode, rss_before_bytes, rss_after_bytes);
+    let qualification = (config.mode == BenchmarkMode::Qualification).then(|| {
+        evaluate_read_qualification(&QualificationObservation {
+            workers,
+            warmup_seconds,
+            measured_seconds,
+            rss_delta_bytes,
+            source_counts_match,
+            list: list.clone(),
+            offers: offers.clone(),
+        })
+    });
+    let qualification_blockers = qualification.as_ref().map_or_else(
+        || qualification_blockers(config.mode),
+        |value| value.blockers.clone(),
+    );
+    let gate_b_qualified = qualification
+        .as_ref()
+        .is_some_and(|value| value.gate_b_qualified);
 
     Ok(BenchmarkReport {
         schema_version: 1,
@@ -284,11 +495,11 @@ fn build_report(
         cpu_milliseconds: cpu_after_milliseconds.saturating_sub(cpu_before_milliseconds),
         rss_before_bytes,
         rss_after_bytes,
-        rss_delta_bytes: signed_delta(rss_after_bytes, rss_before_bytes),
-        workers: 1,
-        warmup_seconds: 0,
-        measured_seconds: elapsed.as_secs(),
-        gate_b_qualified: false,
+        rss_delta_bytes,
+        workers,
+        warmup_seconds,
+        measured_seconds,
+        gate_b_qualified,
         qualification_blockers,
         list,
         offers,
@@ -322,6 +533,32 @@ pub async fn run_postgres_benchmark(
 
     let cursor_key = [0x4c; 32];
     let prepared_queries = prepare_queries(&query_set, &fixture_manifest)?;
+    if config.mode == BenchmarkMode::Qualification {
+        let (rss_before_bytes, cpu_before_milliseconds) = process_sample()?;
+        let (run, peak_rss_bytes) = sample_peak_rss(
+            rss_before_bytes,
+            run_postgres_qualification(options, prepared_queries),
+        )
+        .await?;
+        let (_, cpu_after_milliseconds) = process_sample()?;
+        return build_report(
+            "postgres",
+            config,
+            fixture_manifest,
+            loaded_fixture,
+            query_set_sha256,
+            run.list_metrics,
+            run.offer_metrics,
+            run.elapsed,
+            QUALIFICATION_WORKERS,
+            run.warmup_seconds,
+            run.measured_seconds,
+            rss_before_bytes,
+            peak_rss_bytes,
+            cpu_before_milliseconds,
+            cpu_after_milliseconds,
+        );
+    }
     let (rss_before_bytes, cpu_before_milliseconds) = process_sample()?;
     let started = Instant::now();
     let mut list_metrics = OperationAccumulator::default();
@@ -378,6 +615,9 @@ pub async fn run_postgres_benchmark(
         list_metrics,
         offer_metrics,
         elapsed,
+        1,
+        0,
+        elapsed.as_secs(),
         rss_before_bytes,
         rss_after_bytes,
         cpu_before_milliseconds,
@@ -685,6 +925,362 @@ fn fixture_model_index(model: &str) -> u64 {
             .expect("fixture model suffix")
             + 1
     }
+}
+
+async fn run_sqlite_qualification(
+    options: SqliteConnectOptions,
+    prepared_queries: Vec<PreparedQuery>,
+) -> anyhow::Result<QualificationRun> {
+    run_sqlite_qualification_with_profile(options, prepared_queries, QUALIFICATION_PROFILE).await
+}
+
+async fn run_sqlite_qualification_with_profile(
+    options: SqliteConnectOptions,
+    prepared_queries: Vec<PreparedQuery>,
+    profile: QualificationProfile,
+) -> anyhow::Result<QualificationRun> {
+    let coordinator = QualificationCoordinator::new(profile);
+    let prepared_queries = Arc::new(prepared_queries);
+    let mut connections = Vec::with_capacity(usize::from(profile.workers));
+    for _ in 0..profile.workers {
+        let mut connection = SqliteConnection::connect_with(&options).await?;
+        configure_sqlite(&mut connection).await?;
+        connections.push(connection);
+    }
+    let mut workers = JoinSet::new();
+    for (worker_index, connection) in connections.into_iter().enumerate() {
+        workers.spawn(run_sqlite_qualification_worker(
+            worker_index,
+            connection,
+            Arc::clone(&prepared_queries),
+            coordinator.clone(),
+            profile,
+        ));
+    }
+    finish_qualification(workers, coordinator).await
+}
+
+async fn run_postgres_qualification(
+    options: PgConnectOptions,
+    prepared_queries: Vec<PreparedQuery>,
+) -> anyhow::Result<QualificationRun> {
+    run_postgres_qualification_with_profile(options, prepared_queries, QUALIFICATION_PROFILE).await
+}
+
+async fn run_postgres_qualification_with_profile(
+    options: PgConnectOptions,
+    prepared_queries: Vec<PreparedQuery>,
+    profile: QualificationProfile,
+) -> anyhow::Result<QualificationRun> {
+    let coordinator = QualificationCoordinator::new(profile);
+    let prepared_queries = Arc::new(prepared_queries);
+    let mut connections = Vec::with_capacity(usize::from(profile.workers));
+    for _ in 0..profile.workers {
+        let mut connection = PgConnection::connect_with(&options).await?;
+        connection
+            .execute("SET search_path TO lynshen_marketplace_benchmark")
+            .await?;
+        connections.push(connection);
+    }
+    let mut workers = JoinSet::new();
+    for (worker_index, connection) in connections.into_iter().enumerate() {
+        workers.spawn(run_postgres_qualification_worker(
+            worker_index,
+            connection,
+            Arc::clone(&prepared_queries),
+            coordinator.clone(),
+            profile,
+        ));
+    }
+    finish_qualification(workers, coordinator).await
+}
+
+async fn finish_qualification(
+    mut workers: JoinSet<anyhow::Result<WorkerRun>>,
+    coordinator: QualificationCoordinator,
+) -> anyhow::Result<QualificationRun> {
+    coordinator.start.wait().await;
+    let warmup_started = *coordinator.warmup_started.get_or_init(Instant::now);
+    let mut list_metrics = OperationAccumulator::default();
+    let mut offer_metrics = OperationAccumulator::default();
+    while let Some(result) = workers.join_next().await {
+        match result {
+            Ok(Ok(worker)) => {
+                list_metrics.merge(worker.list_metrics);
+                offer_metrics.merge(worker.offer_metrics);
+            }
+            Ok(Err(error)) => {
+                workers.abort_all();
+                return Err(error);
+            }
+            Err(error) => {
+                workers.abort_all();
+                return Err(anyhow::anyhow!("qualification_worker_failed:{error}"));
+            }
+        }
+    }
+    let measurement_started = coordinator
+        .measurement_started
+        .get()
+        .copied()
+        .context("qualification measurement did not start")?;
+    Ok(QualificationRun {
+        list_metrics,
+        offer_metrics,
+        elapsed: warmup_started.elapsed(),
+        warmup_seconds: measurement_started.duration_since(warmup_started).as_secs(),
+        measured_seconds: measurement_started.elapsed().as_secs(),
+    })
+}
+
+async fn sample_peak_rss<T>(
+    rss_before_bytes: u64,
+    operation: impl std::future::Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<(T, u64)> {
+    let (stop_sender, mut stop_receiver) = watch::channel(false);
+    let sampler = tokio::spawn(async move {
+        let mut peak = rss_before_bytes;
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    peak = peak.max(process_sample()?.0);
+                }
+                changed = stop_receiver.changed() => {
+                    if changed.is_err() || *stop_receiver.borrow() {
+                        peak = peak.max(process_sample()?.0);
+                        return anyhow::Ok(peak);
+                    }
+                }
+            }
+        }
+    });
+    let result = operation.await;
+    let _ = stop_sender.send(true);
+    let peak = sampler
+        .await
+        .map_err(|error| anyhow::anyhow!("qualification_rss_sampler_failed:{error}"))??;
+    result.map(|value| (value, peak))
+}
+
+async fn run_sqlite_qualification_worker(
+    worker_index: usize,
+    mut database: SqliteConnection,
+    prepared_queries: Arc<Vec<PreparedQuery>>,
+    coordinator: QualificationCoordinator,
+    profile: QualificationProfile,
+) -> anyhow::Result<WorkerRun> {
+    coordinator.start.wait().await;
+    let warmup_started = *coordinator.warmup_started.get_or_init(Instant::now);
+    let mut query_index = worker_index % prepared_queries.len();
+    while warmup_started.elapsed() < profile.warmup {
+        let (_, valid, _, _) =
+            execute_prepared_sqlite(&mut database, &prepared_queries[query_index]).await?;
+        if !valid {
+            bail!("qualification_warmup_validation_failed");
+        }
+        query_index = (query_index + 1) % prepared_queries.len();
+    }
+    coordinator.measurement_ready.wait().await;
+    let measurement_started = *coordinator.measurement_started.get_or_init(Instant::now);
+    coordinator.measurement_start.wait().await;
+    measure_sqlite_worker(
+        &mut database,
+        &prepared_queries,
+        query_index,
+        measurement_started,
+        &coordinator,
+        profile,
+    )
+    .await
+}
+
+async fn run_postgres_qualification_worker(
+    worker_index: usize,
+    mut database: PgConnection,
+    prepared_queries: Arc<Vec<PreparedQuery>>,
+    coordinator: QualificationCoordinator,
+    profile: QualificationProfile,
+) -> anyhow::Result<WorkerRun> {
+    coordinator.start.wait().await;
+    let warmup_started = *coordinator.warmup_started.get_or_init(Instant::now);
+    let mut query_index = worker_index % prepared_queries.len();
+    while warmup_started.elapsed() < profile.warmup {
+        let (_, valid, _, _) =
+            execute_prepared_postgres(&mut database, &prepared_queries[query_index]).await?;
+        if !valid {
+            bail!("qualification_warmup_validation_failed");
+        }
+        query_index = (query_index + 1) % prepared_queries.len();
+    }
+    coordinator.measurement_ready.wait().await;
+    let measurement_started = *coordinator.measurement_started.get_or_init(Instant::now);
+    coordinator.measurement_start.wait().await;
+    measure_postgres_worker(
+        &mut database,
+        &prepared_queries,
+        query_index,
+        measurement_started,
+        &coordinator,
+        profile,
+    )
+    .await
+}
+
+fn qualification_measurement_complete(
+    measurement_started: Instant,
+    coordinator: &QualificationCoordinator,
+    profile: QualificationProfile,
+) -> bool {
+    measurement_started.elapsed() >= profile.measurement
+        && coordinator.list_samples.load(Ordering::Relaxed) >= profile.minimum_samples
+        && coordinator.offer_samples.load(Ordering::Relaxed) >= profile.minimum_samples
+}
+
+async fn execute_prepared_sqlite(
+    database: &mut SqliteConnection,
+    prepared: &PreparedQuery,
+) -> anyhow::Result<(QueryKind, bool, u64, u64)> {
+    let cursor_key = [0x4c; 32];
+    let (valid, bytes, statements) = match prepared.query.kind {
+        QueryKind::List => {
+            execute_list_sample(
+                database,
+                &prepared.query,
+                prepared.list_after.clone(),
+                prepared
+                    .expected_list
+                    .as_ref()
+                    .context("expected list page")?,
+                &cursor_key,
+            )
+            .await?
+        }
+        QueryKind::Offers => {
+            execute_offer_sample(
+                database,
+                &prepared.query,
+                prepared.offer_after.clone(),
+                prepared
+                    .expected_offers
+                    .as_ref()
+                    .context("expected offer page")?,
+                &cursor_key,
+            )
+            .await?
+        }
+    };
+    Ok((prepared.query.kind, valid, bytes, statements))
+}
+
+async fn execute_prepared_postgres(
+    database: &mut PgConnection,
+    prepared: &PreparedQuery,
+) -> anyhow::Result<(QueryKind, bool, u64, u64)> {
+    let cursor_key = [0x4c; 32];
+    let (valid, bytes, statements) = match prepared.query.kind {
+        QueryKind::List => {
+            execute_list_sample_postgres(
+                database,
+                &prepared.query,
+                prepared.list_after.clone(),
+                prepared
+                    .expected_list
+                    .as_ref()
+                    .context("expected list page")?,
+                &cursor_key,
+            )
+            .await?
+        }
+        QueryKind::Offers => {
+            execute_offer_sample_postgres(
+                database,
+                &prepared.query,
+                prepared.offer_after.clone(),
+                prepared
+                    .expected_offers
+                    .as_ref()
+                    .context("expected offer page")?,
+                &cursor_key,
+            )
+            .await?
+        }
+    };
+    Ok((prepared.query.kind, valid, bytes, statements))
+}
+
+async fn measure_sqlite_worker(
+    database: &mut SqliteConnection,
+    prepared_queries: &[PreparedQuery],
+    mut query_index: usize,
+    measurement_started: Instant,
+    coordinator: &QualificationCoordinator,
+    profile: QualificationProfile,
+) -> anyhow::Result<WorkerRun> {
+    let mut run = WorkerRun {
+        list_metrics: OperationAccumulator::default(),
+        offer_metrics: OperationAccumulator::default(),
+    };
+    loop {
+        for _ in 0..prepared_queries.len() {
+            let sample_started = Instant::now();
+            let (kind, valid, bytes, statements) =
+                execute_prepared_sqlite(database, &prepared_queries[query_index]).await?;
+            let target = match kind {
+                QueryKind::List => {
+                    coordinator.list_samples.fetch_add(1, Ordering::Relaxed);
+                    &mut run.list_metrics
+                }
+                QueryKind::Offers => {
+                    coordinator.offer_samples.fetch_add(1, Ordering::Relaxed);
+                    &mut run.offer_metrics
+                }
+            };
+            target.record(micros(sample_started.elapsed()), valid, bytes, statements);
+            query_index = (query_index + 1) % prepared_queries.len();
+        }
+        if qualification_measurement_complete(measurement_started, coordinator, profile) {
+            break;
+        }
+    }
+    Ok(run)
+}
+
+async fn measure_postgres_worker(
+    database: &mut PgConnection,
+    prepared_queries: &[PreparedQuery],
+    mut query_index: usize,
+    measurement_started: Instant,
+    coordinator: &QualificationCoordinator,
+    profile: QualificationProfile,
+) -> anyhow::Result<WorkerRun> {
+    let mut run = WorkerRun {
+        list_metrics: OperationAccumulator::default(),
+        offer_metrics: OperationAccumulator::default(),
+    };
+    loop {
+        for _ in 0..prepared_queries.len() {
+            let sample_started = Instant::now();
+            let (kind, valid, bytes, statements) =
+                execute_prepared_postgres(database, &prepared_queries[query_index]).await?;
+            let target = match kind {
+                QueryKind::List => {
+                    coordinator.list_samples.fetch_add(1, Ordering::Relaxed);
+                    &mut run.list_metrics
+                }
+                QueryKind::Offers => {
+                    coordinator.offer_samples.fetch_add(1, Ordering::Relaxed);
+                    &mut run.offer_metrics
+                }
+            };
+            target.record(micros(sample_started.elapsed()), valid, bytes, statements);
+            query_index = (query_index + 1) % prepared_queries.len();
+        }
+        if qualification_measurement_complete(measurement_started, coordinator, profile) {
+            break;
+        }
+    }
+    Ok(run)
 }
 
 fn offer_after_key(provider_count: u64, position: u8, limit: u16) -> Option<OfferKey> {
@@ -1206,6 +1802,14 @@ impl OperationAccumulator {
             p99_microseconds: percentile(&self.latencies, 99),
         })
     }
+
+    fn merge(&mut self, other: Self) {
+        self.latencies.extend(other.latencies);
+        self.failed_samples = self.failed_samples.saturating_add(other.failed_samples);
+        self.statement_count = self.statement_count.saturating_add(other.statement_count);
+        self.response_bytes = self.response_bytes.saturating_add(other.response_bytes);
+        self.max_response_bytes = self.max_response_bytes.max(other.max_response_bytes);
+    }
 }
 
 pub fn write_benchmark_report(
@@ -1316,56 +1920,103 @@ async fn load_sqlite_fixture(
 ) -> anyhow::Result<LoadedFixture> {
     let fixture = manifest.fixture();
     let mut transaction = database.begin().await?;
-    for row in fixture.groups() {
-        sqlx::query("INSERT INTO monoize_groups VALUES (?, ?, ?)")
-            .bind(row.id)
-            .bind(row.public_name)
-            .bind(row.sort_order)
-            .execute(&mut *transaction)
-            .await?;
+    let mut rows = fixture.groups();
+    loop {
+        let batch = rows.by_ref().take(FIXTURE_BATCH_ROWS).collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "INSERT INTO monoize_groups (id, public_name, sort_order) ",
+        );
+        query.push_values(batch, |mut values, row| {
+            values
+                .push_bind(row.id)
+                .push_bind(row.public_name)
+                .push_bind(row.sort_order);
+        });
+        query.build().execute(&mut *transaction).await?;
     }
-    for row in fixture.providers() {
-        let provider_key = row.public_name.as_bytes().to_vec();
-        let channel_key = row.channel_public_name.as_bytes().to_vec();
-        sqlx::query("INSERT INTO monoize_providers VALUES (?, ?, ?, ?, ?, 1, ?, ?, 1)")
-            .bind(row.id)
-            .bind(row.group_id)
-            .bind(row.public_name)
-            .bind(provider_key)
-            .bind(row.priority)
-            .bind(row.channel_public_name)
-            .bind(channel_key)
-            .execute(&mut *transaction)
-            .await?;
+    let mut rows = fixture.providers();
+    loop {
+        let batch = rows.by_ref().take(FIXTURE_BATCH_ROWS).collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "INSERT INTO monoize_providers (id, group_id, public_name, public_name_key, priority, enabled, channel_public_name, channel_public_name_key, channel_enabled) ",
+        );
+        query.push_values(batch, |mut values, row| {
+            let provider_key = row.public_name.as_bytes().to_vec();
+            let channel_key = row.channel_public_name.as_bytes().to_vec();
+            values
+                .push_bind(row.id)
+                .push_bind(row.group_id)
+                .push_bind(row.public_name)
+                .push_bind(provider_key)
+                .push_bind(row.priority)
+                .push_bind(1_i32)
+                .push_bind(row.channel_public_name)
+                .push_bind(channel_key)
+                .push_bind(1_i32);
+        });
+        query.build().execute(&mut *transaction).await?;
     }
-    for row in fixture.provider_models() {
-        let model_key = row.model_name.as_bytes().to_vec();
-        let search_key = row.model_name.to_ascii_lowercase().into_bytes();
-        sqlx::query("INSERT INTO monoize_provider_models VALUES (?, ?, ?, ?)")
-            .bind(row.provider_id)
-            .bind(row.model_name)
-            .bind(model_key)
-            .bind(search_key)
-            .execute(&mut *transaction)
-            .await?;
+    let mut rows = fixture.provider_models();
+    loop {
+        let batch = rows.by_ref().take(FIXTURE_BATCH_ROWS).collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "INSERT INTO monoize_provider_models (provider_id, model_name, model_name_key, model_search_key) ",
+        );
+        query.push_values(batch, |mut values, row| {
+            let model_key = row.model_name.as_bytes().to_vec();
+            let search_key = row.model_name.to_ascii_lowercase().into_bytes();
+            values
+                .push_bind(row.provider_id)
+                .push_bind(row.model_name)
+                .push_bind(model_key)
+                .push_bind(search_key);
+        });
+        query.build().execute(&mut *transaction).await?;
     }
-    for row in fixture.metadata() {
-        sqlx::query("INSERT INTO model_metadata_records VALUES (?, ?, ?)")
-            .bind(row.id)
-            .bind(row.model_name)
-            .bind(row.capability)
-            .execute(&mut *transaction)
-            .await?;
+    let mut rows = fixture.metadata();
+    loop {
+        let batch = rows.by_ref().take(FIXTURE_BATCH_ROWS).collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "INSERT INTO model_metadata_records (id, model_name, capability) ",
+        );
+        query.push_values(batch, |mut values, row| {
+            values
+                .push_bind(row.id)
+                .push_bind(row.model_name)
+                .push_bind(row.capability);
+        });
+        query.build().execute(&mut *transaction).await?;
     }
-    for row in fixture.rates() {
-        sqlx::query("INSERT INTO billing_rate_records VALUES (?, ?, ?, ?, ?)")
-            .bind(row.id)
-            .bind(row.model_name)
-            .bind(row.usage_class)
-            .bind(row.unit_price)
-            .bind(i64::from(row.public_repeat_count))
-            .execute(&mut *transaction)
-            .await?;
+    let mut rows = fixture.rates();
+    loop {
+        let batch = rows.by_ref().take(FIXTURE_BATCH_ROWS).collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "INSERT INTO billing_rate_records (id, model_name, usage_class, unit_price, public_repeat_count) ",
+        );
+        query.push_values(batch, |mut values, row| {
+            values
+                .push_bind(row.id)
+                .push_bind(row.model_name)
+                .push_bind(row.usage_class)
+                .push_bind(row.unit_price)
+                .push_bind(i64::from(row.public_repeat_count));
+        });
+        query.build().execute(&mut *transaction).await?;
     }
     transaction.commit().await?;
     observe_loaded_fixture(database).await
@@ -1377,56 +2028,103 @@ async fn load_postgres_fixture(
 ) -> anyhow::Result<LoadedFixture> {
     let fixture = manifest.fixture();
     let mut transaction = database.begin().await?;
-    for row in fixture.groups() {
-        sqlx::query("INSERT INTO monoize_groups VALUES ($1, $2, $3)")
-            .bind(row.id)
-            .bind(row.public_name)
-            .bind(row.sort_order)
-            .execute(&mut *transaction)
-            .await?;
+    let mut rows = fixture.groups();
+    loop {
+        let batch = rows.by_ref().take(FIXTURE_BATCH_ROWS).collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = QueryBuilder::<sqlx::Postgres>::new(
+            "INSERT INTO monoize_groups (id, public_name, sort_order) ",
+        );
+        query.push_values(batch, |mut values, row| {
+            values
+                .push_bind(row.id)
+                .push_bind(row.public_name)
+                .push_bind(row.sort_order);
+        });
+        query.build().execute(&mut *transaction).await?;
     }
-    for row in fixture.providers() {
-        let provider_key = row.public_name.as_bytes().to_vec();
-        let channel_key = row.channel_public_name.as_bytes().to_vec();
-        sqlx::query("INSERT INTO monoize_providers VALUES ($1, $2, $3, $4, $5, 1, $6, $7, 1)")
-            .bind(row.id)
-            .bind(row.group_id)
-            .bind(row.public_name)
-            .bind(provider_key)
-            .bind(row.priority)
-            .bind(row.channel_public_name)
-            .bind(channel_key)
-            .execute(&mut *transaction)
-            .await?;
+    let mut rows = fixture.providers();
+    loop {
+        let batch = rows.by_ref().take(FIXTURE_BATCH_ROWS).collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = QueryBuilder::<sqlx::Postgres>::new(
+            "INSERT INTO monoize_providers (id, group_id, public_name, public_name_key, priority, enabled, channel_public_name, channel_public_name_key, channel_enabled) ",
+        );
+        query.push_values(batch, |mut values, row| {
+            let provider_key = row.public_name.as_bytes().to_vec();
+            let channel_key = row.channel_public_name.as_bytes().to_vec();
+            values
+                .push_bind(row.id)
+                .push_bind(row.group_id)
+                .push_bind(row.public_name)
+                .push_bind(provider_key)
+                .push_bind(row.priority)
+                .push_bind(1_i32)
+                .push_bind(row.channel_public_name)
+                .push_bind(channel_key)
+                .push_bind(1_i32);
+        });
+        query.build().execute(&mut *transaction).await?;
     }
-    for row in fixture.provider_models() {
-        let model_key = row.model_name.as_bytes().to_vec();
-        let search_key = row.model_name.to_ascii_lowercase().into_bytes();
-        sqlx::query("INSERT INTO monoize_provider_models VALUES ($1, $2, $3, $4)")
-            .bind(row.provider_id)
-            .bind(row.model_name)
-            .bind(model_key)
-            .bind(search_key)
-            .execute(&mut *transaction)
-            .await?;
+    let mut rows = fixture.provider_models();
+    loop {
+        let batch = rows.by_ref().take(FIXTURE_BATCH_ROWS).collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = QueryBuilder::<sqlx::Postgres>::new(
+            "INSERT INTO monoize_provider_models (provider_id, model_name, model_name_key, model_search_key) ",
+        );
+        query.push_values(batch, |mut values, row| {
+            let model_key = row.model_name.as_bytes().to_vec();
+            let search_key = row.model_name.to_ascii_lowercase().into_bytes();
+            values
+                .push_bind(row.provider_id)
+                .push_bind(row.model_name)
+                .push_bind(model_key)
+                .push_bind(search_key);
+        });
+        query.build().execute(&mut *transaction).await?;
     }
-    for row in fixture.metadata() {
-        sqlx::query("INSERT INTO model_metadata_records VALUES ($1, $2, $3)")
-            .bind(row.id)
-            .bind(row.model_name)
-            .bind(row.capability)
-            .execute(&mut *transaction)
-            .await?;
+    let mut rows = fixture.metadata();
+    loop {
+        let batch = rows.by_ref().take(FIXTURE_BATCH_ROWS).collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = QueryBuilder::<sqlx::Postgres>::new(
+            "INSERT INTO model_metadata_records (id, model_name, capability) ",
+        );
+        query.push_values(batch, |mut values, row| {
+            values
+                .push_bind(row.id)
+                .push_bind(row.model_name)
+                .push_bind(row.capability);
+        });
+        query.build().execute(&mut *transaction).await?;
     }
-    for row in fixture.rates() {
-        sqlx::query("INSERT INTO billing_rate_records VALUES ($1, $2, $3, $4, $5)")
-            .bind(row.id)
-            .bind(row.model_name)
-            .bind(row.usage_class)
-            .bind(row.unit_price)
-            .bind(i32::from(row.public_repeat_count))
-            .execute(&mut *transaction)
-            .await?;
+    let mut rows = fixture.rates();
+    loop {
+        let batch = rows.by_ref().take(FIXTURE_BATCH_ROWS).collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = QueryBuilder::<sqlx::Postgres>::new(
+            "INSERT INTO billing_rate_records (id, model_name, usage_class, unit_price, public_repeat_count) ",
+        );
+        query.push_values(batch, |mut values, row| {
+            values
+                .push_bind(row.id)
+                .push_bind(row.model_name)
+                .push_bind(row.usage_class)
+                .push_bind(row.unit_price)
+                .push_bind(i32::from(row.public_repeat_count));
+        });
+        query.build().execute(&mut *transaction).await?;
     }
     transaction.commit().await?;
     observe_loaded_fixture_postgres(database).await
@@ -1710,5 +2408,112 @@ fn signed_delta(after: u64, before: u64) -> i64 {
         i64::try_from(after - before).unwrap_or(i64::MAX)
     } else {
         -i64::try_from(before - after).unwrap_or(i64::MAX)
+    }
+}
+
+fn qualification_rss_delta(before: u64, peak: u64) -> i64 {
+    i64::try_from(peak.saturating_sub(before)).unwrap_or(i64::MAX)
+}
+
+fn benchmark_rss_delta(mode: BenchmarkMode, before: u64, after_or_peak: u64) -> i64 {
+    if mode == BenchmarkMode::Qualification {
+        qualification_rss_delta(before, after_or_peak)
+    } else {
+        signed_delta(after_or_peak, before)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn short_sqlite_profile_runs_concurrent_workers_and_complete_query_cycles() {
+        let temporary = tempfile::TempDir::new().unwrap();
+        let options = SqliteConnectOptions::new()
+            .filename(temporary.path().join("qualification.sqlite3"))
+            .create_if_missing(true);
+        let mut database = SqliteConnection::connect_with(&options).await.unwrap();
+        configure_sqlite(&mut database).await.unwrap();
+        create_sqlite_schema(&mut database).await.unwrap();
+        let manifest = FixtureManifest::generate(7, Envelope::Smoke).unwrap();
+        load_sqlite_fixture(&mut database, &manifest).await.unwrap();
+        database.execute("ANALYZE").await.unwrap();
+        drop(database);
+        let prepared = prepare_queries(&manifest.query_set(), &manifest).unwrap();
+        let profile = QualificationProfile {
+            workers: 4,
+            warmup: Duration::from_millis(10),
+            measurement: Duration::from_millis(20),
+            minimum_samples: 100,
+        };
+
+        let run = run_sqlite_qualification_with_profile(options, prepared, profile)
+            .await
+            .unwrap();
+
+        assert!(run.elapsed >= profile.warmup + profile.measurement);
+        assert!(run.list_metrics.latencies.len() >= 1_280);
+        assert!(run.offer_metrics.latencies.len() >= 320);
+        assert_eq!(run.list_metrics.latencies.len() % 320, 0);
+        assert_eq!(run.offer_metrics.latencies.len() % 80, 0);
+        assert_eq!(run.list_metrics.failed_samples, 0);
+        assert_eq!(run.offer_metrics.failed_samples, 0);
+    }
+
+    #[tokio::test]
+    async fn short_postgres_profile_runs_concurrent_workers_and_complete_query_cycles() {
+        let Ok(url) = std::env::var("LYNSHEN_REHEARSAL_POSTGRES_URL") else {
+            return;
+        };
+        let options = PgConnectOptions::from_str(&url).unwrap();
+        let mut database = PgConnection::connect_with(&options).await.unwrap();
+        create_postgres_schema(&mut database).await.unwrap();
+        let manifest = FixtureManifest::generate(7, Envelope::Smoke).unwrap();
+        load_postgres_fixture(&mut database, &manifest)
+            .await
+            .unwrap();
+        database
+            .execute(
+                "ANALYZE lynshen_marketplace_benchmark.monoize_groups, lynshen_marketplace_benchmark.monoize_providers, lynshen_marketplace_benchmark.monoize_provider_models, lynshen_marketplace_benchmark.billing_rate_records, lynshen_marketplace_benchmark.model_metadata_records",
+            )
+            .await
+            .unwrap();
+        drop(database);
+        let prepared = prepare_queries(&manifest.query_set(), &manifest).unwrap();
+        let profile = QualificationProfile {
+            workers: 4,
+            warmup: Duration::from_millis(10),
+            measurement: Duration::from_millis(20),
+            minimum_samples: 100,
+        };
+
+        let run = run_postgres_qualification_with_profile(options, prepared, profile)
+            .await
+            .unwrap();
+
+        assert!(run.elapsed >= profile.warmup + profile.measurement);
+        assert!(run.list_metrics.latencies.len() >= 1_280);
+        assert!(run.offer_metrics.latencies.len() >= 320);
+        assert_eq!(run.list_metrics.latencies.len() % 320, 0);
+        assert_eq!(run.offer_metrics.latencies.len() % 80, 0);
+        assert_eq!(run.list_metrics.failed_samples, 0);
+        assert_eq!(run.offer_metrics.failed_samples, 0);
+    }
+
+    #[test]
+    fn qualification_rss_delta_uses_peak_and_never_becomes_negative() {
+        assert_eq!(qualification_rss_delta(100, 150), 50);
+        assert_eq!(qualification_rss_delta(150, 100), 0);
+        assert_eq!(qualification_rss_delta(0, u64::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn benchmark_rss_delta_uses_peak_only_for_qualification() {
+        assert_eq!(
+            benchmark_rss_delta(BenchmarkMode::Qualification, 150, 100),
+            0
+        );
+        assert_eq!(benchmark_rss_delta(BenchmarkMode::Smoke, 150, 100), -50);
     }
 }

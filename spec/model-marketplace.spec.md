@@ -274,6 +274,35 @@ five warm-up minutes, ten measured minutes, and at least 10,000 verified cache-m
 per operation kind. List is 80 percent across zero, one, 50, and broad search and first,
 middle, final cursor positions. Offers is 20 percent across three cursor positions.
 
+MM-Q2.1. `mode=qualification` MUST reject `query_limit`. It MUST create 32 worker
+connections after fixture load and `ANALYZE`. Each worker MUST cycle the same 400-case query
+set from an offset equal to `worker_index mod 400`. Each sample MUST execute the exact
+cursor and public DTO validation used by smoke mode.
+
+MM-Q2.2. The warm-up clock starts after all workers are ready. Warm-up samples MUST execute
+queries and validation but MUST NOT contribute to reported latency, sample, statement, or
+response-byte counters. Measurement starts after at least 300 elapsed seconds.
+
+MM-Q2.3. Measurement MUST continue until at least 600 elapsed seconds and at least 10,000
+verified List samples and 10,000 verified Offers samples exist. A failed validation counts
+as a sample and increments `failed_samples`. The report MUST record actual worker count,
+whole warm-up seconds, and whole measured seconds.
+
+MM-Q2.4. A read qualification passes only when worker, duration, per-kind sample, failed
+sample, latency, memory, response-size, and exact source-count requirements all pass. A
+read pass MUST NOT set Gate B passed while source-write qualification or another MM-Q6
+requirement is absent.
+
+MM-Q2.4.1. Qualification MUST sample process RSS at least once per second from before the
+first worker connection until every worker exits. `rss_after_bytes` MUST store the maximum
+sampled RSS, and `rss_delta_bytes` MUST equal `max(0, peak_rss - rss_before)`. A before/after
+comparison without peak sampling does not satisfy MM-Q3.
+
+MM-Q2.5. Fixture load MUST insert at most 500 rows per SQL statement. All fixture inserts
+for one backend MUST use one transaction. A failed batch MUST leave zero committed fixture
+rows. Qualification timing MUST start after fixture load, commit, read-back hashing, and
+`ANALYZE` complete.
+
 MM-Q3. List latency MUST be p95 at most 500 ms and p99 at most 1,000 ms. Offers MUST be p95
 at most 400 ms and p99 at most 800 ms. Application resident-memory increase MUST be at most
 512 MiB. An uncompressed response MUST satisfy MM-S4.

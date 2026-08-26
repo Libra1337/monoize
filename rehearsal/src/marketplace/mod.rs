@@ -6,7 +6,8 @@ mod query;
 
 pub use benchmark::{
     BenchmarkComparisonReport, BenchmarkConfig, BenchmarkMode, BenchmarkReport, OperationMetrics,
-    compare_benchmark_reports, run_postgres_benchmark, run_sqlite_benchmark,
+    QualificationEvaluation, QualificationObservation, compare_benchmark_reports,
+    evaluate_read_qualification, run_postgres_benchmark, run_sqlite_benchmark,
     write_benchmark_comparison_report, write_benchmark_report,
 };
 pub use cursor::{CursorError, EndpointKind, ListCursor, OfferCursor, canonical_filter_digest};
