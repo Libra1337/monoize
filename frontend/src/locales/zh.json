@@ -1,5 +1,28 @@
 {
+	"publicSite": {
+		"skipToContent": "跳到正文", "primaryNavigation": "公开导航", "footer": "使用一个入口调用已支持的 API 协议。",
+		"nav": { "home": "首页", "marketplace": "模型广场", "apiDocs": "API 文档", "status": "运行状态", "console": "控制台", "login": "登录", "menu": "打开导航", "language": "语言", "theme": "主题" },
+		"welcome": {
+			"title": "只连接一次。使用 {{siteName}} 调用每个已支持的模型。", "description": "使用一个 API 密钥和一个 Base URL 连接已支持的模型 Provider。",
+			"exploreModels": "查看模型", "readDocs": "阅读 API 文档", "familiesTitle": "继续使用应用已经支持的协议。", "familiesDescription": "通过 OpenAI、Anthropic、Gemini 和图像端点发送原始 HTTP 请求。",
+			"pricingTitle": "发送流量前先选择 Group。", "pricingDescription": "每个 Group 独立显示可用模型和价格区间。同一个模型在其他 Group 中可以有不同价格。",
+			"groupTitle": "Group 路由", "groupDescription": "Group 为 API 密钥选择已配置的 Provider 路由。", "priceTitle": "Provider 价格", "priceDescription": "每个公开价格由 Provider 价格和已配置的倍率确定。",
+			"stepsTitle": "分三步完成连接。", "codeTitle": "从任意运行时发送原始 HTTP。", "codeDescription": "设置认证请求头。向与协议匹配的端点发送 JSON。",
+			"statusTitle": "在故障前检查 Provider 状态。", "statusDescription": "查看每个 Group 内公开 Provider 的当前状态。", "viewStatus": "查看状态"
+		},
+		"families": { "responses": "OpenAI Responses", "chat": "Chat Completions", "messages": "Anthropic Messages", "gemini": "Gemini Generate Content", "images": "图像生成" },
+		"steps": { "keyTitle": "创建 API 密钥", "keyDescription": "打开控制台并为应用创建密钥。", "modelTitle": "选择模型", "modelDescription": "打开模型广场。在所属 Group 内查看模型。", "requestTitle": "发送请求", "requestDescription": "设置 Base URL，并把密钥作为 Bearer token 发送。" },
+		"docs": {
+			"title": "API 文档", "description": "使用原始 HTTP 调用已支持的模型 API。请选择 API 系列和示例语言。", "baseUrl": "Base URL", "baseUrlError": "请在控制台设置 api_base_url。非 HTTPS 来源已禁用复制操作。", "apiFamilies": "API 系列", "behaviorTitle": "请求行为", "copyDisabled": "请配置安全的 Base URL 以启用示例。",
+			"languages": { "curl": "cURL", "python": "Python", "javascript": "JavaScript", "go": "Go" },
+			"familyDescriptions": { "responsesTitle": "OpenAI Responses", "responses": "从文本或结构化输入创建响应。", "chatTitle": "OpenAI Chat Completions", "chat": "发送有序消息列表。启用 stream 可接收 SSE 输出。", "messagesTitle": "Anthropic Messages", "messages": "发送兼容 Anthropic 的消息并设置 token 上限。", "geminiTitle": "Gemini Generate Content", "gemini": "通过 OpenAI Responses 端点调用 Gemini 模型。", "imagesTitle": "图像生成", "images": "根据文本提示创建图像。" },
+			"authenticationTitle": "认证", "authentication": "发送 Authorization: Bearer $LYNSHEN_API_KEY。不要在浏览器代码中公开密钥。", "streamingTitle": "流式响应", "streaming": "API 系列支持时，把 stream 设为 true。SSE 流以对应协议的终止事件结束。", "errorsTitle": "错误", "errors": "读取 HTTP 状态和 error.code。model_pricing_required 表示所选 Group 没有可用价格。", "pricingTitle": "计费精度", "pricing": "模型广场价格仅供参考。计费先汇总整数 nano-USD 明细，再应用一个精确十进制倍率，并只在最终缩放时截断一次。所有公开 API 路径按可信代理解析出的客户端 IP 共用一个令牌桶。令牌桶每分钟补充 60 次，允许突发 20 次，最多保留 10,000 个客户端，并淘汰闲置 120 秒的桶。生产环境只运行一个公开应用进程；多进程环境必须由网关或共享原子存储执行相同的全局限制。"
+		},
+		"marketplace": { "title": "模型广场", "description": "按 Group 查看模型。打开模型可比较各 Provider 报价。", "search": "搜索模型", "loadError": "公开模型目录暂不可用。", "empty": "没有匹配的模型。", "offerCount": "{{count}} 个报价", "input": "输入价格", "output": "输出价格", "detailDescription": "Provider 与 Channel 价格", "offersError": "Provider 报价暂不可用。", "billingNote": "价格仅供参考。计费先汇总整数 nano-USD 明细，再应用一个精确十进制倍率，并只在最终缩放时截断一次。" },
+		"status": { "title": "Provider 运行状态", "description": "查看每个 Group 内公开 Provider 的当前状态。", "unavailableTitle": "状态数据不可用", "unavailableDescription": "状态端点尚未就绪。请稍后重试。", "incomplete": "部分来源数据不完整。请把显示的百分比视为部分数据。", "dataThrough": "数据统计到 {{time}}", "states": { "operational": "运行正常", "minor_degradation": "轻微降级", "major_degradation": "严重降级", "unavailable": "不可用", "insufficient_data": "数据不足" } }
+	},
 	"common": {
+		"close": "关闭",
 		"loading": "加载中...",
 		"save": "保存",
 		"cancel": "取消",

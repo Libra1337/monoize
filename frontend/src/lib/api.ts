@@ -233,6 +233,12 @@ export interface PublicSystemSettings {
   cap_api_endpoint: string | null;
 }
 
+export interface PublicSiteSettings {
+  site_name: string;
+  site_description: string;
+  api_base_url: string;
+}
+
 export interface DashboardStats {
   user_count: number | null;
   my_api_keys_count: number;
@@ -1018,6 +1024,18 @@ class ApiClient {
 
   async getPublicSettings(): Promise<PublicSystemSettings> {
     return this.request("/settings/public");
+  }
+
+  async getPublicSiteSettings(): Promise<PublicSiteSettings> {
+    const response = await fetch("/api/public/site", {
+      headers: { "Content-Type": "application/json" },
+      credentials: "omit",
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error?.message || data.error?.code || "Request failed");
+    }
+    return data;
   }
 
   // Dashboard

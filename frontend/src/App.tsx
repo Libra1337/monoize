@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { SWRConfig } from "swr";
+import { MotionConfig } from "framer-motion";
 import { AuthProvider } from "@/hooks/use-auth";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { Toaster } from "@/components/ui/sonner";
@@ -17,12 +18,18 @@ import { UserSettingsPage } from "@/pages/user-settings";
 import { PlaygroundPage } from "@/pages/playground";
 import { RequestLogsPage } from "@/pages/request-logs";
 import { ModelMetadataPage } from "@/pages/model-metadata";
-import { ModelMarketplacePage } from "@/pages/model-marketplace";
+import { PublicLayout } from "@/pages/public-layout";
+import { WelcomePage } from "@/pages/welcome";
+import { ApiDocsPage } from "@/pages/api-docs";
+import { PublicMarketplacePage } from "@/pages/public-marketplace";
+import { PublicStatusPage } from "@/pages/public-status";
+import { PUBLIC_PATHS } from "@/public-routes";
 import "@/i18n";
 
 function App() {
   return (
     <ThemeProvider>
+      <MotionConfig reducedMotion="user">
       <SWRConfig
         value={{
           revalidateOnFocus: true,
@@ -32,7 +39,13 @@ function App() {
       >
         <AuthProvider>
         <Routes>
-          <Route path="/login" element={<LoginPage />} />
+          <Route path={PUBLIC_PATHS.login} element={<LoginPage />} />
+          <Route element={<PublicLayout />}>
+            <Route path={PUBLIC_PATHS.home} element={<WelcomePage />} />
+            <Route path={PUBLIC_PATHS.apiDocs} element={<ApiDocsPage />} />
+            <Route path={PUBLIC_PATHS.status} element={<PublicStatusPage />} />
+            <Route path={PUBLIC_PATHS.marketplace} element={<PublicMarketplacePage />} />
+          </Route>
           {/* Dashboard routes - admin panel */}
           <Route path="/dashboard" element={<DashboardLayout />}>
             <Route index element={<DashboardPage />} />
@@ -41,7 +54,6 @@ function App() {
             <Route path="tokens" element={<ApiKeysPage />} />
             <Route path="logs" element={<RequestLogsPage />} />
             <Route path="playground" element={<PlaygroundPage />} />
-            <Route path="marketplace" element={<ModelMarketplacePage />} />
             <Route path="models" element={<ModelMetadataPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="groups" element={<GroupsPage />} />
@@ -52,13 +64,12 @@ function App() {
           <Route path="/settings" element={<DashboardLayout />}>
             <Route index element={<UserSettingsPage />} />
           </Route>
-          {/* Redirect root to dashboard */}
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </AuthProvider>
       </SWRConfig>
       <Toaster />
+      </MotionConfig>
     </ThemeProvider>
   );
 }

@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { MonoizeLogo } from "@/components/MonoizeLogo";
 import { UserCenterMenu } from "@/components/user-center-menu";
 import { springs } from "@/components/ui/motion";
+import { usePublicSiteSettings } from "@/lib/swr";
 
 const navTransition = springs.snappy;
 
@@ -116,6 +117,8 @@ function Sidebar({
   const { user } = useAuth();
   const { t } = useTranslation();
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
+  const { data: publicSite } = usePublicSiteSettings();
+  const siteName = publicSite?.site_name || "LynShen Console";
 
   const navItems = [
     { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard"), exact: true },
@@ -159,10 +162,7 @@ function Sidebar({
             <MonoizeLogo className="h-full w-full" />
           </motion.div>
           {!collapsed && (
-            <div className="flex flex-col leading-none">
-              <span className="font-display text-sm font-semibold tracking-tight">Monoize</span>
-              <span className="mt-0.5 text-xs text-muted-foreground">Console</span>
-            </div>
+            <span className="truncate font-display text-sm font-semibold tracking-tight">{siteName}</span>
           )}
         </Link>
 

@@ -1,5 +1,59 @@
 {
+	"publicSite": {
+		"skipToContent": "Skip to content",
+		"primaryNavigation": "Public navigation",
+		"footer": "One endpoint for supported API protocols.",
+		"nav": { "home": "Home", "marketplace": "Model Marketplace", "apiDocs": "API Docs", "status": "Status", "console": "Console", "login": "Login", "menu": "Open navigation", "language": "Language", "theme": "Theme" },
+		"welcome": {
+			"title": "Connect once. Route every supported model with {{siteName}}.",
+			"description": "Use one API key and one Base URL for supported model providers.",
+			"exploreModels": "Explore models", "readDocs": "Read API Docs",
+			"familiesTitle": "Use the protocol your application already supports.",
+			"familiesDescription": "Send raw HTTP requests through OpenAI, Anthropic, Gemini, and image endpoints.",
+			"pricingTitle": "Choose a Group before you send traffic.",
+			"pricingDescription": "Each Group lists its own available models and price ranges. The same model may have a different price in another Group.",
+			"groupTitle": "Group routing", "groupDescription": "A Group selects the configured Provider route for an API key.",
+			"priceTitle": "Provider prices", "priceDescription": "Each visible price comes from the Provider and its configured multiplier.",
+			"stepsTitle": "Connect in three steps.",
+			"codeTitle": "Use raw HTTP from any runtime.", "codeDescription": "Set the authorization header. Send JSON to the endpoint that matches your protocol.",
+			"statusTitle": "Check Provider status before an incident.", "statusDescription": "View the current state of each public Provider inside its Group.", "viewStatus": "View status"
+		},
+		"families": { "responses": "OpenAI Responses", "chat": "Chat Completions", "messages": "Anthropic Messages", "gemini": "Gemini Generate Content", "images": "Image generation" },
+		"steps": {
+			"keyTitle": "Create an API key", "keyDescription": "Open Console and create a key for your application.",
+			"modelTitle": "Select a model", "modelDescription": "Open Model Marketplace. Review the model inside its Group.",
+			"requestTitle": "Send a request", "requestDescription": "Set the Base URL and pass the key as a Bearer token."
+		},
+		"docs": {
+			"title": "API documentation", "description": "Call supported model APIs with raw HTTP. Select an API family and a language example.",
+			"baseUrl": "Base URL", "baseUrlError": "Set api_base_url in Console settings. Copy actions are disabled on a non-HTTPS origin.",
+			"apiFamilies": "API families", "behaviorTitle": "Request behavior", "copyDisabled": "Configure a secure Base URL to enable examples.",
+			"languages": { "curl": "cURL", "python": "Python", "javascript": "JavaScript", "go": "Go" },
+			"familyDescriptions": {
+				"responsesTitle": "OpenAI Responses", "responses": "Create a response from text or structured input.",
+				"chatTitle": "OpenAI Chat Completions", "chat": "Send an ordered message list. Enable stream for SSE output.",
+				"messagesTitle": "Anthropic Messages", "messages": "Send Anthropic-compatible messages with a token limit.",
+				"geminiTitle": "Gemini Generate Content", "gemini": "Call a Gemini model through the OpenAI Responses endpoint.",
+				"imagesTitle": "Image generation", "images": "Create an image from a text prompt."
+			},
+			"authenticationTitle": "Authentication", "authentication": "Send Authorization: Bearer $LYNSHEN_API_KEY. Never expose a key in browser code.",
+			"streamingTitle": "Streaming", "streaming": "Set stream to true when the API family supports it. An SSE stream ends with its protocol terminal event.",
+			"errorsTitle": "Errors", "errors": "Read the HTTP status and error.code. model_pricing_required means the selected Group has no usable price.",
+			"pricingTitle": "Billing precision", "pricing": "Marketplace prices are informational. Billing sums integer nano-USD line items, applies one exact decimal multiplier, and truncates once at final scaling. One shared bucket covers all public API paths for each trusted-proxy client IP. It refills at 60 requests per minute, allows a burst of 20, keeps at most 10,000 client buckets, and evicts buckets idle for 120 seconds. Production uses one public application process unless a gateway or shared atomic store applies the same global limit."
+		},
+		"marketplace": {
+			"title": "Model Marketplace", "description": "Review models by Group. Open a model to compare its Provider offers.", "search": "Search models", "loadError": "The public model catalog is unavailable.", "empty": "No models match this search.",
+			"offerCount": "{{count}} offers", "input": "Input price", "output": "Output price", "detailDescription": "Provider and Channel prices", "offersError": "Provider offers are unavailable.",
+			"billingNote": "Prices are informational. Billing sums integer nano-USD line items, applies one exact decimal multiplier, and truncates once at final scaling."
+		},
+		"status": {
+			"title": "Provider status", "description": "Review the current state of public Providers inside each Group.", "unavailableTitle": "Status data is unavailable", "unavailableDescription": "The status endpoint is not ready. Try again later.",
+			"incomplete": "Some source data is incomplete. Treat displayed percentages as partial.", "dataThrough": "Data through {{time}}",
+			"states": { "operational": "Operational", "minor_degradation": "Minor degradation", "major_degradation": "Major degradation", "unavailable": "Unavailable", "insufficient_data": "Insufficient data" }
+		}
+	},
 	"common": {
+		"close": "Close",
 		"loading": "Loading...",
 		"save": "Save",
 		"cancel": "Cancel",

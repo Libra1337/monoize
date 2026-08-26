@@ -375,6 +375,32 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<imp
     Ok(Json(settings))
 }
 
+pub async fn get_public_site_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    if !crate::public_api::admit(&headers) {
+        return Ok(crate::public_api::rate_limited_response());
+    }
+    let settings = state
+        .settings_store
+        .get_public_site_settings()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let bytes = serde_json::to_vec(&settings).map_err(|e| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            e.to_string(),
+        )
+    })?;
+    Ok(crate::public_api::cacheable_json_response(
+        &headers,
+        bytes,
+        "public, max-age=15, stale-while-revalidate=30",
+    ))
+}
+
 /// Redact credentials from a DSN string.
 /// e.g. postgres://user:password@host/db → postgres://***@host/db
 fn redact_dsn(dsn: &str) -> String {

@@ -60,7 +60,7 @@ pub use providers::{
 };
 pub use settings::{
     UpdateSettingsRequest, get_config_overview, get_dashboard_stats, get_public_settings,
-    get_settings, update_settings,
+    get_public_site_settings, get_settings, update_settings,
 };
 pub use users::{
     CreateUserRequest, UpdateUserRequest, create_user, delete_user, get_user, list_users,

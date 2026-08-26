@@ -10,6 +10,7 @@ import type {
   ConfigOverview,
   SystemSettings,
   PublicSystemSettings,
+  PublicSiteSettings,
   Provider,
   CreateProviderInput,
   UpdateProviderInput,
@@ -41,6 +42,7 @@ const fetchers = {
   config: () => api.getConfigOverview(),
   settings: () => api.getSettings(),
   publicSettings: () => api.getPublicSettings(),
+  publicSiteSettings: () => api.getPublicSiteSettings(),
   providers: () => api.listProviders(),
   dashboardGroups: async () => (await api.listDashboardGroups()).groups,
   transformRegistry: () => api.getTransformRegistry(),
@@ -60,6 +62,7 @@ export const SWR_KEYS = {
   CONFIG: "/dashboard/config",
   SETTINGS: "/dashboard/settings",
   PUBLIC_SETTINGS: "/dashboard/public-settings",
+  PUBLIC_SITE_SETTINGS: "/api/public/site",
   PROVIDERS: "/dashboard/providers",
   DASHBOARD_GROUPS: "/dashboard/groups",
   TRANSFORM_REGISTRY: "/dashboard/transforms/registry",
@@ -147,6 +150,14 @@ export function usePublicSettings(config?: SWRConfiguration) {
   return useSWR<PublicSystemSettings>(
     SWR_KEYS.PUBLIC_SETTINGS,
     fetchers.publicSettings,
+    { ...defaultConfig, ...config }
+  );
+}
+
+export function usePublicSiteSettings(config?: SWRConfiguration) {
+  return useSWR<PublicSiteSettings>(
+    SWR_KEYS.PUBLIC_SITE_SETTINGS,
+    fetchers.publicSiteSettings,
     { ...defaultConfig, ...config }
   );
 }

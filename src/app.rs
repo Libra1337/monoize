@@ -1974,6 +1974,10 @@ fn build_balance_compatibility_router() -> Router<AppState> {
 fn build_dashboard_api_router() -> Router<AppState> {
     Router::new()
         .route(
+            "/public/site",
+            get(crate::dashboard_handlers::get_public_site_settings),
+        )
+        .route(
             "/dashboard/auth/register",
             post(crate::dashboard_handlers::register),
         )

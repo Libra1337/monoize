@@ -284,6 +284,83 @@ async fn public_settings_and_csp_publish_only_cap_public_configuration() {
 }
 
 #[tokio::test]
+async fn public_site_settings_publish_exactly_the_public_site_allow_list() {
+    let ctx = setup().await;
+    let response = ctx
+        .router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/public/site")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let mut keys = body
+        .as_object()
+        .expect("public site response is an object")
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    assert_eq!(keys, ["api_base_url", "site_description", "site_name"]);
+    assert_eq!(body["site_name"], json!("LynShen Console"));
+}
+
+#[tokio::test]
+async fn settings_startup_rebrands_only_the_old_builtin_site_name() {
+    use sea_orm::ConnectionTrait;
+    use sea_orm_migration::MigratorTrait;
+
+    let db = monoize::db::DbPool::connect("sqlite::memory:")
+        .await
+        .expect("db connects");
+    {
+        let write = db.write().await;
+        monoize::migration::Migrator::up(&*write, None)
+            .await
+            .expect("migrates");
+    }
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO system_settings (key, value, updated_at) VALUES ($1, $2, $3)",
+            vec![
+                "site_name".into(),
+                "Monoize Dashboard".into(),
+                "2026-01-01T00:00:00Z".into(),
+            ],
+        ))
+        .await
+        .expect("old built-in name inserts");
+
+    let store = monoize::settings::SettingsStore::new(db.clone())
+        .await
+        .expect("settings initialize");
+    assert_eq!(
+        store.get("site_name").await.unwrap().as_deref(),
+        Some("LynShen Console")
+    );
+
+    store
+        .set("site_name", "Administrator Brand")
+        .await
+        .expect("custom name stores");
+    let store = monoize::settings::SettingsStore::new(db)
+        .await
+        .expect("settings reinitialize");
+    assert_eq!(
+        store.get("site_name").await.unwrap().as_deref(),
+        Some("Administrator Brand")
+    );
+}
+
+#[tokio::test]
 async fn password_change_rotates_current_session_and_revokes_other_sessions() {
     let ctx = setup().await;
     let login_request = || {

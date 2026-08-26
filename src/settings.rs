@@ -24,6 +24,13 @@ pub struct PublicSettings {
     pub cap_api_endpoint: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublicSiteSettings {
+    pub site_name: String,
+    pub site_description: String,
+    pub api_base_url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemSettings {
     pub registration_enabled: bool,
@@ -179,7 +186,7 @@ impl Default for SystemSettings {
             default_user_role: "user".to_string(),
             session_ttl_days: 7,
             api_key_max_per_user: 1000,
-            site_name: "Monoize Dashboard".to_string(),
+            site_name: "LynShen Console".to_string(),
             site_description: "Unified Responses Proxy".to_string(),
             api_base_url: String::new(),
             global_transforms: Vec::new(),
@@ -243,6 +250,7 @@ impl SettingsStore {
     pub async fn new(db: DbPool) -> Result<Self, String> {
         let store = Self { db };
         store.ensure_defaults().await?;
+        store.migrate_builtin_site_name().await?;
         store.migrate_transform_rule_ids().await?;
         Ok(store)
     }
@@ -444,6 +452,26 @@ impl SettingsStore {
         Ok(())
     }
 
+    async fn migrate_builtin_site_name(&self) -> Result<(), String> {
+        let now = Utc::now().to_rfc3339();
+        let _write_guard = self.db.write().await;
+        system_settings::Entity::update_many()
+            .col_expr(
+                system_settings::Column::Value,
+                sea_orm::sea_query::Expr::value("LynShen Console"),
+            )
+            .col_expr(
+                system_settings::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(system_settings::Column::Key.eq("site_name"))
+            .filter(system_settings::Column::Value.eq("Monoize Dashboard"))
+            .exec(&*_write_guard)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     pub async fn get(&self, key: &str) -> Result<Option<String>, String> {
         let row = system_settings::Entity::find_by_id(key.to_string())
             .one(self.db.read())
@@ -501,6 +529,30 @@ impl SettingsStore {
                 "captcha_enabled" => {
                     public.captcha_enabled = decode_captcha_enabled(&row.value)?;
                 }
+                "site_name" => public.site_name = row.value,
+                "site_description" => public.site_description = row.value,
+                "api_base_url" => public.api_base_url = row.value,
+                _ => {}
+            }
+        }
+        Ok(public)
+    }
+
+    pub async fn get_public_site_settings(&self) -> Result<PublicSiteSettings, String> {
+        const PUBLIC_SITE_KEYS: [&str; 3] = ["site_name", "site_description", "api_base_url"];
+        let rows = system_settings::Entity::find()
+            .filter(system_settings::Column::Key.is_in(PUBLIC_SITE_KEYS))
+            .all(self.db.read())
+            .await
+            .map_err(|error| error.to_string())?;
+        let defaults = SystemSettings::default();
+        let mut public = PublicSiteSettings {
+            site_name: defaults.site_name,
+            site_description: defaults.site_description,
+            api_base_url: defaults.api_base_url,
+        };
+        for row in rows {
+            match row.key.as_str() {
                 "site_name" => public.site_name = row.value,
                 "site_description" => public.site_description = row.value,
                 "api_base_url" => public.api_base_url = row.value,

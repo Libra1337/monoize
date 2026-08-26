@@ -60,3 +60,26 @@ describe("dashboard session transport", () => {
     }
   });
 });
+
+describe("public site transport", () => {
+  test("loads the public allow-list from the public site endpoint", async () => {
+    let requestedUrl = "";
+    globalThis.fetch = (async (input) => {
+      requestedUrl = String(input);
+      return Response.json({
+        site_name: "LynShen Console",
+        site_description: "API service",
+        api_base_url: "https://lynshen.org/v1",
+      });
+    }) as typeof fetch;
+
+    const settings = await api.getPublicSiteSettings();
+
+    expect(requestedUrl).toBe("/api/public/site");
+    expect(Object.keys(settings).sort()).toEqual([
+      "api_base_url",
+      "site_description",
+      "site_name",
+    ]);
+  });
+});
