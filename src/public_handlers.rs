@@ -165,6 +165,18 @@ fn optional_search(value: Option<&str>) -> Result<Option<String>, AppError> {
     canonical_text(trimmed, 128, "q").map(Some)
 }
 
+fn parse_offset_cursor(value: Option<&str>) -> Result<usize, AppError> {
+    let Some(value) = value.filter(|value| !value.is_empty()) else {
+        return Ok(0);
+    };
+    let Some(offset) = value.strip_prefix("o:") else {
+        return Err(invalid("invalid cursor"));
+    };
+    offset
+        .parse::<usize>()
+        .map_err(|_| invalid("invalid cursor"))
+}
+
 fn ascii_search_key(value: &str) -> Vec<u8> {
     value
         .as_bytes()
@@ -327,13 +339,7 @@ pub async fn list_marketplace(
     if !crate::public_api::admit(&headers) {
         return Ok(crate::public_api::rate_limited_response());
     }
-    if query
-        .cursor
-        .as_deref()
-        .is_some_and(|cursor| !cursor.is_empty())
-    {
-        return Err(invalid("cursor pagination is not available yet"));
-    }
+    let offset = parse_offset_cursor(query.cursor.as_deref())?;
     let limit = query.limit.unwrap_or(24);
     if !(1..=50).contains(&limit) {
         return Err(invalid("limit must be between 1 and 50"));
@@ -406,8 +412,9 @@ pub async fn list_marketplace(
             }
         }
     }
+    let total_items = items.len();
     let mut output = Vec::new();
-    for ((group_name, model), offers) in items.into_iter().take(limit as usize) {
+    for ((group_name, model), offers) in items.into_iter().skip(offset).take(limit as usize) {
         let rates = offers
             .iter()
             .flat_map(|offer| offer.2.clone())
@@ -430,7 +437,8 @@ pub async fn list_marketplace(
     let response = MarketplaceResponse {
         generated_at: snapshot.generated_at,
         revision: snapshot.revision.to_string(),
-        next_cursor: None,
+        next_cursor: (offset + output.len() < total_items)
+            .then(|| format!("o:{}", offset + output.len())),
         items: output,
     };
     let bytes = serde_json::to_vec(&response).map_err(|error| {
@@ -455,13 +463,7 @@ pub async fn marketplace_offers(
     if !crate::public_api::admit(&headers) {
         return Ok(crate::public_api::rate_limited_response());
     }
-    if query
-        .cursor
-        .as_deref()
-        .is_some_and(|cursor| !cursor.is_empty())
-    {
-        return Err(invalid("cursor pagination is not available yet"));
-    }
+    let offset = parse_offset_cursor(query.cursor.as_deref())?;
     let group = query
         .group
         .as_deref()
@@ -538,13 +540,20 @@ pub async fn marketplace_offers(
             .routing_config_revision
             .load(std::sync::atomic::Ordering::Acquire),
     );
+    let total_offers = offers.len();
+    let page_offers = offers
+        .into_iter()
+        .skip(offset)
+        .take(limit as usize)
+        .collect::<Vec<_>>();
     let response = OffersResponse {
         generated_at: snapshot.generated_at,
         revision: snapshot.revision.to_string(),
         public_group_name: group,
         model,
-        next_cursor: None,
-        offers: offers.into_iter().take(limit as usize).collect(),
+        next_cursor: (offset + page_offers.len() < total_offers)
+            .then(|| format!("o:{}", offset + page_offers.len())),
+        offers: page_offers,
     };
     let bytes = serde_json::to_vec(&response).map_err(|error| {
         AppError::new(
