@@ -8,6 +8,7 @@ pub mod model_registry_records;
 pub mod monoize_channel_models;
 pub mod monoize_channels;
 pub mod monoize_groups;
+pub mod monoize_provider_models;
 pub mod monoize_providers;
 pub mod request_logs;
 pub mod sessions;
@@ -26,6 +27,7 @@ pub mod prelude {
     pub use super::monoize_channel_models::Entity as MonoizeChannelModels;
     pub use super::monoize_channels::Entity as MonoizeChannels;
     pub use super::monoize_groups::Entity as MonoizeGroups;
+    pub use super::monoize_provider_models::Entity as MonoizeProviderModels;
     pub use super::monoize_providers::Entity as MonoizeProviders;
     pub use super::request_logs::Entity as RequestLogs;
     pub use super::sessions::Entity as Sessions;
