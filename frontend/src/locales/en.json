@@ -44,7 +44,7 @@
 		"marketplace": {
 			"title": "Model Marketplace", "description": "Review models by Group. Open a model to compare its Provider offers.", "search": "Search models", "loadError": "The public model catalog is unavailable.", "empty": "No models match this search.",
 			"offerCount": "{{count}} offers", "input": "Input price", "output": "Output price", "detailDescription": "Provider and Channel prices", "offersError": "Provider offers are unavailable.",
-			"billingNote": "Prices are informational. Billing sums integer nano-USD line items, applies one exact decimal multiplier, and truncates once at final scaling."
+			"billingNote": "Prices are informational. Billing sums integer nano-USD line items, applies one exact decimal multiplier, and truncates once at final scaling.", "loadMore": "Load more", "loadingMore": "Loading more...", "loadMoreError": "The next page is unavailable."
 		},
 		"status": {
 			"title": "Provider status", "description": "Review the current state of public Providers inside each Group.", "unavailableTitle": "Status data is unavailable", "unavailableDescription": "The status endpoint is not ready. Try again later.",
