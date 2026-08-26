@@ -1,4 +1,4 @@
-#[path = "../../src/migration/m20260826_000044_provider_pricing_flatten.rs"]
+#[path = "../../src/migration/m20260826_000048_provider_pricing_flatten.rs"]
 mod migration_under_test;
 
 use migration_under_test::Migration;
