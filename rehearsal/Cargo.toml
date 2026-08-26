@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0.104"
 base64 = "0.22.1"
 chrono = "0.4.45"
+futures-util = "0.3.34"
 hex = "0.4.3"
 hmac = "0.12.1"
 rand = "0.8.5"
@@ -15,6 +16,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.10.9"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "postgres", "chrono", "uuid", "rust_decimal"] }
+sysinfo = "0.39.6"
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["full"] }
 unicode-normalization = "0.1.25"

@@ -265,7 +265,9 @@ MM-U7. Every user-visible string MUST exist in `en`, `zh`, `zh-TW`, and `ja` cat
 
 MM-Q1. The supported catalog envelope is 128 Groups, 5,000 Providers and embedded
 Channels, 250,000 model mappings, 1,000,000 rate rows, 250,000 metadata rows, 2,000,000
-offers, and one model with 5,000 offers. Preflight fails above an envelope value.
+derived offer-rate entries, and one Group/model row with 5,000 Provider offers. One
+Provider offer is one visible Provider-model mapping. One derived offer-rate entry is one
+rate item nested in one Provider offer. Preflight fails above an envelope value.
 
 MM-Q2. Read qualification MUST run on SQLite and PostgreSQL with 32 concurrent workers,
 five warm-up minutes, ten measured minutes, and at least 10,000 verified cache-miss samples

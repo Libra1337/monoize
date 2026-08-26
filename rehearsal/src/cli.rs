@@ -1,3 +1,7 @@
+use crate::marketplace::{
+    BenchmarkConfig, BenchmarkMode, Envelope, FixtureManifest, QuerySetManifest,
+    run_sqlite_benchmark, write_benchmark_report,
+};
 use crate::provider::canonical_json;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -5,11 +9,18 @@ use std::path::{Path, PathBuf};
 
 pub async fn run(args: impl IntoIterator<Item = OsString>) -> anyhow::Result<()> {
     let args = args.into_iter().skip(1).collect::<Vec<_>>();
-    if args.first().and_then(|value| value.to_str()) != Some("gate-summary") {
-        anyhow::bail!(
-            "usage: lynshen-rehearsal gate-summary --output rehearsal/evidence/<file>.json"
-        );
+    match args.first().and_then(|value| value.to_str()) {
+        Some("gate-summary") => run_gate_summary(&args).await,
+        Some("marketplace")
+            if args.get(1).and_then(|value| value.to_str()) == Some("benchmark") =>
+        {
+            run_marketplace_benchmark(&args).await
+        }
+        _ => anyhow::bail!(usage()),
     }
+}
+
+async fn run_gate_summary(args: &[OsString]) -> anyhow::Result<()> {
     let output_index = args
         .iter()
         .position(|value| value == "--output")
@@ -26,6 +37,87 @@ pub async fn run(args: impl IntoIterator<Item = OsString>) -> anyhow::Result<()>
         ..GateSummaryInput::default()
     });
     write_gate_summary(&root, PathBuf::from(output), &summary)
+}
+
+async fn run_marketplace_benchmark(args: &[OsString]) -> anyhow::Result<()> {
+    let backend = required_argument(args, "--backend")?;
+    if backend != "sqlite" {
+        anyhow::bail!("unsupported benchmark backend: {backend}");
+    }
+    let envelope = match required_argument(args, "--envelope")? {
+        "smoke" => Envelope::Smoke,
+        "qualification" => Envelope::Qualification,
+        value => anyhow::bail!("unsupported benchmark envelope: {value}"),
+    };
+    let mode = match optional_argument(args, "--mode")? {
+        None | Some("smoke") => BenchmarkMode::Smoke,
+        Some("qualification") => BenchmarkMode::Qualification,
+        Some(value) => anyhow::bail!("unsupported benchmark mode: {value}"),
+    };
+    let query_set = PathBuf::from(required_argument(args, "--query-set")?);
+    let output = PathBuf::from(required_argument(args, "--output")?);
+    let root = std::env::current_dir()?;
+    let fixture = FixtureManifest::generate(0x004c_594e_5348_454e, envelope)?;
+    QuerySetManifest::read(&root.join(query_set))?.validate(&fixture)?;
+    let report = run_sqlite_benchmark(BenchmarkConfig {
+        seed: fixture.seed,
+        envelope,
+        mode,
+        query_limit: None,
+        git_commit: resolve_clean_git_commit(&root)?,
+    })
+    .await?;
+    write_benchmark_report(&root, output, &report)
+}
+
+fn required_argument<'a>(args: &'a [OsString], name: &str) -> anyhow::Result<&'a str> {
+    optional_argument(args, name)?.with_context(|| format!("missing {name}"))
+}
+
+fn optional_argument<'a>(args: &'a [OsString], name: &str) -> anyhow::Result<Option<&'a str>> {
+    let Some(index) = args.iter().position(|value| value == name) else {
+        return Ok(None);
+    };
+    let value = args
+        .get(index + 1)
+        .with_context(|| format!("missing value for {name}"))?;
+    value
+        .to_str()
+        .map(Some)
+        .with_context(|| format!("{name} is not valid Unicode"))
+}
+
+pub fn resolve_clean_git_commit(root: &Path) -> anyhow::Result<String> {
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(root)
+        .output()
+        .context("inspect benchmark worktree")?;
+    if !status.status.success() {
+        anyhow::bail!("benchmark_git_status_failed");
+    }
+    if !status.stdout.is_empty() {
+        anyhow::bail!("benchmark_requires_clean_worktree");
+    }
+    if let Ok(value) = std::env::var("LYNSHEN_REHEARSAL_GIT_COMMIT")
+        && !value.is_empty()
+    {
+        return Ok(value);
+    }
+    std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .context("resolve benchmark git commit")
+}
+
+fn usage() -> &'static str {
+    "usage: lynshen-rehearsal gate-summary --output rehearsal/evidence/<file>.json\n       lynshen-rehearsal marketplace benchmark --backend sqlite --envelope smoke --query-set rehearsal/fixtures/marketplace/query-set.json --output rehearsal/evidence/<file>.json"
 }
 
 use anyhow::Context;
