@@ -588,6 +588,7 @@ pub async fn public_status(
         })?;
     let since = Utc::now().timestamp_millis() - 86_400_000;
     let mut grouped: BTreeMap<String, Vec<PublicStatusProvider>> = BTreeMap::new();
+    let mut data_complete = true;
     for provider in providers {
         let group_names = provider_group_names(&provider, &groups);
         let row = state.db_pool.read().query_one(state.db_pool.stmt("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS successes FROM request_logs WHERE provider_id = $1 AND created_at_unix_ms >= $2", vec![provider.id.clone().into(), since.into()])).await.map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string()))?;
@@ -595,6 +596,9 @@ pub async fn public_status(
             .as_ref()
             .and_then(|row| row.try_get::<i64>("", "total").ok())
             .unwrap_or(0);
+        if total == 0 {
+            data_complete = false;
+        }
         let successes = row
             .as_ref()
             .and_then(|row| row.try_get::<Option<i64>>("", "successes").ok())
@@ -662,7 +666,7 @@ pub async fn public_status(
     let response = PublicStatusResponse {
         generated_at: snapshot.generated_at.clone(),
         data_through: snapshot.generated_at,
-        data_complete: true,
+        data_complete,
         groups: output,
     };
     let bytes = serde_json::to_vec(&response).map_err(|error| {
