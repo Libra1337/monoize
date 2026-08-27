@@ -16,6 +16,7 @@ const PAYMENT_TABLES: &[&str] = &[
     "store_balance_holds",
     "store_reconciliation_leases",
     "store_reconciliation_cases",
+    "store_fulfillment_retries",
     "store_privacy_records",
     "store_access_audits",
     "store_retention_runs",
@@ -233,4 +234,26 @@ async fn reauth_migration_allows_only_one_active_credential_per_channel() {
     )
     .await
     .expect("retired credential versions remain allowed");
+}
+
+#[tokio::test]
+async fn reconciliation_migration_adds_bounded_fulfillment_retry_state() {
+    let db = migrated_database().await;
+    let columns = sqlite_columns(&db, "store_fulfillment_retries").await;
+    assert_eq!(
+        columns,
+        vec![
+            "order_id",
+            "attempt_count",
+            "next_attempt_at",
+            "last_error_category",
+            "updated_at",
+        ]
+    );
+    let indexes = sqlite_names(&db, "index").await;
+    assert!(
+        indexes
+            .iter()
+            .any(|value| value == "idx_store_fulfillment_retries_due")
+    );
 }

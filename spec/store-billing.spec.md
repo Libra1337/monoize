@@ -410,13 +410,19 @@ SB-Q-13. A Replica MUST spool settlement or release before reporting terminal bi
 
 ## 10. Reconciliation, Manual Cases, And Operations
 
-SB-OP-1. Only the Store Primary MUST run reconciliation. A database lease with a fencing epoch MUST prevent two active reconcilers.
+SB-OP-0. The application MUST keep the periodic reconciliation scheduler disabled until it implements every scan class in SB-OP-3 and the corresponding verified Provider query. An isolated fulfillment-recovery run MAY execute in tests before this gate opens.
 
-SB-OP-2. Reconciliation MUST run once per minute in bounded deterministic batches.
+SB-OP-1. Only the Store Primary MUST run reconciliation. The reconciler MUST acquire the `store_reconciler` row in `store_reconciliation_leases`. A lease MUST contain an opaque owner ID, a strictly increasing fencing epoch, and an expiry 90 seconds after acquisition. A second owner MUST NOT process work before expiry. Every reconciled fulfillment transaction MUST lock and validate the exact owner and fencing epoch before it changes financial state.
+
+SB-OP-2. After SB-OP-0 opens the scheduler gate, reconciliation MUST run once per minute. One fulfillment-recovery run MUST select at most 100 candidates ordered by `paid_at ASC, id ASC`.
 
 SB-OP-3. Reconciliation MUST scan expired presented attempts, paid/pending orders older than 30 seconds, paid/failed orders, refund-pending orders, and retryable provider events.
 
-SB-OP-4. Paid/pending and failed fulfillment retry delays MUST be 30 seconds, two minutes, ten minutes, and one hour.
+SB-OP-4. A paid order without a retry row becomes eligible 30 seconds after `paid_at`. After the first failed reconciliation, the next delay MUST be two minutes. After the second failure, the next delay MUST be ten minutes. After every later failure, the next delay MUST be one hour.
+
+SB-OP-4A. `store_fulfillment_retries` MUST contain one row per order. It MUST store `attempt_count`, `next_attempt_at`, `last_error_category`, and `updated_at`. A successful fulfillment MUST delete this row in the same fenced transaction. A failed fulfillment MUST upsert the next delay without changing the order payment state or user reward.
+
+SB-OP-4B. PostgreSQL MUST store Store order revisions, provider-event revisions, lease epochs, and fulfillment retry counts as signed 64-bit integers. SQLite MUST accept the same signed 64-bit range.
 
 SB-OP-5. Refund query delays MUST be one minute, five minutes, 15 minutes, then hourly. A refund pending longer than 15 minutes MUST alert.
 

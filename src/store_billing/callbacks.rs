@@ -200,12 +200,36 @@ impl PaymentCallbackStore {
     }
 
     pub async fn fulfill_paid_order(&self, order_id: &str) -> Result<(), CallbackStoreError> {
+        self.fulfill_paid_order_inner(order_id, None, Utc::now())
+            .await
+    }
+
+    pub(crate) async fn fulfill_paid_order_fenced(
+        &self,
+        order_id: &str,
+        owner_id: &str,
+        epoch: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(), CallbackStoreError> {
+        self.fulfill_paid_order_inner(order_id, Some((owner_id, epoch)), now)
+            .await
+    }
+
+    async fn fulfill_paid_order_inner(
+        &self,
+        order_id: &str,
+        fence: Option<(&str, i64)>,
+        now_at: DateTime<Utc>,
+    ) -> Result<(), CallbackStoreError> {
         let tx = self.db.begin_write().await.map_err(storage)?;
         let lock = if self.db.is_postgres() {
             " FOR UPDATE"
         } else {
             ""
         };
+        if let Some((owner_id, epoch)) = fence {
+            validate_reconciliation_fence(&self.db, &*tx, owner_id, epoch, now_at, lock).await?;
+        }
         let row = tx
             .query_one(self.db.stmt(
                 &format!(
@@ -220,6 +244,12 @@ impl PaymentCallbackStore {
             .map_err(storage)?
             .ok_or(CallbackStoreError::NotFound)?;
         if row_string(&row, "fulfillment_state")? == "fulfilled" {
+            tx.execute(self.db.stmt(
+                "DELETE FROM store_fulfillment_retries WHERE order_id = $1",
+                vec![order_id.into()],
+            ))
+            .await
+            .map_err(storage)?;
             tx.commit().await.map_err(storage)?;
             return Ok(());
         }
@@ -277,7 +307,7 @@ impl PaymentCallbackStore {
         let balance = previous
             .checked_add(delta)
             .ok_or_else(|| CallbackStoreError::Fulfillment("balance overflow".to_string()))?;
-        let now = timestamp(Utc::now());
+        let now = timestamp(now_at);
         tx.execute(self.db.stmt(
             "UPDATE users SET balance_nano_usd = $2, updated_at = $3 WHERE id = $1",
             vec![
@@ -326,8 +356,49 @@ impl PaymentCallbackStore {
                 "order state changed during fulfillment".to_string(),
             ));
         }
+        tx.execute(self.db.stmt(
+            "DELETE FROM store_fulfillment_retries WHERE order_id = $1",
+            vec![order_id.into()],
+        ))
+        .await
+        .map_err(storage)?;
         tx.commit().await.map_err(storage)
     }
+}
+
+async fn validate_reconciliation_fence<C: ConnectionTrait>(
+    db: &DbPool,
+    connection: &C,
+    owner_id: &str,
+    epoch: i64,
+    now: DateTime<Utc>,
+    lock: &str,
+) -> Result<(), CallbackStoreError> {
+    let lease = connection
+        .query_one(db.stmt(
+            &format!(
+                "SELECT owner_id, epoch, expires_at FROM store_reconciliation_leases
+                 WHERE name = 'store_reconciler'{lock}"
+            ),
+            vec![],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| {
+            CallbackStoreError::Storage("reconciliation lease is missing".to_string())
+        })?;
+    let expires_at = DateTime::parse_from_rfc3339(&row_string(&lease, "expires_at")?)
+        .map_err(storage)?
+        .with_timezone(&Utc);
+    if row_string(&lease, "owner_id")? != owner_id
+        || row_i64(&lease, "epoch")? != epoch
+        || expires_at <= now
+    {
+        return Err(CallbackStoreError::Storage(
+            "reconciliation lease was lost".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 async fn insert_event<C: ConnectionTrait>(
