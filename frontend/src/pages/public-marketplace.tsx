@@ -16,7 +16,7 @@ interface MarketplaceOffer { public_provider_name: string; public_channel_name: 
 interface OffersResponse { generated_at: string; revision: string; public_group_name: string; model: string; next_cursor: string | null; offers: MarketplaceOffer[] }
 
 async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { credentials: "omit", cache: "no-store" });
+  const response = await fetch(url, { credentials: "omit" });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error?.message || data.error?.code || "Request failed");
   return data;

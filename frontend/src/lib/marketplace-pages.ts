@@ -1,3 +1,3 @@
 export function resolveMarketplacePages<T>(pages: T[], data?: T): T[] {
-  return pages.length > 0 ? pages : data ? [data] : [];
+  return data ? [data, ...pages.slice(1)] : pages;
 }
