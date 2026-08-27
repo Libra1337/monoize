@@ -134,7 +134,7 @@ impl ReauthStore {
 }
 
 fn validate_scope(scope: &str) -> Result<(), ReauthError> {
-    if scope == "credential_update" {
+    if matches!(scope, "credential_update" | "redemption_access") {
         Ok(())
     } else {
         Err(ReauthError::InvalidScope)
@@ -235,5 +235,26 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn redemption_access_is_a_distinct_five_minute_scope() {
+        let store = store().await;
+        let grant = store
+            .issue("admin-a", "session-a", "redemption_access")
+            .await
+            .unwrap();
+
+        store
+            .verify("admin-a", "session-a", &grant.token, "redemption_access")
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .verify("admin-a", "session-a", &grant.token, "credential_update")
+                .await,
+            Err(ReauthError::InvalidGrant)
+        );
+        assert!(grant.expires_at <= Utc::now() + Duration::minutes(5));
     }
 }

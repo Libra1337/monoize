@@ -1,7 +1,13 @@
 use super::{
+    crypto::{EncryptedSecret, PaymentKeyRing},
     exchange_rate::ExchangeRateSnapshot,
     models::*,
     money::{Currency, MoneyError, convert_minor, parse_minor, quoted_received_to_nano_usd},
+    redemption::{
+        RedemptionAuditContext, RevealRedemptionInput, RevealedRedemptionCode, code_digest,
+        decrypt_code, generate_code_material, normalize_code, source_ip_digest,
+        validate_audit_context, validate_reveal_input,
+    },
 };
 use crate::db::DbPool;
 use chrono::{DateTime, Duration, SecondsFormat, Timelike, Utc};
@@ -9,7 +15,6 @@ use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use sea_orm::{ConnectionTrait, QueryResult};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -42,6 +47,14 @@ pub enum StoreBillingError {
     RedemptionCodeExpired,
     #[error("redemption code is used")]
     RedemptionCodeUsed,
+    #[error("redemption code is revoked")]
+    RedemptionCodeRevoked,
+    #[error("redemption access requires configured encryption keys")]
+    EncryptionUnavailable,
+    #[error("redemption attempt rate limit exceeded")]
+    RedemptionRateLimited,
+    #[error("redemption attempt cooldown is active")]
+    RedemptionCooldown,
     #[error("payment hold blocks Store mutations")]
     PaymentHold,
     #[error("Store storage failed: {0}")]
@@ -793,6 +806,7 @@ impl StoreBillingStore {
 
     pub async fn generate_redemption_codes(
         &self,
+        key_ring: &PaymentKeyRing,
         created_by_user_id: &str,
         input: GenerateRedemptionCodesInput,
     ) -> Result<Vec<GeneratedRedemptionCode>, StoreBillingError> {
@@ -836,19 +850,27 @@ impl StoreBillingStore {
         let mut generated = Vec::with_capacity(input.count as usize);
         for _ in 0..input.count {
             let id = Uuid::new_v4().to_string();
-            let code = generate_code();
-            let normalized = normalize_code(&code);
-            let code_hint = normalized[normalized.len() - 4..].to_string();
-            let digest = code_digest(&normalized);
+            let material = generate_code_material(key_ring, &id)
+                .map_err(|_| StoreBillingError::EncryptionUnavailable)?;
+            let digest = code_digest(&material.normalized);
             tx.execute(self.db.stmt(
                 "INSERT INTO store_redemption_codes
-                    (id, code_digest, code_hint, reward_kind, reward_json, status, expires_at,
-                     redeemed_by_user_id, redeemed_at, created_by_user_id, created_at)
-                 VALUES ($1, $2, $3, $4, $5, 'unused', $6, NULL, NULL, $7, $8)",
+                    (id, code_format_version, code_digest, code_hint,
+                     encrypted_format_version, encrypted_key_id, encrypted_nonce_base64,
+                     encrypted_ciphertext_base64, ciphertext_destroyed_at,
+                     reward_kind, reward_json, status, expires_at,
+                     redeemed_by_user_id, redeemed_at, revoked_at,
+                     created_by_user_id, created_at)
+                 VALUES ($1, 2, $2, $3, $4, $5, $6, $7, NULL,
+                         $8, $9, 'unused', $10, NULL, NULL, NULL, $11, $12)",
                 vec![
                     id.clone().into(),
                     digest.into(),
-                    code_hint.clone().into(),
+                    material.hint.clone().into(),
+                    i32::from(material.encrypted.version).into(),
+                    material.encrypted.key_id.into(),
+                    material.encrypted.nonce_base64.into(),
+                    material.encrypted.ciphertext_base64.into(),
                     reward_kind.as_str().into(),
                     reward_json.clone().into(),
                     timestamp(expires_at).into(),
@@ -859,10 +881,10 @@ impl StoreBillingStore {
             .await
             .map_err(storage)?;
             generated.push(GeneratedRedemptionCode {
-                code,
+                code: material.code,
                 record: RedemptionCodeRecord {
                     id,
-                    code_hint,
+                    code_hint: material.hint,
                     reward_kind,
                     reward: serde_json::to_value(&reward).map_err(storage)?,
                     status: RedemptionCodeStatus::Unused,
@@ -878,16 +900,158 @@ impl StoreBillingStore {
         Ok(generated)
     }
 
+    pub async fn reveal_redemption_codes(
+        &self,
+        key_ring: &PaymentKeyRing,
+        input: RevealRedemptionInput,
+        context: &RedemptionAuditContext,
+    ) -> Result<Vec<RevealedRedemptionCode>, StoreBillingError> {
+        if !validate_reveal_input(&input) || !validate_audit_context(context) {
+            return Err(StoreBillingError::InvalidInput);
+        }
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let mut revealed = Vec::with_capacity(input.code_ids.len());
+        for id in &input.code_ids {
+            let row = tx
+                .query_one(self.db.stmt(
+                    "SELECT code_format_version, status, expires_at,
+                            encrypted_format_version, encrypted_key_id,
+                            encrypted_nonce_base64, encrypted_ciphertext_base64
+                     FROM store_redemption_codes WHERE id = $1",
+                    vec![id.into()],
+                ))
+                .await
+                .map_err(storage)?
+                .ok_or(StoreBillingError::InvalidRedemptionCode)?;
+            if row_i32(&row, "code_format_version")? != 2
+                || row_string(&row, "status")? != "unused"
+                || parse_timestamp(&row_string(&row, "expires_at")?)? <= Utc::now()
+            {
+                return Err(StoreBillingError::InvalidRedemptionCode);
+            }
+            let encrypted = encrypted_redemption_from_row(&row)?;
+            let code = decrypt_code(key_ring, id, &encrypted)
+                .map_err(|_| StoreBillingError::EncryptionUnavailable)?;
+            revealed.push(RevealedRedemptionCode {
+                id: id.clone(),
+                code,
+            });
+        }
+        let now = Utc::now();
+        tx.execute(self.db.stmt(
+            "INSERT INTO store_access_audits
+                (id, actor_id, actor_role, action, scope_json, reason, result, created_at)
+             VALUES ($1, $2, 'admin', $3, $4, 'redemption_access', 'success', $5)",
+            vec![
+                Uuid::new_v4().to_string().into(),
+                context.admin_user_id.clone().into(),
+                input.action.audit_action().into(),
+                serde_json::json!({
+                    "code_ids": input.code_ids,
+                    "count": revealed.len(),
+                    "source_ip": context.source_ip,
+                    "user_agent": context.user_agent,
+                })
+                .to_string()
+                .into(),
+                timestamp(now).into(),
+            ],
+        ))
+        .await
+        .map_err(storage)?;
+        tx.commit().await.map_err(storage)?;
+        Ok(revealed)
+    }
+
+    pub async fn revoke_redemption_code(
+        &self,
+        code_id: &str,
+        admin_user_id: &str,
+    ) -> Result<RedemptionCodeRecord, StoreBillingError> {
+        if code_id.is_empty() || admin_user_id.trim().is_empty() {
+            return Err(StoreBillingError::InvalidInput);
+        }
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let now = Utc::now();
+        let changed = tx
+            .execute(self.db.stmt(
+                "UPDATE store_redemption_codes
+                 SET status = 'revoked', encrypted_format_version = NULL,
+                     encrypted_key_id = NULL, encrypted_nonce_base64 = NULL,
+                     encrypted_ciphertext_base64 = NULL,
+                     ciphertext_destroyed_at = CASE
+                         WHEN code_format_version = 2 THEN $2 ELSE NULL END,
+                     revoked_at = $2
+                 WHERE id = $1 AND status = 'unused'",
+                vec![code_id.into(), timestamp(now).into()],
+            ))
+            .await
+            .map_err(storage)?;
+        if changed.rows_affected() != 1 {
+            return Err(StoreBillingError::Conflict);
+        }
+        tx.execute(self.db.stmt(
+            "INSERT INTO store_access_audits
+                (id, actor_id, actor_role, action, scope_json, reason, result, created_at)
+             VALUES ($1, $2, 'admin', 'redemption_revoke', $3,
+                     'redemption_revocation', 'success', $4)",
+            vec![
+                Uuid::new_v4().to_string().into(),
+                admin_user_id.into(),
+                serde_json::json!({"code_ids": [code_id], "count": 1})
+                    .to_string()
+                    .into(),
+                timestamp(now).into(),
+            ],
+        ))
+        .await
+        .map_err(storage)?;
+        let record = tx
+            .query_one(self.db.stmt(
+                &format!("{} WHERE id = $1", redemption_select()),
+                vec![code_id.into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or(StoreBillingError::NotFound)
+            .and_then(redemption_record_from_row)?;
+        tx.commit().await.map_err(storage)?;
+        Ok(record)
+    }
+
+    pub async fn cleanup_expired_redemption_ciphertexts(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<u64, StoreBillingError> {
+        let cutoff = now
+            .checked_sub_signed(Duration::hours(24))
+            .ok_or(StoreBillingError::InvalidInput)?;
+        self.db
+            .write()
+            .await
+            .execute(self.db.stmt(
+                "UPDATE store_redemption_codes
+                 SET encrypted_format_version = NULL, encrypted_key_id = NULL,
+                     encrypted_nonce_base64 = NULL, encrypted_ciphertext_base64 = NULL,
+                     ciphertext_destroyed_at = $2
+                 WHERE code_format_version = 2 AND status = 'unused'
+                   AND expires_at <= $1 AND encrypted_ciphertext_base64 IS NOT NULL",
+                vec![timestamp(cutoff).into(), timestamp(now).into()],
+            ))
+            .await
+            .map(|result| result.rows_affected())
+            .map_err(storage)
+    }
+
     pub async fn redeem(
         &self,
         user_id: &str,
         code: &str,
         rate: Option<&ExchangeRateSnapshot>,
+        source_ip: &str,
     ) -> Result<RedemptionCodeRecord, StoreBillingError> {
-        let normalized = normalize_code(code);
-        if normalized.len() != 16 || !normalized.bytes().all(is_code_character) {
-            return Err(StoreBillingError::InvalidRedemptionCode);
-        }
+        let source_ip_digest =
+            source_ip_digest(source_ip).ok_or(StoreBillingError::InvalidInput)?;
         let tx = self.db.begin_write().await.map_err(storage)?;
         let lock = if self.db.is_postgres() {
             " FOR UPDATE"
@@ -907,23 +1071,74 @@ impl StoreBillingStore {
         if hold.is_some() {
             return Err(StoreBillingError::PaymentHold);
         }
+        let redeemed_at = Utc::now();
+        if let Err(error) = check_redemption_limit(
+            &self.db,
+            &*tx,
+            user_id,
+            &source_ip_digest,
+            redeemed_at,
+            lock,
+        )
+        .await
+        {
+            tx.commit().await.map_err(storage)?;
+            return Err(error);
+        }
+        let Some(normalized) = normalize_code(code) else {
+            record_redemption_attempt(
+                &self.db,
+                &*tx,
+                user_id,
+                &source_ip_digest,
+                false,
+                redeemed_at,
+            )
+            .await?;
+            tx.commit().await.map_err(storage)?;
+            return Err(StoreBillingError::InvalidRedemptionCode);
+        };
         let row = tx
             .query_one(self.db.stmt(
                 &format!("{} WHERE code_digest = $1{lock}", redemption_select()),
                 vec![code_digest(&normalized).into()],
             ))
             .await
-            .map_err(storage)?
-            .ok_or(StoreBillingError::InvalidRedemptionCode)?;
+            .map_err(storage)?;
+        let Some(row) = row else {
+            record_redemption_attempt(
+                &self.db,
+                &*tx,
+                user_id,
+                &source_ip_digest,
+                false,
+                redeemed_at,
+            )
+            .await?;
+            tx.commit().await.map_err(storage)?;
+            return Err(StoreBillingError::InvalidRedemptionCode);
+        };
         let mut record = redemption_record_from_row(row)?;
-        if record.status == RedemptionCodeStatus::Used {
-            tx.rollback().await.map_err(storage)?;
-            return Err(StoreBillingError::RedemptionCodeUsed);
-        }
-        let redeemed_at = Utc::now();
-        if record.expires_at <= redeemed_at {
-            tx.rollback().await.map_err(storage)?;
-            return Err(StoreBillingError::RedemptionCodeExpired);
+        let rejected = match record.status {
+            RedemptionCodeStatus::Used => Some(StoreBillingError::RedemptionCodeUsed),
+            RedemptionCodeStatus::Revoked => Some(StoreBillingError::RedemptionCodeRevoked),
+            RedemptionCodeStatus::Unused if record.expires_at <= redeemed_at => {
+                Some(StoreBillingError::RedemptionCodeExpired)
+            }
+            RedemptionCodeStatus::Unused => None,
+        };
+        if let Some(error) = rejected {
+            record_redemption_attempt(
+                &self.db,
+                &*tx,
+                user_id,
+                &source_ip_digest,
+                false,
+                redeemed_at,
+            )
+            .await?;
+            tx.commit().await.map_err(storage)?;
+            return Err(error);
         }
         let reward: PersistedReward =
             serde_json::from_value(record.reward.clone()).map_err(storage)?;
@@ -969,8 +1184,13 @@ impl StoreBillingStore {
             }
         }
         tx.execute(self.db.stmt(
-            "UPDATE store_redemption_codes SET status = 'used', redeemed_by_user_id = $2,
-                    redeemed_at = $3 WHERE id = $1 AND status = 'unused'",
+            "UPDATE store_redemption_codes
+             SET status = 'used', redeemed_by_user_id = $2, redeemed_at = $3,
+                 encrypted_format_version = NULL, encrypted_key_id = NULL,
+                 encrypted_nonce_base64 = NULL, encrypted_ciphertext_base64 = NULL,
+                 ciphertext_destroyed_at = CASE
+                     WHEN code_format_version = 2 THEN $3 ELSE NULL END
+             WHERE id = $1 AND status = 'unused'",
             vec![
                 record.id.clone().into(),
                 user_id.into(),
@@ -979,6 +1199,15 @@ impl StoreBillingStore {
         ))
         .await
         .map_err(storage)?;
+        record_redemption_attempt(
+            &self.db,
+            &*tx,
+            user_id,
+            &source_ip_digest,
+            true,
+            redeemed_at,
+        )
+        .await?;
         tx.commit().await.map_err(storage)?;
         record.status = RedemptionCodeStatus::Used;
         record.redeemed_by_user_id = Some(user_id.to_string());
@@ -1252,38 +1481,150 @@ fn redemption_record_from_row(row: QueryResult) -> Result<RedemptionCodeRecord, 
     })
 }
 
-fn generate_code() -> String {
-    const ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let bytes = Uuid::new_v4().into_bytes();
-    let raw = bytes
-        .iter()
-        .map(|byte| ALPHABET[(byte & 31) as usize] as char)
-        .collect::<String>();
-    format!(
-        "{}-{}-{}-{}",
-        &raw[0..4],
-        &raw[4..8],
-        &raw[8..12],
-        &raw[12..16]
-    )
+fn encrypted_redemption_from_row(row: &QueryResult) -> Result<EncryptedSecret, StoreBillingError> {
+    let version = row
+        .try_get::<Option<i32>>("", "encrypted_format_version")
+        .map_err(storage)?
+        .and_then(|value| u8::try_from(value).ok())
+        .ok_or(StoreBillingError::EncryptionUnavailable)?;
+    Ok(EncryptedSecret {
+        version,
+        key_id: row_optional_string(row, "encrypted_key_id")?
+            .ok_or(StoreBillingError::EncryptionUnavailable)?,
+        nonce_base64: row_optional_string(row, "encrypted_nonce_base64")?
+            .ok_or(StoreBillingError::EncryptionUnavailable)?,
+        ciphertext_base64: row_optional_string(row, "encrypted_ciphertext_base64")?
+            .ok_or(StoreBillingError::EncryptionUnavailable)?,
+    })
 }
 
-fn normalize_code(code: &str) -> String {
-    code.bytes()
-        .filter(|byte| *byte != b'-')
-        .map(|byte| byte.to_ascii_uppercase() as char)
-        .collect()
+async fn check_redemption_limit<C: ConnectionTrait>(
+    db: &DbPool,
+    conn: &C,
+    user_id: &str,
+    source_digest: &str,
+    now: DateTime<Utc>,
+    lock: &str,
+) -> Result<(), StoreBillingError> {
+    let now_text = timestamp(now);
+    conn.execute(db.stmt(
+        "INSERT INTO store_redemption_limits
+            (user_id, source_ip_digest, cooldown_until, updated_at)
+         VALUES ($1, $2, NULL, $3)
+         ON CONFLICT (user_id, source_ip_digest) DO NOTHING",
+        vec![
+            user_id.into(),
+            source_digest.into(),
+            now_text.clone().into(),
+        ],
+    ))
+    .await
+    .map_err(storage)?;
+    let limit = conn
+        .query_one(db.stmt(
+            &format!(
+                "SELECT cooldown_until FROM store_redemption_limits
+                 WHERE user_id = $1 AND source_ip_digest = $2{lock}"
+            ),
+            vec![user_id.into(), source_digest.into()],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| storage("redemption limit row is missing"))?;
+    if row_optional_string(&limit, "cooldown_until")?
+        .map(|value| parse_timestamp(&value))
+        .transpose()?
+        .is_some_and(|value| value > now)
+    {
+        return Err(StoreBillingError::RedemptionCooldown);
+    }
+    let cutoff = now
+        .checked_sub_signed(Duration::minutes(1))
+        .ok_or(StoreBillingError::InvalidInput)?;
+    let attempts = conn
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM store_redemption_attempts
+             WHERE user_id = $1 AND source_ip_digest = $2 AND attempted_at > $3",
+            vec![
+                user_id.into(),
+                source_digest.into(),
+                timestamp(cutoff).into(),
+            ],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| storage("redemption attempt count is missing"))?
+        .try_get::<i64>("", "value")
+        .map_err(storage)?;
+    if attempts >= 10 {
+        return Err(StoreBillingError::RedemptionRateLimited);
+    }
+    Ok(())
 }
 
-fn is_code_character(byte: u8) -> bool {
-    b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789".contains(&byte)
-}
-
-fn code_digest(normalized: &str) -> String {
-    Sha256::digest(normalized.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+async fn record_redemption_attempt<C: ConnectionTrait>(
+    db: &DbPool,
+    conn: &C,
+    user_id: &str,
+    source_digest: &str,
+    success: bool,
+    now: DateTime<Utc>,
+) -> Result<(), StoreBillingError> {
+    let now_text = timestamp(now);
+    conn.execute(db.stmt(
+        "INSERT INTO store_redemption_attempts
+            (id, user_id, source_ip_digest, success, attempted_at)
+         VALUES ($1, $2, $3, $4, $5)",
+        vec![
+            Uuid::new_v4().to_string().into(),
+            user_id.into(),
+            source_digest.into(),
+            i32::from(success).into(),
+            now_text.clone().into(),
+        ],
+    ))
+    .await
+    .map_err(storage)?;
+    if !success {
+        let cutoff = now
+            .checked_sub_signed(Duration::minutes(15))
+            .ok_or(StoreBillingError::InvalidInput)?;
+        let failures = conn
+            .query_one(db.stmt(
+                "SELECT COUNT(*) AS value FROM store_redemption_attempts
+                 WHERE user_id = $1 AND source_ip_digest = $2
+                   AND success = 0 AND attempted_at > $3",
+                vec![
+                    user_id.into(),
+                    source_digest.into(),
+                    timestamp(cutoff).into(),
+                ],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or_else(|| storage("redemption failure count is missing"))?
+            .try_get::<i64>("", "value")
+            .map_err(storage)?;
+        if failures >= 5 {
+            let cooldown_until = now
+                .checked_add_signed(Duration::minutes(30))
+                .ok_or(StoreBillingError::InvalidInput)?;
+            conn.execute(db.stmt(
+                "UPDATE store_redemption_limits
+                 SET cooldown_until = $3, updated_at = $4
+                 WHERE user_id = $1 AND source_ip_digest = $2",
+                vec![
+                    user_id.into(),
+                    source_digest.into(),
+                    timestamp(cooldown_until).into(),
+                    now_text.into(),
+                ],
+            ))
+            .await
+            .map_err(storage)?;
+        }
+    }
+    Ok(())
 }
 
 fn storage(error: impl ToString) -> StoreBillingError {

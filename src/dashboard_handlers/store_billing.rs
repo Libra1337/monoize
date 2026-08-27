@@ -7,6 +7,9 @@ use crate::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
 };
 use crate::store_billing::reauth::{ReauthError, ReauthStore};
+use crate::store_billing::redemption::{
+    RedemptionAccessAction, RedemptionAuditContext, RevealRedemptionInput,
+};
 use crate::store_billing::{
     CreatePaymentChannelInput, CreateProductInput, Currency, GenerateRedemptionCodesInput,
     PAYMENT_ICON_MAX_BYTES, StoreBillingError, StoreSettings, UpdatePaymentChannelInput,
@@ -16,8 +19,8 @@ use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::header::{
-    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, ORIGIN,
-    X_CONTENT_TYPE_OPTIONS,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_SECURITY_POLICY, CONTENT_TYPE,
+    ORIGIN, PRAGMA, REFERRER_POLICY, USER_AGENT, X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -67,8 +70,60 @@ pub struct StoreReauthRequest {
     pub scope: String,
 }
 
-fn no_store_headers() -> [(axum::http::HeaderName, HeaderValue); 1] {
-    [(CACHE_CONTROL, HeaderValue::from_static("no-store"))]
+#[derive(Debug, Deserialize)]
+pub struct RedemptionCodeIdsRequest {
+    pub code_ids: Vec<String>,
+}
+
+fn no_store_headers() -> [(axum::http::HeaderName, HeaderValue); 4] {
+    [
+        (CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        (PRAGMA, HeaderValue::from_static("no-cache")),
+        (REFERRER_POLICY, HeaderValue::from_static("no-referrer")),
+        (X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
+    ]
+}
+
+async fn require_redemption_access(
+    headers: &HeaderMap,
+    state: &AppState,
+    admin_id: &str,
+) -> AppResult<()> {
+    let session_token = extract_session_token(headers).ok_or_else(|| {
+        AppError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "missing dashboard session",
+        )
+    })?;
+    let grant_token = headers
+        .get("X-Store-Reauth-Token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| map_reauth_error(ReauthError::InvalidGrant))?;
+    ReauthStore::new(state.db_pool.clone())
+        .verify(admin_id, &session_token, grant_token, "redemption_access")
+        .await
+        .map_err(map_reauth_error)
+}
+
+fn redemption_audit_context(headers: &HeaderMap, admin_id: &str) -> RedemptionAuditContext {
+    RedemptionAuditContext {
+        admin_user_id: admin_id.to_string(),
+        source_ip: crate::client_ip::canonical_client_ip_from_headers(headers)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        user_agent: headers
+            .get(USER_AGENT)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .chars()
+            .take(512)
+            .collect(),
+    }
 }
 
 fn require_store_mutation_origin(headers: &HeaderMap, state: &AppState) -> AppResult<()> {
@@ -193,6 +248,26 @@ fn map_store_error(error: StoreBillingError) -> AppError {
             StatusCode::CONFLICT,
             "redemption_code_used",
             "redemption code is used",
+        ),
+        StoreBillingError::RedemptionCodeRevoked => (
+            StatusCode::CONFLICT,
+            "redemption_code_revoked",
+            "redemption code is revoked",
+        ),
+        StoreBillingError::EncryptionUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "payment_configuration_unavailable",
+            "redemption-code encryption is unavailable",
+        ),
+        StoreBillingError::RedemptionRateLimited => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "redemption_rate_limited",
+            "too many redemption attempts",
+        ),
+        StoreBillingError::RedemptionCooldown => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "redemption_cooldown",
+            "redemption attempts are temporarily blocked",
         ),
         StoreBillingError::PaymentHold => (
             StatusCode::LOCKED,
@@ -548,7 +623,14 @@ pub async fn redeem_store_code(
     };
     let record = state
         .store_billing
-        .redeem(&user.id, &input.code, rate.as_ref())
+        .redeem(
+            &user.id,
+            &input.code,
+            rate.as_ref(),
+            &crate::client_ip::canonical_client_ip_from_headers(&headers)
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        )
         .await
         .map_err(map_store_error)?;
     Ok(Json(record))
@@ -879,13 +961,106 @@ pub async fn generate_store_redemption_codes_admin(
     body: Result<Json<GenerateRedemptionCodesInput>, JsonRejection>,
 ) -> AppResult<impl IntoResponse> {
     let admin = require_admin(&headers, &state).await?;
+    require_store_mutation_origin(&headers, &state)?;
     let input = parse_store_json(body)?;
+    let key_ring = state
+        .payment_keys
+        .as_deref()
+        .ok_or_else(|| map_store_error(StoreBillingError::EncryptionUnavailable))?;
     let codes = state
         .store_billing
-        .generate_redemption_codes(&admin.id, input)
+        .generate_redemption_codes(key_ring, &admin.id, input)
         .await
         .map_err(map_store_error)?;
-    Ok((StatusCode::CREATED, Json(codes)))
+    Ok((StatusCode::CREATED, no_store_headers(), Json(codes)))
+}
+
+pub async fn reveal_store_redemption_codes_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<RevealRedemptionInput>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    require_store_mutation_origin(&headers, &state)?;
+    require_redemption_access(&headers, &state, &admin.id).await?;
+    let input = parse_store_json(body)?;
+    if input.action == RedemptionAccessAction::Export {
+        return Err(map_store_error(StoreBillingError::InvalidInput));
+    }
+    let key_ring = state
+        .payment_keys
+        .as_deref()
+        .ok_or_else(|| map_store_error(StoreBillingError::EncryptionUnavailable))?;
+    let context = redemption_audit_context(&headers, &admin.id);
+    let codes = state
+        .store_billing
+        .reveal_redemption_codes(key_ring, input, &context)
+        .await
+        .map_err(map_store_error)?;
+    Ok((no_store_headers(), Json(codes)))
+}
+
+pub async fn export_store_redemption_codes_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<RedemptionCodeIdsRequest>, JsonRejection>,
+) -> AppResult<Response> {
+    let admin = require_admin(&headers, &state).await?;
+    require_store_mutation_origin(&headers, &state)?;
+    require_redemption_access(&headers, &state, &admin.id).await?;
+    let request = parse_store_json(body)?;
+    let key_ring = state
+        .payment_keys
+        .as_deref()
+        .ok_or_else(|| map_store_error(StoreBillingError::EncryptionUnavailable))?;
+    let context = redemption_audit_context(&headers, &admin.id);
+    let codes = state
+        .store_billing
+        .reveal_redemption_codes(
+            key_ring,
+            RevealRedemptionInput {
+                code_ids: request.code_ids,
+                action: RedemptionAccessAction::Export,
+            },
+            &context,
+        )
+        .await
+        .map_err(map_store_error)?;
+    let mut csv = String::from("code_id,code\r\n");
+    for code in codes {
+        csv.push_str(&code.id);
+        csv.push(',');
+        csv.push_str(&code.code);
+        csv.push_str("\r\n");
+    }
+    let mut response = Response::new(Body::from(csv));
+    for (name, value) in no_store_headers() {
+        response.headers_mut().insert(name, value);
+    }
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    response.headers_mut().insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=lynshen-redemption-codes.csv"),
+    );
+    Ok(response)
+}
+
+pub async fn revoke_store_redemption_code_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    require_store_mutation_origin(&headers, &state)?;
+    let record = state
+        .store_billing
+        .revoke_redemption_code(&id, &admin.id)
+        .await
+        .map_err(map_store_error)?;
+    Ok(Json(record))
 }
 
 pub async fn get_store_settings_admin(

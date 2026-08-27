@@ -54,6 +54,7 @@ string_enum!(WindowKind {
 string_enum!(RedemptionCodeStatus {
     Unused => "unused",
     Used => "used",
+    Revoked => "revoked",
 });
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -165,6 +165,40 @@ async fn cookie_json_request(
     (status, response_json(response).await)
 }
 
+async fn raw_request_with_reauth(
+    ctx: &super::TestContext,
+    method: Method,
+    path: &str,
+    authorization: &str,
+    reauth_token: Option<&str>,
+    body: Value,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(AUTHORIZATION, authorization)
+        .header(CONTENT_TYPE, "application/json");
+    if let Some(token) = reauth_token {
+        builder = builder.header("X-Store-Reauth-Token", token);
+    }
+    let response = ctx
+        .router
+        .clone()
+        .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
+    (status, headers, bytes)
+}
+
 #[tokio::test]
 async fn credential_replacement_requires_scoped_reauth_and_never_returns_secrets() {
     let mut ctx = setup().await;
@@ -371,6 +405,134 @@ async fn cookie_store_secret_mutations_require_the_configured_origin() {
     assert_eq!(body["error"]["code"], "invalid_store_origin");
 }
 
+#[tokio::test]
+async fn redemption_reveal_export_and_revocation_use_scoped_reauth_and_no_store_headers() {
+    let mut ctx = setup().await;
+    let admin = dashboard_session(&ctx, "redemption_admin", UserRole::Admin).await;
+    ctx.state.payment_keys = Some(Arc::new(
+        PaymentKeyRing::new(
+            PaymentKey::new("api-redemption-key", [79_u8; 32]).unwrap(),
+            vec![],
+        )
+        .unwrap(),
+    ));
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+
+    let (status, generated, generated_headers) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/redemption-codes",
+        &admin,
+        None,
+        json!({
+            "reward":{"kind":"balance","currency":"USD","amount_minor":"100"},
+            "count":2,
+            "validity_days":30
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{generated}");
+    assert_sensitive_headers(&generated_headers);
+    let first_id = generated[0]["record"]["id"].as_str().unwrap();
+    let second_id = generated[1]["record"]["id"].as_str().unwrap();
+    let first_code = generated[0]["code"].as_str().unwrap();
+    let second_code = generated[1]["code"].as_str().unwrap();
+    assert_eq!(first_code.len(), 19);
+    assert_eq!(second_code.len(), 19);
+
+    let (status, error, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/redemption-codes/reveal",
+        &admin,
+        None,
+        json!({"code_ids":[first_id],"action":"reveal"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+
+    let (status, grant, grant_headers) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        &admin,
+        None,
+        json!({"current_password":"test-password","scope":"redemption_access"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{grant}");
+    assert_sensitive_headers(&grant_headers);
+    let token = grant["token"].as_str().unwrap();
+
+    let (status, revealed, reveal_headers) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/redemption-codes/reveal",
+        &admin,
+        Some(token),
+        json!({"code_ids":[first_id,second_id],"action":"copy"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{revealed}");
+    assert_sensitive_headers(&reveal_headers);
+    assert_eq!(revealed[0]["code"], first_code);
+    assert_eq!(revealed[1]["code"], second_code);
+
+    let (status, export_headers, bytes) = raw_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/redemption-codes/export",
+        &admin,
+        Some(token),
+        json!({"code_ids":[first_id,second_id]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_sensitive_headers(&export_headers);
+    assert_eq!(
+        export_headers.get("content-type").unwrap(),
+        "text/csv; charset=utf-8"
+    );
+    let csv = String::from_utf8(bytes).unwrap();
+    assert!(csv.contains(first_code));
+    assert!(csv.contains(second_code));
+
+    let (status, revoked, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        &format!("/api/dashboard/store/admin/redemption-codes/{second_id}/revoke"),
+        &admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{revoked}");
+    assert_eq!(revoked["status"], "revoked");
+    let row = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT encrypted_ciphertext_base64 FROM store_redemption_codes WHERE id = $1",
+            vec![second_id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.try_get::<Option<String>>("", "encrypted_ciphertext_base64")
+            .unwrap(),
+        None
+    );
+}
+
+fn assert_sensitive_headers(headers: &axum::http::HeaderMap) {
+    assert_eq!(headers.get("cache-control").unwrap(), "no-store");
+    assert_eq!(headers.get("pragma").unwrap(), "no-cache");
+    assert_eq!(headers.get("referrer-policy").unwrap(), "no-referrer");
+    assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+}
+
 async fn idempotent_json_request(
     ctx: &super::TestContext,
     path: &str,
@@ -545,6 +707,14 @@ async fn store_admin_guards_and_product_channel_management() {
 async fn redemption_does_not_require_a_payment_channel() {
     let mut ctx = setup().await;
     configure_offline_rate(&mut ctx).await;
+    ctx.state.payment_keys = Some(Arc::new(
+        PaymentKeyRing::new(
+            PaymentKey::new("offline-redemption-key", [83_u8; 32]).unwrap(),
+            vec![],
+        )
+        .unwrap(),
+    ));
+    ctx.router = monoize::app::build_app(ctx.state.clone());
     let admin = dashboard_session(&ctx, "store_code_admin", UserRole::Admin).await;
     let user = dashboard_session(&ctx, "store_code_user", UserRole::User).await;
 

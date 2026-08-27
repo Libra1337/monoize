@@ -1,6 +1,7 @@
 use chrono::{Duration, TimeZone, Utc};
 use monoize::db::DbPool;
 use monoize::migration::Migrator;
+use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::order::{CreatePaymentOrderInput, PaymentOrderStore};
 use monoize::store_billing::{
     BalanceProductInput, CreatePaymentChannelInput, CreateProductInput, Currency,
@@ -66,6 +67,14 @@ fn rate() -> ExchangeRateSnapshot {
         source_updated_at: Utc.with_ymd_and_hms(2026, 8, 27, 0, 0, 0).unwrap(),
         refreshed_at: Utc.with_ymd_and_hms(2026, 8, 27, 0, 5, 0).unwrap(),
     }
+}
+
+fn redemption_keys() -> PaymentKeyRing {
+    PaymentKeyRing::new(
+        PaymentKey::new("store-billing-redemption", [71_u8; 32]).unwrap(),
+        vec![],
+    )
+    .unwrap()
 }
 
 fn balance_product(name: &str, sort_order: i32, enabled: bool) -> CreateProductInput {
@@ -236,6 +245,7 @@ async fn expired_codes_fail_and_one_code_can_be_redeemed_only_once_concurrently(
     insert_user(&db, "admin").await;
     let generated = store
         .generate_redemption_codes(
+            &redemption_keys(),
             "admin",
             GenerateRedemptionCodesInput {
                 reward: RedemptionRewardInput::Balance {
@@ -262,7 +272,7 @@ async fn expired_codes_fail_and_one_code_can_be_redeemed_only_once_concurrently(
         .unwrap();
     assert_eq!(
         store
-            .redeem("user-a", &generated[0].code, Some(&rate()))
+            .redeem("user-a", &generated[0].code, Some(&rate()), "203.0.113.71")
             .await
             .unwrap_err(),
         StoreBillingError::RedemptionCodeExpired
@@ -273,8 +283,16 @@ async fn expired_codes_fail_and_one_code_can_be_redeemed_only_once_concurrently(
     let second_store = store.clone();
     let first_code = code.clone();
     let (first, second) = tokio::join!(
-        async move { first_store.redeem("user-a", &first_code, None).await },
-        async move { second_store.redeem("user-b", &code, None).await }
+        async move {
+            first_store
+                .redeem("user-a", &first_code, None, "203.0.113.72")
+                .await
+        },
+        async move {
+            second_store
+                .redeem("user-b", &code, None, "203.0.113.73")
+                .await
+        }
     );
     assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
     assert_eq!(
@@ -313,6 +331,7 @@ async fn usd_balance_redemption_does_not_require_an_exchange_rate() {
     insert_user(&db, "admin").await;
     let generated = store
         .generate_redemption_codes(
+            &redemption_keys(),
             "admin",
             GenerateRedemptionCodesInput {
                 reward: RedemptionRewardInput::Balance {
@@ -327,7 +346,7 @@ async fn usd_balance_redemption_does_not_require_an_exchange_rate() {
         .unwrap();
 
     let redeemed = store
-        .redeem("user-a", &generated[0].code, None)
+        .redeem("user-a", &generated[0].code, None, "203.0.113.74")
         .await
         .unwrap();
     assert_eq!(redeemed.status, RedemptionCodeStatus::Used);

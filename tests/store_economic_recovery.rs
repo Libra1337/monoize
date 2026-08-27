@@ -1,6 +1,7 @@
 use chrono::{TimeZone, Utc};
 use monoize::db::DbPool;
 use monoize::migration::Migrator;
+use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
 use monoize::store_billing::money::Currency;
 use monoize::store_billing::order::{
@@ -516,6 +517,11 @@ async fn payment_hold_blocks_new_orders_and_redemption_without_consuming_the_cod
     let billing = StoreBillingStore::new(fixture.db.clone());
     let generated = billing
         .generate_redemption_codes(
+            &PaymentKeyRing::new(
+                PaymentKey::new("recovery-redemption", [73_u8; 32]).unwrap(),
+                vec![],
+            )
+            .unwrap(),
             "admin-user",
             GenerateRedemptionCodesInput {
                 reward: RedemptionRewardInput::Balance {
@@ -552,7 +558,7 @@ async fn payment_hold_blocks_new_orders_and_redemption_without_consuming_the_cod
     );
     assert_eq!(
         billing
-            .redeem(USER_ID, &generated[0].code, None)
+            .redeem(USER_ID, &generated[0].code, None, "203.0.113.75")
             .await
             .unwrap_err(),
         StoreBillingError::PaymentHold

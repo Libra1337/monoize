@@ -390,6 +390,8 @@ SB-R-1. New codes MUST use Crockford Base32 alphabet `0123456789ABCDEFGHJKMNPQRS
 
 SB-R-2. The database MUST store code format, SHA-256 lookup digest, final four-character hint, encrypted full code, reward snapshot, expiry, state, creator, and redemption data.
 
+SB-R-2A. A v2 unused unexpired code MUST store `code_format_version = 2` and one complete encrypted value bound to AAD `store_redemption_codes:{code_id}:code`. A v1 row MUST have `code_format_version = 1` and no encrypted value. An encrypted value MUST store format version, key ID, nonce, and ciphertext as separate columns. Destruction MUST set every encrypted field to null and set `ciphertext_destroyed_at` in the same transaction.
+
 SB-R-3. A generation response MUST return every full generated code once. The dialog MUST keep them visible until the Admin closes it.
 
 SB-R-4. An unused v2 code MAY be revealed or exported only with a reauthentication grant scoped to redemption access and expiring after five minutes.
@@ -397,6 +399,8 @@ SB-R-4. An unused v2 code MAY be revealed or exported only with a reauthenticati
 SB-R-5. The server MUST store only a hash of a reauthentication token. Logout, password change, session rotation, session expiry, role removal, or account disablement MUST invalidate the grant.
 
 SB-R-6. A reveal response MUST contain at most 20 codes. An export MUST contain at most 100 codes.
+
+SB-R-6A. Reauthentication scope `redemption_access` MUST authorize reveal, copy, and export. `POST /api/dashboard/store/admin/redemption-codes/reveal` MUST accept one to 20 code IDs and action `reveal` or `copy`. `POST /api/dashboard/store/admin/redemption-codes/export` MUST accept one to 100 code IDs and return CSV. `POST /api/dashboard/store/admin/redemption-codes/{id}/revoke` MUST revoke one unused code.
 
 SB-R-7. Reveal and export responses MUST set `Cache-Control: no-store`, `Pragma: no-cache`, `Referrer-Policy: no-referrer`, and `X-Content-Type-Options: nosniff`.
 
@@ -413,6 +417,8 @@ SB-R-12. Invalid syntax and no match MUST both return HTTP `404` with code `inva
 SB-R-13. Redemption MUST lock or serialize the code row and apply the reward and used state in one transaction. It MUST NOT create a payment order or require a payment Channel.
 
 SB-R-14. Redemption MUST allow at most ten attempts per minute per user and source IP. Five failed attempts in 15 minutes MUST create a 30-minute account-and-IP cooldown.
+
+SB-R-14A. Redemption limits MUST use a persistent lock row keyed by user and SHA-256 source-IP digest plus persistent attempt rows. The service MUST lock the limit row before it counts attempts. A rate-limited or cooldown request MUST perform no code lookup or mutation.
 
 ## 9. Plan Quota Admission
 

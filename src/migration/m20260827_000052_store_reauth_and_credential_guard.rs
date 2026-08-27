@@ -17,7 +17,7 @@ impl MigrationTrait for Migration {
             "CREATE TABLE store_reauth_grants (
                 id TEXT NOT NULL PRIMARY KEY, user_id TEXT NOT NULL,
                 session_token_digest TEXT NOT NULL, token_digest TEXT NOT NULL,
-                scope TEXT NOT NULL CHECK (scope IN ('credential_update')),
+                scope TEXT NOT NULL CHECK (scope IN ('credential_update', 'redemption_access')),
                 created_at TEXT NOT NULL, expires_at TEXT NOT NULL
             )",
             "CREATE UNIQUE INDEX uq_store_reauth_token_digest ON store_reauth_grants (token_digest)",

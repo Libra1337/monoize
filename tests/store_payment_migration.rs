@@ -15,6 +15,8 @@ const PAYMENT_TABLES: &[&str] = &[
     "store_order_recovery_claims",
     "store_settlement_reports",
     "store_settlement_lines",
+    "store_redemption_limits",
+    "store_redemption_attempts",
     "store_balance_holds",
     "store_reconciliation_leases",
     "store_reconciliation_cases",
@@ -112,6 +114,21 @@ async fn payment_migration_replaces_legacy_store_shape() {
         assert!(
             entitlement_columns.iter().any(|value| value == column),
             "missing store_plan_entitlements.{column}"
+        );
+    }
+    let redemption_columns = sqlite_columns(&db, "store_redemption_codes").await;
+    for column in [
+        "code_format_version",
+        "encrypted_format_version",
+        "encrypted_key_id",
+        "encrypted_nonce_base64",
+        "encrypted_ciphertext_base64",
+        "ciphertext_destroyed_at",
+        "revoked_at",
+    ] {
+        assert!(
+            redemption_columns.iter().any(|value| value == column),
+            "missing store_redemption_codes.{column}"
         );
     }
 

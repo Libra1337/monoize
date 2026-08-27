@@ -2174,6 +2174,18 @@ fn build_dashboard_api_router() -> Router<AppState> {
                 .post(crate::dashboard_handlers::generate_store_redemption_codes_admin),
         )
         .route(
+            "/dashboard/store/admin/redemption-codes/reveal",
+            post(crate::dashboard_handlers::reveal_store_redemption_codes_admin),
+        )
+        .route(
+            "/dashboard/store/admin/redemption-codes/export",
+            post(crate::dashboard_handlers::export_store_redemption_codes_admin),
+        )
+        .route(
+            "/dashboard/store/admin/redemption-codes/{id}/revoke",
+            post(crate::dashboard_handlers::revoke_store_redemption_code_admin),
+        )
+        .route(
             "/dashboard/store/admin/settings",
             get(crate::dashboard_handlers::get_store_settings_admin)
                 .put(crate::dashboard_handlers::update_store_settings_admin),

@@ -64,6 +64,8 @@ const PAYMENT_TABLES: &[&str] = &[
     "store_order_recovery_claims",
     "store_settlement_reports",
     "store_settlement_lines",
+    "store_redemption_limits",
+    "store_redemption_attempts",
     "store_balance_holds",
     "store_reconciliation_leases",
     "store_reconciliation_cases",
@@ -120,6 +122,22 @@ fn sqlite_rebuild_statements() -> Vec<String> {
         "ALTER TABLE store_products ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0)".to_string(),
         "ALTER TABLE store_plan_entitlements ADD COLUMN suspended_at TEXT".to_string(),
         "ALTER TABLE store_plan_entitlements ADD COLUMN suspension_reason TEXT".to_string(),
+        sqlite_create_redemption_codes_v2(),
+        "INSERT INTO store_redemption_codes_v2
+            (id, code_format_version, code_digest, code_hint,
+             encrypted_format_version, encrypted_key_id, encrypted_nonce_base64,
+             encrypted_ciphertext_base64, ciphertext_destroyed_at,
+             reward_kind, reward_json, status,
+             expires_at, redeemed_by_user_id, redeemed_at, revoked_at,
+             created_by_user_id, created_at)
+         SELECT id, 1, code_digest, code_hint, NULL, NULL, NULL, NULL, NULL,
+                reward_kind, reward_json, status, expires_at,
+                redeemed_by_user_id, redeemed_at, NULL,
+                created_by_user_id, created_at
+         FROM store_redemption_codes"
+            .to_string(),
+        "DROP TABLE store_redemption_codes".to_string(),
+        "ALTER TABLE store_redemption_codes_v2 RENAME TO store_redemption_codes".to_string(),
         "CREATE TABLE store_payment_channels_v2 (
             id TEXT NOT NULL PRIMARY KEY,
             adapter_kind TEXT NOT NULL,
@@ -184,6 +202,23 @@ fn postgres_rebuild_statements() -> Vec<String> {
         "ALTER TABLE store_products ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0)".to_string(),
         "ALTER TABLE store_plan_entitlements ADD COLUMN suspended_at TEXT".to_string(),
         "ALTER TABLE store_plan_entitlements ADD COLUMN suspension_reason TEXT".to_string(),
+        "ALTER TABLE store_redemption_codes RENAME TO store_redemption_codes_legacy".to_string(),
+        postgres_create_redemption_codes_v2(),
+        "INSERT INTO store_redemption_codes_v2
+            (id, code_format_version, code_digest, code_hint,
+             encrypted_format_version, encrypted_key_id, encrypted_nonce_base64,
+             encrypted_ciphertext_base64, ciphertext_destroyed_at,
+             reward_kind, reward_json, status,
+             expires_at, redeemed_by_user_id, redeemed_at, revoked_at,
+             created_by_user_id, created_at)
+         SELECT id, 1, code_digest, code_hint, NULL, NULL, NULL, NULL, NULL,
+                reward_kind, reward_json, status, expires_at,
+                redeemed_by_user_id, redeemed_at, NULL,
+                created_by_user_id, created_at
+         FROM store_redemption_codes_legacy"
+            .to_string(),
+        "DROP TABLE store_redemption_codes_legacy".to_string(),
+        "ALTER TABLE store_redemption_codes_v2 RENAME TO store_redemption_codes".to_string(),
         "ALTER TABLE store_payment_channels RENAME TO store_payment_channels_legacy".to_string(),
         "CREATE TABLE store_payment_channels (
             id TEXT NOT NULL PRIMARY KEY,
@@ -242,6 +277,81 @@ fn postgres_rebuild_statements() -> Vec<String> {
 
 fn sqlite_create_orders_v2() -> String {
     create_orders_v2("CREATE TABLE store_orders_v2")
+}
+
+fn sqlite_create_redemption_codes_v2() -> String {
+    create_redemption_codes_v2(
+        "CREATE TABLE store_redemption_codes_v2",
+        "length(code_digest) = 64 AND code_digest NOT GLOB '*[^0-9a-f]*'",
+    )
+}
+
+fn postgres_create_redemption_codes_v2() -> String {
+    create_redemption_codes_v2(
+        "CREATE TABLE store_redemption_codes_v2",
+        "code_digest ~ '^[0-9a-f]{64}$'",
+    )
+}
+
+fn create_redemption_codes_v2(prefix: &str, digest_check: &str) -> String {
+    format!(
+        "{prefix} (
+            id TEXT NOT NULL PRIMARY KEY,
+            code_format_version INTEGER NOT NULL CHECK (code_format_version IN (1, 2)),
+            code_digest TEXT NOT NULL,
+            code_hint TEXT NOT NULL CHECK (length(code_hint) = 4),
+            encrypted_format_version INTEGER,
+            encrypted_key_id TEXT,
+            encrypted_nonce_base64 TEXT,
+            encrypted_ciphertext_base64 TEXT,
+            ciphertext_destroyed_at TEXT,
+            reward_kind TEXT NOT NULL CHECK (reward_kind IN ('balance', 'plan')),
+            reward_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unused'
+                CHECK (status IN ('unused', 'used', 'revoked')),
+            expires_at TEXT NOT NULL,
+            redeemed_by_user_id TEXT,
+            redeemed_at TEXT,
+            revoked_at TEXT,
+            created_by_user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK ({digest_check}),
+            CHECK (
+                (code_format_version = 1
+                 AND encrypted_format_version IS NULL
+                 AND encrypted_key_id IS NULL
+                 AND encrypted_nonce_base64 IS NULL
+                 AND encrypted_ciphertext_base64 IS NULL
+                 AND ciphertext_destroyed_at IS NULL)
+                OR
+                (code_format_version = 2 AND (
+                    (status = 'unused'
+                     AND encrypted_format_version IS NOT NULL
+                     AND encrypted_key_id IS NOT NULL
+                     AND encrypted_nonce_base64 IS NOT NULL
+                     AND encrypted_ciphertext_base64 IS NOT NULL
+                     AND ciphertext_destroyed_at IS NULL)
+                    OR
+                    (encrypted_format_version IS NULL
+                     AND encrypted_key_id IS NULL
+                     AND encrypted_nonce_base64 IS NULL
+                     AND encrypted_ciphertext_base64 IS NULL
+                     AND ciphertext_destroyed_at IS NOT NULL
+                     AND (status IN ('used', 'revoked') OR status = 'unused'))
+                ))
+            ),
+            CHECK (
+                (status = 'unused' AND redeemed_by_user_id IS NULL
+                 AND redeemed_at IS NULL AND revoked_at IS NULL)
+                OR
+                (status = 'used' AND redeemed_by_user_id IS NOT NULL
+                 AND redeemed_at IS NOT NULL AND revoked_at IS NULL)
+                OR
+                (status = 'revoked' AND redeemed_by_user_id IS NULL
+                 AND redeemed_at IS NULL AND revoked_at IS NOT NULL)
+            )
+        )"
+    )
 }
 
 fn postgres_create_orders_v2() -> String {
@@ -376,6 +486,16 @@ fn common_table_statements() -> Vec<String> {
             currency TEXT NOT NULL CHECK (currency IN ('CNY', 'USD')),
             provider_transaction_id TEXT, matched_order_id TEXT, created_at TEXT NOT NULL
         )",
+        "CREATE TABLE store_redemption_limits (
+            user_id TEXT NOT NULL, source_ip_digest TEXT NOT NULL,
+            cooldown_until TEXT, updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, source_ip_digest)
+        )",
+        "CREATE TABLE store_redemption_attempts (
+            id TEXT NOT NULL PRIMARY KEY, user_id TEXT NOT NULL,
+            source_ip_digest TEXT NOT NULL,
+            success INTEGER NOT NULL CHECK (success IN (0, 1)), attempted_at TEXT NOT NULL
+        )",
         "CREATE TABLE store_balance_holds (
             user_id TEXT NOT NULL PRIMARY KEY, active INTEGER NOT NULL CHECK (active IN (0, 1)),
             reason TEXT NOT NULL, opened_at TEXT NOT NULL, cleared_at TEXT
@@ -462,6 +582,9 @@ fn common_index_statements() -> Vec<String> {
         "CREATE UNIQUE INDEX uq_store_recovery_claim_event ON store_order_recovery_claims (provider_event_row_id, kind)",
         "CREATE UNIQUE INDEX uq_store_settlement_report_provider ON store_settlement_reports (credential_version_id, provider_report_id)",
         "CREATE UNIQUE INDEX uq_store_settlement_line_provider ON store_settlement_lines (credential_version_id, provider_line_id)",
+        "CREATE UNIQUE INDEX uq_store_redemption_codes_digest_v2 ON store_redemption_codes (code_digest)",
+        "CREATE INDEX idx_store_redemption_codes_status_expires_v2 ON store_redemption_codes (status, expires_at, id)",
+        "CREATE INDEX idx_store_redemption_attempts_limit ON store_redemption_attempts (user_id, source_ip_digest, attempted_at)",
         "CREATE UNIQUE INDEX uq_store_quota_request ON store_quota_reservations (request_id)",
         "CREATE INDEX idx_store_provider_events_projection ON store_provider_events (projection_state, received_at, id)",
         "CREATE INDEX idx_store_refunds_state ON store_refunds (state, updated_at, id)",

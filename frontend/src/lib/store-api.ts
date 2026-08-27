@@ -9,7 +9,7 @@ export type PaymentChannelIconKind = "builtin" | "url" | "upload";
 export type PlanWindowKind = "5h" | "12h" | "day" | "week" | "month" | "custom";
 export type StorePaymentState = "unpaid" | "paid" | "refund_pending" | "refunded" | "closed";
 export type StoreFulfillmentState = "pending" | "fulfilled" | "failed";
-export type RedemptionCodeStatus = "unused" | "used";
+export type RedemptionCodeStatus = "unused" | "used" | "revoked";
 
 export interface BalanceProductInput {
   recharge_minor: string;
@@ -122,8 +122,13 @@ export type PaymentCredentialPayload =
 
 export interface StoreReauthGrant {
   token: string;
-  scope: "credential_update";
+  scope: "credential_update" | "redemption_access";
   expires_at: string;
+}
+
+export interface RevealedRedemptionCode {
+  id: string;
+  code: string;
 }
 
 export interface SavedPaymentCredential {
@@ -389,10 +394,13 @@ export const storeApi = {
         `/admin/payment-channels/${encodeURIComponent(id)}`,
         { method: "DELETE" },
       ),
-    createReauthGrant: (currentPassword: string) =>
+    createReauthGrant: (
+      currentPassword: string,
+      scope: StoreReauthGrant["scope"] = "credential_update",
+    ) =>
       jsonMutation<StoreReauthGrant>("/admin/reauth", "POST", {
         current_password: currentPassword,
-        scope: "credential_update",
+        scope,
       }),
     replacePaymentCredential: (
       id: string,
@@ -427,6 +435,32 @@ export const storeApi = {
       storeRequest<RedemptionCodeRecord[]>(listPath("/admin/redemption-codes", limit)),
     generateRedemptionCodes: (input: GenerateRedemptionCodesInput) =>
       jsonMutation<GeneratedRedemptionCode[]>("/admin/redemption-codes", "POST", input),
+    revealRedemptionCodes: (
+      codeIds: string[],
+      action: "reveal" | "copy",
+      reauthToken: string,
+    ) =>
+      storeRequest<RevealedRedemptionCode[]>("/admin/redemption-codes/reveal", {
+        method: "POST",
+        headers: { "X-Store-Reauth-Token": reauthToken },
+        body: JSON.stringify({ code_ids: codeIds, action }),
+      }),
+    exportRedemptionCodes: (codeIds: string[], reauthToken: string) =>
+      fetch(`${STORE_API_BASE}/admin/redemption-codes/export`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Store-Reauth-Token": reauthToken,
+        },
+        body: JSON.stringify({ code_ids: codeIds }),
+      }),
+    revokeRedemptionCode: (id: string) =>
+      jsonMutation<RedemptionCodeRecord>(
+        `/admin/redemption-codes/${encodeURIComponent(id)}/revoke`,
+        "POST",
+        {},
+      ),
     getSettings: () => storeRequest<StoreSettings>("/admin/settings"),
     updateSettings: (input: StoreSettings) =>
       jsonMutation<StoreSettings>("/admin/settings", "PUT", input),

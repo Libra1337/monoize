@@ -130,6 +130,14 @@ describe("Store admin page", () => {
     expect(pageSource).not.toContain("redemption.code_plaintext");
   });
 
+  test("supports scoped redemption reveal export and revocation", () => {
+    expect(apiSource).toContain('scope: "credential_update" | "redemption_access"');
+    expect(apiSource).toContain("revealRedemptionCodes");
+    expect(apiSource).toContain("exportRedemptionCodes");
+    expect(apiSource).toContain("revokeRedemptionCode");
+    expect(apiSource).toContain('"unused" | "used" | "revoked"');
+  });
+
   test("edits four exact custom amount bounds", () => {
     expect(pageSource).toContain("custom_recharge_cny_min_minor");
     expect(pageSource).toContain("custom_recharge_cny_max_minor");
