@@ -58,6 +58,10 @@ The primary node requests `https://open.er-api.com/v6/latest/USD` at startup and
 
 The client uses the exact HTTPS host, the system trust store, no redirects, a five-second timeout, and a 64 KiB response limit. Each attempt stores source URL, parser version, HTTP status, response-body SHA-256 when a body exists, and an error category. It never stores the body in application logs.
 
+Production stores an exchange-source governance record with provider name, endpoint, terms and attribution URLs, allowed commercial use, caching permission, request limit, required attribution, reviewer identity, review evidence digest, reviewed time, and next review time no more than 180 days later.
+
+Conversion checkout cannot enable without a current accepted governance record. A detected terms change, revoked permission, exceeded rate limit, or expired review pauses refresh-dependent checkout and creates a critical alert. Changing the source endpoint requires a design revision, parser fixtures, anomaly baseline, operations approval, and legal or authorized terms review.
+
 The response must be valid JSON with `result = success`, `base_code = USD`, a positive integer source timestamp, and one finite decimal `rates.CNY`. The rate must be between 1 and 20 CNY per USD and contain at most 18 fractional digits.
 
 The source timestamp cannot be more than five minutes in the future, more than 48 hours before refresh time, or older than the active source timestamp. Every comparison uses UTC.
@@ -155,6 +159,16 @@ SQLite persists one `store_feature_gates` row for `plan_quota`. Its state is `pe
 The backend derives one effective `plan_quota_enabled` value from that matching row at startup and after configuration change. A mismatched version or setting returns the gate to `pending`.
 
 No Dashboard endpoint can set the gate to `passed`. The project-owned offline CLI runs the drill against a temporary SQLite database on the same filesystem with the target settings. After success, it acquires the target database write lock and writes the result manifest and digest. Failure writes `failed`. Interrupted or malformed output leaves `pending`.
+
+The gate fingerprint uses a quota-engine compatibility ID, schema version, SQLite library version, WAL mode, busy timeout, page size, synchronous mode, and filesystem identifier. An application release that does not change this fingerprint keeps the passed gate; the ordinary application version alone does not invalidate it.
+
+Before a deployment that changes the fingerprint, the release workflow automatically runs the new binary's quota drill on the target host and stores a `next` passed manifest. Cutover promotes it only when its fingerprint matches the starting process.
+
+If startup finds no matching manifest and active plan entitlements exist, startup stops before the listener with `sqlite_plan_gate_pending`. The operator must run the drill or roll back the binary. It does not start and then make purchased plans unexpectedly unavailable.
+
+If no active plan entitlement exists, startup can continue with plan features disabled and starts one low-priority drill against a temporary same-filesystem database. Success sets `passed` and emits a recovery event. Failure sets `failed`, creates a critical alert, and retries only after an Admin acknowledges the failure or the fingerprint changes.
+
+A pending gate creates a warning immediately. A failed gate creates a critical alert. Admin shows old and new fingerprints, invalidation reason, drill progress, lock latency, failure output digest, and required operator action.
 
 The product write API rejects creation or enablement of a plan while the effective gate is false. Catalog queries omit disabled-gate plan products. Plan redemption-code generation, plan order creation, plan fulfillment, and plan-funded API admission all reject with `plan_requires_postgres` while the gate is false.
 
@@ -280,6 +294,12 @@ The design does not adopt a manual paid or manual completion endpoint. Admin rec
 
 An implementation review records the external reference commit, lists the independently adopted behavior, and confirms that no AGPL source or test text appears in the change.
 
+The release stores a license review record containing the Monoize commit, external repository and commit, both license identifiers, files reviewed, SBOM and dependency-license manifest digest, similarity-scan result, reviewer identity, decision, restrictions, and review time. The reviewer must be authorized to approve license use for the deployment.
+
+The release scan normalizes whitespace and comments, tokenizes changed non-generated source and test files, and reports every contiguous exact match of 80 or more tokens against the referenced repository tree. Public protocol constants and generated files are listed as exclusions with reasons.
+
+A source or dependency similarity hit blocks release until the reviewer classifies and records it. A clean-room engineering checklist does not replace legal advice. Direct AGPL code reuse remains prohibited unless a separately recorded compatible-license or commercial-license decision permits it.
+
 ## 6. Configurable HTTP Adapter
 
 The configurable HTTP adapter is a separate milestone after the three official adapters. Its unfinished or disabled state does not block Alipay, WeChat Pay, or Stripe release.
@@ -390,6 +410,10 @@ A fulfilled order cannot return to pending or failed.
 
 Event application locks order, recovery, and user rows in that order. It persists every verified event before projection. Duplicate event identity is a no-op.
 
+`store_provider_events` has a unique `(credential_version_id, provider_event_id)` key, immutable body digest, immutable verified fields, projection state, and state revision. `store_order_event_applications` uses `provider_event_row_id` as its primary key. One verified event can project to one order at most once.
+
+`store_orders` has a monotonic state revision. SQLite and PostgreSQL migration SQL create equivalent transition triggers. A trigger rejects every payment, fulfillment, dispute, or hold transition that is not listed in this design. Application updates also include expected state and revision; zero updated rows cause a fresh read instead of a blind retry.
+
 Each verified event has projection state `pending`, `applied`, `superseded`, or `manual_review`. An event that lacks prerequisite local payment evidence remains `pending`; it is never discarded as invalid solely because it arrived first.
 
 An adapter uses a provider object version when the provider guarantees monotonic versions. A conflicting or backward event without such a version triggers provider query. It does not directly change state.
@@ -471,6 +495,14 @@ For eligible orders, the first release supports only full refunds. It does not i
 A new `store_order_reward_recoveries` table contains one row per fulfilled balance order. It stores original credited nano USD, reserved nano USD, recovered nano USD, one debit ledger key, one release ledger key, state, and timestamps. Database checks require nonnegative values and `reserved + recovered <= original`.
 
 A `store_order_recovery_claims` table records refund, dispute, and chargeback reasons separately. Multiple claims can reference one recovery row, but they share its single economic reserve. Claim insertion never creates a second debit for that order.
+
+`store_order_recovery_claims` has unique `(credential_version_id, provider_claim_id, kind)` and unique `(provider_event_row_id, kind)` keys. A claim references one immutable order recovery row. It cannot change order ID after insertion.
+
+Every recovery debit, release, and final loss uses a unique ledger idempotency key derived from recovery row and mutation kind. The ledger table rejects duplicate keys.
+
+PostgreSQL constraint triggers and separate SQLite `BEFORE INSERT` and `BEFORE UPDATE` triggers query the recovery and ledger rows inside the same write transaction. They reject a mutation when cumulative reserved plus recovered value exceeds original credited value, when a second debit key exists, or when an event application already exists. Application code cannot disable these triggers.
+
+The migration verification suite inspects installed trigger SQL and unique indexes on both backends. Missing or changed recovery constraints stop startup before Store routes mount.
 
 Fulfillment and refund start both lock the order first. Balance operations then lock recovery and user rows. This lock order is fixed. Refund start requires payment state `paid`; fulfillment requires payment state `paid`, no active recovery claim, and zero reserved or recovered amount. The first committed transition makes the competing transition fail its predicate and retry from fresh state.
 
@@ -567,6 +599,14 @@ A terms-version change invalidates the prior acknowledgement and makes every pro
 Effective Channel availability is true only when the stored Channel is enabled, current compliance acknowledgement exists, required credential fields exist, callback verification is configured, at least one product and settlement currency are compatible, and adapter capability validation passes. Public Store responses return only effectively available Channels.
 
 A production Channel must provide either an automated settlement-report operation or a documented Admin upload format with signature or digest verification. A Channel without either path cannot pass the production gate.
+
+Each Channel stores a capability register. Every payment query, refund, refund query, dispute event, dispute query, bill download, and settlement-report capability is `supported`, `unsupported`, or `manual`.
+
+A capability entry stores merchant-account digest, environment, provider product name, permission or API response digest, test transaction ID when applicable, verifier Admin, verified time, and expiry time. Production verification expires after 90 days or immediately after credential, merchant account, provider product, or API-version change.
+
+Core checkout, payment query, callback verification, refund, refund query, and settlement report must be supported. Optional dispute automation can be unsupported only when the manual case path, provider deadline source, owner assignment, and tabletop drill pass.
+
+Admin cannot mark a capability supported without a passing adapter probe or controlled transaction. Screenshots alone do not prove an automated capability. A manual capability requires a documented provider console path and evidence-upload procedure.
 
 Saving credentials does not prove that the provider account is active. Alipay sandbox, Stripe test mode, and a controlled WeChat live test are separate release checks.
 
@@ -698,6 +738,7 @@ Backend tests cover:
 - Callback logs exclude raw body and signature header while retaining event ID and body digest.
 - Reduced rational rate parsing, both exchange directions, checked overflow, nano USD conversion, future and stale timestamps, configurable anomaly quarantine, startup failure, and one final rounding point.
 - Exchange response digest, parser version, consecutive-failure alerts, persisted pause, and restart without a first snapshot.
+- Exchange-source governance acceptance, review expiry, terms change, rate-limit breach, attribution requirement, and source-change rejection.
 - Rate warning and critical response clocks, four-hour decision, 24-hour escalation, dual-Admin compromise recovery, and missed-SLA incident review.
 - Stripe account-country and API-version capability validation with unsupported-currency failure.
 - Amount, currency, merchant, and order mismatch.
@@ -708,6 +749,7 @@ Backend tests cover:
 - Crash after payment commit with paid/pending reconciliation and one later fulfillment.
 - Balance refund reservation, concurrent spending, one compensation, and ambiguous provider results.
 - Refund, dispute, and chargeback claims in every order, with `reserved + recovered <= original` and one recovery ledger debit.
+- SQLite and PostgreSQL transition-trigger rejection, duplicate event application, duplicate claim identity, duplicate ledger key, missing trigger startup failure, and concurrent recovery attempts across multiple connections.
 - Every ordering of fulfillment, refund start, callback retry, and reconciliation, with one final reward state.
 - Plan refund rejection after fulfillment.
 - Order idempotency-key replay, mismatched input, open-order cap, creation rate limit, and polling rate limit.
@@ -716,6 +758,7 @@ Backend tests cover:
 - An isolated PostgreSQL quota load drill with five Replicas, 10,000 entitlements, five windows per entitlement, and at least `max(500 requests/second, two times measured seven-day peak)` for ten minutes. It includes 100 concurrent requests against one entitlement and never starts PostgreSQL on the user's computer.
 - A SQLite WAL quota drill at its defined target, including concurrent admission, settlement, replacement, lock timeout, process restart, and zero unhandled `SQLITE_BUSY`. Failure proves that plan products require PostgreSQL.
 - SQLite pending and failed gates across Admin product writes, catalog reads, plan redemption generation, order creation, fulfillment, database triggers, startup version mismatch, and frontend controls.
+- SQLite unchanged compatibility ID, pre-cutover `next` manifest promotion, active-entitlement startup refusal, no-entitlement automatic rerun, failed-drill alert, and acknowledged retry.
 - Quota fault drills that stop the Primary after reserve, expire tokens, delay and duplicate spool shipment, replace a plan during traffic, inject database lock waits, and shift a Replica clock by plus or minus two minutes.
 - Ed25519 admission-token signature, unknown key, wrong node audience, durable same-node replay, cross-node replay, TTL, clock skew, key publication, activation, and prior-key retirement.
 - Quota acceptance requires zero duplicate or missing finalizations, exact reservation conservation, no charge to a replacement generation, p95 admission below 100 ms, and p99 below 250 ms at the target load. Injected outages are excluded from latency percentiles and must fail closed.
@@ -729,12 +772,14 @@ Backend tests cover:
 - Dispute open, win, loss, chargeback debt, plan suspension, daily settlement reimport, fee classification, and unmatched-line cases.
 - Every event-order matrix row and pairwise reversed delivery, including refund-before-payment, dispute-before-payment, dispute during refund pending, chargeback during refund pending, refund success after chargeback, dispute-before-fulfillment, stale terminal events, and query-required conflicts.
 - Per-adapter capability tests for supported and unsupported dispute, query, refund, and settlement operations.
+- Merchant capability register probe evidence, 90-day expiry, credential-change invalidation, screenshot rejection, and manual-path tabletop requirement.
 - Payment-hold Store read, checkout rejection, redemption non-consumption, plan block, ordinary-balance boundary, pending-payment handling, and hold-clear refusal.
 - Manual case assignment, acknowledgement and escalation clocks, provider deadline, dual approval, self-approval rejection, and immutable case audit.
 - Single Store Primary routing, Replica endpoint absence, persisted redemption cooldown, and invalid multi-process topology.
 - SQLite migration and isolated PostgreSQL migration.
 - Migration preflight rejection for every unknown or inconsistent legacy state.
 - A clean-room review records external commit `8f6961c675932f406260ff0c218bc2aa0603e9b2`, adopted behaviors, license difference, and a no-verbatim-copy check.
+- License review record completeness, dependency digest, similarity-hit release block, reviewer authorization, and missing-review production refusal.
 
 Frontend tests cover:
 
@@ -787,6 +832,10 @@ A Channel can accept production purchases only after:
 13. Primary and backup Payment Operations owners, a distinct Finance Approver, primary and backup Rate Operations Admin assignments, and alert destinations are configured. Rate roles can reuse Payment Operations identities, but one user cannot propose and approve the same action.
 14. A tabletop drill passes for rate-source outage, suspected source compromise, unmatched payment, manual dispute, missed provider deadline, and owner escalation.
 15. Current payment compliance terms are acknowledged and the clean-room license review is recorded.
+16. Database transition and recovery constraints are installed, verified, and pass multi-connection concurrency tests on the production backend type.
+17. The SQLite quota fingerprint is prevalidated for the release, or the deployment uses PostgreSQL for plan products.
+18. Every enabled Channel has a current merchant capability register and a passing automated or manual evidence path.
+19. The exchange-source governance and formal license review records are current and accepted by their assigned reviewers.
 
 Production deployment does not invent or embed merchant credentials. The operator must supply them through Admin or deployment configuration.
 
