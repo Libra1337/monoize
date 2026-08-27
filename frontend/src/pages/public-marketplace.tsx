@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { resolveMarketplacePages } from "@/lib/marketplace-pages";
 
 interface RateRange { min: string; max: string; unit: string }
 interface MarketplaceItem { public_group_name: string; model: string; capabilities: string[]; input_rate_range: RateRange | null; output_rate_range: RateRange | null; offer_count: number }
@@ -44,8 +45,9 @@ export function PublicMarketplacePage() {
   const offersKey = selected ? `/api/public/marketplace/offers?group=${encodeURIComponent(selected.public_group_name)}&model=${encodeURIComponent(selected.model)}&limit=50` : null;
   const { data: offers, error: offersError, isLoading: offersLoading } = useSWR<OffersResponse>(offersKey, getJson);
 
-  const items = pages.flatMap((page) => page.items);
-  const nextCursor = pages.at(-1)?.next_cursor ?? null;
+  const resolvedPages = resolveMarketplacePages(pages, data);
+  const items = resolvedPages.flatMap((page) => page.items);
+  const nextCursor = resolvedPages.at(-1)?.next_cursor ?? null;
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">

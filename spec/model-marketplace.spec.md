@@ -256,6 +256,10 @@ Playground Marketplace keys.
 MM-U2. Initial list loading and hydration MUST render matching Skeletons. Browser state
 MUST retain at most three list pages and discard earlier pages when advancing.
 
+MM-U2.1. If SWR returns a cached first page before the retained-page state is populated,
+the page MUST render that SWR page. The empty state MUST render only when the resolved first
+page contains zero items.
+
 MM-U3. Model details MUST open in a modal, not an expanded table row. Click, tap, Enter,
 and Space MUST open it. Focus moves to its heading, remains trapped, and returns to the
 invoker after Escape or close. Background scroll is disabled and `aria-labelledby` is set.
