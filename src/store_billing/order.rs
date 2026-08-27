@@ -7,6 +7,7 @@ use uuid::Uuid;
 use super::exchange_rate::ExchangeRateSnapshot;
 use super::models::StoreSettings;
 use super::money::{Currency, ExchangeRateRational, convert_minor_rational, parse_minor};
+use super::payment::CheckoutAction;
 use super::state_machine::{FulfillmentState, PaymentState};
 use super::store::StoreBillingStore;
 use crate::db::DbPool;
@@ -77,6 +78,22 @@ impl PaymentAttemptState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaymentAttemptFailureKind {
+    ConfigurationUnavailable,
+    ProviderRejected,
+}
+
+impl PaymentAttemptFailureKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ConfigurationUnavailable => "configuration_unavailable",
+            Self::ProviderRejected => "provider_rejected",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentAttempt {
     pub id: String,
@@ -86,10 +103,21 @@ pub struct PaymentAttempt {
     pub credential_version_id: String,
     pub merchant_account_identity: String,
     pub expected_payment_method: Option<String>,
+    pub payment_contract_version: i32,
     pub state: PaymentAttemptState,
+    pub failure_kind: Option<PaymentAttemptFailureKind>,
     pub idempotency_key: String,
+    pub provider_object_id: Option<String>,
+    pub action: Option<CheckoutAction>,
+    pub provider_expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatePaymentAttemptOutcome {
+    pub attempt: PaymentAttempt,
+    pub replayed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -114,6 +142,8 @@ pub enum PaymentOrderError {
     OpenOrderLimit,
     #[error("an active payment attempt already exists")]
     ActiveAttemptExists,
+    #[error("provider state must be queried before another payment attempt")]
+    ProviderQueryRequired,
     #[error("order cannot accept a payment attempt")]
     OrderNotPayable,
     #[error("amount overflow")]
@@ -369,6 +399,24 @@ impl PaymentOrderStore {
             .map(|(order, _)| order))
     }
 
+    pub async fn replay_order(
+        &self,
+        user_id: &str,
+        input: &CreatePaymentOrderInput,
+    ) -> Result<Option<PaymentOrder>, PaymentOrderError> {
+        validate_idempotency_key(&input.idempotency_key)?;
+        let Some((order, digest)) = self
+            .order_by_creation_key(user_id, &input.idempotency_key)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if digest != order_request_digest(input) {
+            return Err(PaymentOrderError::IdempotencyConflict);
+        }
+        Ok(Some(order))
+    }
+
     pub async fn list_orders_admin(
         &self,
         limit: u64,
@@ -395,13 +443,31 @@ impl PaymentOrderStore {
         order_id: &str,
         input: CreatePaymentAttemptInput,
     ) -> Result<PaymentAttempt, PaymentOrderError> {
+        Ok(self
+            .create_attempt_with_outcome(user_id, order_id, input)
+            .await?
+            .attempt)
+    }
+
+    pub async fn create_attempt_with_outcome(
+        &self,
+        user_id: &str,
+        order_id: &str,
+        input: CreatePaymentAttemptInput,
+    ) -> Result<CreatePaymentAttemptOutcome, PaymentOrderError> {
         validate_idempotency_key(&input.idempotency_key)?;
         let tx = self.db.begin_write().await.map_err(storage)?;
         if let Some(existing) = query_attempt_by_key(&self.db, &*tx, &input.idempotency_key).await?
         {
             if existing.order_id == order_id {
+                query_order_by_id(&self.db, &*tx, order_id, Some(user_id))
+                    .await?
+                    .ok_or(PaymentOrderError::OrderNotFound)?;
                 tx.commit().await.map_err(storage)?;
-                return Ok(existing);
+                return Ok(CreatePaymentAttemptOutcome {
+                    attempt: existing,
+                    replayed: true,
+                });
             }
             return Err(PaymentOrderError::IdempotencyConflict);
         }
@@ -410,6 +476,18 @@ impl PaymentOrderStore {
             .ok_or(PaymentOrderError::OrderNotFound)?;
         if order.payment_state != PaymentState::Unpaid || order.expires_at <= Utc::now() {
             return Err(PaymentOrderError::OrderNotPayable);
+        }
+        let rejected_count = count_value(
+            tx.query_one(self.db.stmt(
+                "SELECT COUNT(*) AS value FROM store_payment_attempts
+                 WHERE order_id = $1 AND state = 'failed' AND failure_kind = 'provider_rejected'",
+                vec![order_id.into()],
+            ))
+            .await
+            .map_err(storage)?,
+        )?;
+        if rejected_count != 0 {
+            return Err(PaymentOrderError::ProviderQueryRequired);
         }
         let active_count = count_value(
             tx.query_one(self.db.stmt(
@@ -447,10 +525,10 @@ impl PaymentOrderStore {
         let now = timestamp(Utc::now());
         tx.execute(self.db.stmt(
             "INSERT INTO store_payment_attempts
-                (id, order_id, channel_id, adapter_kind, credential_version_id,
-                 merchant_account_identity, expected_payment_method, state,
-                 idempotency_key, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9, $9)",
+                    (id, order_id, channel_id, adapter_kind, credential_version_id,
+                     merchant_account_identity, expected_payment_method,
+                     payment_contract_version, state, idempotency_key, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'created', $9, $10, $10)",
             vec![
                 id.clone().into(),
                 order_id.into(),
@@ -459,6 +537,7 @@ impl PaymentOrderStore {
                 row_string(&credential, "id")?.into(),
                 row_string(&credential, "account_identity_digest")?.into(),
                 input.expected_payment_method.into(),
+                order.contract_version.into(),
                 input.idempotency_key.into(),
                 now.into(),
             ],
@@ -469,7 +548,113 @@ impl PaymentOrderStore {
             .await?
             .ok_or_else(|| PaymentOrderError::Storage("inserted attempt is missing".to_string()))?;
         tx.commit().await.map_err(storage)?;
-        Ok(attempt)
+        Ok(CreatePaymentAttemptOutcome {
+            attempt,
+            replayed: false,
+        })
+    }
+
+    pub async fn present_attempt(
+        &self,
+        user_id: &str,
+        attempt_id: &str,
+        provider_object_id: &str,
+        action: &CheckoutAction,
+    ) -> Result<PaymentAttempt, PaymentOrderError> {
+        if provider_object_id.trim().is_empty() {
+            return Err(PaymentOrderError::InvalidInput);
+        }
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let attempt = query_attempt_by_id(&self.db, &*tx, attempt_id)
+            .await?
+            .ok_or(PaymentOrderError::OrderNotFound)?;
+        let order = query_order_by_id(&self.db, &*tx, &attempt.order_id, Some(user_id))
+            .await?
+            .ok_or(PaymentOrderError::OrderNotFound)?;
+        if attempt.state == PaymentAttemptState::Presented {
+            tx.commit().await.map_err(storage)?;
+            return Ok(attempt);
+        }
+        if attempt.state != PaymentAttemptState::Created
+            || order.payment_state != PaymentState::Unpaid
+        {
+            return Err(PaymentOrderError::OrderNotPayable);
+        }
+        let (action_kind, expires_at) = checkout_action_metadata(action)?;
+        let now = timestamp(Utc::now());
+        let changed = tx
+            .execute(self.db.stmt(
+                "UPDATE store_payment_attempts
+                 SET state = 'presented', provider_object_id = $2, action_kind = $3,
+                     action_json = $4, provider_expires_at = $5, presented_at = $6,
+                     updated_at = $6
+                 WHERE id = $1 AND state = 'created'",
+                vec![
+                    attempt_id.into(),
+                    provider_object_id.into(),
+                    action_kind.into(),
+                    serde_json::to_string(action)
+                        .map_err(|error| PaymentOrderError::Storage(error.to_string()))?
+                        .into(),
+                    timestamp(expires_at).into(),
+                    now.into(),
+                ],
+            ))
+            .await
+            .map_err(storage)?;
+        if changed.rows_affected() != 1 {
+            return Err(PaymentOrderError::ActiveAttemptExists);
+        }
+        let presented = query_attempt_by_id(&self.db, &*tx, attempt_id)
+            .await?
+            .ok_or_else(|| {
+                PaymentOrderError::Storage("presented attempt is missing".to_string())
+            })?;
+        tx.commit().await.map_err(storage)?;
+        Ok(presented)
+    }
+
+    pub async fn fail_attempt(
+        &self,
+        user_id: &str,
+        attempt_id: &str,
+        failure_kind: PaymentAttemptFailureKind,
+    ) -> Result<PaymentAttempt, PaymentOrderError> {
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let attempt = query_attempt_by_id(&self.db, &*tx, attempt_id)
+            .await?
+            .ok_or(PaymentOrderError::OrderNotFound)?;
+        query_order_by_id(&self.db, &*tx, &attempt.order_id, Some(user_id))
+            .await?
+            .ok_or(PaymentOrderError::OrderNotFound)?;
+        if attempt.state == PaymentAttemptState::Failed {
+            if attempt.failure_kind != Some(failure_kind) {
+                return Err(PaymentOrderError::OrderNotPayable);
+            }
+            tx.commit().await.map_err(storage)?;
+            return Ok(attempt);
+        }
+        if attempt.state != PaymentAttemptState::Created {
+            return Err(PaymentOrderError::OrderNotPayable);
+        }
+        let now = timestamp(Utc::now());
+        let changed = tx
+            .execute(self.db.stmt(
+                "UPDATE store_payment_attempts
+                 SET state = 'failed', failure_kind = $2, updated_at = $3
+                 WHERE id = $1 AND state = 'created'",
+                vec![attempt_id.into(), failure_kind.as_str().into(), now.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        if changed.rows_affected() != 1 {
+            return Err(PaymentOrderError::ActiveAttemptExists);
+        }
+        let failed = query_attempt_by_id(&self.db, &*tx, attempt_id)
+            .await?
+            .ok_or_else(|| PaymentOrderError::Storage("failed attempt is missing".to_string()))?;
+        tx.commit().await.map_err(storage)?;
+        Ok(failed)
     }
 
     async fn order_by_creation_key(
@@ -652,8 +837,9 @@ fn order_select() -> &'static str {
 
 fn attempt_select() -> &'static str {
     "SELECT id, order_id, channel_id, adapter_kind, credential_version_id,
-            merchant_account_identity, expected_payment_method, state,
-            idempotency_key, created_at, updated_at
+            merchant_account_identity, expected_payment_method, payment_contract_version, state,
+            failure_kind, idempotency_key, provider_object_id, action_json, provider_expires_at,
+            created_at, updated_at
      FROM store_payment_attempts"
 }
 
@@ -695,11 +881,64 @@ fn payment_attempt_from_row(row: QueryResult) -> Result<PaymentAttempt, PaymentO
         credential_version_id: row_string(&row, "credential_version_id")?,
         merchant_account_identity: row_string(&row, "merchant_account_identity")?,
         expected_payment_method: row_optional_string(&row, "expected_payment_method")?,
+        payment_contract_version: row
+            .try_get::<i32>("", "payment_contract_version")
+            .map_err(storage)?,
         state: parse_attempt_state(&row_string(&row, "state")?)?,
+        failure_kind: row_optional_string(&row, "failure_kind")?
+            .map(|value| parse_attempt_failure_kind(&value))
+            .transpose()?,
         idempotency_key: row_string(&row, "idempotency_key")?,
+        provider_object_id: row_optional_string(&row, "provider_object_id")?,
+        action: row_optional_string(&row, "action_json")?
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(|error| PaymentOrderError::Storage(error.to_string()))?,
+        provider_expires_at: row_optional_string(&row, "provider_expires_at")?
+            .map(|value| parse_timestamp(&value))
+            .transpose()?,
         created_at: parse_timestamp(&row_string(&row, "created_at")?)?,
         updated_at: parse_timestamp(&row_string(&row, "updated_at")?)?,
     })
+}
+
+fn checkout_action_metadata(
+    action: &CheckoutAction,
+) -> Result<(&'static str, DateTime<Utc>), PaymentOrderError> {
+    let (kind, expires_at) = match action {
+        CheckoutAction::Redirect { url, expires_at } => {
+            validate_checkout_url(url)?;
+            ("redirect", expires_at)
+        }
+        CheckoutAction::Qr {
+            payload,
+            expires_at,
+        } => {
+            if payload.trim().is_empty() {
+                return Err(PaymentOrderError::InvalidInput);
+            }
+            ("qr", expires_at)
+        }
+        CheckoutAction::Form {
+            action, expires_at, ..
+        } => {
+            validate_checkout_url(action)?;
+            ("form", expires_at)
+        }
+    };
+    Ok((kind, parse_timestamp(expires_at)?))
+}
+
+fn validate_checkout_url(value: &str) -> Result<(), PaymentOrderError> {
+    let url = url::Url::parse(value).map_err(|_| PaymentOrderError::InvalidInput)?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(PaymentOrderError::InvalidInput);
+    }
+    Ok(())
 }
 
 fn validate_idempotency_key(value: &str) -> Result<(), PaymentOrderError> {
@@ -806,6 +1045,16 @@ fn parse_attempt_state(value: &str) -> Result<PaymentAttemptState, PaymentOrderE
         "paid" => Ok(PaymentAttemptState::Paid),
         _ => Err(PaymentOrderError::Storage(
             "stored payment attempt state is invalid".to_string(),
+        )),
+    }
+}
+
+fn parse_attempt_failure_kind(value: &str) -> Result<PaymentAttemptFailureKind, PaymentOrderError> {
+    match value {
+        "configuration_unavailable" => Ok(PaymentAttemptFailureKind::ConfigurationUnavailable),
+        "provider_rejected" => Ok(PaymentAttemptFailureKind::ProviderRejected),
+        _ => Err(PaymentOrderError::Storage(
+            "stored payment attempt failure kind is invalid".to_string(),
         )),
     }
 }

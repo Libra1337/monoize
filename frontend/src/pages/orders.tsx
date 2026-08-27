@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertCircle, Eye } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import useSWR from "swr";
+import useSWR, { mutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -13,10 +13,13 @@ import {
 } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/hooks/use-auth";
 import { storeApi, type StoreOrder } from "@/lib/store-api";
 import { formatMinor } from "@/lib/store-money";
+import { isPaymentPollingTerminal } from "./store/checkout-state";
 
 const ORDERS_KEY = "/api/dashboard/store/orders";
+const ENTITLEMENT_KEY = "/api/dashboard/store/entitlement";
 
 function OrdersSkeleton() {
   return (
@@ -38,8 +41,46 @@ function OrdersSkeleton() {
 
 export function OrdersPage() {
   const { t, i18n } = useTranslation();
+  const { refreshUser } = useAuth();
   const [selectedOrder, setSelectedOrder] = useState<StoreOrder | null>(null);
   const orders = useSWR(ORDERS_KEY, () => storeApi.listOrders(100));
+
+  useEffect(() => {
+    if (!selectedOrder) return;
+    const paymentTerminal = isPaymentPollingTerminal(selectedOrder.payment_state);
+    const fulfillmentTerminal = selectedOrder.fulfillment_state === "fulfilled" || selectedOrder.fulfillment_state === "failed";
+    if (paymentTerminal || fulfillmentTerminal || Date.parse(selectedOrder.expires_at) <= Date.now()) return;
+    let active = true;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const current = await storeApi.getOrder(selectedOrder.id);
+        if (!active) return;
+        setSelectedOrder(current);
+        await mutate<StoreOrder[]>(
+          ORDERS_KEY,
+          (items = []) => [current, ...items.filter((item) => item.id !== current.id)],
+          { revalidate: false },
+        );
+        const done = isPaymentPollingTerminal(current.payment_state)
+          || current.fulfillment_state === "fulfilled"
+          || current.fulfillment_state === "failed"
+          || Date.parse(current.expires_at) <= Date.now();
+        if (done) {
+          await Promise.all([refreshUser(), mutate(ENTITLEMENT_KEY), orders.mutate()]);
+          return;
+        }
+      } catch {
+        // A later poll retries transient and rate-limit responses.
+      }
+      if (active) timer = window.setTimeout(() => void poll(), 2_000);
+    };
+    timer = window.setTimeout(() => void poll(), 2_000);
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [orders, refreshUser, selectedOrder]);
 
   return (
     <div className="flex flex-col gap-6">

@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::error::{AppError, AppResult};
+use crate::store_billing::checkout::{CheckoutError, CheckoutService};
 use crate::store_billing::exchange_rate::ExchangeRateError;
 use crate::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
@@ -175,6 +176,11 @@ fn map_payment_order_error(error: PaymentOrderError) -> AppError {
             "active_payment_attempt",
             "an active payment attempt already exists",
         ),
+        PaymentOrderError::ProviderQueryRequired => (
+            StatusCode::CONFLICT,
+            "provider_query_required",
+            "provider state must be queried before another payment attempt",
+        ),
         PaymentOrderError::OrderNotPayable => (
             StatusCode::CONFLICT,
             "order_not_payable",
@@ -195,6 +201,27 @@ fn map_payment_order_error(error: PaymentOrderError) -> AppError {
         }
     };
     AppError::new(status, code, message)
+}
+
+fn map_checkout_error(error: CheckoutError) -> AppError {
+    match error {
+        CheckoutError::ConfigurationUnavailable => AppError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "payment_configuration_unavailable",
+            "payment checkout configuration is unavailable",
+        ),
+        CheckoutError::ProviderAmbiguous => AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "payment_provider_ambiguous",
+            "payment provider state is ambiguous",
+        ),
+        CheckoutError::ProviderRejected => AppError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "payment_provider_rejected",
+            "payment provider rejected checkout",
+        ),
+        CheckoutError::Order(error) => map_payment_order_error(error),
+    }
 }
 
 fn required_idempotency_key(headers: &HeaderMap) -> AppResult<String> {
@@ -329,35 +356,27 @@ pub async fn create_store_order(
     let user = get_current_user(&headers, &state).await?;
     let input = parse_store_json(body)?;
     let idempotency_key = required_idempotency_key(&headers)?;
-    let rate = current_rate(&state).await?;
     let store = PaymentOrderStore::new(state.db_pool.clone());
-    let replayed = store
-        .find_order_by_creation_key(&user.id, &idempotency_key)
+    let input = CreatePaymentOrderInput {
+        idempotency_key,
+        product_id: input.product_id,
+        payment_channel_id: input.payment_channel_id,
+        payment_currency: input.payment_currency,
+        custom_recharge_minor: input.custom_recharge_minor,
+    };
+    if let Some(order) = store
+        .replay_order(&user.id, &input)
         .await
         .map_err(map_payment_order_error)?
-        .is_some();
+    {
+        return Ok((StatusCode::OK, Json(order)));
+    }
+    let rate = current_rate(&state).await?;
     let order = store
-        .create_order(
-            &user.id,
-            CreatePaymentOrderInput {
-                idempotency_key,
-                product_id: input.product_id,
-                payment_channel_id: input.payment_channel_id,
-                payment_currency: input.payment_currency,
-                custom_recharge_minor: input.custom_recharge_minor,
-            },
-            &rate,
-        )
+        .create_order(&user.id, input, &rate)
         .await
         .map_err(map_payment_order_error)?;
-    Ok((
-        if replayed {
-            StatusCode::OK
-        } else {
-            StatusCode::CREATED
-        },
-        Json(order),
-    ))
+    Ok((StatusCode::CREATED, Json(order)))
 }
 
 pub async fn get_store_order(
@@ -366,6 +385,13 @@ pub async fn get_store_order(
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
+    if !state.store_order_poll_limiter.allow(&user.id) {
+        return Err(AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "order_poll_rate_limited",
+            "too many order status requests",
+        ));
+    }
     let order = PaymentOrderStore::new(state.db_pool.clone())
         .get_order_for_user(&user.id, &id)
         .await
@@ -386,11 +412,27 @@ pub async fn create_store_payment_attempt(
         idempotency_key: required_idempotency_key(&headers)?,
         expected_payment_method: request.expected_payment_method,
     };
-    let attempt = PaymentOrderStore::new(state.db_pool.clone())
+    let checkout = CheckoutService::new(
+        state.db_pool.clone(),
+        state.payment_keys.clone(),
+        state.payment_public_origin.clone(),
+        state.checkout_provider.clone(),
+    );
+    let result = checkout
         .create_attempt(&user.id, &id, input)
         .await
-        .map_err(map_payment_order_error)?;
-    Ok((StatusCode::CREATED, Json(attempt)))
+        .map_err(map_checkout_error)?;
+    Ok((
+        if result.replayed {
+            StatusCode::OK
+        } else {
+            StatusCode::CREATED
+        },
+        Json(json!({
+            "attempt": result.attempt,
+            "action": result.action,
+        })),
+    ))
 }
 
 pub async fn redeem_store_code(

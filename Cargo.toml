@@ -22,7 +22,7 @@ mime = "0.3.17"
 mime_guess = "2.0.5"
 pdf-extract = "0.10.0"
 regex = "1.12.2"
-reqwest = { version = "0.13.1", features = ["json", "stream", "rustls-native-certs", "query", "multipart", "rustls-no-provider", "charset", "http2", "system-proxy"], default-features = false }
+reqwest = { version = "0.13.1", features = ["json", "stream", "rustls-native-certs", "query", "multipart", "rustls-no-provider", "charset", "http2", "system-proxy", "form"], default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["arbitrary_precision"] }
 rust_decimal = "1.39.0"
@@ -62,7 +62,7 @@ chacha20poly1305 = "0.11.0"
 hmac = "0.13.0"
 subtle = "2.6.1"
 url = "2.5.8"
-zeroize = "1.9.0"
+zeroize = { version = "1.9.0", features = ["derive"] }
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 rsa = { version = "0.9.10", features = ["sha2", "pem"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

@@ -127,7 +127,8 @@ impl PaymentCallbackStore {
         let now = timestamp(input.received_at);
         tx.execute(self.db.stmt(
             "UPDATE store_payment_attempts
-             SET state = 'paid', provider_transaction_id = $2, paid_at = $3, updated_at = $3
+             SET state = 'paid', failure_kind = NULL,
+                 provider_transaction_id = $2, paid_at = $3, updated_at = $3
              WHERE id = $1",
             vec![
                 input.attempt_id.clone().into(),

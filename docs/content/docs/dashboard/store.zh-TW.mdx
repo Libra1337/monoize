@@ -20,6 +20,12 @@ Monoize 最多每 15 分鐘更新一次美元兌人民幣匯率。更新失敗�
 3. 選擇一個已啟用的付款 Channel。
 4. 建立訂單。
 
+Monoize 在聯絡 Provider 前儲存付款嘗試。Stripe 隨後開啟其託管的 Checkout 頁面。
+
+Provider 結果未知時，不要建立另一個付款嘗試。等待 Monoize 對帳現有付款嘗試。
+
+Checkout 結束後，商店每兩秒檢查一次訂單。付款和履約完成、訂單關閉或訂單過期後，檢查停止。
+
 在 `/dashboard/orders` 查看訂單。分別檢查付款狀態和履約狀態。
 
 Monoize 僅在驗證 Channel 付款後發放餘額。管理員不能把未付款訂單標記為已付款或已履約。

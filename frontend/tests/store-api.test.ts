@@ -51,6 +51,32 @@ describe("Store API transport", () => {
     expect(idempotencyKey).toBe("checkout-1");
   });
 
+  test("creates a payment attempt with an idempotency key and returns its action", async () => {
+    let requestUrl = "";
+    let body = "";
+    let idempotencyKey = "";
+    globalThis.fetch = (async (input, init) => {
+      requestUrl = String(input);
+      body = String(init?.body);
+      idempotencyKey = new Headers(init?.headers).get("Idempotency-Key") ?? "";
+      return Response.json({
+        attempt: { id: "attempt-1", state: "presented" },
+        action: {
+          kind: "redirect",
+          url: "https://checkout.stripe.com/c/pay_1",
+          expires_at: "2026-08-27T18:00:00Z",
+        },
+      }, { status: 201 });
+    }) as typeof fetch;
+
+    const result = await storeApi.createPaymentAttempt("order-1", "attempt-key-1", "card");
+
+    expect(requestUrl).toBe("/api/dashboard/store/orders/order-1/attempts");
+    expect(JSON.parse(body)).toEqual({ expected_payment_method: "card" });
+    expect(idempotencyKey).toBe("attempt-key-1");
+    expect(result.action.kind).toBe("redirect");
+  });
+
   test("maps user and admin operations to the Store route surface", async () => {
     const requests: Array<{ url: string; method: string }> = [];
     globalThis.fetch = (async (input, init) => {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, Check, Infinity as InfinityIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -6,11 +6,21 @@ import useSWR, { mutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { PageHeader } from "@/components/ui/page-header";
 import { useAuth } from "@/hooks/use-auth";
 import { api } from "@/lib/api";
 import {
   storeApi,
+  StoreApiError,
+  type CreateStoreOrderInput,
+  type StoreCheckoutAction,
   type StoreOrder,
   type StorePaymentChannel,
   type StoreProduct,
@@ -31,6 +41,16 @@ import { selectStoreProduct, validateCustomAmount } from "./store-selection";
 import { StoreModeContent } from "./store-mode-content";
 import { StoreSkeleton } from "./store-skeleton";
 import { StoreTabs, type StoreTab } from "./store-tabs";
+import {
+  checkoutFingerprint,
+  clearPendingCheckout,
+  isDefiniteAttemptFailure,
+  isPaymentPollingTerminal,
+  loadPendingCheckout,
+  preparePendingCheckout,
+  rotatePendingAttempt,
+  savePendingCheckout,
+} from "./checkout-state";
 
 const CATALOG_KEY = "/api/dashboard/store/catalog";
 const EXCHANGE_RATE_KEY = "/api/dashboard/store/exchange-rate";
@@ -309,11 +329,19 @@ export function StorePage() {
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [customAmount, setCustomAmount] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [pollingOrderId, setPollingOrderId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("order_id")
+      ?? loadPendingCheckout(window.sessionStorage)?.orderId
+      ?? null;
+  });
+  const [qrAction, setQrAction] = useState<Extract<StoreCheckoutAction, { kind: "qr" }> | null>(null);
   const monthStart = useMemo(monthStartIso, []);
 
   const catalog = useSWR(CATALOG_KEY, storeApi.getCatalog);
   const exchangeRate = useSWR(EXCHANGE_RATE_KEY, storeApi.getExchangeRate);
   const entitlement = useSWR(ENTITLEMENT_KEY, storeApi.getEntitlement);
+  const mutateEntitlement = entitlement.mutate;
   const redemptionStatus = useSWR<RedemptionStatus>(REDEMPTION_STATUS_KEY, null, {
     fallbackData: IDLE_REDEMPTION_STATUS,
   });
@@ -358,6 +386,52 @@ export function StorePage() {
     monthlyUsage.mutate(),
   ]);
 
+  useEffect(() => {
+    if (!pollingOrderId) return;
+    let active = true;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      try {
+        const order = await storeApi.getOrder(pollingOrderId);
+        await mutate<StoreOrder[]>(
+          ORDERS_KEY,
+          (current = []) => [order, ...current.filter((item) => item.id !== order.id)],
+          { revalidate: false },
+        );
+        const paymentTerminal = isPaymentPollingTerminal(order.payment_state);
+        const fulfillmentTerminal = order.fulfillment_state === "fulfilled" || order.fulfillment_state === "failed";
+        const expired = Date.parse(order.expires_at) <= Date.now();
+        if (paymentTerminal || fulfillmentTerminal || expired) {
+          clearPendingCheckout(window.sessionStorage, order.id);
+          await Promise.all([mutate(ORDERS_KEY), refreshUser(), mutateEntitlement()]);
+          if (active) {
+            setPollingOrderId(null);
+            setQrAction(null);
+            const url = new URL(window.location.href);
+            url.searchParams.delete("order_id");
+            url.searchParams.delete("checkout");
+            window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+          }
+          return;
+        }
+      } catch (cause) {
+        if (cause instanceof StoreApiError && cause.status === 404) {
+          clearPendingCheckout(window.sessionStorage, pollingOrderId);
+          if (active) setPollingOrderId(null);
+          return;
+        }
+      }
+      if (active) timer = window.setTimeout(() => void poll(), 2_000);
+    };
+
+    void poll();
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [mutateEntitlement, pollingOrderId, refreshUser]);
+
   const handleTabChange = (tab: StoreTab) => {
     setActiveTab(tab);
     setSelectedProductId(null);
@@ -365,7 +439,7 @@ export function StorePage() {
   };
 
   const handleCreateOrder = async () => {
-    if (!selectedProduct || !selectedChannel || customAmountInvalid) return;
+    if (!user || !selectedProduct || !selectedChannel || customAmountInvalid) return;
     const paymentMinor = customValidation.hasCustomAmount
       ? customRechargeMinor
       : convertMinor(
@@ -382,21 +456,28 @@ export function StorePage() {
       paymentMinor,
       rate,
     );
-    const idempotencyKey = crypto.randomUUID();
+    const request: CreateStoreOrderInput = {
+      product_id: selectedProduct.id,
+      payment_channel_id: selectedChannel.id,
+      payment_currency: currency,
+      custom_recharge_minor: customRechargeMinor,
+    };
+    const pendingCheckout = preparePendingCheckout(
+      window.sessionStorage,
+      checkoutFingerprint(user.id, request),
+    );
     setSubmitting(true);
     try {
-      await mutate<StoreOrder[]>(
+      const updatedOrders = await mutate<StoreOrder[]>(
         ORDERS_KEY,
         async (current = []) => {
-          const created = await storeApi.createOrder(
-            {
-              product_id: selectedProduct.id,
-              payment_channel_id: selectedChannel.id,
-              payment_currency: currency,
-              custom_recharge_minor: customRechargeMinor,
-            },
-            idempotencyKey,
-          );
+          const created = pendingCheckout.orderId
+            ? await storeApi.getOrder(pendingCheckout.orderId)
+            : await storeApi.createOrder(request, pendingCheckout.orderIdempotencyKey);
+          if (!pendingCheckout.orderId) {
+            pendingCheckout.orderId = created.id;
+            savePendingCheckout(window.sessionStorage, pendingCheckout);
+          }
           return [created, ...current.filter((order) => order.id !== pending.id)];
         },
         {
@@ -405,9 +486,46 @@ export function StorePage() {
           revalidate: false,
         },
       );
-      await Promise.all([refreshUser(), entitlement.mutate()]);
-      toast.success(t("store.ui.orderSuccess"));
+      const createdOrder = updatedOrders?.[0];
+      if (!createdOrder) throw new Error(t("store.ui.orderFailed"));
+      const checkout = await storeApi.createPaymentAttempt(
+        createdOrder.id,
+        pendingCheckout.attemptIdempotencyKey,
+        selectedChannel.adapter_kind === "stripe" ? "card" : null,
+      );
+      if (checkout.action.kind === "redirect") {
+        window.location.assign(checkout.action.url);
+        return;
+      }
+      if (checkout.action.kind === "form") {
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = checkout.action.action;
+        for (const [name, value] of checkout.action.fields) {
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = name;
+          input.value = value;
+          form.append(input);
+        }
+        document.body.append(form);
+        form.submit();
+        return;
+      }
+      setQrAction(checkout.action);
+      setPollingOrderId(createdOrder.id);
     } catch (cause) {
+      if (
+        cause instanceof StoreApiError
+        && cause.code !== "payment_provider_ambiguous"
+        && pendingCheckout.orderId
+      ) {
+        if (cause.status === 404) {
+          clearPendingCheckout(window.sessionStorage, pendingCheckout.orderId);
+        } else if (isDefiniteAttemptFailure(cause.code)) {
+          rotatePendingAttempt(window.sessionStorage, pendingCheckout);
+        }
+      }
       toast.error(cause instanceof Error ? cause.message : t("store.ui.orderFailed"));
     } finally {
       setSubmitting(false);
@@ -432,6 +550,17 @@ export function StorePage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title={t("store.title")} description={t("store.description")} />
+      <Dialog open={qrAction !== null} onOpenChange={(open) => !open && setQrAction(null)}>
+        <DialogContent className="max-w-sm rounded-2xl" closeLabel={t("store.ui.close")}>
+          <DialogHeader>
+            <DialogTitle>{t("store.payment.qrTitle")}</DialogTitle>
+            <DialogDescription>{t("store.payment.qrDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="break-all rounded-xl border bg-muted/40 p-4 text-center font-mono text-sm">
+            {qrAction?.payload}
+          </div>
+        </DialogContent>
+      </Dialog>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <StoreTabs activeTab={activeTab} onTabChange={handleTabChange} />
         {activeTab !== "redeem" && (

@@ -85,7 +85,7 @@
 		"account": { "balance": "可用餘額", "monthlyUsage": "本月用量", "currentPlan": "目前方案", "noPlan": "沒有有效方案" },
 		"balanceProduct": { "recharge": "儲值", "bonus": "贈送", "actualReceived": "實得", "formula": "實得金額 = 儲值 + 贈送", "custom": "自訂金額", "customPlaceholder": "輸入金額" },
 		"plan": { "price": "方案價格", "duration": "有效期", "quota": "額度", "groups": "Group", "unrestricted": "全部 Group" },
-		"payment": { "title": "付款方式", "empty": "沒有可用付款方式", "select": "選擇 {{name}}" },
+		"payment": { "title": "付款方式", "empty": "沒有可用付款方式", "select": "選擇 {{name}}", "qrTitle": "付款碼", "qrDescription": "使用微信支付完成此訂單。" },
 		"summary": { "title": "訂單摘要", "product": "商品", "payment": "付款方式", "total": "合計", "actualReceived": "實得金額", "submit": "建立訂單" },
 		"redeem": { "title": "兌換兌換碼", "description": "輸入一個未使用的兌換碼以領取獎勵。", "code": "兌換碼", "placeholder": "XXXX-XXXX-XXXX-XXXX", "submit": "立即兌換", "success": "兌換成功", "failed": "兌換失敗" },
 		"orders": { "title": "訂單", "description": "查看商店購買記錄。", "empty": "沒有訂單", "number": "訂單編號", "product": "商品", "amount": "金額", "payment": "付款方式", "paymentStatus": "付款狀態", "fulfillmentStatus": "履約狀態", "created": "建立時間", "details": "訂單詳情", "paymentStates": { "unpaid": "未付款", "paid": "已付款", "refund_pending": "退款處理中", "refunded": "已退款", "closed": "已關閉" }, "fulfillmentStates": { "pending": "待履約", "fulfilled": "已履約", "failed": "履約失敗" } },

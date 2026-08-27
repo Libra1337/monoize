@@ -15,7 +15,7 @@ use rsa::{Pkcs1v15Sign, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use subtle::ConstantTimeEq as _;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 const SECRET_FORMAT_VERSION: u8 = 1;
 
@@ -96,6 +96,25 @@ impl PaymentKeyRing {
         })
     }
 
+    pub fn from_deployment_json(raw: Option<&str>) -> Result<Option<Self>, CryptoError> {
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(CryptoError::InvalidEncoding);
+        }
+        let wire: DeploymentKeyRing =
+            serde_json::from_str(raw).map_err(|_| CryptoError::InvalidEncoding)?;
+        let active = payment_key_from_wire(wire.active)?;
+        let prior = wire
+            .prior
+            .into_iter()
+            .map(payment_key_from_wire)
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::new(active, prior).map(Some)
+    }
+
     pub fn encrypt(&self, aad: &str, plaintext: &[u8]) -> Result<EncryptedSecret, CryptoError> {
         let key = self
             .keys
@@ -153,6 +172,35 @@ impl PaymentKeyRing {
             .map(Zeroizing::new)
             .map_err(|_| CryptoError::Authentication)
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentKeyRing {
+    active: DeploymentKey,
+    prior: Vec<DeploymentKey>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentKey {
+    id: String,
+    key_base64: String,
+}
+
+fn payment_key_from_wire(mut wire: DeploymentKey) -> Result<PaymentKey, CryptoError> {
+    let decoded = STANDARD
+        .decode(wire.key_base64.as_bytes())
+        .map_err(|_| CryptoError::InvalidEncoding);
+    wire.key_base64.zeroize();
+    let mut decoded = Zeroizing::new(decoded?);
+    if decoded.len() != 32 {
+        return Err(CryptoError::InvalidKey);
+    }
+    let mut bytes = [0_u8; 32];
+    bytes.copy_from_slice(decoded.as_slice());
+    decoded.zeroize();
+    PaymentKey::new(wire.id, bytes)
 }
 
 impl fmt::Debug for PaymentKeyRing {

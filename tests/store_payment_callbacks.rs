@@ -201,6 +201,41 @@ async fn concurrent_duplicate_callbacks_fulfill_once() {
 }
 
 #[tokio::test]
+async fn verified_late_payment_clears_a_prior_attempt_failure() {
+    let (db, order_id, attempt_id) = setup().await;
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_payment_attempts
+             SET state = 'failed', failure_kind = 'provider_rejected'
+             WHERE id = $1",
+            vec![attempt_id.clone().into()],
+        ))
+        .await
+        .unwrap();
+
+    PaymentCallbackStore::new(db.clone())
+        .apply_verified_payment(success_event(&order_id, &attempt_id))
+        .await
+        .unwrap();
+
+    let row = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT state, failure_kind FROM store_payment_attempts WHERE id = $1",
+            vec![attempt_id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.try_get::<String>("", "state").unwrap(), "paid");
+    assert_eq!(
+        row.try_get::<Option<String>>("", "failure_kind").unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
 async fn callback_mismatch_is_persisted_for_manual_review_without_fulfillment() {
     let (db, order_id, attempt_id) = setup().await;
     let store = PaymentCallbackStore::new(db.clone());

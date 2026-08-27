@@ -6,6 +6,7 @@ use monoize::store_billing::money::Currency;
 use monoize::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
 };
+use monoize::store_billing::payment::CheckoutAction;
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
 
@@ -134,6 +135,27 @@ async fn idempotency_key_reuse_with_different_input_is_rejected() {
 }
 
 #[tokio::test]
+async fn order_replay_does_not_require_an_exchange_rate() {
+    let (_db, store) = setup().await;
+    let input = order_input("checkout-replay-without-rate");
+    let created = store
+        .create_order("user-1", input.clone(), &rate())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store.replay_order("user-1", &input).await.unwrap(),
+        Some(created)
+    );
+    let mut changed = input;
+    changed.payment_currency = Currency::USD;
+    assert_eq!(
+        store.replay_order("user-1", &changed).await.unwrap_err(),
+        PaymentOrderError::IdempotencyConflict
+    );
+}
+
+#[tokio::test]
 async fn one_order_has_at_most_one_active_payment_attempt() {
     let (_db, store) = setup().await;
     let order = store
@@ -154,6 +176,7 @@ async fn one_order_has_at_most_one_active_payment_attempt() {
 
     assert_eq!(attempt.state.as_str(), "created");
     assert_eq!(attempt.order_id, order.id);
+    assert_eq!(attempt.payment_contract_version, 2);
     assert_eq!(attempt.credential_version_id, "credential-1");
     assert_eq!(
         store
@@ -183,4 +206,103 @@ async fn one_order_has_at_most_one_active_payment_attempt() {
             .unwrap_err(),
         PaymentOrderError::OrderNotFound
     );
+}
+
+#[tokio::test]
+async fn presented_checkout_action_is_persisted_and_replayed() {
+    let (_db, store) = setup().await;
+    let order = store
+        .create_order("user-1", order_input("checkout-present"), &rate())
+        .await
+        .unwrap();
+    let attempt = store
+        .create_attempt(
+            "user-1",
+            &order.id,
+            CreatePaymentAttemptInput {
+                idempotency_key: "attempt-present".to_string(),
+                expected_payment_method: Some("card".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    let action = CheckoutAction::Redirect {
+        url: "https://checkout.stripe.com/c/pay_test".to_string(),
+        expires_at: "2026-08-27T01:00:00Z".to_string(),
+    };
+
+    let presented = store
+        .present_attempt("user-1", &attempt.id, "cs_test_1", &action)
+        .await
+        .unwrap();
+    assert_eq!(presented.state.as_str(), "presented");
+    assert_eq!(presented.provider_object_id.as_deref(), Some("cs_test_1"));
+    assert_eq!(presented.action.as_ref(), Some(&action));
+
+    let replay = store
+        .create_attempt(
+            "user-1",
+            &order.id,
+            CreatePaymentAttemptInput {
+                idempotency_key: "attempt-present".to_string(),
+                expected_payment_method: Some("card".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay, presented);
+    assert_eq!(
+        store
+            .create_attempt(
+                "user-2",
+                &order.id,
+                CreatePaymentAttemptInput {
+                    idempotency_key: "attempt-present".to_string(),
+                    expected_payment_method: Some("card".to_string()),
+                },
+            )
+            .await
+            .unwrap_err(),
+        PaymentOrderError::OrderNotFound
+    );
+}
+
+#[tokio::test]
+async fn checkout_actions_reject_insecure_redirect_and_form_urls() {
+    let (_db, store) = setup().await;
+    let order = store
+        .create_order("user-1", order_input("checkout-https"), &rate())
+        .await
+        .unwrap();
+    let attempt = store
+        .create_attempt(
+            "user-1",
+            &order.id,
+            CreatePaymentAttemptInput {
+                idempotency_key: "attempt-https".to_string(),
+                expected_payment_method: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    for action in [
+        CheckoutAction::Redirect {
+            url: "http://checkout.example/pay".to_string(),
+            expires_at: "2026-08-27T01:00:00Z".to_string(),
+        },
+        CheckoutAction::Form {
+            action: "http://checkout.example/form".to_string(),
+            fields: vec![],
+            expires_at: "2026-08-27T01:00:00Z".to_string(),
+        },
+    ] {
+        assert_eq!(
+            store
+                .present_attempt("user-1", &attempt.id, "provider-object", &action)
+                .await
+                .unwrap_err(),
+            PaymentOrderError::InvalidInput
+        );
+    }
 }

@@ -1,6 +1,265 @@
+use std::collections::BTreeMap;
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::store_billing::crypto::{CryptoError, verify_hmac_sha256_hex};
+use crate::store_billing::money::Currency;
+use crate::store_billing::payment::CheckoutAction;
+use crate::store_billing::payment::{AdapterError, CheckoutRequest};
+
+pub const STRIPE_CHECKOUT_SESSIONS_URL: &str = "https://api.stripe.com/v1/checkout/sessions";
+
+#[derive(Clone, Deserialize, Zeroize)]
+#[serde(deny_unknown_fields)]
+#[zeroize(drop)]
+pub struct StripeCredential {
+    secret_key: String,
+    publishable_key: String,
+    webhook_signing_secret: String,
+    api_version: String,
+    account_id: String,
+    live_mode: bool,
+}
+
+impl StripeCredential {
+    pub fn from_json(raw: &[u8]) -> Result<Zeroizing<Self>, AdapterError> {
+        let credential: Self =
+            serde_json::from_slice(raw).map_err(|_| AdapterError::InvalidConfiguration)?;
+        credential.validate()?;
+        Ok(Zeroizing::new(credential))
+    }
+
+    pub fn account_id(&self) -> &str {
+        &self.account_id
+    }
+
+    pub fn api_version(&self) -> &str {
+        &self.api_version
+    }
+
+    pub fn webhook_signing_secret(&self) -> &[u8] {
+        self.webhook_signing_secret.as_bytes()
+    }
+
+    fn validate(&self) -> Result<(), AdapterError> {
+        if [
+            &self.secret_key,
+            &self.publishable_key,
+            &self.webhook_signing_secret,
+            &self.api_version,
+            &self.account_id,
+        ]
+        .into_iter()
+        .any(|value| value.trim().is_empty())
+            || self.secret_key.starts_with("sk_live_") != self.live_mode
+            || self.publishable_key.starts_with("pk_live_") != self.live_mode
+            || !valid_api_version(&self.api_version)
+        {
+            return Err(AdapterError::InvalidConfiguration);
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for StripeCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StripeCredential")
+            .field("secret_key", &"[REDACTED]")
+            .field("publishable_key", &"[REDACTED]")
+            .field("webhook_signing_secret", &"[REDACTED]")
+            .field("api_version", &self.api_version)
+            .field("account_id", &self.account_id)
+            .field("live_mode", &self.live_mode)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PreparedStripeCheckout {
+    pub endpoint: &'static str,
+    pub authorization: Zeroizing<String>,
+    pub idempotency_key: String,
+    pub api_version: String,
+    pub form: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for PreparedStripeCheckout {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedStripeCheckout")
+            .field("endpoint", &self.endpoint)
+            .field("authorization", &"[REDACTED]")
+            .field("idempotency_key", &self.idempotency_key)
+            .field("api_version", &self.api_version)
+            .field("form", &self.form)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StripeCheckoutResult {
+    pub provider_object_id: String,
+    pub action: CheckoutAction,
+}
+
+pub fn prepare_checkout_request(
+    credential: &StripeCredential,
+    request: &CheckoutRequest,
+) -> Result<PreparedStripeCheckout, AdapterError> {
+    credential.validate()?;
+    let amount = request
+        .amount_minor
+        .parse::<u64>()
+        .ok()
+        .filter(|amount| *amount > 0)
+        .ok_or(AdapterError::InvalidRequest)?;
+    if request.success_url.scheme() != "https" || request.cancel_url.scheme() != "https" {
+        return Err(AdapterError::InvalidRequest);
+    }
+    let currency = match request.currency {
+        Currency::CNY => "cny",
+        Currency::USD => "usd",
+    };
+    let form = BTreeMap::from([
+        ("mode".to_string(), "payment".to_string()),
+        (
+            "client_reference_id".to_string(),
+            request.order_number.clone(),
+        ),
+        (
+            "metadata[store_attempt_id]".to_string(),
+            request.attempt_id.clone(),
+        ),
+        ("line_items[0][quantity]".to_string(), "1".to_string()),
+        (
+            "line_items[0][price_data][currency]".to_string(),
+            currency.to_string(),
+        ),
+        (
+            "line_items[0][price_data][unit_amount]".to_string(),
+            amount.to_string(),
+        ),
+        (
+            "line_items[0][price_data][product_data][name]".to_string(),
+            request.order_number.clone(),
+        ),
+        ("success_url".to_string(), request.success_url.to_string()),
+        ("cancel_url".to_string(), request.cancel_url.to_string()),
+    ]);
+    Ok(PreparedStripeCheckout {
+        endpoint: STRIPE_CHECKOUT_SESSIONS_URL,
+        authorization: Zeroizing::new(format!("Bearer {}", credential.secret_key)),
+        idempotency_key: request.order_number.clone(),
+        api_version: credential.api_version.clone(),
+        form,
+    })
+}
+
+pub fn parse_checkout_response(body: &[u8]) -> Result<StripeCheckoutResult, AdapterError> {
+    #[derive(Deserialize)]
+    struct Response {
+        id: String,
+        url: String,
+        expires_at: i64,
+    }
+    let response: Response = serde_json::from_slice(body).map_err(|_| AdapterError::Ambiguous)?;
+    let url = url::Url::parse(&response.url).map_err(|_| AdapterError::Ambiguous)?;
+    if response.id.trim().is_empty()
+        || url.scheme() != "https"
+        || url.host_str().is_none()
+        || response.expires_at <= 0
+    {
+        return Err(AdapterError::Ambiguous);
+    }
+    let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(response.expires_at, 0)
+        .ok_or(AdapterError::Ambiguous)?
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    Ok(StripeCheckoutResult {
+        provider_object_id: response.id,
+        action: CheckoutAction::Redirect {
+            url: response.url,
+            expires_at,
+        },
+    })
+}
+
+pub async fn create_checkout(
+    client: &reqwest::Client,
+    credential: &StripeCredential,
+    request: &CheckoutRequest,
+) -> Result<StripeCheckoutResult, AdapterError> {
+    let prepared = prepare_checkout_request(credential, request)?;
+    let response = client
+        .post(prepared.endpoint)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            prepared.authorization.as_str(),
+        )
+        .header("Stripe-Version", prepared.api_version)
+        .header("Idempotency-Key", prepared.idempotency_key)
+        .form(&prepared.form)
+        .send()
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    let status = response.status();
+    let body = crate::bounded_response::read_response_body_with_limit(response, 65_536)
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    if !status.is_success() {
+        return Err(classify_checkout_error_response(status, &body));
+    }
+    parse_checkout_response(&body)
+}
+
+pub fn classify_checkout_error_response(status: reqwest::StatusCode, body: &[u8]) -> AdapterError {
+    #[derive(Deserialize)]
+    struct ErrorEnvelope {
+        error: StripeError,
+    }
+
+    #[derive(Deserialize)]
+    struct StripeError {
+        #[serde(rename = "type")]
+        kind: String,
+        message: String,
+    }
+
+    let recognized = serde_json::from_slice::<ErrorEnvelope>(body)
+        .ok()
+        .is_some_and(|value| {
+            !value.error.kind.trim().is_empty() && !value.error.message.trim().is_empty()
+        });
+    if status.is_client_error() && recognized {
+        AdapterError::Rejected
+    } else {
+        AdapterError::Ambiguous
+    }
+}
+
+fn valid_api_version(value: &str) -> bool {
+    let (date, suffix_is_valid) = match value.split_once('.') {
+        Some((date, suffix)) => (
+            date,
+            !suffix.is_empty()
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+        ),
+        None => (value, true),
+    };
+    let bytes = date.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+        && suffix_is_valid
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerifiedStripeEvent {

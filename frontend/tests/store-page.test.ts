@@ -12,6 +12,7 @@ const paymentSource = readSource("../src/pages/store/payment-methods.tsx");
 const summarySource = readSource("../src/pages/store/order-summary.tsx");
 const skeletonSource = readSource("../src/pages/store/store-skeleton.tsx");
 const redemptionSource = readSource("../src/pages/store/redemption-panel.tsx");
+const checkoutStateSource = readSource("../src/pages/store/checkout-state.ts");
 const ordersSource = readSource("../src/pages/orders.tsx");
 const moneySource = readSource("../src/lib/store-money.ts");
 const zhSource = readSource("../src/locales/zh.json");
@@ -81,6 +82,27 @@ describe("Store user pages", () => {
     expect(skeletonSource).toContain("Skeleton");
   });
 
+  test("starts the persisted payment attempt and follows redirect checkout actions", () => {
+    expect(storeSource).toContain("storeApi.createPaymentAttempt");
+    expect(storeSource).toContain("preparePendingCheckout");
+    expect(checkoutStateSource).toContain("crypto.randomUUID()");
+    expect(storeSource).toContain("window.sessionStorage");
+    expect(storeSource).toContain("window.location.assign(checkout.action.url)");
+  });
+
+  test("polls a pending payment every two seconds and revalidates account data", () => {
+    expect(storeSource).toContain("storeApi.getOrder(pollingOrderId)");
+    expect(storeSource).toContain("2_000");
+    expect(storeSource).toContain("refreshUser()");
+    expect(storeSource).toContain("entitlement.mutate()");
+    expect(storeSource).toContain("isPaymentPollingTerminal(order.payment_state)");
+    expect(ordersSource).toContain("isPaymentPollingTerminal(current.payment_state)");
+  });
+
+  test("rotates an attempt key only after a definite provider failure", () => {
+    expect(storeSource).toContain("isDefiniteAttemptFailure(cause.code)");
+  });
+
   test("renders an optimistic redemption status before the API finishes", () => {
     expect(storeSource).toContain("REDEMPTION_STATUS_KEY");
     expect(storeSource).toContain('optimisticData: { state: "redeeming"');
@@ -93,6 +115,8 @@ describe("Store user pages", () => {
     expect(ordersSource).toContain("storeApi.listOrders");
     expect(ordersSource).toContain("Dialog");
     expect(ordersSource).toContain("Skeleton");
+    expect(ordersSource).toContain("storeApi.getOrder(selectedOrder.id)");
+    expect(ordersSource).toContain("2_000");
   });
 
   test("uses the exact Simplified Chinese wording 实得", () => {

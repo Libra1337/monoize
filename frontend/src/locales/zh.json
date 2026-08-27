@@ -97,7 +97,7 @@
 		"account": { "balance": "可用余额", "monthlyUsage": "本月用量", "currentPlan": "当前套餐", "noPlan": "暂无有效套餐" },
 		"balanceProduct": { "recharge": "充值", "bonus": "赠送", "actualReceived": "实得", "formula": "实得金额 = 充值 + 赠送", "custom": "自定义金额", "customPlaceholder": "输入金额" },
 		"plan": { "price": "套餐价格", "duration": "有效期", "quota": "额度", "groups": "Group", "unrestricted": "全部 Group" },
-		"payment": { "title": "支付方式", "empty": "暂无可用支付方式", "select": "选择 {{name}}" },
+		"payment": { "title": "支付方式", "empty": "暂无可用支付方式", "select": "选择 {{name}}", "qrTitle": "支付码", "qrDescription": "使用微信支付完成此订单。" },
 		"summary": { "title": "订单摘要", "product": "商品", "payment": "支付方式", "total": "合计", "actualReceived": "实得金额", "submit": "创建订单" },
 		"redeem": { "title": "兑换兑换码", "description": "输入一个未使用的兑换码领取奖励。", "code": "兑换码", "placeholder": "XXXX-XXXX-XXXX-XXXX", "submit": "立即兑换", "success": "兑换成功", "failed": "兑换失败" },
 		"orders": { "title": "订单", "description": "查看商店购买记录。", "empty": "暂无订单", "number": "订单号", "product": "商品", "amount": "金额", "payment": "支付方式", "paymentStatus": "支付状态", "fulfillmentStatus": "履约状态", "created": "创建时间", "details": "订单详情", "paymentStates": { "unpaid": "未支付", "paid": "已支付", "refund_pending": "退款处理中", "refunded": "已退款", "closed": "已关闭" }, "fulfillmentStates": { "pending": "待履约", "fulfilled": "已履约", "failed": "履约失败" } },

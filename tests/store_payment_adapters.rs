@@ -108,3 +108,159 @@ fn stripe_webhook_checks_timestamp_signature_and_api_version() {
         StripeWebhookError::ApiVersionMismatch
     );
 }
+
+#[test]
+fn stripe_credentials_are_strict_and_redacted() {
+    let credential = monoize::store_billing::adapters::stripe::StripeCredential::from_json(
+        br#"{
+            "secret_key":"sk_test_secret",
+            "publishable_key":"pk_test_public",
+            "webhook_signing_secret":"whsec_test",
+            "api_version":"2026-08-01",
+            "account_id":"acct_1",
+            "live_mode":false
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(credential.account_id(), "acct_1");
+    assert!(!format!("{credential:?}").contains("sk_test_secret"));
+
+    assert!(
+        monoize::store_billing::adapters::stripe::StripeCredential::from_json(
+            br#"{
+                "secret_key":"sk_test_secret",
+                "publishable_key":"pk_test_public",
+                "webhook_signing_secret":"whsec_test",
+                "api_version":"2026-08-01",
+                "account_id":"acct_1",
+                "live_mode":false,
+                "endpoint":"https://attacker.example"
+            }"#,
+        )
+        .is_err()
+    );
+    assert!(
+        monoize::store_billing::adapters::stripe::StripeCredential::from_json(
+            br#"{
+                "secret_key":"sk_test_secret",
+                "publishable_key":"pk_test_public",
+                "webhook_signing_secret":"whsec_test",
+                "api_version":"2026-08-01.",
+                "account_id":"acct_1",
+                "live_mode":false
+            }"#,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn stripe_checkout_request_uses_exact_amount_and_idempotency() {
+    let credential = monoize::store_billing::adapters::stripe::StripeCredential::from_json(
+        br#"{
+            "secret_key":"sk_test_secret",
+            "publishable_key":"pk_test_public",
+            "webhook_signing_secret":"whsec_test",
+            "api_version":"2026-08-01",
+            "account_id":"acct_1",
+            "live_mode":false
+        }"#,
+    )
+    .unwrap();
+    let checkout = monoize::store_billing::payment::CheckoutRequest {
+        attempt_id: "attempt-1".to_string(),
+        order_number: "LS-ORDER-1".to_string(),
+        amount_minor: "1234".to_string(),
+        currency: monoize::store_billing::money::Currency::USD,
+        success_url: url::Url::parse("https://lynshen.org/dashboard/orders?payment=success")
+            .unwrap(),
+        cancel_url: url::Url::parse("https://lynshen.org/dashboard/store?payment=cancelled")
+            .unwrap(),
+    };
+    let prepared =
+        monoize::store_billing::adapters::stripe::prepare_checkout_request(&credential, &checkout)
+            .unwrap();
+
+    assert_eq!(prepared.idempotency_key, "LS-ORDER-1");
+    assert_eq!(prepared.authorization.as_str(), "Bearer sk_test_secret");
+    assert!(!format!("{prepared:?}").contains("sk_test_secret"));
+    assert_eq!(prepared.form.get("mode").unwrap(), "payment");
+    assert_eq!(
+        prepared
+            .form
+            .get("line_items[0][price_data][unit_amount]")
+            .unwrap(),
+        "1234"
+    );
+    assert_eq!(
+        prepared
+            .form
+            .get("line_items[0][price_data][currency]")
+            .unwrap(),
+        "usd"
+    );
+    assert_eq!(
+        prepared.form.get("client_reference_id").unwrap(),
+        "LS-ORDER-1"
+    );
+    assert_eq!(
+        prepared.form.get("metadata[store_attempt_id]").unwrap(),
+        "attempt-1"
+    );
+}
+
+#[test]
+fn stripe_checkout_response_requires_https_and_returns_provider_object() {
+    let result = monoize::store_billing::adapters::stripe::parse_checkout_response(
+        br#"{"id":"cs_test_1","object":"checkout.session","payment_status":"unpaid","url":"https://checkout.stripe.com/c/pay_test","expires_at":1787788800}"#,
+    )
+    .unwrap();
+    assert_eq!(result.provider_object_id, "cs_test_1");
+    assert!(matches!(
+        result.action,
+        CheckoutAction::Redirect { ref url, .. }
+            if url == "https://checkout.stripe.com/c/pay_test"
+    ));
+
+    assert!(
+        monoize::store_billing::adapters::stripe::parse_checkout_response(
+            br#"{"id":"cs_test_1","url":"http://checkout.stripe.com/c/pay_test","expires_at":1787788800}"#,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn stripe_checkout_rejects_only_recognized_client_error_responses() {
+    use monoize::store_billing::payment::AdapterError;
+    use reqwest::StatusCode;
+
+    assert_eq!(
+        monoize::store_billing::adapters::stripe::classify_checkout_error_response(
+            StatusCode::BAD_REQUEST,
+            br#"{"error":{"type":"invalid_request_error","message":"invalid amount"}}"#,
+        ),
+        AdapterError::Rejected
+    );
+    for (status, body) in [
+        (
+            StatusCode::BAD_REQUEST,
+            br#"{"unexpected":true}"#.as_slice(),
+        ),
+        (
+            StatusCode::FOUND,
+            br#"{"error":{"type":"redirect","message":"moved"}}"#.as_slice(),
+        ),
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            br#"{"error":{"type":"api_error","message":"failed"}}"#.as_slice(),
+        ),
+    ] {
+        assert_eq!(
+            monoize::store_billing::adapters::stripe::classify_checkout_error_response(
+                status, body,
+            ),
+            AdapterError::Ambiguous
+        );
+    }
+}

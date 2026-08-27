@@ -172,10 +172,25 @@ export interface StorePaymentAttempt {
   credential_version_id: string;
   merchant_account_identity: string;
   expected_payment_method: string | null;
+  payment_contract_version: number;
   state: "created" | "presented" | "expired" | "failed" | "paid";
+  failure_kind: "configuration_unavailable" | "provider_rejected" | null;
   idempotency_key: string;
+  provider_object_id: string | null;
+  action: StoreCheckoutAction | null;
+  provider_expires_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type StoreCheckoutAction =
+  | { kind: "redirect"; url: string; expires_at: string }
+  | { kind: "qr"; payload: string; expires_at: string }
+  | { kind: "form"; action: string; fields: Array<[string, string]>; expires_at: string };
+
+export interface StoreCheckoutResponse {
+  attempt: StorePaymentAttempt;
+  action: StoreCheckoutAction;
 }
 
 export interface StorePlanEntitlement {
@@ -231,6 +246,22 @@ export interface DeleteStoreRecordResponse {
   success: boolean;
 }
 
+export class StoreApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(
+    message: string,
+    code: string,
+    status: number,
+  ) {
+    super(message);
+    this.name = "StoreApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
 async function storeRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${STORE_API_BASE}${path}`, {
     ...options,
@@ -242,7 +273,11 @@ async function storeRequest<T>(path: string, options: RequestInit = {}): Promise
   });
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.error?.message || data.error?.code || "Request failed");
+    throw new StoreApiError(
+      data.error?.message || data.error?.code || "Request failed",
+      data.error?.code || "request_failed",
+      response.status,
+    );
   }
   return data as T;
 }
@@ -272,7 +307,7 @@ export const storeApi = {
     idempotencyKey: string,
     expectedPaymentMethod: string | null,
   ) =>
-    storeRequest<StorePaymentAttempt>(`/orders/${encodeURIComponent(orderId)}/attempts`, {
+    storeRequest<StoreCheckoutResponse>(`/orders/${encodeURIComponent(orderId)}/attempts`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ expected_payment_method: expectedPaymentMethod }),

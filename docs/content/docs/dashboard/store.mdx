@@ -20,6 +20,12 @@ Monoize refreshes the USD/CNY rate at most once every 15 minutes. It keeps the l
 3. Select one enabled payment Channel.
 4. Create the order.
 
+Monoize saves the payment attempt before it contacts the Provider. Stripe then opens its hosted Checkout page.
+
+Do not create another attempt when the Provider result is unknown. Wait for Monoize to reconcile the existing attempt.
+
+The Store checks the order every two seconds after checkout. It stops after payment and fulfillment finish, the order closes, or the order expires.
+
 Open `/dashboard/orders` to review the order. Check the payment state and the fulfillment state separately.
 
 Monoize grants the balance only after it verifies the provider payment. An administrator cannot mark an unpaid order as paid or fulfilled.

@@ -308,11 +308,15 @@ fn common_table_statements() -> Vec<String> {
             id TEXT NOT NULL PRIMARY KEY, order_id TEXT NOT NULL, channel_id TEXT NOT NULL,
             adapter_kind TEXT NOT NULL, credential_version_id TEXT NOT NULL,
             merchant_account_identity TEXT NOT NULL, expected_payment_method TEXT,
+            payment_contract_version INTEGER NOT NULL,
             state TEXT NOT NULL CHECK (state IN ('created', 'presented', 'expired', 'failed', 'paid')),
+            failure_kind TEXT CHECK (failure_kind IS NULL OR failure_kind IN ('configuration_unavailable', 'provider_rejected')),
             provider_transaction_id TEXT, provider_object_id TEXT, idempotency_key TEXT NOT NULL,
             action_kind TEXT CHECK (action_kind IS NULL OR action_kind IN ('redirect', 'qr', 'form')),
             action_json TEXT, provider_expires_at TEXT, presented_at TEXT, paid_at TEXT,
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            CHECK ((state = 'failed' AND failure_kind IS NOT NULL)
+                OR (state <> 'failed' AND failure_kind IS NULL))
         )",
         "CREATE TABLE store_provider_events (
             id TEXT NOT NULL PRIMARY KEY, credential_version_id TEXT NOT NULL,

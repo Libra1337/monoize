@@ -120,11 +120,17 @@ SB-C-4. Credentials and recoverable redemption codes MUST use XChaCha20-Poly1305
 
 SB-C-5. The key ring MUST name one active encryption key and zero or more decrypt-only prior keys. An encrypted row without a matching key MUST block checkout and code reveal.
 
+SB-C-5A. `MONOIZE_STORE_PAYMENT_KEYS_JSON` MUST contain one JSON object with `active` and `prior`. Each key object MUST contain `id` and `key_base64`. `key_base64` MUST decode to exactly 32 bytes. An absent variable MUST permit startup with payment creation unavailable. An empty or otherwise invalid present variable MUST stop startup.
+
 SB-C-6. Admin reads MUST NOT return saved credentials, private keys, Webhook secrets, API v3 keys, or full redemption codes except through a scoped reveal response.
 
 SB-C-7. A payment attempt MUST store its adapter kind, credential version ID, merchant-account identity, expected payment method, and payment contract version.
 
 SB-C-8. A credential version MUST remain decryptable while any referenced attempt is inside its provider callback, refund, dispute, or reconciliation window.
+
+SB-C-8A. A Stripe credential plaintext MUST be JSON with exactly `secret_key`, `publishable_key`, `webhook_signing_secret`, `api_version`, `account_id`, and `live_mode`. Every string MUST be nonempty. `api_version` MUST use `YYYY-MM-DD` or `YYYY-MM-DD.name` format. Unknown fields MUST fail validation.
+
+SB-C-8B. A Stripe credential account identity MUST equal the lowercase SHA-256 hexadecimal digest of the exact UTF-8 `account_id`. Checkout MUST reject a credential when this digest differs from the immutable attempt identity.
 
 SB-C-9. A Channel MUST have a current compliance confirmation. Confirmation MUST require an Admin session, reauthentication, `confirmed = true`, and the current terms version.
 
@@ -164,17 +170,31 @@ SB-O-6. Order creation MUST require a user-scoped `Idempotency-Key`. Reuse with 
 
 SB-O-7. A user MUST create at most five orders per minute and have at most ten unpaid unexpired orders. Excess creation MUST return HTTP `429`.
 
-SB-O-8. A user MUST poll one order at most 30 times per minute. The order MUST belong to that user.
+SB-O-8. A user MUST poll one order at most 30 times per minute across that user's order-detail requests on the single Store Primary. The order MUST belong to that user.
 
 SB-O-9. Every provider mutation MUST use a stable idempotency key derived from the local object.
 
 SB-O-10. A timeout, disconnect, HTTP 5xx, or unrecognized response after any provider request byte is sent MUST be ambiguous. The service MUST query provider state before retry.
 
+SB-O-10A. A repeated attempt request that finds the same attempt in `created` state MUST return HTTP `502` with code `payment_provider_ambiguous`. It MUST NOT send another checkout mutation.
+
 SB-O-11. Only a verified provider not-found result MAY permit a second checkout or refund mutation.
 
 SB-O-12. Checkout MUST return one action: `redirect`, `qr`, or `form`. Redirect and form action URLs MUST use HTTPS.
 
+SB-O-12A. `POST /api/dashboard/store/orders/{id}/attempts` MUST commit the attempt before sending provider bytes. A successful response MUST contain `{ "attempt": PaymentAttempt, "action": CheckoutAction }`. The service MUST persist the exact browser-safe action before returning it.
+
+SB-O-12B. Missing runtime keys, missing public origin, credential decryption failure, credential mismatch, and unsupported adapter checkout MUST set a new attempt to `failed` with failure kind `configuration_unavailable`. The endpoint MUST return HTTP `503` with code `payment_configuration_unavailable`. A definite provider rejection MUST set the attempt to `failed` with failure kind `provider_rejected` and return HTTP `422` with code `payment_provider_rejected`. An ambiguous provider result MUST leave the attempt in `created` state and return HTTP `502` with code `payment_provider_ambiguous`. Replaying a failed attempt MUST return the error mapped by its persisted failure kind without another provider request.
+
+SB-O-12D. An order with a failed `provider_rejected` attempt MUST reject a new attempt key with HTTP `409` and code `provider_query_required`. Only a verified Provider `not_found` query result MAY clear this block. Rejection MUST occur before another checkout mutation.
+
+SB-O-12C. A first successful attempt response MUST use HTTP `201`. A repeated successful attempt response MUST use HTTP `200` and MUST return the persisted action without a provider request when the attempt is `presented` or `paid`.
+
 SB-O-13. A custom return or cancel URL MUST match the configured HTTPS origin allow-list exactly. A rejected URL MUST create no local order and no provider object.
+
+SB-O-13A. `MONOIZE_PUBLIC_ORIGIN` MUST be one HTTPS origin without credentials, path, query, or fragment. An absent value MUST permit startup with payment creation unavailable. An empty or otherwise invalid present value MUST stop startup.
+
+SB-O-13B. Stripe success and cancel URLs MUST use `/dashboard/store`. The query MUST contain the exact local `order_id` and `checkout=success` or `checkout=cancel`.
 
 SB-O-14. The allowed payment transitions are `unpaid -> paid`, `unpaid -> closed`, version-2 `closed -> paid`, `paid -> refund_pending`, `refund_pending -> refunded`, and `refund_pending -> paid` after definite rejection and local compensation.
 
@@ -209,6 +229,10 @@ SB-A-8. WeChat Pay MUST support order query, refund notification, refund query, 
 SB-A-9. Stripe MUST use hosted Checkout. Monoize MUST NOT collect or store card numbers.
 
 SB-A-10. Stripe MUST create a Checkout Session with the Store order number as idempotency key and metadata reference.
+
+SB-A-10A. Stripe Checkout creation MUST send `mode=payment`, one line item, `client_reference_id=order_number`, `metadata[store_attempt_id]=attempt_id`, `success_url`, and `cancel_url`. It MUST send the order number as `Idempotency-Key`. It MUST authenticate with the credential `secret_key`. It MUST reject a non-HTTPS action URL.
+
+SB-A-10B. A Stripe client-error response MUST be a definite rejection only when its JSON contains one nonempty `error.type` and one nonempty `error.message`. A redirect, server error, malformed body, or unrecognized body MUST be ambiguous.
 
 SB-A-11. Stripe Webhook verification MUST check signature, configured API version, Checkout Session, PaymentIntent, amount, currency, merchant account, and payment state.
 
@@ -472,7 +496,9 @@ SB-UI-7. Store and Store Management reads MUST use SWR and initial skeletons. Us
 
 SB-UI-8. Payment creation MUST NOT optimistically credit balance or activate a plan.
 
-SB-UI-9. An unpaid order MUST poll every two seconds until payment terminal state, fulfillment terminal state, expiration, or unmount. Completion MUST revalidate order, balance, user, and entitlement data.
+SB-UI-9. An unpaid order MUST poll every two seconds until payment state is `paid`, `refunded`, or `closed`, fulfillment state is `fulfilled` or `failed`, expiration, or unmount. Completion MUST revalidate order, balance, user, and entitlement data.
+
+SB-UI-9A. The browser MUST persist one pending checkout fingerprint, order idempotency key, attempt idempotency key, and optional order ID in tab-scoped session storage. A retry with the same user and canonical purchase input MUST reuse these values. Only `payment_configuration_unavailable` and `payment_provider_rejected` MAY rotate the attempt key after the order ID is known. Network failures, `internal_error`, `payment_provider_ambiguous`, and unrecognized errors MUST retain both keys.
 
 SB-UI-10. Alipay and Stripe MUST use provider redirects. WeChat desktop MUST use a QR modal. WeChat mobile MUST use H5 redirect.
 

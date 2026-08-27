@@ -182,6 +182,10 @@ pub struct AppState {
     pub auth: AuthState,
     pub http: reqwest::Client,
     pub http_clients: HttpClients,
+    pub payment_keys: Option<Arc<crate::store_billing::crypto::PaymentKeyRing>>,
+    pub payment_public_origin: Option<url::Url>,
+    pub checkout_provider: Arc<dyn crate::store_billing::checkout::CheckoutProvider>,
+    pub store_order_poll_limiter: crate::store_billing::poll_limit::StoreOrderPollLimiter,
     pub node: Arc<NodeSettings>,
     pub db_pool: DbPool,
     /// Present on replicas; drives the metering shipment pipeline.
@@ -321,6 +325,28 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             error,
         )
     })?;
+    let payment_keys = crate::store_billing::crypto::PaymentKeyRing::from_deployment_json(
+        std::env::var("MONOIZE_STORE_PAYMENT_KEYS_JSON")
+            .ok()
+            .as_deref(),
+    )
+    .map_err(|error| {
+        AppError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "store_payment_keys_invalid",
+            error.to_string(),
+        )
+    })?
+    .map(Arc::new);
+    let payment_public_origin =
+        payment_public_origin_from_raw(std::env::var("MONOIZE_PUBLIC_ORIGIN").ok().as_deref())
+            .map_err(|detail| {
+                AppError::new(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "store_public_origin_invalid",
+                    detail,
+                )
+            })?;
 
     let http_clients =
         HttpClients::new(runtime.node.upstream_proxy_url.as_deref()).map_err(|err| {
@@ -331,6 +357,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             )
         })?;
     let http = http_clients.global_client();
+    let checkout_provider =
+        Arc::new(crate::store_billing::checkout::ReqwestCheckoutProvider::new(http.clone()));
 
     let db = DbPool::connect(&runtime.database_dsn)
         .await
@@ -957,6 +985,11 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         auth,
         http,
         http_clients,
+        payment_keys,
+        payment_public_origin,
+        checkout_provider,
+        store_order_poll_limiter: crate::store_billing::poll_limit::StoreOrderPollLimiter::default(
+        ),
         node,
         db_pool: db.clone(),
         metering,
@@ -987,6 +1020,28 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         request_capture,
         trusted_proxies,
     })
+}
+
+fn payment_public_origin_from_raw(raw: Option<&str>) -> Result<Option<url::Url>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("MONOIZE_PUBLIC_ORIGIN is empty".to_string());
+    }
+    let origin = url::Url::parse(raw).map_err(|_| "MONOIZE_PUBLIC_ORIGIN is invalid")?;
+    if origin.scheme() != "https"
+        || origin.host_str().is_none()
+        || !origin.username().is_empty()
+        || origin.password().is_some()
+        || origin.path() != "/"
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+    {
+        return Err("MONOIZE_PUBLIC_ORIGIN must be one HTTPS origin".to_string());
+    }
+    Ok(Some(origin))
 }
 
 #[allow(clippy::result_large_err)]
@@ -1645,6 +1700,27 @@ mod active_probe_billing_tests {
             http_body_max_bytes_from_raw(Some(&overflow)),
             DEFAULT_HTTP_BODY_MAX_BYTES
         );
+    }
+
+    #[test]
+    fn payment_public_origin_requires_one_https_origin() {
+        assert_eq!(
+            payment_public_origin_from_raw(Some("https://lynshen.org"))
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            "https://lynshen.org/"
+        );
+        assert!(payment_public_origin_from_raw(None).unwrap().is_none());
+        for invalid in [
+            "   ",
+            "http://lynshen.org",
+            "https://lynshen.org/store",
+            "https://user@lynshen.org",
+            "https://lynshen.org?x=1",
+        ] {
+            assert!(payment_public_origin_from_raw(Some(invalid)).is_err());
+        }
     }
 
     fn rate(

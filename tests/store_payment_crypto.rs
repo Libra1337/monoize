@@ -57,6 +57,71 @@ fn payment_key_ring_decrypts_with_a_prior_key() {
 }
 
 #[test]
+fn deployment_key_ring_parses_one_active_and_prior_keys() {
+    let json = serde_json::json!({
+        "active": { "id": "active", "key_base64": STANDARD.encode([7_u8; 32]) },
+        "prior": [{ "id": "old", "key_base64": STANDARD.encode([3_u8; 32]) }]
+    })
+    .to_string();
+    let ring = PaymentKeyRing::from_deployment_json(Some(&json))
+        .unwrap()
+        .unwrap();
+    let old_ring = PaymentKeyRing::new(key("old", 3), vec![]).unwrap();
+    let encrypted = old_ring
+        .encrypt("store_channel_credentials:c1:secret", b"secret")
+        .unwrap();
+
+    assert_eq!(
+        ring.decrypt("store_channel_credentials:c1:secret", &encrypted)
+            .unwrap()
+            .as_slice(),
+        b"secret"
+    );
+    assert!(
+        PaymentKeyRing::from_deployment_json(None)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn deployment_key_ring_rejects_unknown_fields_and_wrong_key_lengths() {
+    assert_eq!(
+        PaymentKeyRing::from_deployment_json(Some("   ")).unwrap_err(),
+        CryptoError::InvalidEncoding
+    );
+    let unknown = serde_json::json!({
+        "active": { "id": "active", "key_base64": STANDARD.encode([7_u8; 32]) },
+        "prior": [],
+        "plaintext_fallback": true
+    })
+    .to_string();
+    assert_eq!(
+        PaymentKeyRing::from_deployment_json(Some(&unknown)).unwrap_err(),
+        CryptoError::InvalidEncoding
+    );
+
+    let missing_prior = serde_json::json!({
+        "active": { "id": "active", "key_base64": STANDARD.encode([7_u8; 32]) }
+    })
+    .to_string();
+    assert_eq!(
+        PaymentKeyRing::from_deployment_json(Some(&missing_prior)).unwrap_err(),
+        CryptoError::InvalidEncoding
+    );
+
+    let short = serde_json::json!({
+        "active": { "id": "active", "key_base64": STANDARD.encode([7_u8; 31]) },
+        "prior": []
+    })
+    .to_string();
+    assert_eq!(
+        PaymentKeyRing::from_deployment_json(Some(&short)).unwrap_err(),
+        CryptoError::InvalidKey
+    );
+}
+
+#[test]
 fn stripe_hmac_verification_rejects_changed_payloads() {
     let secret = b"whsec_test";
     let payload = b"1710000000.{\"id\":\"evt_1\"}";
