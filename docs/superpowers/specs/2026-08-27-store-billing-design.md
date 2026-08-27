@@ -720,11 +720,45 @@ Order, polling, and callback token buckets are process-wide because one Primary 
 
 A future deployment with more than one Store-serving process must configure a gateway or shared rate-limit backend before startup. Without an explicit shared mode, a second Store-serving process is an invalid topology and must not accept Store traffic.
 
+### 15.1 Primary Availability And Recovery
+
+Every production deployment declares one Store availability profile: `postgresql_primary` or `sqlite_primary`. Startup rejects a missing profile or a profile that does not match the configured database backend.
+
+The PostgreSQL profile has a Store RTO of five minutes and a committed-state RPO of zero. Health routing detects an unavailable Primary within 30 seconds. Promotion first fences the old Store process by revoking its lease epoch and removing its callback and Dashboard routes. The replacement acquires a database-backed exclusive Store lease with a new monotonic epoch before it mounts any Store endpoint or issues an admission token. A process that loses the lease fails Store writes and admissions closed within one lease interval. The lease interval is at most 15 seconds.
+
+PostgreSQL database failover is owned by the configured database service. The replacement Store process starts only after the promoted database accepts writes and the prior writer is fenced. It loads pending payment attempts, callback events, quota reservations, and spool acknowledgements from committed storage. It queries ambiguous provider attempts before retrying. Provider callback and query reconciliation starts before checkout is re-enabled.
+
+The SQLite profile has a process-restart RTO of two minutes on a healthy host. Host loss has an RTO of 30 minutes and an RPO of at most 60 seconds. Production SQLite requires continuous encrypted off-host replication or backup with a measured copy lag of at most 60 seconds. A backup stored only on the application host is invalid. The restore procedure verifies database integrity, Store migration version, key-ring availability, SQLite quota-gate fingerprint, and the last replicated timestamp before routing Store traffic.
+
+During every Primary outage, checkout, payment polling mutations, refund mutations, redemption, and plan admission fail closed. Public callbacks may receive a temporary failure so the provider retries. Ordinary API requests funded by the existing balance continue only when they do not require the Store Primary or a payment hold. After SQLite recovery, reconciliation queries every attempt created since the last confirmed backup boundary before checkout resumes. A missing or ambiguous provider query keeps the affected order blocked for manual review.
+
+Each enabled Channel capability record includes the provider's measured callback retry window and query-availability window. Both windows must exceed the declared Store RTO by at least 15 minutes. A Channel with a shorter or unknown window cannot enable in production.
+
+Production readiness includes one PostgreSQL or SQLite drill matching the selected profile. The drill removes Primary routing, proves fencing, promotes or restores the replacement, replays duplicate callbacks, reconciles ambiguous attempts, and measures detection time, RTO, RPO, and provider retry recovery. A release fails when any measured value exceeds the declared objective or when two Store Primaries accept writes in one lease epoch.
+
 Payment and reveal endpoints require the existing dashboard authorization model. Reveal, export, refund, reprocess, exchange-rate override, key rotation, and credential updates require Admin plus a matching five-minute reauthentication scope.
 
 Every cookie-authenticated Store mutation requires `Content-Type: application/json` or the documented multipart icon type and an `Origin` equal to the configured public origin. A missing or mismatched Origin fails. State-changing actions never use GET. Provider callbacks are exempt from session CSRF checks and require provider verification instead.
 
 The dashboard session cookie remains HttpOnly, Secure, SameSite Strict, and Path `/`. Session invalidation is checked before accepting a reauthentication grant or a sensitive mutation.
+
+### 15.2 Privacy, Retention, And Data Residency
+
+Production stores one accepted, versioned Store privacy record. The record names the policy version, jurisdiction, allowed storage regions, retention values, legal basis, privacy reviewer, approval evidence digest, approved time, and next review time. The next review time is no more than 365 days later. Store callbacks and production checkout cannot enable without a current accepted record.
+
+Encrypted raw callback bodies are retained for 30 days. Source IP addresses and User-Agent values are retained for 90 days and are then deleted. A deployment may retain a keyed, non-reversible pseudonym after deletion only when the accepted privacy record states its purpose and rotation period. The pseudonym key is not a payment encryption key.
+
+Allow-listed parsed provider events, payment orders, ledger entries, refunds, disputes, chargebacks, settlement reports, economic-recovery claims, and their immutable financial audits are retained for seven years unless the accepted jurisdiction policy requires a different period. A different period requires an explicit value and reviewer evidence in the privacy record; code does not silently replace the configured value.
+
+Redemption reveal, copy, and export audit records are retained for two years. Reauthentication grant hashes are deleted no later than 24 hours after grant expiry. Expired nonce and callback replay records are deleted after the longer of their protocol replay window and 24 hours. Deleting these short-lived records does not delete the associated financial audit.
+
+Raw callback bodies are accessible only to Payment Operations during an assigned incident and to a Privacy or Security reviewer. Financial records are accessible to Payment Operations and Finance roles. Redemption reveal and export audits are accessible to Security and authorized Admin reviewers. Every read, export, retention override, and legal-hold operation writes an immutable access audit containing actor, role, scope, reason, time, and result.
+
+Payment data, callback evidence, backups, and encryption keys remain inside the allowed storage regions in the accepted privacy record. A cross-region replica, log sink, support export, or backup target is rejected unless its region is listed. Application logs never become an alternative retention store for deleted payment data.
+
+A Primary daily deletion job removes data whose retention period has expired. It records counts by data class, the oldest remaining timestamp, failures, and the policy version. Three consecutive failures create a critical alert and pause new checkout until an authorized operator records containment. Deletion is idempotent and runs in bounded batches.
+
+A legal hold suspends deletion only for its declared data class and identifiers. It stores a reason, scope, requesting authority, approving Privacy or Legal reviewer, start time, and mandatory expiry time. An expired hold stops applying automatically. Extending a hold requires a new approval record. A hold never restores data already deleted.
 
 ## 16. Verification
 
@@ -776,6 +810,12 @@ Backend tests cover:
 - Payment-hold Store read, checkout rejection, redemption non-consumption, plan block, ordinary-balance boundary, pending-payment handling, and hold-clear refusal.
 - Manual case assignment, acknowledgement and escalation clocks, provider deadline, dual approval, self-approval rejection, and immutable case audit.
 - Single Store Primary routing, Replica endpoint absence, persisted redemption cooldown, and invalid multi-process topology.
+- PostgreSQL Store lease fencing, stale-epoch rejection, 30-second detection, five-minute promotion, and zero committed-state loss.
+- SQLite process restart, off-host restore, 60-second backup lag, 30-minute host-loss recovery, and post-restore provider reconciliation.
+- Provider retry-window capability rejection when the measured window does not exceed the selected RTO by 15 minutes.
+- Privacy-record expiry, regional target rejection, role-scoped evidence access, immutable access audit, and checkout refusal without an accepted policy.
+- Daily bounded deletion for raw callbacks, IP, User-Agent, reauthentication grants, replay records, and expired legal holds.
+- Legal-hold scope, approval, expiry, extension, and non-restoration of already deleted data.
 - SQLite migration and isolated PostgreSQL migration.
 - Migration preflight rejection for every unknown or inconsistent legacy state.
 - A clean-room review records external commit `8f6961c675932f406260ff0c218bc2aa0603e9b2`, adopted behaviors, license difference, and a no-verbatim-copy check.
@@ -836,6 +876,11 @@ A Channel can accept production purchases only after:
 17. The SQLite quota fingerprint is prevalidated for the release, or the deployment uses PostgreSQL for plan products.
 18. Every enabled Channel has a current merchant capability register and a passing automated or manual evidence path.
 19. The exchange-source governance and formal license review records are current and accepted by their assigned reviewers.
+20. The selected Store availability profile has a current failover drill with measured detection time, RTO, RPO, fencing, provider retry recovery, and no dual-Primary write acceptance.
+21. SQLite deployments have an encrypted off-host backup target with measured lag at most 60 seconds. PostgreSQL deployments have a verified database-writer fencing path.
+22. Every enabled Channel has measured callback retry and query windows that exceed the selected Store RTO by at least 15 minutes.
+23. A current Store privacy record defines jurisdiction, allowed regions, retention, access roles, deletion, and legal-hold policy. Its reviewer evidence is accepted.
+24. The deletion job has completed successfully, regional targets match the accepted privacy record, and no unresolved critical retention alert exists.
 
 Production deployment does not invent or embed merchant credentials. The operator must supply them through Admin or deployment configuration.
 
