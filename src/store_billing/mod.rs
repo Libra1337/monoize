@@ -1,3 +1,5 @@
+pub mod credentials;
+pub mod crypto;
 pub mod exchange_rate;
 pub mod models;
 pub mod money;

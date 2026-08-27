@@ -17,12 +17,12 @@ eventsource-stream = "0.2.3"
 futures-util = "0.3.31"
 include_dir = "0.7.4"
 metrics = "0.24.3"
-metrics-exporter-prometheus = "0.18.1"
+metrics-exporter-prometheus = { version = "0.18.1", default-features = false, features = ["http-listener"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
 pdf-extract = "0.10.0"
 regex = "1.12.2"
-reqwest = { version = "0.13.1", features = ["json", "stream", "rustls-native-certs", "query", "multipart"] }
+reqwest = { version = "0.13.1", features = ["json", "stream", "rustls-native-certs", "query", "multipart", "rustls-no-provider", "charset", "http2", "system-proxy"], default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["arbitrary_precision"] }
 rust_decimal = "1.39.0"
@@ -45,18 +45,26 @@ jsonwebtoken = "9"
 inventory = "0.3.21"
 dashmap = "6.1.0"
 image = "0.25.8"
-jxl-sys = "0.1.11"
+jxl-sys = { version = "0.1.11", optional = true }
 mozjpeg = "0.10.13"
 oxipng = "10.1.0"
 percent-encoding = "2.3.2"
 webp = { version = "0.3.1", default-features = false }
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 ipnet = "2"
-sha2 = "0.10.9"
+sha2 = { version = "0.11.0", features = ["oid"] }
 cron = "0.17.0"
 chrono-tz = "0.10.4"
 unicode-normalization = "0.1.25"
 quick-xml = "0.42.0"
+aes-gcm = "0.11.1"
+chacha20poly1305 = "0.11.0"
+hmac = "0.13.0"
+subtle = "2.6.1"
+url = "2.5.8"
+zeroize = "1.9.0"
+ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
+rsa = { version = "0.9.10", features = ["sha2", "pem"] }
 
 [dev-dependencies]
 http-body-util = "0.1.3"
@@ -64,3 +72,7 @@ hyper = "1.8.1"
 once_cell = "1.21.3"
 tempfile = "3.24.0"
 tower = "0.5.2"
+
+[features]
+default = ["jpegxl"]
+jpegxl = ["dep:jxl-sys"]

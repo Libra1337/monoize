@@ -489,6 +489,8 @@ CUMI-8. When `output_format = original`, the transform MUST emit the same suppor
 
 Both JPEG XL modes MUST emit media type `image/jxl`. Both WebP modes MUST emit media type `image/webp`.
 
+CUMI-8A. The default application build MUST enable the Cargo feature `jpegxl`. A build that explicitly disables default features MUST compile without libjxl. In that build, selecting `jpegxl` or `jpegxl_lossless` MUST return `TransformError::Apply` with `jpeg xl support is disabled in this build`. It MUST NOT emit another image format.
+
 CUMI-9. The cache key material MUST be the ordered byte sequence:
 1. UTF-8 bytes of `compress_user_message_images:v5` (a version-frozen cache-key literal; it intentionally retains the historical transform name so existing cache entries stay valid across the TF-17 ID migration);
 2. one zero byte;

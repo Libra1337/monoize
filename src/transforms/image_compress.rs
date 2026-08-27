@@ -836,10 +836,13 @@ fn fast_lossy_webp_config(quality: u8) -> Result<webp::WebPConfig, TransformErro
     Ok(config)
 }
 
+#[cfg(feature = "jpegxl")]
 struct LibJxlEncoder(*mut jxl_sys::JxlEncoder);
 
+#[cfg(feature = "jpegxl")]
 struct LibJxlParallelRunner(*mut std::ffi::c_void);
 
+#[cfg(feature = "jpegxl")]
 impl LibJxlParallelRunner {
     fn new() -> Result<Self, TransformError> {
         // SAFETY: the query has no preconditions and a null memory manager requests the default
@@ -856,6 +859,7 @@ impl LibJxlParallelRunner {
     }
 }
 
+#[cfg(feature = "jpegxl")]
 impl Drop for LibJxlParallelRunner {
     fn drop(&mut self) {
         // SAFETY: the handle was returned by JxlThreadParallelRunnerCreate and is destroyed once.
@@ -863,6 +867,7 @@ impl Drop for LibJxlParallelRunner {
     }
 }
 
+#[cfg(feature = "jpegxl")]
 impl LibJxlEncoder {
     fn check(
         &self,
@@ -880,6 +885,7 @@ impl LibJxlEncoder {
     }
 }
 
+#[cfg(feature = "jpegxl")]
 impl Drop for LibJxlEncoder {
     fn drop(&mut self) {
         // SAFETY: the handle was returned by JxlEncoderCreate and is destroyed exactly once.
@@ -887,6 +893,7 @@ impl Drop for LibJxlEncoder {
     }
 }
 
+#[cfg(feature = "jpegxl")]
 fn encode_image_as_jpegxl(
     image: &DynamicImage,
     lossless: bool,
@@ -1038,6 +1045,18 @@ fn encode_image_as_jpegxl(
     }
 }
 
+#[cfg(not(feature = "jpegxl"))]
+fn encode_image_as_jpegxl(
+    _image: &DynamicImage,
+    _lossless: bool,
+    _quality: u8,
+    _effort: u8,
+) -> Result<Vec<u8>, TransformError> {
+    Err(TransformError::Apply(
+        "jpeg xl support is disabled in this build".to_string(),
+    ))
+}
+
 fn encode_jpeg_with_mozjpeg(
     rgb: &[u8],
     width: u32,
@@ -1186,6 +1205,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "jpegxl")]
     #[test]
     fn encodes_explicit_jpegxl_modes_with_libjxl() {
         let original = STANDARD
@@ -1211,6 +1231,18 @@ mod tests {
             assert_eq!(transformed.media_type, "image/jxl");
             assert_eq!(transformed.bytes.get(..2), Some([0xff, 0x0a].as_slice()));
         }
+    }
+
+    #[cfg(not(feature = "jpegxl"))]
+    #[test]
+    fn rejects_jpegxl_when_the_build_feature_is_disabled() {
+        let error = encode_image_as_jpegxl(&DynamicImage::new_rgb8(1, 1), false, 90, 7)
+            .expect_err("jpeg xl must be unavailable");
+
+        assert_eq!(
+            error.to_string(),
+            "transform apply failed: jpeg xl support is disabled in this build"
+        );
     }
 
     #[test]
