@@ -132,7 +132,23 @@ Funding source is fixed before routing. An applicable active plan requires a suc
 
 The Primary admission transaction locks the entitlement and every applicable window bucket in deterministic order. It verifies active state, generation, expiration, and `settled + reserved + maximum <= quota` for every rule. It then increments every reserved counter and inserts one reservation.
 
+SQLite supports only the single-Primary topology and does not use Replica admission tokens. SQLite admission and settlement use short `BEGIN IMMEDIATE` transactions, WAL mode, foreign keys enabled, and a 5-second busy timeout. Network calls and price calculation run outside the write transaction.
+
+Plan products on SQLite require a local-file concurrency drill at `max(100 requests/second, two times measured seven-day peak)` for ten minutes, with five quota windows and 100 concurrent requests against one entitlement. Acceptance requires zero unhandled `SQLITE_BUSY`, exact reservation conservation, p95 lock wait below 50 ms, and p99 below 200 ms.
+
+If the SQLite drill fails, plan-product creation and enablement return `plan_requires_postgres`. Balance products, redemption of balance, and payment Channels remain available. PostgreSQL is not started on the user's computer.
+
 The Primary returns a signed short-lived admission token bound to the reservation and request ID. A Replica must obtain this token from the Primary before routing a plan-funded request. Primary unavailability fails plan admission closed. A Replica cannot create a local optimistic reservation.
+
+The token is compact JWS with `alg = EdDSA`, an Ed25519 key, `typ = lynshen-plan-admission`, and a required `kid`. Claims contain issuer, Replica ID audience, token ID, reservation ID, request ID, entitlement ID, generation, maximum nano USD, reserved CNY fen, pricing revision, issued time, not-before time, and expiration.
+
+Token TTL is 30 seconds. Verification allows at most five seconds of clock skew. The Replica rejects an unknown key ID, wrong audience, duplicate token ID, mismatched request, future token, expired token, or signature failure before upstream routing.
+
+Before routing, the bound Replica atomically creates and fsyncs a durable token-claim marker in its metering spool. An existing marker rejects replay. Cross-Replica replay fails the audience check. The marker remains until the Primary acknowledges one settlement or release, and for at least five minutes after token expiry.
+
+Admission signing uses a key ring separate from credential encryption. Rotation publishes the next public key to Replicas through configuration epoch, waits for every non-stale Replica heartbeat to acknowledge the key ID, then activates the private key. The prior public key remains valid for at least five minutes and until no unexpired token references it.
+
+Internal admission requests use the existing Replica authentication channel and include the configured Replica ID. The Primary refuses to issue a token when the authenticated node and requested audience differ.
 
 Settlement locks the same generation and bucket rows. It verifies the stored rate and pricing revision, changes the reservation to settled, subtracts reserved CNY fen, and adds the converted actual CNY fen. A request that fails before billable upstream work releases the reservation once.
 
@@ -325,6 +341,27 @@ The allowed fulfillment-state transitions are:
 
 A fulfilled order cannot return to pending or failed.
 
+### 8.1 Provider Event Ordering
+
+Event application locks order, recovery, and user rows in that order. It persists every verified event before projection. Duplicate event identity is a no-op.
+
+An adapter uses a provider object version when the provider guarantees monotonic versions. A conflicting or backward event without such a version triggers provider query. It does not directly change state.
+
+| Verified event | Current state | Required result |
+| --- | --- | --- |
+| Payment success | `unpaid` or version 2 `closed` | Set `paid`; start fulfillment only when no hold, refund success, or lost dispute exists. |
+| Payment failure or close | `unpaid` | Query provider, then close only when query confirms unpaid. Never downgrade `paid` or `refunded`. |
+| Refund success | `paid` or `refund_pending` | Set `refunded`, consume shared recovery once, and block fulfillment. |
+| Refund success before payment event | `unpaid` | Query the original payment, record verified payment evidence, then set `refunded` without fulfillment. |
+| Refund failure | `refund_pending` | Return to `paid` only after refund query confirms failure and no refund-success event exists. |
+| Dispute opened | Verified paid or refunded order | Set dispute `open`, add the shared recovery claim, set payment hold, and block pending fulfillment. |
+| Dispute won | `open` | Set `won`, resolve only that claim, and resume eligible paid/pending fulfillment when no other hold reason exists. |
+| Dispute lost or chargeback | `open`, `won`, `paid`, or `refunded` | Set `lost`, recover at most the original reward once, keep payment hold, and block fulfillment. |
+| Dispute reopened | `won` | Return to `open` only with a new dispute ID or higher provider version. |
+| Settlement difference | Any | Open a reconciliation case and query provider; do not mutate user reward directly. |
+
+Refund success is terminal for refund state. Dispute lost is terminal for one dispute version. A later contradictory event requires query and a newer provider version before transition. Event arrival time alone never overrides a terminal state.
+
 Order creation inserts an unpaid order and one payment attempt. It stores the product snapshot, reward snapshot, settlement amount, settlement currency, exchange rate, Channel ID, and adapter kind.
 
 Order creation requires an `Idempotency-Key` containing one UUID v4. The database makes `(user_id, idempotency_key)` unique and stores a digest of the canonical request. Repeating the same key and request returns the original order. Reusing the key with different input returns HTTP 409.
@@ -346,8 +383,8 @@ Callback processing performs these checks:
 5. Match the exact amount and currency.
 6. Enforce provider transaction uniqueness.
 7. Change payment state to paid.
-8. Apply the balance credit or plan entitlement.
-9. Change fulfillment state to fulfilled.
+8. Apply the balance credit or plan entitlement only when the event-order matrix permits fulfillment.
+9. Change fulfillment state to fulfilled after reward commit.
 
 Steps 6 and 7 run in one payment transaction with the verified event. Steps 8 and 9 run in a second fulfillment transaction. The fulfillment transaction uses an order-derived ledger or entitlement idempotency key.
 
@@ -500,7 +537,17 @@ A dispute-won event resolves its claim. It releases the shared reserve only when
 
 A verified dispute-lost or chargeback event consumes the shared reserve and writes one idempotent negative ledger adjustment only for `original - recovered - reserved`. The recovery row then records `recovered = original`. The balance can become negative. It revokes an active plan from that order and keeps the account payment hold until Admin review.
 
-Payment hold blocks new Store checkout and plan-funded API admission. Ordinary balance-funded API requests continue only when the effective balance rules permit them. Redemption-code use remains blocked while payment hold is active.
+Payment hold does not disable login, API keys, Store reads, order reads, callbacks, refunds, or reconciliation.
+
+Payment hold rejects new Store order creation with HTTP 423 `payment_hold`. It rejects plan-funded API admission. A request with no applicable plan can continue through ordinary balance only when the existing effective-balance and account-enabled rules permit it; hold does not create a plan-to-balance fallback.
+
+Payment hold rejects redemption before code lookup or mutation with HTTP 423 `payment_hold`. It does not consume, expire, or reveal the submitted code.
+
+An already presented payment attempt remains queryable. A verified payment is recorded, but pending fulfillment remains blocked while hold is active. Admin can refund it or clear the hold after every recovery claim is resolved.
+
+An active plan unrelated to the disputed order keeps its original dates but cannot fund requests during hold. The system does not extend its end time for the blocked interval.
+
+The system clears hold automatically only when every dispute is won or closed without loss, every recovery claim is resolved, and user balance is nonnegative. Otherwise Admin reauthentication, a reason, and resolved reconciliation case are required. Admin cannot clear hold while balance is negative or a provider claim remains open.
 
 The Primary imports or fetches each provider daily settlement report when the provider supports it. A report line has a provider-unique ID and classifies gross charge, refund, dispute, fee, tax, currency conversion, and net settlement. Reimport is idempotent.
 
@@ -586,7 +633,9 @@ Backend tests cover:
 - Product revision conflicts, emergency disable versus callback, immutable quote triggers, plan replacement races, plan expiration, and every quota window.
 - Primary quota reservation, Replica admission token, concurrent reservations, replacement generations, exact settlement, release, and above-reserve anomaly.
 - An isolated PostgreSQL quota load drill with five Replicas, 10,000 entitlements, five windows per entitlement, and at least `max(500 requests/second, two times measured seven-day peak)` for ten minutes. It includes 100 concurrent requests against one entitlement and never starts PostgreSQL on the user's computer.
+- A SQLite WAL quota drill at its defined target, including concurrent admission, settlement, replacement, lock timeout, process restart, and zero unhandled `SQLITE_BUSY`. Failure proves that plan products require PostgreSQL.
 - Quota fault drills that stop the Primary after reserve, expire tokens, delay and duplicate spool shipment, replace a plan during traffic, inject database lock waits, and shift a Replica clock by plus or minus two minutes.
+- Ed25519 admission-token signature, unknown key, wrong node audience, durable same-node replay, cross-node replay, TTL, clock skew, key publication, activation, and prior-key retirement.
 - Quota acceptance requires zero duplicate or missing finalizations, exact reservation conservation, no charge to a replacement generation, p95 admission below 100 ms, and p99 below 250 ms at the target load. Injected outages are excluded from latency percentiles and must fail closed.
 - HTTP milestone JSON, form, redirect, QR, and form actions.
 - HTTP milestone DNS rebinding, private addresses, redirect rejection, timeout, response limits, template limits, and query-before-retry behavior.
@@ -596,7 +645,9 @@ Backend tests cover:
 - CSRF Origin rejection, session invalidation, role removal, and passwordless Admin fail-closed behavior.
 - Reconciler lease fencing, due-order selection, retry schedule, and alert thresholds.
 - Dispute open, win, loss, chargeback debt, plan suspension, daily settlement reimport, fee classification, and unmatched-line cases.
+- Every event-order matrix row and pairwise reversed delivery, including refund-before-payment, dispute-before-fulfillment, stale terminal events, and query-required conflicts.
 - Per-adapter capability tests for supported and unsupported dispute, query, refund, and settlement operations.
+- Payment-hold Store read, checkout rejection, redemption non-consumption, plan block, ordinary-balance boundary, pending-payment handling, and hold-clear refusal.
 - Single Store Primary routing, Replica endpoint absence, persisted redemption cooldown, and invalid multi-process topology.
 - SQLite migration and isolated PostgreSQL migration.
 - Migration preflight rejection for every unknown or inconsistent legacy state.
@@ -646,6 +697,9 @@ A Channel can accept production purchases only after:
 7. Supported dispute events or the documented manual case path, plus the settlement-report path, are configured.
 8. Exchange-rate refresh, quarantine, pause, and alert checks pass.
 9. The reverse proxy routes Store traffic to exactly one Primary.
+10. A SQLite deployment passes the SQLite quota drill, or plan products remain disabled until PostgreSQL is used.
+11. A deployment with Replicas passes admission-token rotation and replay drills.
+12. Event-order and payment-hold acceptance tests pass for every enabled official adapter.
 
 Production deployment does not invent or embed merchant credentials. The operator must supply them through Admin or deployment configuration.
 
