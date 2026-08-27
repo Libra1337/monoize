@@ -18,6 +18,7 @@ import type { PlaygroundPrefs } from "./prefs";
 import type { ComposerAttachment } from "./use-image-generation";
 import { ApiKeyDropdown } from "./api-key-dropdown";
 import { GroupSelector } from "./group-selector";
+import { ImageSizeSelect } from "./image-size-select";
 import { ModelCombobox } from "./model-combobox";
 import { SettingsPopover } from "./settings-popover";
 
@@ -259,6 +260,10 @@ export function Composer({
                   records={models}
                   kind="image"
                   isLoading={modelsLoading}
+                />
+                <ImageSizeSelect
+                  value={prefs.imageSize}
+                  onChange={(imageSize) => setPref("imageSize", imageSize)}
                 />
               </motion.div>
             )}
