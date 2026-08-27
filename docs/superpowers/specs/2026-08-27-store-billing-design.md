@@ -54,17 +54,27 @@ The primary node requests `https://open.er-api.com/v6/latest/USD` at startup and
 
 The response must be valid JSON with `result = success`, `base_code = USD`, a positive integer source timestamp, and one finite decimal `rates.CNY`. The rate must be between 1 and 20 CNY per USD and contain at most 18 fractional digits.
 
-Let `R` be CNY per USD. USD cents convert to CNY fen as `round(cents * R)`. CNY fen convert to USD cents as `round(fen / R)`. The service never persists a rounded reciprocal.
+The source timestamp cannot be more than five minutes in the future, more than 48 hours before refresh time, or older than the active source timestamp. Every comparison uses UTC.
 
-USD cents convert to nano USD exactly as `cents * 10,000,000`. CNY fen convert to nano USD as `round(fen * 10,000,000 / R)`. Each formula rounds half away from zero only at its final integer result.
+The service parses the decimal rate into positive integers `N` and `D`, where `D = 10^scale`, `scale` is 0 through 18, and `R = N / D`. It reduces the pair by their greatest common divisor. It does not use decimal division or persist a rounded reciprocal.
+
+USD cents convert to CNY fen as `round(cents * N / D)`. CNY fen convert to USD cents as `round(fen * D / N)`. USD cents convert to nano USD exactly as `cents * 10,000,000`. CNY fen convert to nano USD as `round(fen * D * 10,000,000 / N)`.
+
+All products use checked integer multiplication, division, quotient, and remainder. Round-half-away-from-zero is applied once to the final nonnegative rational result. An intermediate overflow returns `amount_overflow` and writes no order.
 
 The decimal exchange rate contains at most 18 fractional digits. A checkout that needs conversion fails when the last successful refresh is older than 60 minutes or the source timestamp is older than 48 hours. A failed refresh retains the prior snapshot but does not extend its validity.
 
-A candidate that differs from the active rate by more than five percent is quarantined and does not replace it. Admin can approve or reject the candidate. Admin can pause conversion-based checkout. Same-currency checkout can continue only when its reward and entitlement calculations do not require the rate.
+A candidate that differs from the active rate by more than the configured threshold is quarantined and does not replace it. The threshold defaults to five percent and is configurable from 0.1 through 25 percent. Admin can approve or reject the candidate. Admin can pause conversion-based checkout. Same-currency checkout can continue only when its reward and entitlement calculations do not require the rate.
 
 The service retains accepted snapshots for 30 days. Admin can restore the immediately prior accepted snapshot only while its original age limits still pass. Restore does not change its source or refresh timestamp. If no accepted snapshot is valid, conversion-based checkout remains paused.
 
 At startup, a network failure uses the stored active snapshot only while both age limits pass. Without a valid snapshot, dependent checkout returns HTTP 503. The process remains available for non-Store traffic.
+
+The primary runs one non-overlapping refresh task immediately after startup and then 15 minutes after each completed attempt. It persists consecutive failure count, last attempt time, last error category, and paused state. Replicas never refresh.
+
+Three consecutive failures create a warning. Six failures or an active snapshot within 15 minutes of expiry create a critical alert. Admin shows the alert, active snapshot, quarantined candidate, failure count, and next attempt time.
+
+When no first valid snapshot exists, conversion-dependent products remain visible but checkout is disabled with an exchange-rate-unavailable state. The operator can retry refresh, correct network access, or pause those products. The operator cannot type an unverified rate into the database through Admin.
 
 Conversion happens once during order quotation. The service converts from the product currency to the settlement currency, then rounds half away from zero to the settlement minor unit. The immutable quote stores the unrounded decimal inputs, rounded settlement amount, rate, and timestamps.
 
@@ -72,7 +82,7 @@ Alipay and WeChat Pay settle in CNY. When the Store currency control shows USD, 
 
 Stripe Checkout can charge CNY or USD when the Stripe account supports the selected currency.
 
-The Stripe adapter rejects a CNY charge below 300 fen and a USD charge below 50 cents. Alipay and WeChat reject a CNY charge below 1 fen. These adapter limits apply after conversion.
+Alipay and WeChat reject a CNY charge below 1 fen. Stripe validates credentials by retrieving the account country and supported presentment currencies. It resolves minimum amounts from a versioned capability table bound to the configured Stripe API version and account country. A missing capability disables that currency instead of guessing a minimum. Adapter limits apply after conversion.
 
 The default custom-recharge range is 1,000 through 100,000,000 minor units for each currency. Admin can configure a separate positive minimum and maximum for CNY and USD. A product price must be positive, and checkout also applies the selected adapter minimum.
 
@@ -98,7 +108,21 @@ Buying or redeeming another plan replaces the active plan immediately. Unused ti
 
 All quota rules in a plan apply concurrently. Five-hour, 12-hour, and custom-hour windows are rolling. Day, week, and month windows use Asia/Shanghai calendar boundaries, with Monday as the first day of a week.
 
-Quota checks use settled request charges. A request is denied before routing when any quota has no remaining amount. One already-routed request can cross a limit; later requests are denied.
+Each entitlement has a monotonic generation and state. Each quota window bucket stores settled and reserved CNY fen. Each request reservation has a unique request ID, entitlement ID, generation, maximum charge, state, and timestamps.
+
+Before routing, the billing engine computes a finite maximum charge from known input usage, the selected pricing snapshot, and the request output or meter caps. When no finite cap exists, plan admission returns `plan_request_unbounded`; the request can use ordinary balance instead.
+
+The Primary admission transaction locks the entitlement and every applicable window bucket in deterministic order. It verifies active state, generation, expiration, and `settled + reserved + maximum <= quota` for every rule. It then increments every reserved counter and inserts one reservation.
+
+The Primary returns a signed short-lived admission token bound to the reservation and request ID. A Replica must obtain this token from the Primary before routing a plan-funded request. Primary unavailability fails plan admission closed. A Replica cannot create a local optimistic reservation.
+
+Settlement locks the same generation and bucket rows. It changes the reservation to settled, subtracts its maximum from reserved, and adds the exact final charge to settled. A request that fails before billable upstream work releases the reservation once.
+
+A Replica writes settlement or release with the reservation ID to its durable metering spool before reporting terminal billing success. The Primary applies that event idempotently. Shipment delay leaves the amount reserved and raises the existing spool-health alert; it never recreates available quota locally.
+
+Plan replacement creates a new generation. Existing in-flight reservations remain bound to the prior generation and settle against its snapshot. New requests use only the new generation. Expiration or replacement does not erase an unsettled reservation.
+
+If provider behavior produces a charge above the reserved maximum, settlement records a quota-bound violation, applies the full charge to the old generation, blocks later plan admission, and raises a critical alert. It does not charge the new plan generation.
 
 ## 4. Payment Core
 
@@ -256,7 +280,7 @@ The allowed payment-state transitions are:
 
 - `unpaid -> paid` after a verified callback or positive provider query.
 - `unpaid -> closed` after expiration and a provider query that confirms no payment.
-- `closed -> paid` only after later verified provider evidence. This transition records a late-payment alert.
+- `closed -> paid` only for payment-contract version 2 after later verified provider evidence. This transition records a late-payment alert.
 - `paid -> refund_pending` after a valid refund reservation.
 - `refund_pending -> refunded` after verified provider success.
 - `refund_pending -> paid` after a definite provider rejection and a completed local compensation.
@@ -322,7 +346,7 @@ Refund requests use the original provider transaction and amount. Provider accep
 
 For eligible orders, the first release supports only full refunds. It does not implement partial refunds.
 
-A new `store_balance_reservations` table records refund reserves. Each row contains order ID, user ID, nano USD amount, state, reserve ledger key, release ledger key, and timestamps. Order ID is unique.
+A new `store_balance_reservations` table records refund and dispute reserves. Each row contains order ID, kind, user ID, nano USD amount, state, reserve ledger key, release ledger key, and timestamps. `(order_id, kind)` is unique.
 
 Fulfillment and refund start both lock the order first. Balance operations then lock the user row. This lock order is fixed. Refund start requires payment state `paid`; fulfillment requires payment state `paid` and no reservation. The first committed transition makes the competing transition fail its predicate and retry from fresh state.
 
@@ -346,7 +370,7 @@ Every Admin order action records the Admin user ID, order ID, action, result, an
 
 ## 10. Redemption Codes
 
-A generated code contains 16 random base32 characters grouped as `XXXX-XXXX-XXXX-XXXX`.
+New codes use strict Crockford Base32 alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ`. They contain 16 OS-CSPRNG characters grouped as `XXXX-XXXX-XXXX-XXXX`, which provides 80 random bits. Generation never emits `I`, `L`, `O`, or `U`.
 
 The database stores:
 
@@ -354,6 +378,7 @@ The database stores:
 - The final four-character hint.
 - An encrypted full code for Admin reveal.
 - Reward, expiration, state, creator, and redemption data.
+- Code format `crockford-v2` or `legacy-v1`.
 
 The generation dialog keeps the returned codes visible until the Admin closes it. It supports individual copy, copy all, and CSV export.
 
@@ -371,9 +396,15 @@ Audit records contain Admin ID, action, selected code IDs, count, IP, user agent
 
 Used, expired, or revoked codes remain masked and cannot be returned by a reveal endpoint.
 
-Existing codes created before this design have no encrypted full value. They remain redeemable by users, but Admin can see only the final four characters. Admin can revoke and replace them.
+Successful redemption and revocation delete the encrypted full code in the same transaction. A Primary cleanup task deletes encrypted full values within 24 hours after expiration. Digest, hint, reward, status, and audit fields remain.
 
-User redemption converts ASCII letters to uppercase and removes ASCII hyphens. The normalized value must contain exactly 16 allowed base32 characters. Redemption locks or serializes the code row and changes an unused code exactly once in the same reward transaction.
+Existing codes created before this design use legacy alphabet `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, format `legacy-v1`, and no encrypted full value. They remain redeemable by users, but Admin can see only the final four characters. Admin can revoke and replace them.
+
+User redemption converts ASCII letters to uppercase and removes ASCII hyphens. It does not map look-alike characters. A v2 candidate must contain exactly 16 Crockford characters. A legacy candidate must contain exactly 16 legacy characters.
+
+The service computes the applicable v2 and legacy SHA-256 digest candidates and performs one bounded database lookup with code format. Invalid syntax and no match both return HTTP 404 `invalid_redemption_code` with the same public message.
+
+Redemption locks or serializes the code row and changes an unused code exactly once in the same reward transaction.
 
 The redeem endpoint allows at most ten attempts per minute per user and per source IP. Five failed attempts in 15 minutes create a 30-minute account-and-IP cooldown. A rate-limited request returns HTTP 429 and does not disclose whether a code exists.
 
@@ -403,6 +434,8 @@ The Payment Channels page shows:
 
 A Channel cannot be enabled until required configuration passes local validation.
 
+A production Channel must provide either an automated settlement-report operation or a documented Admin upload format with signature or digest verification. A Channel without either path cannot pass the production gate.
+
 Saving credentials does not prove that the provider account is active. Alipay sandbox, Stripe test mode, and a controlled WeChat live test are separate release checks.
 
 ## 13. Reconciliation And Alerts
@@ -424,6 +457,20 @@ A refund-pending order is queried after one minute, five minutes, 15 minutes, an
 
 The system records metrics for callback rejection, late payment, duplicate payment, failed fulfillment, stale unpaid attempts, refund timeout, reconciliation failures, and lease loss. Admin shows the affected order count and the latest error.
 
+Provider events distinguish payment, refund, dispute opened, dispute won, dispute lost, chargeback, fee, and settlement adjustment. Each order has dispute state `none`, `open`, `won`, or `lost`.
+
+A verified dispute-open event places the user in payment hold. It reserves the remaining balance reward up to the original credit and suspends an active plan sourced from that order. A dispute-won event releases the reserve, restores the plan only until its original end time, and clears the hold when no other dispute remains.
+
+A verified dispute-lost or chargeback event consumes the reserve and writes one idempotent negative ledger adjustment for any unreserved original credit. The balance can become negative. It revokes an active plan from that order and keeps the account payment hold until Admin review.
+
+Payment hold blocks new Store checkout and plan-funded API admission. Ordinary balance-funded API requests continue only when the effective balance rules permit them. Redemption-code use remains blocked while payment hold is active.
+
+The Primary imports or fetches each provider daily settlement report when the provider supports it. A report line has a provider-unique ID and classifies gross charge, refund, dispute, fee, tax, currency conversion, and net settlement. Reimport is idempotent.
+
+Provider fees, taxes, and settlement FX differences are merchant accounting entries and do not change user rewards. An unmatched payment, refund, dispute, or unknown settlement difference creates a reconciliation case and critical alert.
+
+An unresolved paid fulfillment older than one hour, refund older than 24 hours, reconciliation case older than 24 hours, or dispute without an update for seven days remains open and appears in Admin. The system never silently closes a provider-money mismatch by age.
+
 Every automated state change writes the same audit format as an Admin action and identifies the reconciler actor.
 
 ## 14. Migration
@@ -435,6 +482,8 @@ The current schema permits only `pending`, `completed`, and `cancelled`. The pre
 The schema migration runs in one database transaction after preflight passes.
 
 Existing completed orders migrate to payment state `paid` and fulfillment state `fulfilled`. Existing pending and cancelled orders migrate to payment state `closed` and fulfillment state `pending`. A new callback cannot fulfill a legacy order.
+
+Migrated orders use payment-contract version 1 and have no provider attempt or callback identity. Version 1 `closed` is terminal. Callback, query, refund, and `closed -> paid` paths accept only version 2 orders. If preflight finds evidence that a legacy order received provider payment, migration aborts for a dedicated importer; it does not close that order.
 
 Existing Alipay and WeChat Channel rows become disabled, unconfigured official Channels. Existing custom Channel rows become disabled, unconfigured HTTP Channels. The migration creates one disabled, unconfigured Stripe Channel when none exists.
 
@@ -466,6 +515,12 @@ Generic callback replay protection validates timestamp and nonce when the config
 
 Callback admission allows at most 600 requests per minute per Channel and source IP. Rate limiting does not replace signature verification.
 
+One deployment has exactly one Store-serving Primary process. The reverse proxy routes Store Dashboard endpoints and public payment callbacks only to that Primary. Replica nodes do not mount those endpoints; they call the Primary internal admission service for plan reservations.
+
+Order, polling, and callback token buckets are process-wide because one Primary serves them. Redemption failure counters and cooldowns are stored in the database so a restart cannot clear them.
+
+A future deployment with more than one Store-serving process must configure a gateway or shared rate-limit backend before startup. Without an explicit shared mode, a second Store-serving process is an invalid topology and must not accept Store traffic.
+
 Payment and reveal endpoints require the existing dashboard authorization model. Reveal, export, refund, reprocess, exchange-rate override, key rotation, and credential updates require Admin plus a matching five-minute reauthentication scope.
 
 Every cookie-authenticated Store mutation requires `Content-Type: application/json` or the documented multipart icon type and an `Origin` equal to the configured public origin. A missing or mismatched Origin fails. State-changing actions never use GET. Provider callbacks are exempt from session CSRF checks and require provider verification instead.
@@ -477,23 +532,28 @@ The dashboard session cookie remains HttpOnly, Secure, SameSite Strict, and Path
 Backend tests cover:
 
 - Official signature and callback test vectors.
-- Both exchange directions, nano USD conversion, rate age, anomaly quarantine, startup failure, one rounding point, and provider minimum amounts.
+- Reduced rational rate parsing, both exchange directions, checked overflow, nano USD conversion, future and stale timestamps, configurable anomaly quarantine, startup failure, and one final rounding point.
+- Stripe account-country and API-version capability validation with unsupported-currency failure.
 - Amount, currency, merchant, and order mismatch.
 - Twenty concurrent copies of one callback with one fulfillment.
 - Callback versus expiration, close, refund, and a second provider transaction.
+- Version 1 closed-order callback rejection and version 2 late-payment acceptance.
 - Retry after verified payment and failed fulfillment.
 - Balance refund reservation, concurrent spending, one compensation, and ambiguous provider results.
 - Every ordering of fulfillment, refund start, callback retry, and reconciliation, with one final reward state.
 - Plan refund rejection after fulfillment.
 - Order idempotency-key replay, mismatched input, open-order cap, creation rate limit, and polling rate limit.
 - Product edit, disable, emergency close, immutable quote, plan replacement, plan expiration, and every quota window.
+- Primary quota reservation, Replica admission token, concurrent reservations, replacement generations, exact settlement, release, and above-reserve anomaly.
 - HTTP milestone JSON, form, redirect, QR, and form actions.
 - HTTP milestone DNS rebinding, private addresses, redirect rejection, timeout, response limits, template limits, and query-before-retry behavior.
 - Encryption, wrong-key failure, and prior-key decryption.
 - Key rotation, bounded re-encryption, referenced credential retention, and old-key removal refusal.
-- New-code reveal, reauthentication expiry, response headers, rate limits, and existing-code non-recoverability.
+- Crockford v2 generation, legacy v1 lookup, invalid alphabet, new-code reveal, reauthentication expiry, response headers, rate limits, and existing-code non-recoverability.
 - CSRF Origin rejection, session invalidation, role removal, and passwordless Admin fail-closed behavior.
 - Reconciler lease fencing, due-order selection, retry schedule, and alert thresholds.
+- Dispute open, win, loss, chargeback debt, plan suspension, daily settlement reimport, fee classification, and unmatched-line cases.
+- Single Store Primary routing, Replica endpoint absence, persisted redemption cooldown, and invalid multi-process topology.
 - SQLite migration and isolated PostgreSQL migration.
 - Migration preflight rejection for every unknown or inconsistent legacy state.
 
@@ -538,6 +598,10 @@ A Channel can accept production purchases only after:
 3. The exact public callback URL is registered with the provider.
 4. Signature and callback verification passes.
 5. One controlled payment and refund passes.
+6. Account and currency capability validation passes.
+7. Dispute events and the settlement-report path are configured.
+8. Exchange-rate refresh, quarantine, pause, and alert checks pass.
+9. The reverse proxy routes Store traffic to exactly one Primary.
 
 Production deployment does not invent or embed merchant credentials. The operator must supply them through Admin or deployment configuration.
 
