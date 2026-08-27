@@ -3,7 +3,7 @@ use crate::db::DbPool;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use reqwest::Client;
-use sea_orm::{ConnectionTrait, TryGetable};
+use sea_orm::ConnectionTrait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;

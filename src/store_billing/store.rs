@@ -7,7 +7,7 @@ use crate::db::DbPool;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
-use sea_orm::{ConnectionTrait, QueryResult, TryGetable};
+use sea_orm::{ConnectionTrait, QueryResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -1386,7 +1386,7 @@ fn validate_svg(content: &[u8]) -> Result<(), StoreBillingError> {
         match reader.read_event() {
             Ok(Event::Start(element)) => {
                 if root_closed
-                    || (!root_seen && !is_local_name(element.local_name().as_ref(), b"svg"))
+                    || (!root_seen && !is_local_name(element.local_name().as_ref(), "svg"))
                 {
                     return Err(StoreBillingError::InvalidIcon);
                 }
@@ -1396,7 +1396,7 @@ fn validate_svg(content: &[u8]) -> Result<(), StoreBillingError> {
             }
             Ok(Event::Empty(element)) => {
                 if root_closed
-                    || (!root_seen && !is_local_name(element.local_name().as_ref(), b"svg"))
+                    || (!root_seen && !is_local_name(element.local_name().as_ref(), "svg"))
                 {
                     return Err(StoreBillingError::InvalidIcon);
                 }
@@ -1435,15 +1435,15 @@ fn validate_svg(content: &[u8]) -> Result<(), StoreBillingError> {
 }
 
 fn validate_svg_element(element: &BytesStart<'_>) -> Result<(), StoreBillingError> {
-    const FORBIDDEN_ELEMENTS: [&[u8]; 8] = [
-        b"script",
-        b"style",
-        b"foreignObject",
-        b"iframe",
-        b"object",
-        b"embed",
-        b"use",
-        b"image",
+    const FORBIDDEN_ELEMENTS: [&str; 8] = [
+        "script",
+        "style",
+        "foreignObject",
+        "iframe",
+        "object",
+        "embed",
+        "use",
+        "image",
     ];
     let local_name = element.local_name();
     if FORBIDDEN_ELEMENTS
@@ -1458,9 +1458,9 @@ fn validate_svg_element(element: &BytesStart<'_>) -> Result<(), StoreBillingErro
         let local_name = local_name.as_ref();
         if local_name
             .get(..2)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"on"))
-            || is_local_name(local_name, b"href")
-            || is_local_name(local_name, b"style")
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
+            || is_local_name(local_name, "href")
+            || is_local_name(local_name, "style")
         {
             return Err(StoreBillingError::InvalidIcon);
         }
@@ -1468,7 +1468,7 @@ fn validate_svg_element(element: &BytesStart<'_>) -> Result<(), StoreBillingErro
     Ok(())
 }
 
-fn is_local_name(actual: &[u8], expected: &[u8]) -> bool {
+fn is_local_name(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected)
 }
 
