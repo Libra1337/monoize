@@ -15,6 +15,8 @@ The first release does not support recurring subscriptions. An Admin cannot mark
 
 Implementation is split into two separately approved milestones. Milestone 1 contains the Store layout, payment core, Alipay, WeChat Pay, Stripe, reconciliation, refunds, and redemption protection. Milestone 2 contains verified configurable HTTP templates. Milestone 2 cannot weaken or bypass Milestone 1 security rules.
 
+Plan quota admission is an independent acceptance workstream inside Milestone 1. Payment implementation can compile before its load gate passes, but plan products cannot be enabled in production until quota load and fault drills pass.
+
 The logged-in Model Marketplace redesign is a separate subsystem. It is not part of this design.
 
 ## 2. Approved Layout
@@ -52,6 +54,8 @@ Plan quota values use CNY as their stored base. The currency control changes pre
 
 The primary node requests `https://open.er-api.com/v6/latest/USD` at startup and no more than once per 15 minutes. It stores the exact decimal `rates.CNY`, the source timestamp, and the local refresh timestamp. Replicas only read the stored snapshot.
 
+The client uses the exact HTTPS host, the system trust store, no redirects, a five-second timeout, and a 64 KiB response limit. Each attempt stores source URL, parser version, HTTP status, response-body SHA-256 when a body exists, and an error category. It never stores the body in application logs.
+
 The response must be valid JSON with `result = success`, `base_code = USD`, a positive integer source timestamp, and one finite decimal `rates.CNY`. The rate must be between 1 and 20 CNY per USD and contain at most 18 fractional digits.
 
 The source timestamp cannot be more than five minutes in the future, more than 48 hours before refresh time, or older than the active source timestamp. Every comparison uses UTC.
@@ -73,6 +77,8 @@ At startup, a network failure uses the stored active snapshot only while both ag
 The primary runs one non-overlapping refresh task immediately after startup and then 15 minutes after each completed attempt. It persists consecutive failure count, last attempt time, last error category, and paused state. Replicas never refresh.
 
 Three consecutive failures create a warning. Six failures or an active snapshot within 15 minutes of expiry create a critical alert. Admin shows the alert, active snapshot, quarantined candidate, failure count, and next attempt time.
+
+The Store operator owns rate alerts. Production readiness requires routing the warning and critical metrics to the deployment alert system. Recovery requires inspecting the recorded digest and error category, checking source reachability, and explicitly resuming or approving a quarantined candidate with reauthentication. Process restart alone does not clear pause or failure state.
 
 When no first valid snapshot exists, conversion-dependent products remain visible but checkout is disabled with an exchange-rate-unavailable state. The operator can retry refresh, correct network access, or pause those products. The operator cannot type an unverified rate into the database through Admin.
 
@@ -98,7 +104,13 @@ Order creation stores an immutable exchange-rate snapshot. A later rate refresh 
 
 Product edits affect only later orders. Every order stores an immutable product, price, reward, duration, Group, and quota snapshot.
 
-Disabling or editing a product does not change an existing unpaid order. That order remains payable until its 30-minute expiration. An emergency Admin action can close every unpaid order for one product before changing it.
+Each product has a monotonic revision. Admin update, disable, and delete require the expected revision. A stale revision returns HTTP 409 and changes no row.
+
+Database triggers reject an update to order quote, settlement amount, settlement currency, exchange-rate rational, reward snapshot, or payment-contract version after insertion. Entitlement generation snapshots and settled quota reservations are also immutable.
+
+Disabling or editing a product does not change an existing unpaid order. That order remains payable until its 30-minute expiration.
+
+Emergency disable first locks the product, sets `enabled = false`, increments revision, and creates one close-request job per unpaid order. It does not mark a presented attempt closed. Reconciliation queries each provider, closes only a confirmed unpaid order, and fulfills any verified payment from the immutable quote.
 
 A referenced product cannot be physically deleted. Admin can disable it. Unreferenced products can be deleted with an audit record.
 
@@ -110,17 +122,25 @@ All quota rules in a plan apply concurrently. Five-hour, 12-hour, and custom-hou
 
 Each entitlement has a monotonic generation and state. Each quota window bucket stores settled and reserved CNY fen. Each request reservation has a unique request ID, entitlement ID, generation, maximum charge, state, and timestamps.
 
-Before routing, the billing engine computes a finite maximum charge from known input usage, the selected pricing snapshot, and the request output or meter caps. When no finite cap exists, plan admission returns `plan_request_unbounded`; the request can use ordinary balance instead.
+At plan fulfillment, an order-funded entitlement copies the order exchange-rate rational `N/D`. A redemption-funded entitlement copies the valid active rational inside the redemption transaction. That generation uses the same immutable `N/D` for every reservation and settlement until it expires or is replaced. A later market-rate refresh does not change its quota accounting.
+
+The billing engine prices a request in integer nano USD. It converts actual nano USD to CNY fen as `round(nano_usd * N / (D * 10,000,000))`. It converts a maximum nano USD bound to reserved CNY fen with ceiling division of the same rational, so reservation cannot round below the eventual charge.
+
+Before routing, the billing engine computes a finite maximum nano USD charge from known input usage, the selected pricing snapshot, and the request output or meter caps. The reservation stores maximum nano USD, reserved CNY fen, rate numerator, rate denominator, and pricing revision. When no finite cap exists, plan admission returns `plan_request_unbounded` and does not route.
+
+Funding source is fixed before routing. An applicable active plan requires a successful reservation and charges only that plan generation; it does not also deduct ordinary balance. A request with no applicable plan uses the existing ordinary-balance path. The first release does not silently fall back from an exhausted or unbounded plan to ordinary balance.
 
 The Primary admission transaction locks the entitlement and every applicable window bucket in deterministic order. It verifies active state, generation, expiration, and `settled + reserved + maximum <= quota` for every rule. It then increments every reserved counter and inserts one reservation.
 
 The Primary returns a signed short-lived admission token bound to the reservation and request ID. A Replica must obtain this token from the Primary before routing a plan-funded request. Primary unavailability fails plan admission closed. A Replica cannot create a local optimistic reservation.
 
-Settlement locks the same generation and bucket rows. It changes the reservation to settled, subtracts its maximum from reserved, and adds the exact final charge to settled. A request that fails before billable upstream work releases the reservation once.
+Settlement locks the same generation and bucket rows. It verifies the stored rate and pricing revision, changes the reservation to settled, subtracts reserved CNY fen, and adds the converted actual CNY fen. A request that fails before billable upstream work releases the reservation once.
 
 A Replica writes settlement or release with the reservation ID to its durable metering spool before reporting terminal billing success. The Primary applies that event idempotently. Shipment delay leaves the amount reserved and raises the existing spool-health alert; it never recreates available quota locally.
 
 Plan replacement creates a new generation. Existing in-flight reservations remain bound to the prior generation and settle against its snapshot. New requests use only the new generation. Expiration or replacement does not erase an unsettled reservation.
+
+Plan fulfillment locks the user entitlement pointer. `(source_kind, source_id)` is unique, so one order or redemption cannot create two generations. Replacement inserts one immutable generation and changes the pointer with an expected-generation predicate. A concurrent duplicate, refund transition, or newer replacement makes the stale update fail without overwriting current entitlement.
 
 If provider behavior produces a charge above the reserved maximum, settlement records a quota-bound violation, applies the full charge to the old generation, blocks later plan admission, and raises a critical alert. It does not charge the new plan generation.
 
@@ -134,6 +154,8 @@ Each adapter implements these operations:
 2. `query_payment`
 3. `verify_callback`
 4. `refund_payment`
+
+Each adapter also declares capabilities for payment query, refund query, dispute Webhook, dispute query, and settlement report. A Channel cannot call or display an unsupported operation. Production configuration verifies required capabilities against the merchant account.
 
 An adapter cannot write a user balance or activate a plan. Only the payment core can fulfill an order.
 
@@ -162,6 +184,8 @@ Admin configuration contains:
 
 The adapter selects the website or mobile product from the request context. The callback verifier checks the Alipay signature, App ID, seller identity, order number, amount, currency, and success status.
 
+The baseline Alipay contract supports trade notification, trade query, refund, refund query, and bill download. It does not claim an automated dispute or chargeback event unless the configured merchant product exposes a documented signed API and its capability test passes. Otherwise a bill mismatch opens a manual reconciliation case.
+
 ### 5.2 WeChat Pay
 
 The WeChat adapter supports Native QR payment and H5 payment. It uses WeChat Pay API v3.
@@ -176,6 +200,8 @@ Admin configuration contains:
 
 The adapter verifies platform certificate signatures and decrypts callback resources. It checks the merchant ID, App ID, order number, amount, currency, and success status.
 
+The baseline WeChat Pay contract supports payment notification, order query, refund notification, refund query, and bill download. Complaint or dispute automation is conditional on merchant API permission and a passing capability test. Without it, the adapter records statement differences as manual reconciliation cases.
+
 ### 5.3 Stripe
 
 Stripe uses hosted Stripe Checkout. LynShen does not collect card numbers.
@@ -188,6 +214,8 @@ Admin configuration contains:
 - Production or test environment.
 
 The adapter creates a Checkout Session with the Store order number as the idempotency key and metadata reference. The webhook verifier checks the Stripe signature, Checkout Session, PaymentIntent, amount, currency, and payment status.
+
+The Stripe contract supports signed dispute Webhooks, Disputes API query, refunds, refund query, balance transactions, and settlement reconciliation. Provider event ID is the dispute-event idempotency key.
 
 The Store can show card, Apple Pay, Google Pay, and other methods that the Stripe account enables. LynShen does not claim that a method is available until Stripe returns it.
 
@@ -259,6 +287,8 @@ Key rotation adds a new active key, keeps prior keys decrypt-only, and re-encryp
 ## 8. Order And Callback State
 
 An order tracks payment and fulfillment separately.
+
+The order stores payment-state and fulfillment-state timestamps, including `paid_at`, `fulfillment_started_at`, `fulfilled_at`, and `fulfillment_failed_at`. A transition writes its timestamp in the same transaction as the state.
 
 Payment state is one of:
 
@@ -346,17 +376,19 @@ Refund requests use the original provider transaction and amount. Provider accep
 
 For eligible orders, the first release supports only full refunds. It does not implement partial refunds.
 
-A new `store_balance_reservations` table records refund and dispute reserves. Each row contains order ID, kind, user ID, nano USD amount, state, reserve ledger key, release ledger key, and timestamps. `(order_id, kind)` is unique.
+A new `store_order_reward_recoveries` table contains one row per fulfilled balance order. It stores original credited nano USD, reserved nano USD, recovered nano USD, one debit ledger key, one release ledger key, state, and timestamps. Database checks require nonnegative values and `reserved + recovered <= original`.
 
-Fulfillment and refund start both lock the order first. Balance operations then lock the user row. This lock order is fixed. Refund start requires payment state `paid`; fulfillment requires payment state `paid` and no reservation. The first committed transition makes the competing transition fail its predicate and retry from fresh state.
+A `store_order_recovery_claims` table records refund, dispute, and chargeback reasons separately. Multiple claims can reference one recovery row, but they share its single economic reserve. Claim insertion never creates a second debit for that order.
+
+Fulfillment and refund start both lock the order first. Balance operations then lock recovery and user rows. This lock order is fixed. Refund start requires payment state `paid`; fulfillment requires payment state `paid`, no active recovery claim, and zero reserved or recovered amount. The first committed transition makes the competing transition fail its predicate and retry from fresh state.
 
 A paid but unfulfilled order needs no reward reversal.
 
-A fulfilled balance order can start a refund only when the user balance is at least the original credited nano USD amount. One transaction locks the user balance, inserts the reservation, writes one negative ledger entry, updates the balance, and changes payment state to `refund_pending`. The unique order ID and ledger idempotency key prevent a second reserve.
+A fulfilled balance order can start a refund only when the user balance is at least the original credited nano USD amount or the same recovery row is already fully reserved. One transaction locks order, recovery, and user; inserts the refund claim; creates the single negative ledger reserve when needed; and changes payment state to `refund_pending`.
 
-A definite provider rejection runs one compensation transaction. It locks the reservation and user balance, writes one positive release ledger entry, updates the balance, marks the reservation released, and returns payment state to `paid`.
+A definite provider rejection resolves the refund claim. It releases the economic reserve exactly once only when no dispute or chargeback claim remains and no recovery was consumed. It then returns payment state to `paid`.
 
-A verified provider refund marks the reservation consumed and payment state `refunded`. It does not write another balance delta.
+A verified provider refund marks the shared recovery amount consumed and payment state `refunded`. It does not write another balance delta. A later dispute or chargeback cannot recover the same original credit again.
 
 The first release does not refund a fulfilled plan order. It permits a plan-order refund only when payment is verified and fulfillment is still pending or failed. This limit avoids a race with in-flight and delayed API usage settlement.
 
@@ -445,13 +477,14 @@ Only the primary node runs payment reconciliation. A database lease with a fenci
 The reconciler runs once per minute. It selects bounded batches with deterministic order and processes:
 
 - Presented attempts whose provider expiration has passed.
+- Paid orders whose fulfillment state is `pending` for at least 30 seconds.
 - Paid orders whose fulfillment state is `failed`.
 - Refunds in `refund_pending`.
 - Callback events marked retryable.
 
 Before closing an expired unpaid order, the reconciler queries the provider. A positive payment result changes the order to paid and starts fulfillment. A confirmed unpaid result closes the order.
 
-Retryable fulfillment uses exponential delays of 30 seconds, two minutes, ten minutes, and one hour. Later failures remain visible for Admin processing.
+The reconciler immediately attempts a due paid/pending order through the same idempotent fulfillment transaction. Retryable pending or failed fulfillment uses delays of 30 seconds, two minutes, ten minutes, and one hour. Later failures remain visible for Admin processing.
 
 A refund-pending order is queried after one minute, five minutes, 15 minutes, and then hourly. It raises an alert after 15 minutes and remains pending until the provider returns a definite result.
 
@@ -459,9 +492,13 @@ The system records metrics for callback rejection, late payment, duplicate payme
 
 Provider events distinguish payment, refund, dispute opened, dispute won, dispute lost, chargeback, fee, and settlement adjustment. Each order has dispute state `none`, `open`, `won`, or `lost`.
 
-A verified dispute-open event places the user in payment hold. It reserves the remaining balance reward up to the original credit and suspends an active plan sourced from that order. A dispute-won event releases the reserve, restores the plan only until its original end time, and clears the hold when no other dispute remains.
+Every automated dispute event passes the adapter signature verifier and account-identity check. `(credential_version_id, provider_event_id)` is unique. An adapter without a provider event ID uses a documented canonical signed-field digest. Repeated events return success without another reserve, ledger entry, or state change.
 
-A verified dispute-lost or chargeback event consumes the reserve and writes one idempotent negative ledger adjustment for any unreserved original credit. The balance can become negative. It revokes an active plan from that order and keeps the account payment hold until Admin review.
+A verified dispute-open event places the user in payment hold and adds a claim to the shared order recovery row. It reserves only the unrecovered original credit that is still available in the user balance; an existing refund reserve is reused. It also suspends an active plan sourced from that order.
+
+A dispute-won event resolves its claim. It releases the shared reserve only when no refund, dispute, or chargeback claim remains, restores the plan only until its original end time, and clears the hold when no other dispute remains.
+
+A verified dispute-lost or chargeback event consumes the shared reserve and writes one idempotent negative ledger adjustment only for `original - recovered - reserved`. The recovery row then records `recovered = original`. The balance can become negative. It revokes an active plan from that order and keeps the account payment hold until Admin review.
 
 Payment hold blocks new Store checkout and plan-funded API admission. Ordinary balance-funded API requests continue only when the effective balance rules permit them. Redemption-code use remains blocked while payment hold is active.
 
@@ -533,18 +570,24 @@ Backend tests cover:
 
 - Official signature and callback test vectors.
 - Reduced rational rate parsing, both exchange directions, checked overflow, nano USD conversion, future and stale timestamps, configurable anomaly quarantine, startup failure, and one final rounding point.
+- Exchange response digest, parser version, consecutive-failure alerts, persisted pause, and restart without a first snapshot.
 - Stripe account-country and API-version capability validation with unsupported-currency failure.
 - Amount, currency, merchant, and order mismatch.
 - Twenty concurrent copies of one callback with one fulfillment.
 - Callback versus expiration, close, refund, and a second provider transaction.
 - Version 1 closed-order callback rejection and version 2 late-payment acceptance.
 - Retry after verified payment and failed fulfillment.
+- Crash after payment commit with paid/pending reconciliation and one later fulfillment.
 - Balance refund reservation, concurrent spending, one compensation, and ambiguous provider results.
+- Refund, dispute, and chargeback claims in every order, with `reserved + recovered <= original` and one recovery ledger debit.
 - Every ordering of fulfillment, refund start, callback retry, and reconciliation, with one final reward state.
 - Plan refund rejection after fulfillment.
 - Order idempotency-key replay, mismatched input, open-order cap, creation rate limit, and polling rate limit.
-- Product edit, disable, emergency close, immutable quote, plan replacement, plan expiration, and every quota window.
+- Product revision conflicts, emergency disable versus callback, immutable quote triggers, plan replacement races, plan expiration, and every quota window.
 - Primary quota reservation, Replica admission token, concurrent reservations, replacement generations, exact settlement, release, and above-reserve anomaly.
+- An isolated PostgreSQL quota load drill with five Replicas, 10,000 entitlements, five windows per entitlement, and at least `max(500 requests/second, two times measured seven-day peak)` for ten minutes. It includes 100 concurrent requests against one entitlement and never starts PostgreSQL on the user's computer.
+- Quota fault drills that stop the Primary after reserve, expire tokens, delay and duplicate spool shipment, replace a plan during traffic, inject database lock waits, and shift a Replica clock by plus or minus two minutes.
+- Quota acceptance requires zero duplicate or missing finalizations, exact reservation conservation, no charge to a replacement generation, p95 admission below 100 ms, and p99 below 250 ms at the target load. Injected outages are excluded from latency percentiles and must fail closed.
 - HTTP milestone JSON, form, redirect, QR, and form actions.
 - HTTP milestone DNS rebinding, private addresses, redirect rejection, timeout, response limits, template limits, and query-before-retry behavior.
 - Encryption, wrong-key failure, and prior-key decryption.
@@ -553,6 +596,7 @@ Backend tests cover:
 - CSRF Origin rejection, session invalidation, role removal, and passwordless Admin fail-closed behavior.
 - Reconciler lease fencing, due-order selection, retry schedule, and alert thresholds.
 - Dispute open, win, loss, chargeback debt, plan suspension, daily settlement reimport, fee classification, and unmatched-line cases.
+- Per-adapter capability tests for supported and unsupported dispute, query, refund, and settlement operations.
 - Single Store Primary routing, Replica endpoint absence, persisted redemption cooldown, and invalid multi-process topology.
 - SQLite migration and isolated PostgreSQL migration.
 - Migration preflight rejection for every unknown or inconsistent legacy state.
@@ -599,7 +643,7 @@ A Channel can accept production purchases only after:
 4. Signature and callback verification passes.
 5. One controlled payment and refund passes.
 6. Account and currency capability validation passes.
-7. Dispute events and the settlement-report path are configured.
+7. Supported dispute events or the documented manual case path, plus the settlement-report path, are configured.
 8. Exchange-rate refresh, quarantine, pause, and alert checks pass.
 9. The reverse proxy routes Store traffic to exactly one Primary.
 
