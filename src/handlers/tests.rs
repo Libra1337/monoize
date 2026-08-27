@@ -3368,6 +3368,7 @@ fn affinity_test_attempt(
         api_key: "secret".to_string(),
         logical_model: "gpt-affinity".to_string(),
         upstream_model: "gpt-affinity".to_string(),
+        pricing_profile: None,
         model_multiplier: Multiplier::ONE,
         server_tool_usage_classes: Vec::new(),
         provider_transforms: Vec::new(),

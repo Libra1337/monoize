@@ -7,7 +7,8 @@ use monoize::store_billing::{
     PaymentChannelMode, PlanQuotaInput, ProductKind, RedemptionCodeStatus, RedemptionRewardInput,
     StoreBillingError, StoreBillingStore, StoreSettings, UpdatePaymentChannelInput, WindowKind,
 };
-use sea_orm::{ConnectionTrait, MigratorTrait, TryGetable};
+use sea_orm::ConnectionTrait;
+use sea_orm_migration::MigratorTrait;
 
 async fn setup() -> (DbPool, StoreBillingStore) {
     let db = DbPool::connect("sqlite::memory:")

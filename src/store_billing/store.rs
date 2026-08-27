@@ -4,7 +4,7 @@ use super::{
     money::{Currency, MoneyError, convert_minor, parse_minor, quoted_received_to_nano_usd},
 };
 use crate::db::DbPool;
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Timelike, Utc};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use sea_orm::{ConnectionTrait, QueryResult};
@@ -447,7 +447,9 @@ impl StoreBillingStore {
             id: Uuid::new_v4().to_string(),
             content_type,
             content,
-            created_at: Utc::now(),
+            created_at: Utc::now()
+                .with_nanosecond(0)
+                .ok_or_else(|| storage("failed to normalize payment icon timestamp"))?,
         };
         self.db
             .write()
@@ -1413,7 +1415,12 @@ fn validate_svg(content: &[u8]) -> Result<(), StoreBillingError> {
                 }
             }
             Ok(Event::Text(text)) => {
-                if depth == 0 && text.as_ref().iter().any(|byte| !byte.is_ascii_whitespace()) {
+                if depth == 0
+                    && text
+                        .as_ref()
+                        .chars()
+                        .any(|character| !character.is_ascii_whitespace())
+                {
                     return Err(StoreBillingError::InvalidIcon);
                 }
             }
