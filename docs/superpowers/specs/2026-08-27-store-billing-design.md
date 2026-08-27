@@ -80,6 +80,16 @@ Three consecutive failures create a warning. Six failures or an active snapshot 
 
 The Store operator owns rate alerts. Production readiness requires routing the warning and critical metrics to the deployment alert system. Recovery requires inspecting the recorded digest and error category, checking source reachability, and explicitly resuming or approving a quarantined candidate with reauthentication. Process restart alone does not clear pause or failure state.
 
+Production configuration names one primary Rate Operations Admin and one distinct backup Admin. A warning requires acknowledgement within 30 minutes. A critical alert requires acknowledgement within 15 minutes and a recorded containment decision within 30 minutes.
+
+Containment keeps conversion checkout paused. The Rate Operations Admin can leave only same-currency products enabled when their reward calculation does not require FX. The Admin cannot extend snapshot age or enter an arbitrary replacement rate.
+
+After four hours without a valid refresh, the Payment Operations Owner records one decision: continue the partial Store, disable every checkout, or schedule maintenance. After 24 hours, the incident escalates to the business owner and remains open until source recovery. These are operational response objectives, not permission to accept stale rates.
+
+Recovery from suspected source compromise requires a clean network and trust-store check plus two valid source observations at least 15 minutes apart. Both observations must pass timestamp, range, and configured-change checks. One Rate Operations Admin proposes resume; the distinct backup Admin approves it with reauthentication. Recovery from an ordinary transient outage requires one valid observation and one reauthenticated Admin.
+
+The incident record contains alert times, response times, source digests, decisions, approvers, affected products, and recovery evidence. Missing the response objective creates a production-gate incident review.
+
 When no first valid snapshot exists, conversion-dependent products remain visible but checkout is disabled with an exchange-rate-unavailable state. The operator can retry refresh, correct network access, or pause those products. The operator cannot type an unverified rate into the database through Admin.
 
 Conversion happens once during order quotation. The service converts from the product currency to the settlement currency, then rounds half away from zero to the settlement minor unit. The immutable quote stores the unrounded decimal inputs, rounded settlement amount, rate, and timestamps.
@@ -137,6 +147,18 @@ SQLite supports only the single-Primary topology and does not use Replica admiss
 Plan products on SQLite require a local-file concurrency drill at `max(100 requests/second, two times measured seven-day peak)` for ten minutes, with five quota windows and 100 concurrent requests against one entitlement. Acceptance requires zero unhandled `SQLITE_BUSY`, exact reservation conservation, p95 lock wait below 50 ms, and p99 below 200 ms.
 
 If the SQLite drill fails, plan-product creation and enablement return `plan_requires_postgres`. Balance products, redemption of balance, and payment Channels remain available. PostgreSQL is not started on the user's computer.
+
+SQLite persists one `store_feature_gates` row for `plan_quota`. Its state is `pending`, `passed`, or `failed`. Migration initializes it to `pending`. A passed row stores schema version, application version, SQLite version, WAL and busy-timeout settings, filesystem identifier, drill result digest, measured time, and Admin importer.
+
+The backend derives one effective `plan_quota_enabled` value from that matching row at startup and after configuration change. A mismatched version or setting returns the gate to `pending`.
+
+No Dashboard endpoint can set the gate to `passed`. The project-owned offline CLI runs the drill against a temporary SQLite database on the same filesystem with the target settings. After success, it acquires the target database write lock and writes the result manifest and digest. Failure writes `failed`. Interrupted or malformed output leaves `pending`.
+
+The product write API rejects creation or enablement of a plan while the effective gate is false. Catalog queries omit disabled-gate plan products. Plan redemption-code generation, plan order creation, plan fulfillment, and plan-funded API admission all reject with `plan_requires_postgres` while the gate is false.
+
+SQLite triggers reject an enabled plan-product row, a new plan entitlement generation, and a plan redemption reward while the persisted gate is not `passed`. The frontend reads the gate, disables plan controls, and shows a database requirement. Frontend state cannot override the backend or trigger.
+
+Migration preflight aborts on SQLite when an active plan entitlement exists and no matching passed gate is available. It does not silently suspend a purchased entitlement.
 
 The Primary returns a signed short-lived admission token bound to the reservation and request ID. A Replica must obtain this token from the Primary before routing a plan-funded request. Primary unavailability fails plan admission closed. A Replica cannot create a local optimistic reservation.
 
@@ -345,6 +367,8 @@ A fulfilled order cannot return to pending or failed.
 
 Event application locks order, recovery, and user rows in that order. It persists every verified event before projection. Duplicate event identity is a no-op.
 
+Each verified event has projection state `pending`, `applied`, `superseded`, or `manual_review`. An event that lacks prerequisite local payment evidence remains `pending`; it is never discarded as invalid solely because it arrived first.
+
 An adapter uses a provider object version when the provider guarantees monotonic versions. A conflicting or backward event without such a version triggers provider query. It does not directly change state.
 
 | Verified event | Current state | Required result |
@@ -352,15 +376,23 @@ An adapter uses a provider object version when the provider guarantees monotonic
 | Payment success | `unpaid` or version 2 `closed` | Set `paid`; start fulfillment only when no hold, refund success, or lost dispute exists. |
 | Payment failure or close | `unpaid` | Query provider, then close only when query confirms unpaid. Never downgrade `paid` or `refunded`. |
 | Refund success | `paid` or `refund_pending` | Set `refunded`, consume shared recovery once, and block fulfillment. |
+| Refund success | Dispute `open` or `lost` | Set payment state `refunded` and consume shared recovery once. Keep dispute state and payment hold unchanged. |
 | Refund success before payment event | `unpaid` | Query the original payment, record verified payment evidence, then set `refunded` without fulfillment. |
 | Refund failure | `refund_pending` | Return to `paid` only after refund query confirms failure and no refund-success event exists. |
-| Dispute opened | Verified paid or refunded order | Set dispute `open`, add the shared recovery claim, set payment hold, and block pending fulfillment. |
+| Dispute opened | `paid` or `refunded` | Set dispute `open`, add the shared recovery claim, set payment hold, and block pending fulfillment. |
+| Dispute opened | `refund_pending` | Keep `refund_pending`, set dispute `open`, reuse the shared recovery reserve, set payment hold, block fulfillment, and query both payment and refund. |
+| Dispute opened before payment evidence | `unpaid` or version 2 `closed` | Keep the event `pending`, set no user reward or recovery, and query payment by provider object and merchant order. If paid is confirmed, record payment evidence and then apply dispute-open without fulfillment. If unpaid is confirmed, keep a reconciliation case until the provider explains the dispute object. |
 | Dispute won | `open` | Set `won`, resolve only that claim, and resume eligible paid/pending fulfillment when no other hold reason exists. |
+| Dispute won | Payment `refund_pending` | Keep payment state `refund_pending`, set dispute `won`, resolve only the dispute claim, retain the refund claim and shared reserve, and continue refund query. |
 | Dispute lost or chargeback | `open`, `won`, `paid`, or `refunded` | Set `lost`, recover at most the original reward once, keep payment hold, and block fulfillment. |
+| Dispute lost or chargeback | `refund_pending` | Keep refund state pending, set dispute `lost`, consume at most the shared original reward once, keep payment hold, block fulfillment, and query the refund. Later refund success changes payment state to `refunded` without another recovery; refund failure returns payment state to `paid` while dispute remains `lost`. |
+| Dispute lost or chargeback before payment evidence | `unpaid` or version 2 `closed` | Keep the event `pending`, query payment, and open a critical reconciliation case. Confirmed payment records payment evidence, applies dispute loss, and never fulfills. Unconfirmed identity performs no user balance mutation. |
 | Dispute reopened | `won` | Return to `open` only with a new dispute ID or higher provider version. |
 | Settlement difference | Any | Open a reconciliation case and query provider; do not mutate user reward directly. |
 
 Refund success is terminal for refund state. Dispute lost is terminal for one dispute version. A later contradictory event requires query and a newer provider version before transition. Event arrival time alone never overrides a terminal state.
+
+Refund state and dispute state are orthogonal. Refund success never clears a dispute. Dispute success or loss never fabricates a refund result. The shared recovery invariant prevents either event order from deducting the original reward twice.
 
 Order creation inserts an unpaid order and one payment attempt. It stores the product snapshot, reward snapshot, settlement amount, settlement currency, exchange rate, Channel ID, and adapter kind.
 
@@ -555,6 +587,18 @@ Provider fees, taxes, and settlement FX differences are merchant accounting entr
 
 An unresolved paid fulfillment older than one hour, refund older than 24 hours, reconciliation case older than 24 hours, or dispute without an update for seven days remains open and appears in Admin. The system never silently closes a provider-money mismatch by age.
 
+Production configuration names a primary Payment Operations Owner, a distinct backup owner, and a Finance Approver. All three identities are enabled Admin users. A production Channel cannot enable without these assignments and an alert destination.
+
+The system assigns each manual case to the primary owner and starts an SLA clock. Unmatched payment, refund, chargeback, or lost-dispute cases are critical: acknowledge within 15 minutes, stop affected new checkout within 30 minutes when exposure can grow, and record provider evidence within four hours.
+
+Paid-but-unfulfilled and refund-pending cases require acknowledgement within 30 minutes. Statement fee or settlement-FX differences require acknowledgement by the next business day. A provider dispute response must be submitted at least 24 hours before the provider deadline.
+
+An unacknowledged case escalates to the backup owner. A missed critical four-hour target or provider deadline escalates to the Finance Approver and business owner. Alerts remain active until the case has evidence, a resolution code, and an audit record.
+
+Case closure, permitted payment-hold clearance, ledger recovery adjustment, or acceptance of an unexplained settlement difference requires reauthentication by the assigned owner and approval by the distinct Finance Approver. Neither user can approve their own action.
+
+Admin shows case owner, severity, provider deadline, internal deadline, evidence links, action history, approver, and escalation state. It does not permit deletion of a case or its audit trail.
+
 Every automated state change writes the same audit format as an Admin action and identifies the reconciler actor.
 
 ## 14. Migration
@@ -618,6 +662,7 @@ Backend tests cover:
 - Official signature and callback test vectors.
 - Reduced rational rate parsing, both exchange directions, checked overflow, nano USD conversion, future and stale timestamps, configurable anomaly quarantine, startup failure, and one final rounding point.
 - Exchange response digest, parser version, consecutive-failure alerts, persisted pause, and restart without a first snapshot.
+- Rate warning and critical response clocks, four-hour decision, 24-hour escalation, dual-Admin compromise recovery, and missed-SLA incident review.
 - Stripe account-country and API-version capability validation with unsupported-currency failure.
 - Amount, currency, merchant, and order mismatch.
 - Twenty concurrent copies of one callback with one fulfillment.
@@ -634,6 +679,7 @@ Backend tests cover:
 - Primary quota reservation, Replica admission token, concurrent reservations, replacement generations, exact settlement, release, and above-reserve anomaly.
 - An isolated PostgreSQL quota load drill with five Replicas, 10,000 entitlements, five windows per entitlement, and at least `max(500 requests/second, two times measured seven-day peak)` for ten minutes. It includes 100 concurrent requests against one entitlement and never starts PostgreSQL on the user's computer.
 - A SQLite WAL quota drill at its defined target, including concurrent admission, settlement, replacement, lock timeout, process restart, and zero unhandled `SQLITE_BUSY`. Failure proves that plan products require PostgreSQL.
+- SQLite pending and failed gates across Admin product writes, catalog reads, plan redemption generation, order creation, fulfillment, database triggers, startup version mismatch, and frontend controls.
 - Quota fault drills that stop the Primary after reserve, expire tokens, delay and duplicate spool shipment, replace a plan during traffic, inject database lock waits, and shift a Replica clock by plus or minus two minutes.
 - Ed25519 admission-token signature, unknown key, wrong node audience, durable same-node replay, cross-node replay, TTL, clock skew, key publication, activation, and prior-key retirement.
 - Quota acceptance requires zero duplicate or missing finalizations, exact reservation conservation, no charge to a replacement generation, p95 admission below 100 ms, and p99 below 250 ms at the target load. Injected outages are excluded from latency percentiles and must fail closed.
@@ -645,9 +691,10 @@ Backend tests cover:
 - CSRF Origin rejection, session invalidation, role removal, and passwordless Admin fail-closed behavior.
 - Reconciler lease fencing, due-order selection, retry schedule, and alert thresholds.
 - Dispute open, win, loss, chargeback debt, plan suspension, daily settlement reimport, fee classification, and unmatched-line cases.
-- Every event-order matrix row and pairwise reversed delivery, including refund-before-payment, dispute-before-fulfillment, stale terminal events, and query-required conflicts.
+- Every event-order matrix row and pairwise reversed delivery, including refund-before-payment, dispute-before-payment, dispute during refund pending, chargeback during refund pending, refund success after chargeback, dispute-before-fulfillment, stale terminal events, and query-required conflicts.
 - Per-adapter capability tests for supported and unsupported dispute, query, refund, and settlement operations.
 - Payment-hold Store read, checkout rejection, redemption non-consumption, plan block, ordinary-balance boundary, pending-payment handling, and hold-clear refusal.
+- Manual case assignment, acknowledgement and escalation clocks, provider deadline, dual approval, self-approval rejection, and immutable case audit.
 - Single Store Primary routing, Replica endpoint absence, persisted redemption cooldown, and invalid multi-process topology.
 - SQLite migration and isolated PostgreSQL migration.
 - Migration preflight rejection for every unknown or inconsistent legacy state.
@@ -700,6 +747,8 @@ A Channel can accept production purchases only after:
 10. A SQLite deployment passes the SQLite quota drill, or plan products remain disabled until PostgreSQL is used.
 11. A deployment with Replicas passes admission-token rotation and replay drills.
 12. Event-order and payment-hold acceptance tests pass for every enabled official adapter.
+13. Primary and backup Payment Operations owners, a distinct Finance Approver, primary and backup Rate Operations Admin assignments, and alert destinations are configured. Rate roles can reuse Payment Operations identities, but one user cannot propose and approve the same action.
+14. A tabletop drill passes for rate-source outage, suspected source compromise, unmatched payment, manual dispute, missed provider deadline, and owner escalation.
 
 Production deployment does not invent or embed merchant credentials. The operator must supply them through Admin or deployment configuration.
 
