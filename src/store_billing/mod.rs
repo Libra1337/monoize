@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod callbacks;
 pub mod credentials;
 pub mod crypto;
 pub mod exchange_rate;
