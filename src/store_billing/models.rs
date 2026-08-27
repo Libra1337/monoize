@@ -2,6 +2,8 @@ use super::money::Currency;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub const PAYMENT_ICON_MAX_BYTES: usize = 2 * 1024 * 1024;
+
 macro_rules! string_enum {
     ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +167,14 @@ pub struct PaymentChannel {
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorePaymentIcon {
+    pub id: String,
+    pub content_type: String,
+    pub content: Vec<u8>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -5,6 +5,8 @@ use super::{
 };
 use crate::db::DbPool;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
 use sea_orm::{ConnectionTrait, QueryResult, TryGetable};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -32,6 +34,8 @@ pub enum StoreBillingError {
     ProductNotAvailable,
     #[error("payment channel is invalid")]
     InvalidPaymentChannel,
+    #[error("payment channel icon is invalid")]
+    InvalidIcon,
     #[error("no payment channel is enabled")]
     NoPaymentChannel,
     #[error("order was not found")]
@@ -432,6 +436,60 @@ impl StoreBillingStore {
         self.payment_channel_by_id(&id, false)
             .await?
             .ok_or(StoreBillingError::InvalidPaymentChannel)
+    }
+
+    pub async fn save_payment_icon(
+        &self,
+        content: Vec<u8>,
+    ) -> Result<StorePaymentIcon, StoreBillingError> {
+        let content_type = validate_payment_icon(&content)?.to_string();
+        let icon = StorePaymentIcon {
+            id: Uuid::new_v4().to_string(),
+            content_type,
+            content,
+            created_at: Utc::now(),
+        };
+        self.db
+            .write()
+            .await
+            .execute(self.db.stmt(
+                "INSERT INTO store_payment_icons (id, content_type, content, created_at)
+                 VALUES ($1, $2, $3, $4)",
+                vec![
+                    icon.id.clone().into(),
+                    icon.content_type.clone().into(),
+                    icon.content.clone().into(),
+                    timestamp(icon.created_at).into(),
+                ],
+            ))
+            .await
+            .map_err(storage)?;
+        Ok(icon)
+    }
+
+    pub async fn get_payment_icon(
+        &self,
+        id: &str,
+    ) -> Result<Option<StorePaymentIcon>, StoreBillingError> {
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                "SELECT id, content_type, content, created_at
+                 FROM store_payment_icons WHERE id = $1",
+                vec![id.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        row.map(|row| {
+            Ok(StorePaymentIcon {
+                id: row_string(&row, "id")?,
+                content_type: row_string(&row, "content_type")?,
+                content: row.try_get("", "content").map_err(storage)?,
+                created_at: parse_timestamp(&row_string(&row, "created_at")?)?,
+            })
+        })
+        .transpose()
     }
 
     pub async fn update_payment_channel(
@@ -1298,6 +1356,122 @@ fn validate_payment_channel(
     Ok(())
 }
 
+fn validate_payment_icon(content: &[u8]) -> Result<&'static str, StoreBillingError> {
+    if content.is_empty() || content.len() > PAYMENT_ICON_MAX_BYTES {
+        return Err(StoreBillingError::InvalidIcon);
+    }
+    if content.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Ok("image/png");
+    }
+    if content.starts_with(b"\xff\xd8\xff") {
+        return Ok("image/jpeg");
+    }
+    if content.len() >= 12 && content.starts_with(b"RIFF") && &content[8..12] == b"WEBP" {
+        return Ok("image/webp");
+    }
+
+    validate_svg(content)?;
+    Ok("image/svg+xml")
+}
+
+fn validate_svg(content: &[u8]) -> Result<(), StoreBillingError> {
+    std::str::from_utf8(content).map_err(|_| StoreBillingError::InvalidIcon)?;
+    let mut reader = Reader::from_reader(content);
+    reader.config_mut().check_end_names = true;
+    let mut root_seen = false;
+    let mut root_closed = false;
+    let mut depth = 0_usize;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(element)) => {
+                if root_closed
+                    || (!root_seen && !is_local_name(element.local_name().as_ref(), b"svg"))
+                {
+                    return Err(StoreBillingError::InvalidIcon);
+                }
+                validate_svg_element(&element)?;
+                root_seen = true;
+                depth = depth.checked_add(1).ok_or(StoreBillingError::InvalidIcon)?;
+            }
+            Ok(Event::Empty(element)) => {
+                if root_closed
+                    || (!root_seen && !is_local_name(element.local_name().as_ref(), b"svg"))
+                {
+                    return Err(StoreBillingError::InvalidIcon);
+                }
+                validate_svg_element(&element)?;
+                if !root_seen {
+                    root_seen = true;
+                    root_closed = true;
+                }
+            }
+            Ok(Event::End(_)) => {
+                depth = depth.checked_sub(1).ok_or(StoreBillingError::InvalidIcon)?;
+                if depth == 0 {
+                    root_closed = true;
+                }
+            }
+            Ok(Event::Text(text)) => {
+                if depth == 0 && text.as_ref().iter().any(|byte| !byte.is_ascii_whitespace()) {
+                    return Err(StoreBillingError::InvalidIcon);
+                }
+            }
+            Ok(Event::CData(_)) if depth == 0 => return Err(StoreBillingError::InvalidIcon),
+            Ok(Event::GeneralRef(_)) if depth == 0 => return Err(StoreBillingError::InvalidIcon),
+            Ok(Event::Decl(_)) if root_seen => return Err(StoreBillingError::InvalidIcon),
+            Ok(Event::PI(_) | Event::DocType(_)) => return Err(StoreBillingError::InvalidIcon),
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(_) => return Err(StoreBillingError::InvalidIcon),
+        }
+    }
+
+    if root_seen && root_closed && depth == 0 {
+        Ok(())
+    } else {
+        Err(StoreBillingError::InvalidIcon)
+    }
+}
+
+fn validate_svg_element(element: &BytesStart<'_>) -> Result<(), StoreBillingError> {
+    const FORBIDDEN_ELEMENTS: [&[u8]; 8] = [
+        b"script",
+        b"style",
+        b"foreignObject",
+        b"iframe",
+        b"object",
+        b"embed",
+        b"use",
+        b"image",
+    ];
+    let local_name = element.local_name();
+    if FORBIDDEN_ELEMENTS
+        .iter()
+        .any(|forbidden| local_name.as_ref().eq_ignore_ascii_case(forbidden))
+    {
+        return Err(StoreBillingError::InvalidIcon);
+    }
+    for attribute in element.attributes().with_checks(true) {
+        let attribute = attribute.map_err(|_| StoreBillingError::InvalidIcon)?;
+        let local_name = attribute.key.local_name();
+        let local_name = local_name.as_ref();
+        if local_name
+            .get(..2)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"on"))
+            || is_local_name(local_name, b"href")
+            || is_local_name(local_name, b"style")
+        {
+            return Err(StoreBillingError::InvalidIcon);
+        }
+    }
+    Ok(())
+}
+
+fn is_local_name(actual: &[u8], expected: &[u8]) -> bool {
+    actual.eq_ignore_ascii_case(expected)
+}
+
 fn payment_channel_from_row(row: QueryResult) -> Result<PaymentChannel, StoreBillingError> {
     Ok(PaymentChannel {
         id: row_string(&row, "id")?,
@@ -1651,12 +1825,85 @@ fn actual_received(balance: &BalanceProductInput) -> Result<String, StoreBilling
 
 #[cfg(test)]
 mod tests {
-    use super::{StoreBillingError, row_i32};
+    use super::{StoreBillingError, StoreBillingStore, row_i32, validate_payment_icon};
+    use crate::db::DbPool;
+    use crate::migration::Migrator;
     use sea_orm::QueryResult;
+    use sea_orm_migration::MigratorTrait;
 
     #[test]
     fn store_integer_boolean_decoder_uses_postgres_int4_width() {
         let decoder = row_i32 as fn(&QueryResult, &str) -> Result<i32, StoreBillingError>;
         let _ = decoder;
+    }
+
+    #[test]
+    fn payment_icon_validation_uses_exact_file_signatures() {
+        assert_eq!(
+            validate_payment_icon(b"\x89PNG\r\n\x1a\nbody").unwrap(),
+            "image/png"
+        );
+        assert_eq!(
+            validate_payment_icon(b"\xff\xd8\xff\xe0jpeg").unwrap(),
+            "image/jpeg"
+        );
+        assert_eq!(
+            validate_payment_icon(b"RIFF\x04\0\0\0WEBPdata").unwrap(),
+            "image/webp"
+        );
+        assert_eq!(
+            validate_payment_icon(b"<?xml version=\"1.0\"?><svg viewBox=\"0 0 1 1\"></svg>")
+                .unwrap(),
+            "image/svg+xml"
+        );
+
+        for invalid in [
+            b"not an image".as_slice(),
+            b"<svg><script>alert(1)</script></svg>".as_slice(),
+            b"<svg xmlns:s='urn:test'><s:script>alert(1)</s:script></svg>".as_slice(),
+            b"<svg onload=\"alert(1)\"></svg>".as_slice(),
+            b"<svg><image href=\"https://example.test/a.png\"/></svg>".as_slice(),
+            b"<svg><path xlink:href='//example.test/a.svg#x'/></svg>".as_slice(),
+            b"<svg><path></svg>".as_slice(),
+            b"<?unsafe value?><svg></svg>".as_slice(),
+            b"\xff<svg></svg>".as_slice(),
+        ] {
+            assert_eq!(
+                validate_payment_icon(invalid),
+                Err(StoreBillingError::InvalidIcon)
+            );
+        }
+        assert_eq!(
+            validate_payment_icon(&vec![0_u8; 2 * 1024 * 1024 + 1]),
+            Err(StoreBillingError::InvalidIcon)
+        );
+    }
+
+    #[tokio::test]
+    async fn payment_icon_storage_round_trips_exact_bytes() {
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("connect db");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrate db");
+        }
+        let store = StoreBillingStore::new(db);
+        let content = b"\x89PNG\r\n\x1a\nexact\0bytes".to_vec();
+
+        let saved = store
+            .save_payment_icon(content.clone())
+            .await
+            .expect("save icon");
+        assert_eq!(saved.content_type, "image/png");
+        assert_eq!(saved.content, content);
+
+        let loaded = store
+            .get_payment_icon(&saved.id)
+            .await
+            .expect("load icon")
+            .expect("icon exists");
+        assert_eq!(loaded, saved);
+        assert!(store.get_payment_icon("missing").await.unwrap().is_none());
     }
 }

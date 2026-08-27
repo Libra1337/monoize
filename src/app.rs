@@ -1937,7 +1937,8 @@ async fn content_security_policy_middleware(
     if let Ok(value) = header::HeaderValue::from_str(&policy) {
         response
             .headers_mut()
-            .insert(header::CONTENT_SECURITY_POLICY, value);
+            .entry(header::CONTENT_SECURITY_POLICY)
+            .or_insert(value);
     }
     response
 }
@@ -2031,6 +2032,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
             post(crate::dashboard_handlers::redeem_store_code),
         )
         .route(
+            "/dashboard/store/icons/{id}",
+            get(crate::dashboard_handlers::get_store_payment_icon),
+        )
+        .route(
             "/dashboard/store/admin/products",
             get(crate::dashboard_handlers::list_store_products_admin)
                 .post(crate::dashboard_handlers::create_store_product_admin),
@@ -2044,6 +2049,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
             "/dashboard/store/admin/payment-channels",
             get(crate::dashboard_handlers::list_store_payment_channels_admin)
                 .post(crate::dashboard_handlers::create_store_payment_channel_admin),
+        )
+        .route(
+            "/dashboard/store/admin/icons",
+            post(crate::dashboard_handlers::upload_store_payment_icon_admin),
         )
         .route(
             "/dashboard/store/admin/payment-channels/{id}",

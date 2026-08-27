@@ -3,13 +3,15 @@ use crate::error::{AppError, AppResult};
 use crate::store_billing::exchange_rate::ExchangeRateError;
 use crate::store_billing::{
     CreateOrderInput, CreatePaymentChannelInput, CreateProductInput, GenerateRedemptionCodesInput,
-    StoreBillingError, StoreSettings, UpdatePaymentChannelInput,
+    PAYMENT_ICON_MAX_BYTES, StoreBillingError, StoreSettings, UpdatePaymentChannelInput,
 };
 use axum::Json;
+use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
-use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::IntoResponse;
+use axum::extract::{Multipart, Path, Query, State};
+use axum::http::header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
@@ -66,6 +68,11 @@ fn map_store_error(error: StoreBillingError) -> AppError {
             StatusCode::BAD_REQUEST,
             "invalid_payment_channel",
             "payment channel is invalid",
+        ),
+        StoreBillingError::InvalidIcon => (
+            StatusCode::BAD_REQUEST,
+            "invalid_icon",
+            "payment channel icon is invalid",
         ),
         StoreBillingError::NoPaymentChannel => (
             StatusCode::CONFLICT,
@@ -349,6 +356,103 @@ pub async fn create_store_payment_channel_admin(
         .await
         .map_err(map_store_error)?;
     Ok((StatusCode::CREATED, Json(channel)))
+}
+
+pub async fn upload_store_payment_icon_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let mut content = None;
+    while let Some(mut field) = multipart.next_field().await.map_err(|error| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_icon",
+            "payment channel icon is invalid",
+        )
+        .with_internal_message(error.to_string())
+    })? {
+        if field.name() != Some("file") {
+            return Err(invalid_icon_error(
+                "multipart contains a field other than file",
+            ));
+        }
+        if content.is_some() {
+            return Err(invalid_icon_error(
+                "multipart contains more than one file field",
+            ));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = field.chunk().await.map_err(|error| {
+            invalid_icon_error(format!("failed to read multipart file: {error}"))
+        })? {
+            if bytes
+                .len()
+                .checked_add(chunk.len())
+                .is_none_or(|length| length > PAYMENT_ICON_MAX_BYTES)
+            {
+                return Err(invalid_icon_error("multipart file exceeds 2 MiB"));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        content = Some(bytes);
+    }
+    let content = content.ok_or_else(|| invalid_icon_error("multipart file field is missing"))?;
+    let icon = state
+        .store_billing
+        .save_payment_icon(content)
+        .await
+        .map_err(map_store_error)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "url": format!("/api/dashboard/store/icons/{}", icon.id),
+        })),
+    ))
+}
+
+pub async fn get_store_payment_icon(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    get_current_user(&headers, &state).await?;
+    let icon = state
+        .store_billing
+        .get_payment_icon(&id)
+        .await
+        .map_err(map_store_error)?
+        .ok_or_else(|| map_store_error(StoreBillingError::NotFound))?;
+    let content_type = HeaderValue::from_str(&icon.content_type).map_err(|error| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "stored payment channel icon is invalid",
+        )
+        .with_internal_message(error.to_string())
+    })?;
+    let mut response = Response::new(Body::from(icon.content));
+    response.headers_mut().insert(CONTENT_TYPE, content_type);
+    response
+        .headers_mut()
+        .insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    if icon.content_type == "image/svg+xml" {
+        response.headers_mut().insert(
+            CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("sandbox; default-src 'none'"),
+        );
+    }
+    Ok(response)
+}
+
+fn invalid_icon_error(detail: impl Into<String>) -> AppError {
+    AppError::new(
+        StatusCode::BAD_REQUEST,
+        "invalid_icon",
+        "payment channel icon is invalid",
+    )
+    .with_internal_message(detail)
 }
 
 pub async fn update_store_payment_channel_admin(

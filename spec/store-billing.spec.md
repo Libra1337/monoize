@@ -76,6 +76,16 @@ SB-C-6. Order creation MUST count enabled payment channels before validating the
 
 SB-C-7. Admin payment channel reads MUST include enabled and disabled channels and MUST omit `config_secret`. Deleting a missing channel MUST return `not_found`. Deleting a channel referenced by an order MUST return `conflict` and MUST NOT delete it.
 
+SB-C-8. `store_payment_icons` MUST contain `id`, `content_type`, `content`, and `created_at`. `content` MUST use a binary database type. SQLite MUST use `BLOB`. PostgreSQL MUST use `BYTEA`.
+
+SB-C-9. `POST /api/dashboard/store/admin/icons` MUST require an admin session and a primary-node write configuration. It MUST accept exactly one multipart field named `file`. For a request admitted by the process-wide HTTP body limit, it MUST reject a missing field, an additional field, a second `file` field, or any file larger than 2,097,152 bytes with HTTP `400` code `invalid_icon`. It MUST stop accumulating the field after the size exceeds this limit. A request rejected by the process-wide limit before multipart parsing MUST retain the shared HTTP `413` response.
+
+SB-C-10. The upload endpoint MUST accept only PNG, JPEG, WebP, and SVG. Raster validation MUST use file signature bytes and MUST NOT trust the multipart media type or filename. SVG content MUST be valid UTF-8 and well-formed XML with an `svg` root element. SVG validation MUST compare XML local names without case sensitivity. It MUST reject `script`, `style`, `foreignObject`, `iframe`, `object`, `embed`, `use`, and `image` elements. It MUST reject every attribute whose local name starts with `on`, equals `href`, or equals `style`. It MUST reject DTD and processing-instruction events.
+
+SB-C-11. A successful icon upload MUST persist the exact accepted bytes and return HTTP `201` with `{ "url": "/api/dashboard/store/icons/{id}" }`. Payment channel JSON MUST contain only this URL and MUST NOT contain uploaded bytes.
+
+SB-C-12. `GET /api/dashboard/store/icons/{id}` MUST require a dashboard session. A missing icon MUST return HTTP `404` code `not_found`. A successful response MUST preserve the uploaded bytes, set the validated `Content-Type`, and set `X-Content-Type-Options: nosniff`. An SVG response MUST also set `Content-Security-Policy: sandbox`.
+
 ## 4. Orders And Fulfillment
 
 SB-O-1. `store_orders` MUST contain: `id`, `order_number`, `user_id`, `product_id`, `product_kind`, `status`, `payment_channel_id`, `payment_currency`, `payment_minor`, `cny_per_usd`, `rate_source_updated_at`, `quote_json`, `created_at`, `updated_at`, `completed_at`, and `cancelled_at`.
@@ -146,6 +156,7 @@ SB-A-1. Session user endpoints are:
 - `GET /api/dashboard/store/orders`
 - `POST /api/dashboard/store/orders`
 - `POST /api/dashboard/store/redeem`
+- `GET /api/dashboard/store/icons/{id}`
 
 SB-A-2. Admin endpoints are:
 
@@ -158,6 +169,7 @@ SB-A-2. Admin endpoints are:
 - `POST /api/dashboard/store/admin/orders/{id}/cancel`
 - `GET|POST /api/dashboard/store/admin/redemption-codes`
 - `GET|PUT /api/dashboard/store/admin/settings`
+- `POST /api/dashboard/store/admin/icons`
 
 Every endpoint in SB-A-2 MUST require an admin session.
 

@@ -52,6 +52,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260825_000043_channel_allow_missing_usage::Migration),
             Box::new(m20260826_000048_provider_pricing_flatten::Migration),
             Box::new(m20260827_000049_store_billing::Migration),
+            Box::new(m20260827_000050_store_payment_icons::Migration),
         ]
     }
 }
@@ -233,6 +234,7 @@ mod m20260825_000042_groups_registry;
 mod m20260825_000043_channel_allow_missing_usage;
 mod m20260826_000048_provider_pricing_flatten;
 mod m20260827_000049_store_billing;
+mod m20260827_000050_store_payment_icons;
 
 #[cfg(test)]
 mod tests {
