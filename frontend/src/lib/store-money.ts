@@ -96,6 +96,13 @@ export function decimalToMinor(value: string): string | null {
   return (BigInt(whole) * 100n + BigInt(fraction.padEnd(2, "0") || "0")).toString();
 }
 
+export function minorToDecimal(minor: string): string {
+  const amount = parseMinor(minor);
+  const whole = amount / 100n;
+  const fraction = (amount % 100n).toString().padStart(2, "0");
+  return `${whole}.${fraction}`;
+}
+
 export function formatNanoUsd(
   nanoUsd: string,
   currency: StoreCurrency = "USD",

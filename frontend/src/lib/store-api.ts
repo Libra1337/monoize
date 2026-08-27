@@ -270,6 +270,20 @@ export const storeApi = {
         `/admin/payment-channels/${encodeURIComponent(id)}`,
         { method: "DELETE" },
       ),
+    uploadIcon: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch(`${STORE_API_BASE}/admin/icons`, {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error?.message || data.error?.code || "Request failed");
+      }
+      return data as { url: string };
+    },
     listOrders: (limit = 100) =>
       storeRequest<StoreOrder[]>(listPath("/admin/orders", limit)),
     completeOrder: (id: string) =>

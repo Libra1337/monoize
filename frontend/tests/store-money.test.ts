@@ -4,6 +4,7 @@ import {
   convertMinor,
   formatMinor,
   formatPlanQuota,
+  minorToDecimal,
 } from "../src/lib/store-money";
 
 describe("Store money helpers", () => {
@@ -36,5 +37,11 @@ describe("Store money helpers", () => {
   test("rejects non-canonical amounts and invalid exchange rates", () => {
     expect(() => formatMinor("01", "CNY")).toThrow("canonical");
     expect(() => convertMinor("100", "CNY", "USD", "0")).toThrow("rate");
+  });
+
+  test("converts minor units to an exact editable decimal", () => {
+    expect(minorToDecimal("0")).toBe("0.00");
+    expect(minorToDecimal("5")).toBe("0.05");
+    expect(minorToDecimal("1250")).toBe("12.50");
   });
 });
