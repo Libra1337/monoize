@@ -1,7 +1,7 @@
-use rust_decimal::{Decimal, RoundingStrategy, prelude::ToPrimitive};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::str::FromStr;
 use thiserror::Error;
+
+const NANO_USD_PER_CENT: i128 = 10_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Currency {
@@ -56,13 +56,72 @@ impl<'de> Deserialize<'de> for Money {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExchangeRateRational {
+    decimal: String,
+    numerator: i128,
+    denominator: i128,
+}
+
+impl ExchangeRateRational {
+    pub fn parse(value: &str) -> Result<Self, MoneyError> {
+        let (integer, fraction) = match value.split_once('.') {
+            Some((integer, fraction)) => (integer, Some(fraction)),
+            None => (value, None),
+        };
+        if integer.is_empty()
+            || !integer.bytes().all(|byte| byte.is_ascii_digit())
+            || (integer.len() > 1 && integer.starts_with('0'))
+            || fraction.is_some_and(|digits| {
+                digits.is_empty()
+                    || digits.len() > 18
+                    || !digits.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        {
+            return Err(MoneyError::InvalidExchangeRate);
+        }
+
+        let scale = fraction.map_or(0_u32, |digits| digits.len() as u32);
+        let denominator = checked_pow10(scale).ok_or(MoneyError::AmountOverflow)?;
+        let whole = integer
+            .parse::<i128>()
+            .map_err(|_| MoneyError::AmountOverflow)?;
+        let fractional = fraction.unwrap_or_default().parse::<i128>().unwrap_or(0);
+        let numerator = whole
+            .checked_mul(denominator)
+            .and_then(|value| value.checked_add(fractional))
+            .ok_or(MoneyError::AmountOverflow)?;
+        if numerator == 0 {
+            return Err(MoneyError::InvalidExchangeRate);
+        }
+        let divisor = gcd(numerator, denominator);
+        Ok(Self {
+            decimal: value.to_string(),
+            numerator: numerator / divisor,
+            denominator: denominator / divisor,
+        })
+    }
+
+    pub const fn numerator(&self) -> i128 {
+        self.numerator
+    }
+
+    pub const fn denominator(&self) -> i128 {
+        self.denominator
+    }
+
+    pub fn decimal(&self) -> &str {
+        &self.decimal
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum MoneyError {
     #[error("amount must be a canonical nonnegative integer string")]
     InvalidAmount,
-    #[error("exchange rate must be a positive finite decimal")]
+    #[error("exchange rate must be a positive canonical decimal")]
     InvalidExchangeRate,
-    #[error("amount exceeds the supported decimal range")]
+    #[error("amount exceeds the supported integer range")]
     AmountOverflow,
 }
 
@@ -73,7 +132,6 @@ pub fn parse_minor(value: &str) -> Result<i128, MoneyError> {
     {
         return Err(MoneyError::InvalidAmount);
     }
-
     value.parse().map_err(|_| MoneyError::AmountOverflow)
 }
 
@@ -83,16 +141,26 @@ pub fn convert_minor(
     target: Currency,
     cny_per_usd: &str,
 ) -> Result<i128, MoneyError> {
-    let amount = nonnegative_decimal(amount, 0)?;
-    let rate = parse_rate(cny_per_usd)?;
-    let converted = match (source, target) {
-        (Currency::USD, Currency::CNY) => amount.checked_mul(rate),
-        (Currency::CNY, Currency::USD) => amount.checked_div(rate),
-        _ => Some(amount),
-    }
-    .ok_or(MoneyError::AmountOverflow)?;
+    let rate = ExchangeRateRational::parse(cny_per_usd)?;
+    convert_minor_rational(amount, source, target, &rate)
+}
 
-    rounded_nonnegative_i128(converted)
+pub fn convert_minor_rational(
+    amount: i128,
+    source: Currency,
+    target: Currency,
+    rate: &ExchangeRateRational,
+) -> Result<i128, MoneyError> {
+    require_nonnegative(amount)?;
+    match (source, target) {
+        (Currency::USD, Currency::CNY) => {
+            checked_round_product_ratio(amount, rate.numerator, rate.denominator)
+        }
+        (Currency::CNY, Currency::USD) => {
+            checked_round_product_ratio(amount, rate.denominator, rate.numerator)
+        }
+        _ => Ok(amount),
+    }
 }
 
 pub fn quoted_received_to_nano_usd(
@@ -100,18 +168,37 @@ pub fn quoted_received_to_nano_usd(
     currency: Currency,
     cny_per_usd: &str,
 ) -> Result<i128, MoneyError> {
-    let amount = nonnegative_decimal(amount_minor, 0)?;
-    let rate = parse_rate(cny_per_usd)?;
-    let nano_per_minor = Decimal::from(10_000_000u64);
-    let nano_usd = amount
-        .checked_mul(nano_per_minor)
-        .and_then(|amount| match currency {
-            Currency::USD => Some(amount),
-            Currency::CNY => amount.checked_div(rate),
-        })
-        .ok_or(MoneyError::AmountOverflow)?;
+    let rate = ExchangeRateRational::parse(cny_per_usd)?;
+    match currency {
+        Currency::USD => amount_minor
+            .checked_mul(NANO_USD_PER_CENT)
+            .ok_or(MoneyError::AmountOverflow),
+        Currency::CNY => cny_fen_to_nano_usd(amount_minor, &rate),
+    }
+}
 
-    rounded_nonnegative_i128(nano_usd)
+pub fn cny_fen_to_nano_usd(
+    amount_fen: i128,
+    rate: &ExchangeRateRational,
+) -> Result<i128, MoneyError> {
+    require_nonnegative(amount_fen)?;
+    let scaled_denominator = rate
+        .denominator
+        .checked_mul(NANO_USD_PER_CENT)
+        .ok_or(MoneyError::AmountOverflow)?;
+    checked_round_product_ratio(amount_fen, scaled_denominator, rate.numerator)
+}
+
+pub fn nano_usd_to_cny_fen(
+    amount_nano_usd: i128,
+    rate: &ExchangeRateRational,
+) -> Result<i128, MoneyError> {
+    require_nonnegative(amount_nano_usd)?;
+    let denominator = rate
+        .denominator
+        .checked_mul(NANO_USD_PER_CENT)
+        .ok_or(MoneyError::AmountOverflow)?;
+    checked_round_product_ratio(amount_nano_usd, rate.numerator, denominator)
 }
 
 pub fn plan_quota_whole_units(
@@ -119,52 +206,76 @@ pub fn plan_quota_whole_units(
     display_currency: Currency,
     cny_per_usd: &str,
 ) -> Result<i128, MoneyError> {
-    let quota_cny = nonnegative_decimal(quota_fen_cny, 2)?;
-    let rate = parse_rate(cny_per_usd)?;
-    let displayed = match display_currency {
-        Currency::CNY => quota_cny,
-        Currency::USD => quota_cny
-            .checked_div(rate)
-            .ok_or(MoneyError::AmountOverflow)?,
-    };
-
-    rounded_nonnegative_i128(displayed)
+    require_nonnegative(quota_fen_cny)?;
+    let rate = ExchangeRateRational::parse(cny_per_usd)?;
+    match display_currency {
+        Currency::CNY => round_nonnegative_ratio(quota_fen_cny, 100),
+        Currency::USD => {
+            let denominator = rate
+                .numerator
+                .checked_mul(100)
+                .ok_or(MoneyError::AmountOverflow)?;
+            checked_round_product_ratio(quota_fen_cny, rate.denominator, denominator)
+        }
+    }
 }
 
-pub(crate) fn parse_rate(value: &str) -> Result<Decimal, MoneyError> {
-    let mut components = value.split('.');
-    let integer = components.next().unwrap_or_default();
-    let fraction = components.next();
-    let syntax_is_valid = !integer.is_empty()
-        && integer.bytes().all(|byte| byte.is_ascii_digit())
-        && fraction.is_none_or(|digits| {
-            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
-        })
-        && components.next().is_none();
-    if !syntax_is_valid {
-        return Err(MoneyError::InvalidExchangeRate);
-    }
-
-    let rate = Decimal::from_str(value).map_err(|_| MoneyError::InvalidExchangeRate)?;
-    if rate <= Decimal::ZERO {
-        return Err(MoneyError::InvalidExchangeRate);
-    }
-    Ok(rate)
+pub(crate) fn parse_rate(value: &str) -> Result<ExchangeRateRational, MoneyError> {
+    ExchangeRateRational::parse(value)
 }
 
-fn nonnegative_decimal(value: i128, scale: u32) -> Result<Decimal, MoneyError> {
-    if value < 0 {
+fn checked_round_product_ratio(
+    value: i128,
+    multiplier: i128,
+    denominator: i128,
+) -> Result<i128, MoneyError> {
+    let numerator = value
+        .checked_mul(multiplier)
+        .ok_or(MoneyError::AmountOverflow)?;
+    round_nonnegative_ratio(numerator, denominator)
+}
+
+fn round_nonnegative_ratio(numerator: i128, denominator: i128) -> Result<i128, MoneyError> {
+    if numerator < 0 || denominator <= 0 {
         return Err(MoneyError::InvalidAmount);
     }
-    Decimal::try_from_i128_with_scale(value, scale).map_err(|_| MoneyError::AmountOverflow)
+    let quotient = numerator / denominator;
+    let remainder = numerator % denominator;
+    if remainder != 0 && remainder >= denominator - remainder {
+        quotient.checked_add(1).ok_or(MoneyError::AmountOverflow)
+    } else {
+        Ok(quotient)
+    }
 }
 
-fn rounded_nonnegative_i128(value: Decimal) -> Result<i128, MoneyError> {
-    value
-        .round_dp_with_strategy(0, RoundingStrategy::MidpointAwayFromZero)
-        .to_i128()
-        .filter(|value| *value >= 0)
-        .ok_or(MoneyError::AmountOverflow)
+fn require_nonnegative(value: i128) -> Result<(), MoneyError> {
+    if value < 0 {
+        Err(MoneyError::InvalidAmount)
+    } else {
+        Ok(())
+    }
+}
+
+const fn gcd(mut left: i128, mut right: i128) -> i128 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
+}
+
+const fn checked_pow10(scale: u32) -> Option<i128> {
+    let mut value = 1_i128;
+    let mut index = 0;
+    while index < scale {
+        value = match value.checked_mul(10) {
+            Some(next) => next,
+            None => return None,
+        };
+        index += 1;
+    }
+    Some(value)
 }
 
 #[cfg(test)]

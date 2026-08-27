@@ -3,6 +3,7 @@ pub mod crypto;
 pub mod exchange_rate;
 pub mod models;
 pub mod money;
+pub mod state_machine;
 pub mod store;
 
 pub use exchange_rate::ExchangeRateSnapshot;
