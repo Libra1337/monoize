@@ -275,7 +275,9 @@ fn create_orders_v2(prefix: &str) -> String {
             fulfillment_failed_at TEXT,
             closed_at TEXT,
             refund_pending_at TEXT,
-            refunded_at TEXT
+            refunded_at TEXT,
+            FOREIGN KEY (product_id) REFERENCES store_products(id),
+            FOREIGN KEY (payment_channel_id) REFERENCES store_payment_channels(id)
         )"
     )
 }

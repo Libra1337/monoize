@@ -3,11 +3,11 @@ import type { StoreCurrency } from "@/lib/store-money";
 const STORE_API_BASE = "/api/dashboard/store";
 
 export type ProductKind = "balance" | "plan";
-export type PaymentChannelKind = "alipay" | "wechat" | "custom";
-export type PaymentChannelMode = "redirect" | "qr" | "manual";
+export type PaymentAdapterKind = "alipay" | "wechat" | "stripe" | "http";
 export type PaymentChannelIconKind = "builtin" | "url" | "upload";
 export type PlanWindowKind = "5h" | "12h" | "day" | "week" | "month" | "custom";
-export type StoreOrderStatus = "pending" | "completed" | "cancelled";
+export type StorePaymentState = "unpaid" | "paid" | "refund_pending" | "refunded" | "closed";
+export type StoreFulfillmentState = "pending" | "fulfilled" | "failed";
 export type RedemptionCodeStatus = "unused" | "used";
 
 export interface BalanceProductInput {
@@ -62,13 +62,10 @@ export interface StoreProduct {
 }
 
 export interface PaymentChannelInput {
-  kind: PaymentChannelKind;
+  adapter_kind: PaymentAdapterKind;
   name: string;
-  mode: PaymentChannelMode;
-  endpoint: string | null;
   icon_kind: PaymentChannelIconKind;
   icon_value: string | null;
-  config_secret: string | null;
   sort_order: number;
   enabled: boolean;
 }
@@ -77,14 +74,13 @@ export type PaymentChannelUpdate = Partial<PaymentChannelInput>;
 
 export interface StorePaymentChannel {
   id: string;
-  kind: PaymentChannelKind;
+  adapter_kind: PaymentAdapterKind;
   name: string;
-  mode: PaymentChannelMode;
-  endpoint: string | null;
   icon_kind: PaymentChannelIconKind;
   icon_value: string | null;
   sort_order: number;
   enabled: boolean;
+  revision: number;
   created_at: string;
   updated_at: string;
 }
@@ -125,10 +121,8 @@ export interface StoreProductSnapshot {
 
 export interface StorePaymentChannelSnapshot {
   id: string;
-  kind: PaymentChannelKind;
+  adapter_kind: PaymentAdapterKind;
   name: string;
-  mode: PaymentChannelMode;
-  endpoint: string | null;
   icon_kind: PaymentChannelIconKind;
   icon_value: string | null;
 }
@@ -136,8 +130,14 @@ export interface StorePaymentChannelSnapshot {
 export interface StoreOrderQuote {
   version: number;
   product: StoreProductSnapshot;
-  balance: StoreBalanceProduct | null;
   payment_channel: StorePaymentChannelSnapshot;
+  rate: {
+    decimal: string;
+    numerator: string;
+    denominator: string;
+    source_updated_at: string;
+    refreshed_at: string;
+  };
 }
 
 export interface StoreOrder {
@@ -146,17 +146,36 @@ export interface StoreOrder {
   user_id: string;
   product_id: string;
   product_kind: ProductKind;
-  status: StoreOrderStatus;
+  payment_state: StorePaymentState;
+  fulfillment_state: StoreFulfillmentState;
+  dispute_state: "none" | "open" | "won" | "lost";
+  payment_hold: boolean;
   payment_channel_id: string;
   payment_currency: StoreCurrency;
   payment_minor: string;
   cny_per_usd: string;
-  rate_source_updated_at: string;
+  rate_numerator: string;
+  rate_denominator: string;
   quote: StoreOrderQuote;
+  contract_version: number;
+  state_revision: number;
+  expires_at: string;
   created_at: string;
   updated_at: string;
-  completed_at: string | null;
-  cancelled_at: string | null;
+}
+
+export interface StorePaymentAttempt {
+  id: string;
+  order_id: string;
+  channel_id: string;
+  adapter_kind: PaymentAdapterKind;
+  credential_version_id: string;
+  merchant_account_identity: string;
+  expected_payment_method: string | null;
+  state: "created" | "presented" | "expired" | "failed" | "paid";
+  idempotency_key: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface StorePlanEntitlement {
@@ -241,8 +260,23 @@ export const storeApi = {
   getExchangeRate: () => storeRequest<StoreExchangeRate>("/exchange-rate"),
   getEntitlement: () => storeRequest<StorePlanEntitlement | null>("/entitlement"),
   listOrders: (limit = 100) => storeRequest<StoreOrder[]>(listPath("/orders", limit)),
-  createOrder: (input: CreateStoreOrderInput) =>
-    jsonMutation<StoreOrder>("/orders", "POST", input),
+  getOrder: (id: string) => storeRequest<StoreOrder>(`/orders/${encodeURIComponent(id)}`),
+  createOrder: (input: CreateStoreOrderInput, idempotencyKey: string) =>
+    storeRequest<StoreOrder>("/orders", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(input),
+    }),
+  createPaymentAttempt: (
+    orderId: string,
+    idempotencyKey: string,
+    expectedPaymentMethod: string | null,
+  ) =>
+    storeRequest<StorePaymentAttempt>(`/orders/${encodeURIComponent(orderId)}/attempts`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ expected_payment_method: expectedPaymentMethod }),
+    }),
   redeem: (code: string) =>
     jsonMutation<RedemptionCodeRecord>("/redeem", "POST", { code }),
   admin: {
@@ -286,14 +320,6 @@ export const storeApi = {
     },
     listOrders: (limit = 100) =>
       storeRequest<StoreOrder[]>(listPath("/admin/orders", limit)),
-    completeOrder: (id: string) =>
-      storeRequest<StoreOrder>(`/admin/orders/${encodeURIComponent(id)}/complete`, {
-        method: "POST",
-      }),
-    cancelOrder: (id: string) =>
-      storeRequest<StoreOrder>(`/admin/orders/${encodeURIComponent(id)}/cancel`, {
-        method: "POST",
-      }),
     listRedemptionCodes: (limit = 100) =>
       storeRequest<RedemptionCodeRecord[]>(listPath("/admin/redemption-codes", limit)),
     generateRedemptionCodes: (input: GenerateRedemptionCodesInput) =>

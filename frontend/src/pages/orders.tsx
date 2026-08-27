@@ -90,8 +90,13 @@ export function OrdersPage() {
                   </p>
                 </div>
                 <div className="flex items-center justify-between gap-3 sm:justify-end">
-                  <span className="rounded-full bg-muted px-3 py-1 text-xs font-medium">
-                    {t(`store.orders.${order.status}`)}
+                  <span className="flex flex-wrap justify-end gap-2">
+                    <span className="rounded-full bg-muted px-3 py-1 text-xs font-medium">
+                      {t(`store.orders.paymentStates.${order.payment_state}`)}
+                    </span>
+                    <span className="rounded-full border px-3 py-1 text-xs font-medium">
+                      {t(`store.orders.fulfillmentStates.${order.fulfillment_state}`)}
+                    </span>
                   </span>
                   <Button
                     type="button"
@@ -136,9 +141,15 @@ export function OrdersPage() {
                 </dd>
               </div>
               <div className="flex justify-between gap-4 border-b pb-3">
-                <dt className="text-muted-foreground">{t("store.orders.status")}</dt>
+                <dt className="text-muted-foreground">{t("store.orders.paymentStatus")}</dt>
                 <dd className="text-right font-medium">
-                  {t(`store.orders.${selectedOrder.status}`)}
+                  {t(`store.orders.paymentStates.${selectedOrder.payment_state}`)}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4 border-b pb-3">
+                <dt className="text-muted-foreground">{t("store.orders.fulfillmentStatus")}</dt>
+                <dd className="text-right font-medium">
+                  {t(`store.orders.fulfillmentStates.${selectedOrder.fulfillment_state}`)}
                 </dd>
               </div>
               <div className="flex justify-between gap-4">

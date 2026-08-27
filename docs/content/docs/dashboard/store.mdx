@@ -20,7 +20,9 @@ Monoize refreshes the USD/CNY rate at most once every 15 minutes. It keeps the l
 3. Select one enabled payment Channel.
 4. Create the order.
 
-Open `/dashboard/orders` to review the order. The balance changes after an administrator completes the order.
+Open `/dashboard/orders` to review the order. Check the payment state and the fulfillment state separately.
+
+Monoize grants the balance only after it verifies the provider payment. An administrator cannot mark an unpaid order as paid or fulfilled.
 
 ## Buy a plan
 
@@ -37,6 +39,7 @@ Enter one unused code in **Redeem code**. A code grants balance or activates a p
 Administrators open `/dashboard/store-admin`. Use its four tabs to manage products, payment Channels, orders, and redemption codes.
 
 - Set separate custom recharge limits for CNY and USD.
-- Add Alipay, WeChat Pay, or a custom payment Channel. Use a built-in icon, an HTTPS image URL, or an uploaded image.
-- Complete a pending order to grant its reward. Cancel a pending order to prevent fulfillment.
+- Add an Alipay, WeChat Pay, Stripe, or draft HTTP Channel. Use a built-in icon, an HTTPS image URL, or an uploaded image.
+- Keep an HTTP Channel disabled in Milestone 1.
+- Review payment state and fulfillment state separately. Do not use a manual completion action.
 - Generate 1 through 20 single-use codes. Copy the plaintext codes when Monoize shows them.

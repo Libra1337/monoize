@@ -32,15 +32,11 @@ string_enum!(ProductKind {
     Balance => "balance",
     Plan => "plan",
 });
-string_enum!(PaymentChannelKind {
+string_enum!(PaymentAdapterKind {
     Alipay => "alipay",
     Wechat => "wechat",
-    Custom => "custom",
-});
-string_enum!(PaymentChannelMode {
-    Redirect => "redirect",
-    Qr => "qr",
-    Manual => "manual",
+    Stripe => "stripe",
+    Http => "http",
 });
 string_enum!(IconKind {
     Builtin => "builtin",
@@ -54,11 +50,6 @@ string_enum!(WindowKind {
     Week => "week",
     Month => "month",
     Custom => "custom",
-});
-string_enum!(OrderStatus {
-    Pending => "pending",
-    Completed => "completed",
-    Cancelled => "cancelled",
 });
 string_enum!(RedemptionCodeStatus {
     Unused => "unused",
@@ -130,26 +121,20 @@ pub struct StoreProduct {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreatePaymentChannelInput {
-    pub kind: PaymentChannelKind,
+    pub adapter_kind: PaymentAdapterKind,
     pub name: String,
-    pub mode: PaymentChannelMode,
-    pub endpoint: Option<String>,
     pub icon_kind: IconKind,
     pub icon_value: Option<String>,
-    pub config_secret: Option<String>,
     pub sort_order: i32,
     pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdatePaymentChannelInput {
-    pub kind: Option<PaymentChannelKind>,
+    pub adapter_kind: Option<PaymentAdapterKind>,
     pub name: Option<String>,
-    pub mode: Option<PaymentChannelMode>,
-    pub endpoint: Option<String>,
     pub icon_kind: Option<IconKind>,
     pub icon_value: Option<String>,
-    pub config_secret: Option<String>,
     pub sort_order: Option<i32>,
     pub enabled: Option<bool>,
 }
@@ -157,14 +142,13 @@ pub struct UpdatePaymentChannelInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentChannel {
     pub id: String,
-    pub kind: PaymentChannelKind,
+    pub adapter_kind: PaymentAdapterKind,
     pub name: String,
-    pub mode: PaymentChannelMode,
-    pub endpoint: Option<String>,
     pub icon_kind: IconKind,
     pub icon_value: Option<String>,
     pub sort_order: i32,
     pub enabled: bool,
+    pub revision: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -204,14 +188,6 @@ impl Default for StoreSettings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CreateOrderInput {
-    pub product_id: String,
-    pub payment_channel_id: String,
-    pub payment_currency: Currency,
-    pub custom_recharge_minor: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductSnapshot {
     pub id: String,
     pub kind: ProductKind,
@@ -223,45 +199,6 @@ pub struct ProductSnapshot {
     pub group_ids: Vec<String>,
     pub balance: Option<BalanceProduct>,
     pub quotas: Vec<PlanQuota>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PaymentChannelSnapshot {
-    pub id: String,
-    pub kind: PaymentChannelKind,
-    pub name: String,
-    pub mode: PaymentChannelMode,
-    pub endpoint: Option<String>,
-    pub icon_kind: IconKind,
-    pub icon_value: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OrderQuote {
-    pub version: u32,
-    pub product: ProductSnapshot,
-    pub balance: Option<BalanceProduct>,
-    pub payment_channel: PaymentChannelSnapshot,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StoreOrder {
-    pub id: String,
-    pub order_number: String,
-    pub user_id: String,
-    pub product_id: String,
-    pub product_kind: ProductKind,
-    pub status: OrderStatus,
-    pub payment_channel_id: String,
-    pub payment_currency: Currency,
-    pub payment_minor: String,
-    pub cny_per_usd: String,
-    pub rate_source_updated_at: DateTime<Utc>,
-    pub quote: OrderQuote,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub cancelled_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

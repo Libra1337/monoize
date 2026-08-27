@@ -58,20 +58,25 @@ function optimisticOrder(
   cnyPerUsd: string,
 ): StoreOrder {
   const now = new Date().toISOString();
+  const fractionalDigits = cnyPerUsd.split(".")[1]?.length ?? 0;
   return {
     id: `optimistic-${Date.now()}`,
     order_number: "...",
     user_id: "",
     product_id: product.id,
     product_kind: product.kind,
-    status: "pending",
+    payment_state: "unpaid",
+    fulfillment_state: "pending",
+    dispute_state: "none",
+    payment_hold: false,
     payment_channel_id: channel.id,
     payment_currency: currency,
     payment_minor: paymentMinor,
     cny_per_usd: cnyPerUsd,
-    rate_source_updated_at: now,
+    rate_numerator: cnyPerUsd.replace(".", ""),
+    rate_denominator: `1${"0".repeat(fractionalDigits)}`,
     quote: {
-      version: 1,
+      version: 2,
       product: {
         id: product.id,
         kind: product.kind,
@@ -84,21 +89,26 @@ function optimisticOrder(
         balance: product.balance,
         quotas: product.quotas,
       },
-      balance: product.balance,
       payment_channel: {
         id: channel.id,
-        kind: channel.kind,
+        adapter_kind: channel.adapter_kind,
         name: channel.name,
-        mode: channel.mode,
-        endpoint: channel.endpoint,
         icon_kind: channel.icon_kind,
         icon_value: channel.icon_value,
       },
+      rate: {
+        decimal: cnyPerUsd,
+        numerator: cnyPerUsd.replace(".", ""),
+        denominator: `1${"0".repeat(fractionalDigits)}`,
+        source_updated_at: now,
+        refreshed_at: now,
+      },
     },
+    contract_version: 2,
+    state_revision: 0,
+    expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
     created_at: now,
     updated_at: now,
-    completed_at: null,
-    cancelled_at: null,
   };
 }
 
@@ -372,17 +382,21 @@ export function StorePage() {
       paymentMinor,
       rate,
     );
+    const idempotencyKey = crypto.randomUUID();
     setSubmitting(true);
     try {
       await mutate<StoreOrder[]>(
         ORDERS_KEY,
         async (current = []) => {
-          const created = await storeApi.createOrder({
-            product_id: selectedProduct.id,
-            payment_channel_id: selectedChannel.id,
-            payment_currency: currency,
-            custom_recharge_minor: customRechargeMinor,
-          });
+          const created = await storeApi.createOrder(
+            {
+              product_id: selectedProduct.id,
+              payment_channel_id: selectedChannel.id,
+              payment_currency: currency,
+              custom_recharge_minor: customRechargeMinor,
+            },
+            idempotencyKey,
+          );
           return [created, ...current.filter((order) => order.id !== pending.id)];
         },
         {

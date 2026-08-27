@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { SiAlipay, SiWechat } from "@icons-pack/react-simple-icons";
+import { SiAlipay, SiStripe, SiWechat } from "@icons-pack/react-simple-icons";
 import { CreditCard } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { StorePaymentChannel } from "@/lib/store-api";
@@ -25,8 +25,9 @@ function ChannelIcon({ channel }: { channel: StorePaymentChannel }) {
       />
     );
   }
-  if (channel.kind === "alipay") return <SiAlipay className="size-5 text-[#1677ff]" />;
-  if (channel.kind === "wechat") return <SiWechat className="size-5 text-[#07c160]" />;
+  if (channel.adapter_kind === "alipay") return <SiAlipay className="size-5 text-[#1677ff]" />;
+  if (channel.adapter_kind === "wechat") return <SiWechat className="size-5 text-[#07c160]" />;
+  if (channel.adapter_kind === "stripe") return <SiStripe className="size-5 text-[#635bff]" />;
   return <CreditCard className="size-5" />;
 }
 

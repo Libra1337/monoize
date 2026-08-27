@@ -104,6 +104,32 @@ async fn json_request(
     (status, response_json(response).await)
 }
 
+async fn idempotent_json_request(
+    ctx: &super::TestContext,
+    path: &str,
+    authorization: &str,
+    idempotency_key: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let response = ctx
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(AUTHORIZATION, authorization)
+                .header(CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", idempotency_key)
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response_json(response).await)
+}
+
 fn balance_product(name: &str) -> Value {
     json!({
         "kind": "balance",
@@ -122,15 +148,12 @@ fn balance_product(name: &str) -> Value {
 
 fn payment_channel(name: &str) -> Value {
     json!({
-        "kind": "custom",
+        "adapter_kind": "http",
         "name": name,
-        "mode": "manual",
-        "endpoint": null,
         "icon_kind": "builtin",
-        "icon_value": null,
-        "config_secret": "must-not-leak",
+        "icon_value": "custom",
         "sort_order": 10,
-        "enabled": true
+        "enabled": false
     })
 }
 
@@ -174,12 +197,11 @@ async fn entitlement_endpoint_returns_null_without_an_active_store_plan() {
 }
 
 #[tokio::test]
-async fn store_admin_guards_and_product_channel_order_lifecycle() {
+async fn store_admin_guards_and_product_channel_management() {
     let mut ctx = setup().await;
     configure_rate(&mut ctx).await;
     let admin = dashboard_session(&ctx, "store_api_admin", UserRole::Admin).await;
     let user = dashboard_session(&ctx, "store_api_user", UserRole::User).await;
-    let other_user = dashboard_session(&ctx, "store_api_other", UserRole::User).await;
 
     let (status, body) = json_request(
         &ctx,
@@ -201,19 +223,22 @@ async fn store_admin_guards_and_product_channel_order_lifecycle() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{product}");
-    let product_id = product["id"].as_str().unwrap();
+    assert!(product["id"].is_string());
 
     let (status, channel) = json_request(
         &ctx,
         Method::POST,
         "/api/dashboard/store/admin/payment-channels",
         Some(&admin),
-        Some(payment_channel("Manual transfer")),
+        Some(payment_channel("Custom provider")),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{channel}");
+    assert_eq!(channel["adapter_kind"], "http");
+    assert!(channel.get("kind").is_none());
+    assert!(channel.get("mode").is_none());
+    assert!(channel.get("endpoint").is_none());
     assert!(channel.get("config_secret").is_none());
-    let channel_id = channel["id"].as_str().unwrap();
 
     let (status, catalog) = json_request(
         &ctx,
@@ -225,11 +250,7 @@ async fn store_admin_guards_and_product_channel_order_lifecycle() {
     .await;
     assert_eq!(status, StatusCode::OK, "{catalog}");
     assert_eq!(catalog["products"].as_array().unwrap().len(), 1);
-    assert!(
-        !serde_json::to_string(&catalog)
-            .unwrap()
-            .contains("must-not-leak")
-    );
+    assert!(catalog["payment_channels"].as_array().unwrap().is_empty());
 
     let (status, rate) = json_request(
         &ctx,
@@ -242,55 +263,15 @@ async fn store_admin_guards_and_product_channel_order_lifecycle() {
     assert_eq!(status, StatusCode::OK, "{rate}");
     assert_eq!(rate["cny_per_usd"], json!("6.7370"));
 
-    let (status, order) = json_request(
+    let (status, _) = json_request(
         &ctx,
         Method::POST,
-        "/api/dashboard/store/orders",
-        Some(&user),
-        Some(json!({
-            "product_id": product_id,
-            "payment_channel_id": channel_id,
-            "payment_currency": "CNY"
-        })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{order}");
-    let order_id = order["id"].as_str().unwrap();
-
-    let (status, orders) = json_request(
-        &ctx,
-        Method::GET,
-        "/api/dashboard/store/orders?limit=1000",
-        Some(&user),
+        "/api/dashboard/store/admin/orders/legacy-order/complete",
+        Some(&admin),
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{orders}");
-    assert_eq!(orders.as_array().unwrap().len(), 1);
-
-    let (status, orders) = json_request(
-        &ctx,
-        Method::GET,
-        "/api/dashboard/store/orders",
-        Some(&other_user),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{orders}");
-    assert!(orders.as_array().unwrap().is_empty());
-
-    for _ in 0..2 {
-        let (status, completed) = json_request(
-            &ctx,
-            Method::POST,
-            &format!("/api/dashboard/store/admin/orders/{order_id}/complete"),
-            Some(&admin),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{completed}");
-        assert_eq!(completed["status"], json!("completed"));
-    }
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -382,40 +363,42 @@ async fn store_json_errors_distinguish_currency_and_amount_overflow() {
         Some(balance_product("Error mapping recharge")),
     )
     .await;
-    let (_, channel) = json_request(
-        &ctx,
-        Method::POST,
-        "/api/dashboard/store/admin/payment-channels",
-        Some(&admin),
-        Some(payment_channel("Error mapping channel")),
-    )
-    .await;
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_payment_channels SET enabled = 1
+             WHERE id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
     let request = |currency: &str, custom_recharge_minor: Option<String>| {
         json!({
             "product_id": product["id"],
-            "payment_channel_id": channel["id"],
+            "payment_channel_id": "store-channel-stripe",
             "payment_currency": currency,
             "custom_recharge_minor": custom_recharge_minor
         })
     };
 
-    let (status, body) = json_request(
+    let (status, body) = idempotent_json_request(
         &ctx,
-        Method::POST,
         "/api/dashboard/store/orders",
-        Some(&user),
-        Some(request("EUR", None)),
+        &user,
+        "invalid-currency",
+        request("EUR", None),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], json!("invalid_currency"));
 
-    let (status, body) = json_request(
+    let (status, body) = idempotent_json_request(
         &ctx,
-        Method::POST,
         "/api/dashboard/store/orders",
-        Some(&user),
-        Some(request("CNY", Some("9".repeat(100)))),
+        &user,
+        "overflow-amount",
+        request("CNY", Some("9".repeat(100))),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");

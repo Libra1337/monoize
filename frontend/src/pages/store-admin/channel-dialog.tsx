@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ImageOff, Upload } from "lucide-react";
-import { SiAlipay, SiWechat } from "@icons-pack/react-simple-icons";
+import { SiAlipay, SiStripe, SiWechat } from "@icons-pack/react-simple-icons";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,10 +23,9 @@ import {
 import { Switch } from "@/components/ui/switch";
 import {
   storeApi,
+  type PaymentAdapterKind,
   type PaymentChannelIconKind,
   type PaymentChannelInput,
-  type PaymentChannelKind,
-  type PaymentChannelMode,
   type StorePaymentChannel,
 } from "@/lib/store-api";
 
@@ -38,21 +37,19 @@ interface ChannelDialogProps {
   onSave: (input: PaymentChannelInput) => Promise<void>;
 }
 
-function ChannelMark({ kind }: { kind: PaymentChannelKind }) {
-  if (kind === "alipay") return <SiAlipay className="size-6 text-[#1677ff]" />;
-  if (kind === "wechat") return <SiWechat className="size-6 text-[#07c160]" />;
+function ChannelMark({ adapterKind }: { adapterKind: PaymentAdapterKind }) {
+  if (adapterKind === "alipay") return <SiAlipay className="size-6 text-[#1677ff]" />;
+  if (adapterKind === "wechat") return <SiWechat className="size-6 text-[#07c160]" />;
+  if (adapterKind === "stripe") return <SiStripe className="size-6 text-[#635bff]" />;
   return <ImageOff className="size-6 text-muted-foreground" />;
 }
 
 export function ChannelDialog({ open, channel, saving, onOpenChange, onSave }: ChannelDialogProps) {
   const { t } = useTranslation();
-  const [kind, setKind] = useState<PaymentChannelKind>("custom");
+  const [adapterKind, setAdapterKind] = useState<PaymentAdapterKind>("http");
   const [name, setName] = useState("");
-  const [mode, setMode] = useState<PaymentChannelMode>("redirect");
-  const [endpoint, setEndpoint] = useState("");
   const [iconKind, setIconKind] = useState<PaymentChannelIconKind>("builtin");
   const [iconValue, setIconValue] = useState("");
-  const [secret, setSecret] = useState("");
   const [sortOrder, setSortOrder] = useState("0");
   const [enabled, setEnabled] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -61,13 +58,10 @@ export function ChannelDialog({ open, channel, saving, onOpenChange, onSave }: C
 
   useEffect(() => {
     if (!open) return;
-    setKind(channel?.kind ?? "custom");
+    setAdapterKind(channel?.adapter_kind ?? "http");
     setName(channel?.name ?? "");
-    setMode(channel?.mode ?? "redirect");
-    setEndpoint(channel?.endpoint ?? "");
     setIconKind(channel?.icon_kind ?? "builtin");
     setIconValue(channel?.icon_value ?? "");
-    setSecret("");
     setSortOrder(String(channel?.sort_order ?? 0));
     setEnabled(channel?.enabled ?? false);
     setImageFailed(false);
@@ -109,13 +103,10 @@ export function ChannelDialog({ open, channel, saving, onOpenChange, onSave }: C
       return;
     }
     await onSave({
-      kind,
+      adapter_kind: adapterKind,
       name: name.trim(),
-      mode,
-      endpoint: endpoint.trim() || null,
       icon_kind: iconKind,
       icon_value: iconKind === "builtin" ? null : iconValue.trim(),
-      config_secret: secret || null,
       sort_order: parsedSortOrder,
       enabled,
     });
@@ -133,17 +124,12 @@ export function ChannelDialog({ open, channel, saving, onOpenChange, onSave }: C
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label>{t("store.admin.channels.kind")}</Label>
-              <Select value={kind} disabled={Boolean(channel)} onValueChange={(value) => setKind(value as PaymentChannelKind)}>
+              <Select value={adapterKind} disabled={Boolean(channel)} onValueChange={(value) => setAdapterKind(value as PaymentAdapterKind)}>
                 <SelectTrigger className="min-h-11 rounded-xl"><SelectValue /></SelectTrigger>
-                <SelectContent>{["alipay", "wechat", "custom"].map((value) => <SelectItem key={value} value={value}>{t(`store.admin.channels.kinds.${value}`)}</SelectItem>)}</SelectContent>
+                <SelectContent>{["alipay", "wechat", "stripe", "http"].map((value) => <SelectItem key={value} value={value}>{t(`store.admin.channels.kinds.${value}`)}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="grid gap-2"><Label htmlFor="store-channel-name">{t("store.admin.channels.name")}</Label><Input id="store-channel-name" className="min-h-11 rounded-xl" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></div>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="grid gap-2"><Label>{t("store.admin.channels.mode")}</Label><Select value={mode} onValueChange={(value) => setMode(value as PaymentChannelMode)}><SelectTrigger className="min-h-11 rounded-xl"><SelectValue /></SelectTrigger><SelectContent>{["redirect", "qr", "manual"].map((value) => <SelectItem key={value} value={value}>{t(`store.admin.channels.modes.${value}`)}</SelectItem>)}</SelectContent></Select></div>
-            <div className="grid gap-2"><Label htmlFor="store-channel-endpoint">{t("store.admin.channels.endpoint")}</Label><Input id="store-channel-endpoint" className="min-h-11 rounded-xl" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></div>
           </div>
 
           <div className="grid gap-3">
@@ -159,12 +145,11 @@ export function ChannelDialog({ open, channel, saving, onOpenChange, onSave }: C
               </label>
             )}
             <div className="flex min-h-16 items-center gap-3 rounded-xl border px-4">
-              {iconKind !== "builtin" && iconValue && !imageFailed ? <img key={iconValue} src={iconValue} alt="" className="size-8 rounded-lg object-contain" onError={() => setImageFailed(true)} /> : <ChannelMark kind={kind} />}
-              <div className="min-w-0"><p className="text-sm font-medium">{name || t(`store.admin.channels.kinds.${kind}`)}</p><p className="truncate text-xs text-muted-foreground">{iconKind === "builtin" ? t("store.admin.channels.builtinPreview") : iconValue || t("store.admin.channels.noImage")}</p></div>
+              {iconKind !== "builtin" && iconValue && !imageFailed ? <img key={iconValue} src={iconValue} alt="" className="size-8 rounded-lg object-contain" onError={() => setImageFailed(true)} /> : <ChannelMark adapterKind={adapterKind} />}
+              <div className="min-w-0"><p className="text-sm font-medium">{name || t(`store.admin.channels.kinds.${adapterKind}`)}</p><p className="truncate text-xs text-muted-foreground">{iconKind === "builtin" ? t("store.admin.channels.builtinPreview") : iconValue || t("store.admin.channels.noImage")}</p></div>
             </div>
           </div>
 
-          <div className="grid gap-2"><Label htmlFor="store-channel-secret">{t("store.admin.channels.secret")}</Label><Input id="store-channel-secret" className="min-h-11 rounded-xl" type="password" autoComplete="new-password" value={secret} onChange={(event) => setSecret(event.target.value)} /></div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2"><Label htmlFor="store-channel-sort">{t("store.admin.channels.sortOrder")}</Label><Input id="store-channel-sort" className="min-h-11 rounded-xl" type="number" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} /></div>
             <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 self-end rounded-xl border px-3"><span className="text-sm font-medium">{t("store.admin.enabled")}</span><Switch checked={enabled} onCheckedChange={setEnabled} /></label>

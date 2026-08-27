@@ -5,7 +5,7 @@ use crate::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
 };
 use crate::store_billing::{
-    CreateOrderInput, CreatePaymentChannelInput, CreateProductInput, GenerateRedemptionCodesInput,
+    CreatePaymentChannelInput, CreateProductInput, Currency, GenerateRedemptionCodesInput,
     PAYMENT_ICON_MAX_BYTES, StoreBillingError, StoreSettings, UpdatePaymentChannelInput,
 };
 use axum::Json;
@@ -45,6 +45,14 @@ pub struct CreatePaymentAttemptRequest {
     pub expected_payment_method: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreatePaymentOrderRequest {
+    pub product_id: String,
+    pub payment_channel_id: String,
+    pub payment_currency: Currency,
+    pub custom_recharge_minor: Option<String>,
+}
+
 fn map_store_error(error: StoreBillingError) -> AppError {
     let (status, code, message) = match error {
         StoreBillingError::InvalidInput => (
@@ -81,26 +89,6 @@ fn map_store_error(error: StoreBillingError) -> AppError {
             StatusCode::BAD_REQUEST,
             "invalid_icon",
             "payment channel icon is invalid",
-        ),
-        StoreBillingError::NoPaymentChannel => (
-            StatusCode::CONFLICT,
-            "no_payment_channel",
-            "no payment channel is enabled",
-        ),
-        StoreBillingError::OrderNotFound => (
-            StatusCode::NOT_FOUND,
-            "order_not_found",
-            "order was not found",
-        ),
-        StoreBillingError::OrderCancelled => (
-            StatusCode::CONFLICT,
-            "order_cancelled",
-            "order is cancelled",
-        ),
-        StoreBillingError::OrderCompleted => (
-            StatusCode::CONFLICT,
-            "order_completed",
-            "order is completed",
         ),
         StoreBillingError::InvalidRedemptionCode => (
             StatusCode::NOT_FOUND,
@@ -336,7 +324,7 @@ pub async fn list_store_orders(
 pub async fn create_store_order(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Result<Json<CreateOrderInput>, JsonRejection>,
+    body: Result<Json<CreatePaymentOrderRequest>, JsonRejection>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
     let input = parse_store_json(body)?;

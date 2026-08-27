@@ -36,14 +36,6 @@ pub enum StoreBillingError {
     InvalidPaymentChannel,
     #[error("payment channel icon is invalid")]
     InvalidIcon,
-    #[error("no payment channel is enabled")]
-    NoPaymentChannel,
-    #[error("order was not found")]
-    OrderNotFound,
-    #[error("order is cancelled")]
-    OrderCancelled,
-    #[error("order is completed")]
-    OrderCompleted,
     #[error("redemption code is invalid")]
     InvalidRedemptionCode,
     #[error("redemption code is expired")]
@@ -413,18 +405,15 @@ impl StoreBillingStore {
         write
             .execute(self.db.stmt(
                 "INSERT INTO store_payment_channels
-                    (id, kind, name, mode, endpoint, icon_kind, icon_value, config_secret,
-                     sort_order, enabled, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)",
+                    (id, adapter_kind, name, icon_kind, icon_value, sort_order, enabled,
+                     revision, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8)",
                 vec![
                     id.clone().into(),
-                    input.kind.as_str().into(),
+                    input.adapter_kind.as_str().into(),
                     input.name.trim().to_string().into(),
-                    input.mode.as_str().into(),
-                    input.endpoint.into(),
                     input.icon_kind.as_str().into(),
                     input.icon_value.into(),
-                    input.config_secret.into(),
                     input.sort_order.into(),
                     i32::from(input.enabled).into(),
                     now.into(),
@@ -512,20 +501,20 @@ impl StoreBillingStore {
         let result = write
             .execute(self.db.stmt(
                 "UPDATE store_payment_channels SET
-                    kind = $2, name = $3, mode = $4, endpoint = COALESCE($5, endpoint),
-                    icon_kind = $6, icon_value = $7,
-                    config_secret = COALESCE($8, config_secret), sort_order = $9,
-                    enabled = $10, updated_at = $11
+                    adapter_kind = $2, name = $3, icon_kind = $4, icon_value = $5,
+                    sort_order = $6, enabled = $7, revision = revision + 1,
+                    updated_at = $8
                  WHERE id = $1",
                 vec![
                     id.into(),
-                    input.kind.unwrap_or(current.kind).as_str().into(),
+                    input
+                        .adapter_kind
+                        .unwrap_or(current.adapter_kind)
+                        .as_str()
+                        .into(),
                     name.trim().to_string().into(),
-                    input.mode.unwrap_or(current.mode).as_str().into(),
-                    input.endpoint.into(),
                     icon_kind.as_str().into(),
                     icon_value.into(),
-                    input.config_secret.into(),
                     input.sort_order.unwrap_or(current.sort_order).into(),
                     i32::from(input.enabled.unwrap_or(current.enabled)).into(),
                     timestamp(Utc::now()).into(),
@@ -553,8 +542,8 @@ impl StoreBillingStore {
             .read()
             .query_one(self.db.stmt(
                 &format!(
-                    "SELECT id, kind, name, mode, endpoint, icon_kind, icon_value,
-                            sort_order, enabled, created_at, updated_at
+                    "SELECT id, adapter_kind, name, icon_kind, icon_value,
+                            sort_order, enabled, revision, created_at, updated_at
                      FROM store_payment_channels WHERE id = $1{suffix}"
                 ),
                 vec![id.into()],
@@ -586,8 +575,8 @@ impl StoreBillingStore {
             .db
             .read()
             .query_all(self.db.stmt(
-                "SELECT id, kind, name, mode, endpoint, icon_kind, icon_value,
-                        sort_order, enabled, created_at, updated_at
+                "SELECT id, adapter_kind, name, icon_kind, icon_value,
+                        sort_order, enabled, revision, created_at, updated_at
                  FROM store_payment_channels WHERE enabled = 1
                  ORDER BY sort_order ASC, created_at ASC, id ASC",
                 vec![],
@@ -630,8 +619,8 @@ impl StoreBillingStore {
         self.db
             .read()
             .query_all(self.db.stmt(
-                "SELECT id, kind, name, mode, endpoint, icon_kind, icon_value,
-                        sort_order, enabled, created_at, updated_at
+                "SELECT id, adapter_kind, name, icon_kind, icon_value,
+                        sort_order, enabled, revision, created_at, updated_at
                  FROM store_payment_channels
                  ORDER BY sort_order ASC, created_at ASC, id ASC",
                 vec![],
@@ -671,335 +660,6 @@ impl StoreBillingStore {
             return Err(StoreBillingError::NotFound);
         }
         Ok(())
-    }
-
-    pub async fn create_order(
-        &self,
-        user_id: &str,
-        input: CreateOrderInput,
-        rate: &ExchangeRateSnapshot,
-    ) -> Result<StoreOrder, StoreBillingError> {
-        validate_rate_snapshot(rate)?;
-        let product = self
-            .product_by_id(&input.product_id, true)
-            .await?
-            .ok_or(StoreBillingError::ProductNotAvailable)?;
-        let enabled_channel_count = self
-            .db
-            .read()
-            .query_one(self.db.stmt(
-                "SELECT COUNT(*) AS count FROM store_payment_channels WHERE enabled = 1",
-                vec![],
-            ))
-            .await
-            .map_err(storage)?
-            .ok_or_else(|| storage("payment channel count is missing"))?;
-        if row_i64(&enabled_channel_count, "count")? == 0 {
-            return Err(StoreBillingError::NoPaymentChannel);
-        }
-        let channel = self
-            .payment_channel_by_id(&input.payment_channel_id, true)
-            .await?
-            .ok_or(StoreBillingError::InvalidPaymentChannel)?;
-
-        let (payment_minor, quoted_balance) = if product.kind == ProductKind::Balance {
-            let balance = product
-                .balance
-                .as_ref()
-                .ok_or_else(|| storage("balance product details are missing"))?;
-            if let Some(custom) = input.custom_recharge_minor.as_deref() {
-                let amount = parse_minor(custom)?;
-                let settings = self.get_settings().await?;
-                let (minimum, maximum) = settings.custom_recharge_bounds(input.payment_currency)?;
-                if !(minimum..=maximum).contains(&amount) {
-                    return Err(StoreBillingError::InvalidAmount);
-                }
-                (
-                    custom.to_string(),
-                    Some(BalanceProduct {
-                        recharge_minor: custom.to_string(),
-                        bonus_minor: "0".to_string(),
-                        actual_received_minor: custom.to_string(),
-                    }),
-                )
-            } else {
-                let recharge = convert_minor(
-                    parse_minor(&balance.recharge_minor)?,
-                    product.price_currency,
-                    input.payment_currency,
-                    &rate.cny_per_usd,
-                )?;
-                let bonus = convert_minor(
-                    parse_minor(&balance.bonus_minor)?,
-                    product.price_currency,
-                    input.payment_currency,
-                    &rate.cny_per_usd,
-                )?;
-                let actual = recharge
-                    .checked_add(bonus)
-                    .ok_or(StoreBillingError::AmountOverflow)?;
-                (
-                    recharge.to_string(),
-                    Some(BalanceProduct {
-                        recharge_minor: recharge.to_string(),
-                        bonus_minor: bonus.to_string(),
-                        actual_received_minor: actual.to_string(),
-                    }),
-                )
-            }
-        } else {
-            if input.custom_recharge_minor.is_some() {
-                return Err(StoreBillingError::InvalidAmount);
-            }
-            (
-                convert_minor(
-                    parse_minor(&product.price_minor)?,
-                    product.price_currency,
-                    input.payment_currency,
-                    &rate.cny_per_usd,
-                )?
-                .to_string(),
-                None,
-            )
-        };
-        if parse_minor(&payment_minor)? == 0 {
-            return Err(StoreBillingError::InvalidAmount);
-        }
-
-        let product_snapshot = ProductSnapshot {
-            id: product.id.clone(),
-            kind: product.kind,
-            name: product.name.clone(),
-            description: product.description.clone(),
-            price_currency: product.price_currency,
-            price_minor: product.price_minor.clone(),
-            duration_seconds: product.duration_seconds,
-            group_ids: product.group_ids.clone(),
-            balance: quoted_balance.clone(),
-            quotas: product.quotas.clone(),
-        };
-        let quote = OrderQuote {
-            version: 1,
-            product: product_snapshot,
-            balance: quoted_balance,
-            payment_channel: PaymentChannelSnapshot {
-                id: channel.id.clone(),
-                kind: channel.kind,
-                name: channel.name.clone(),
-                mode: channel.mode,
-                endpoint: channel.endpoint.clone(),
-                icon_kind: channel.icon_kind,
-                icon_value: channel.icon_value.clone(),
-            },
-        };
-        let id = Uuid::new_v4().to_string();
-        let order_number = format!("LS-{}", Uuid::new_v4().simple()).to_uppercase();
-        let now = timestamp(Utc::now());
-        let write = self.db.write().await;
-        write
-            .execute(self.db.stmt(
-                "INSERT INTO store_orders
-                    (id, order_number, user_id, product_id, product_kind, status,
-                     payment_channel_id, payment_currency, payment_minor, cny_per_usd,
-                     rate_source_updated_at, quote_json, created_at, updated_at,
-                     completed_at, cancelled_at)
-                 VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10, $11,
-                         $12, $12, NULL, NULL)",
-                vec![
-                    id.clone().into(),
-                    order_number.into(),
-                    user_id.into(),
-                    product.id.into(),
-                    product.kind.as_str().into(),
-                    channel.id.into(),
-                    currency_string(input.payment_currency).into(),
-                    payment_minor.into(),
-                    rate.cny_per_usd.clone().into(),
-                    timestamp(rate.source_updated_at).into(),
-                    to_json(&quote)?.into(),
-                    now.into(),
-                ],
-            ))
-            .await
-            .map_err(storage)?;
-        drop(write);
-        self.order_by_id(&id)
-            .await?
-            .ok_or(StoreBillingError::OrderNotFound)
-    }
-
-    pub async fn list_orders_for_user(
-        &self,
-        user_id: &str,
-        limit: u64,
-    ) -> Result<Vec<StoreOrder>, StoreBillingError> {
-        self.db
-            .read()
-            .query_all(self.db.stmt(
-                &format!(
-                    "{} WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
-                    order_select()
-                ),
-                vec![user_id.into(), (limit.min(100) as i64).into()],
-            ))
-            .await
-            .map_err(storage)?
-            .into_iter()
-            .map(store_order_from_row)
-            .collect()
-    }
-
-    pub async fn list_orders_admin(
-        &self,
-        limit: u64,
-    ) -> Result<Vec<StoreOrder>, StoreBillingError> {
-        self.db
-            .read()
-            .query_all(self.db.stmt(
-                &format!(
-                    "{} ORDER BY created_at DESC, id DESC LIMIT $1",
-                    order_select()
-                ),
-                vec![(limit.min(100) as i64).into()],
-            ))
-            .await
-            .map_err(storage)?
-            .into_iter()
-            .map(store_order_from_row)
-            .collect()
-    }
-
-    async fn order_by_id(&self, id: &str) -> Result<Option<StoreOrder>, StoreBillingError> {
-        self.db
-            .read()
-            .query_one(self.db.stmt(
-                &format!("{} WHERE id = $1", order_select()),
-                vec![id.into()],
-            ))
-            .await
-            .map_err(storage)?
-            .map(store_order_from_row)
-            .transpose()
-    }
-
-    pub async fn complete_order(&self, id: &str) -> Result<StoreOrder, StoreBillingError> {
-        let tx = self.db.begin_write().await.map_err(storage)?;
-        let lock = if self.db.is_postgres() {
-            " FOR UPDATE"
-        } else {
-            ""
-        };
-        let row = tx
-            .query_one(self.db.stmt(
-                &format!("{} WHERE id = $1{lock}", order_select()),
-                vec![id.into()],
-            ))
-            .await
-            .map_err(storage)?
-            .ok_or(StoreBillingError::OrderNotFound)?;
-        let order = store_order_from_row(row)?;
-        match order.status {
-            OrderStatus::Completed => {
-                tx.commit().await.map_err(storage)?;
-                return Ok(order);
-            }
-            OrderStatus::Cancelled => {
-                tx.rollback().await.map_err(storage)?;
-                return Err(StoreBillingError::OrderCancelled);
-            }
-            OrderStatus::Pending => {}
-        }
-
-        let completed_at = Utc::now();
-        match order.product_kind {
-            ProductKind::Balance => {
-                let amount = order
-                    .quote
-                    .balance
-                    .as_ref()
-                    .ok_or_else(|| storage("order balance quote is missing"))?;
-                let delta = quoted_received_to_nano_usd(
-                    parse_minor(&amount.actual_received_minor)?,
-                    order.payment_currency,
-                    &order.cny_per_usd,
-                )?;
-                self.credit_balance(
-                    &*tx,
-                    &order.user_id,
-                    delta,
-                    "store_recharge",
-                    &format!("store-order:{}", order.id),
-                    serde_json::json!({"order_id": order.id}),
-                    completed_at,
-                )
-                .await?;
-            }
-            ProductKind::Plan => {
-                self.activate_plan(
-                    &*tx,
-                    &order.user_id,
-                    &order.quote.product,
-                    &order.cny_per_usd,
-                    "order",
-                    &order.id,
-                    completed_at,
-                )
-                .await?;
-            }
-        }
-        let now = timestamp(completed_at);
-        tx.execute(self.db.stmt(
-            "UPDATE store_orders SET status = 'completed', updated_at = $2, completed_at = $2
-             WHERE id = $1 AND status = 'pending'",
-            vec![id.into(), now.into()],
-        ))
-        .await
-        .map_err(storage)?;
-        tx.commit().await.map_err(storage)?;
-        self.order_by_id(id)
-            .await?
-            .ok_or(StoreBillingError::OrderNotFound)
-    }
-
-    pub async fn cancel_order(&self, id: &str) -> Result<StoreOrder, StoreBillingError> {
-        let tx = self.db.begin_write().await.map_err(storage)?;
-        let lock = if self.db.is_postgres() {
-            " FOR UPDATE"
-        } else {
-            ""
-        };
-        let row = tx
-            .query_one(self.db.stmt(
-                &format!("{} WHERE id = $1{lock}", order_select()),
-                vec![id.into()],
-            ))
-            .await
-            .map_err(storage)?
-            .ok_or(StoreBillingError::OrderNotFound)?;
-        let order = store_order_from_row(row)?;
-        match order.status {
-            OrderStatus::Cancelled => {
-                tx.commit().await.map_err(storage)?;
-                return Ok(order);
-            }
-            OrderStatus::Completed => {
-                tx.rollback().await.map_err(storage)?;
-                return Err(StoreBillingError::OrderCompleted);
-            }
-            OrderStatus::Pending => {}
-        }
-        let now = timestamp(Utc::now());
-        tx.execute(self.db.stmt(
-            "UPDATE store_orders SET status = 'cancelled', updated_at = $2, cancelled_at = $2
-             WHERE id = $1 AND status = 'pending'",
-            vec![id.into(), now.into()],
-        ))
-        .await
-        .map_err(storage)?;
-        tx.commit().await.map_err(storage)?;
-        self.order_by_id(id)
-            .await?
-            .ok_or(StoreBillingError::OrderNotFound)
     }
 
     pub async fn current_entitlement(
@@ -1482,17 +1142,15 @@ fn is_local_name(actual: &str, expected: &str) -> bool {
 fn payment_channel_from_row(row: QueryResult) -> Result<PaymentChannel, StoreBillingError> {
     Ok(PaymentChannel {
         id: row_string(&row, "id")?,
-        kind: PaymentChannelKind::from_str(&row_string(&row, "kind")?)
-            .ok_or_else(|| storage("stored payment channel kind is invalid"))?,
+        adapter_kind: PaymentAdapterKind::from_str(&row_string(&row, "adapter_kind")?)
+            .ok_or_else(|| storage("stored payment adapter kind is invalid"))?,
         name: row_string(&row, "name")?,
-        mode: PaymentChannelMode::from_str(&row_string(&row, "mode")?)
-            .ok_or_else(|| storage("stored payment channel mode is invalid"))?,
-        endpoint: row_optional_string(&row, "endpoint")?,
         icon_kind: IconKind::from_str(&row_string(&row, "icon_kind")?)
             .ok_or_else(|| storage("stored icon kind is invalid"))?,
         icon_value: row_optional_string(&row, "icon_value")?,
         sort_order: row.try_get("", "sort_order").map_err(storage)?,
         enabled: row_i32(&row, "enabled")? != 0,
+        revision: row.try_get("", "revision").map_err(storage)?,
         created_at: parse_timestamp(&row_string(&row, "created_at")?)?,
         updated_at: parse_timestamp(&row_string(&row, "updated_at")?)?,
     })
@@ -1504,43 +1162,6 @@ fn validate_rate_snapshot(rate: &ExchangeRateSnapshot) -> Result<(), StoreBillin
     }
     convert_minor(1, Currency::USD, Currency::USD, &rate.cny_per_usd)?;
     Ok(())
-}
-
-fn order_select() -> &'static str {
-    "SELECT id, order_number, user_id, product_id, product_kind, status,
-            payment_channel_id, payment_currency, payment_minor, cny_per_usd,
-            rate_source_updated_at, quote_json, created_at, updated_at,
-            completed_at, cancelled_at
-     FROM store_orders"
-}
-
-fn store_order_from_row(row: QueryResult) -> Result<StoreOrder, StoreBillingError> {
-    let completed_at = row_optional_string(&row, "completed_at")?
-        .map(|value| parse_timestamp(&value))
-        .transpose()?;
-    let cancelled_at = row_optional_string(&row, "cancelled_at")?
-        .map(|value| parse_timestamp(&value))
-        .transpose()?;
-    Ok(StoreOrder {
-        id: row_string(&row, "id")?,
-        order_number: row_string(&row, "order_number")?,
-        user_id: row_string(&row, "user_id")?,
-        product_id: row_string(&row, "product_id")?,
-        product_kind: ProductKind::from_str(&row_string(&row, "product_kind")?)
-            .ok_or_else(|| storage("stored order product kind is invalid"))?,
-        status: OrderStatus::from_str(&row_string(&row, "status")?)
-            .ok_or_else(|| storage("stored order status is invalid"))?,
-        payment_channel_id: row_string(&row, "payment_channel_id")?,
-        payment_currency: parse_currency(&row_string(&row, "payment_currency")?)?,
-        payment_minor: row_string(&row, "payment_minor")?,
-        cny_per_usd: row_string(&row, "cny_per_usd")?,
-        rate_source_updated_at: parse_timestamp(&row_string(&row, "rate_source_updated_at")?)?,
-        quote: parse_json(&row_string(&row, "quote_json")?)?,
-        created_at: parse_timestamp(&row_string(&row, "created_at")?)?,
-        updated_at: parse_timestamp(&row_string(&row, "updated_at")?)?,
-        completed_at,
-        cancelled_at,
-    })
 }
 
 fn plan_entitlement_from_row(row: QueryResult) -> Result<PlanEntitlement, StoreBillingError> {
@@ -1744,25 +1365,6 @@ fn validate_settings(settings: &StoreSettings) -> Result<(), StoreBillingError> 
         }
     }
     Ok(())
-}
-
-impl StoreSettings {
-    fn custom_recharge_bounds(
-        &self,
-        currency: Currency,
-    ) -> Result<(i128, i128), StoreBillingError> {
-        let (minimum, maximum) = match currency {
-            Currency::CNY => (
-                &self.custom_recharge_cny_min_minor,
-                &self.custom_recharge_cny_max_minor,
-            ),
-            Currency::USD => (
-                &self.custom_recharge_usd_min_minor,
-                &self.custom_recharge_usd_max_minor,
-            ),
-        };
-        Ok((parse_minor(minimum)?, parse_minor(maximum)?))
-    }
 }
 
 fn validate_product(input: &CreateProductInput) -> Result<(), StoreBillingError> {

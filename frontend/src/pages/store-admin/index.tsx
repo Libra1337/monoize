@@ -22,7 +22,6 @@ import {
   storeApi,
   type GenerateRedemptionCodesInput,
   type PaymentChannelInput,
-  type StoreOrder,
   type StorePaymentChannel,
   type StoreProduct,
   type StoreProductInput,
@@ -66,7 +65,7 @@ function optimisticProduct(input: StoreProductInput, id: string): StoreProduct {
 
 function optimisticChannel(input: PaymentChannelInput, id: string): StorePaymentChannel {
   const now = new Date().toISOString();
-  return { ...input, id, created_at: now, updated_at: now };
+  return { ...input, id, revision: 1, created_at: now, updated_at: now };
 }
 
 function SettingsPanel({ settings, saving, onSave }: { settings: StoreSettings; saving: boolean; onSave: (settings: StoreSettings) => Promise<void> }) {
@@ -103,7 +102,6 @@ export function StoreAdminPage() {
   const [selectedChannel, setSelectedChannel] = useState<StorePaymentChannel | null>(null);
   const [redemptionDialogOpen, setRedemptionDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
 
   const products = useSWR(PRODUCTS_KEY, storeApi.admin.listProducts);
@@ -142,7 +140,7 @@ export function StoreAdminPage() {
       await channels.mutate(async (current = []) => {
         const saved = target ? await storeApi.admin.updatePaymentChannel(target.id, input) : await storeApi.admin.createPaymentChannel(input);
         return target ? current.map((item) => item.id === target.id ? saved : item) : [...current.filter((item) => item.id !== optimistic.id), saved];
-      }, { optimisticData: (current = []) => target ? current.map((item) => item.id === target.id ? { ...optimistic, created_at: item.created_at } : item) : [...current, optimistic], rollbackOnError: true, revalidate: false });
+      }, { optimisticData: (current = []) => target ? current.map((item) => item.id === target.id ? { ...optimistic, created_at: item.created_at, revision: item.revision + 1 } : item) : [...current, optimistic], rollbackOnError: true, revalidate: false });
       toast.success(t("store.admin.saved"));
       setChannelDialogOpen(false);
     } catch (cause) { toast.error(cause instanceof Error ? cause.message : t("common.error")); } finally { setSaving(false); }
@@ -153,18 +151,6 @@ export function StoreAdminPage() {
       await channels.mutate(async (current = []) => { await storeApi.admin.deletePaymentChannel(channel.id); return current.filter((item) => item.id !== channel.id); }, { optimisticData: (current = []) => current.filter((item) => item.id !== channel.id), rollbackOnError: true, revalidate: false });
       toast.success(t("store.admin.deleted"));
     } catch (cause) { toast.error(cause instanceof Error ? cause.message : t("common.error")); }
-  };
-
-  const updateOrder = async (order: StoreOrder, action: "complete" | "cancel") => {
-    setOrderBusyId(order.id);
-    const status = action === "complete" ? "completed" : "cancelled";
-    try {
-      await orders.mutate(async (current = []) => {
-        const updated = action === "complete" ? await storeApi.admin.completeOrder(order.id) : await storeApi.admin.cancelOrder(order.id);
-        return current.map((item) => item.id === order.id ? updated : item);
-      }, { optimisticData: (current = []) => current.map((item) => item.id === order.id ? { ...item, status } : item), rollbackOnError: true, revalidate: false });
-      toast.success(t("store.admin.orders.updated"));
-    } catch (cause) { toast.error(cause instanceof Error ? cause.message : t("common.error")); } finally { setOrderBusyId(null); }
   };
 
   const saveSettings = async (input: StoreSettings) => {
@@ -210,7 +196,7 @@ export function StoreAdminPage() {
     <div role="tabpanel" className="grid gap-6">
       {activeTab === "products" && <AdminLoadState loading={products.isLoading || settings.isLoading || groups.isLoading} error={products.error || settings.error || groups.error} onRetry={() => { void products.mutate(); void settings.mutate(); void groups.mutate(); }}><ProductsPanel products={products.data ?? []} onCreate={() => { setSelectedProduct(null); setProductDialogOpen(true); }} onEdit={(product) => { setSelectedProduct(product); setProductDialogOpen(true); }} onDelete={(product) => setDeleteTarget({ kind: "product", record: product })} />{settings.data && <SettingsPanel settings={settings.data} saving={saving} onSave={saveSettings} />}</AdminLoadState>}
       {activeTab === "channels" && <AdminLoadState loading={channels.isLoading} error={channels.error} onRetry={() => void channels.mutate()}><ChannelsPanel channels={channels.data ?? []} onCreate={() => { setSelectedChannel(null); setChannelDialogOpen(true); }} onEdit={(channel) => { setSelectedChannel(channel); setChannelDialogOpen(true); }} onDelete={(channel) => setDeleteTarget({ kind: "channel", record: channel })} /></AdminLoadState>}
-      {activeTab === "orders" && <AdminLoadState loading={orders.isLoading} error={orders.error} onRetry={() => void orders.mutate()}><OrdersPanel orders={orders.data ?? []} busyId={orderBusyId} onComplete={(order) => void updateOrder(order, "complete")} onCancel={(order) => void updateOrder(order, "cancel")} /></AdminLoadState>}
+      {activeTab === "orders" && <AdminLoadState loading={orders.isLoading} error={orders.error} onRetry={() => void orders.mutate()}><OrdersPanel orders={orders.data ?? []} /></AdminLoadState>}
       {activeTab === "redemptions" && <AdminLoadState loading={redemptions.isLoading || products.isLoading} error={redemptions.error || products.error} onRetry={() => { void redemptions.mutate(); void products.mutate(); }}><RedemptionsPanel codes={redemptions.data ?? []} onGenerate={() => setRedemptionDialogOpen(true)} /></AdminLoadState>}
     </div>
     <ProductDialog open={productDialogOpen} product={selectedProduct} groups={groups.data?.groups ?? []} saving={saving} onOpenChange={setProductDialogOpen} onSave={saveProduct} />

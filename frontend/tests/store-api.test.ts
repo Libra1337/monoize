@@ -25,17 +25,22 @@ describe("Store API transport", () => {
 
   test("creates an order with the exact JSON field names", async () => {
     let body = "";
+    let idempotencyKey = "";
     globalThis.fetch = (async (_input, init) => {
       body = String(init?.body);
+      idempotencyKey = new Headers(init?.headers).get("Idempotency-Key") ?? "";
       return Response.json({ id: "order-1" }, { status: 201 });
     }) as typeof fetch;
 
-    await storeApi.createOrder({
-      product_id: "product-1",
-      payment_channel_id: "channel-1",
-      payment_currency: "CNY",
-      custom_recharge_minor: "1200",
-    });
+    await storeApi.createOrder(
+      {
+        product_id: "product-1",
+        payment_channel_id: "channel-1",
+        payment_currency: "CNY",
+        custom_recharge_minor: "1200",
+      },
+      "checkout-1",
+    );
 
     expect(JSON.parse(body)).toEqual({
       product_id: "product-1",
@@ -43,6 +48,7 @@ describe("Store API transport", () => {
       payment_currency: "CNY",
       custom_recharge_minor: "1200",
     });
+    expect(idempotencyKey).toBe("checkout-1");
   });
 
   test("maps user and admin operations to the Store route surface", async () => {
@@ -60,8 +66,6 @@ describe("Store API transport", () => {
     await storeApi.admin.listOrders(50);
     await storeApi.admin.listRedemptionCodes(10);
     await storeApi.admin.getSettings();
-    await storeApi.admin.completeOrder("order/1");
-    await storeApi.admin.cancelOrder("order/1");
 
     expect(requests).toEqual([
       { url: "/api/dashboard/store/exchange-rate", method: "GET" },
@@ -72,8 +76,11 @@ describe("Store API transport", () => {
       { url: "/api/dashboard/store/admin/orders?limit=50", method: "GET" },
       { url: "/api/dashboard/store/admin/redemption-codes?limit=10", method: "GET" },
       { url: "/api/dashboard/store/admin/settings", method: "GET" },
-      { url: "/api/dashboard/store/admin/orders/order%2F1/complete", method: "POST" },
-      { url: "/api/dashboard/store/admin/orders/order%2F1/cancel", method: "POST" },
     ]);
+  });
+
+  test("does not expose manual order completion or cancellation", () => {
+    expect("completeOrder" in storeApi.admin).toBe(false);
+    expect("cancelOrder" in storeApi.admin).toBe(false);
   });
 });

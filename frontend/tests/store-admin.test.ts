@@ -80,10 +80,12 @@ describe("Store admin page", () => {
     expect(productSource).toContain("quota_minor_cny");
   });
 
-  test("supports default and custom payment channels with URL or uploaded icons", () => {
+  test("supports official and HTTP payment adapters with URL or uploaded icons", () => {
     expect(channelSource).toContain('"alipay"');
     expect(channelSource).toContain('"wechat"');
-    expect(channelSource).toContain('"custom"');
+    expect(channelSource).toContain('"stripe"');
+    expect(channelSource).toContain('"http"');
+    expect(channelSource).not.toContain("config_secret");
     expect(channelSource).toContain('type="file"');
     expect(channelSource).toContain("uploadIcon");
     expect(channelSource).toContain("onError");
@@ -92,9 +94,9 @@ describe("Store admin page", () => {
     expect(apiSource).toContain('`${STORE_API_BASE}/admin/icons`');
   });
 
-  test("completes or cancels orders with optimistic rollback", () => {
-    expect(pageSource).toContain("completeOrder");
-    expect(pageSource).toContain("cancelOrder");
+  test("removes manual order completion and keeps optimistic rollback", () => {
+    expect(pageSource).not.toContain("completeOrder");
+    expect(pageSource).not.toContain("cancelOrder");
     expect(pageSource).toContain("optimisticData");
     expect(pageSource).toContain("rollbackOnError: true");
   });

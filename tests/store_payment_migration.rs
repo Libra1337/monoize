@@ -147,6 +147,17 @@ async fn payment_migration_installs_transition_and_recovery_guards() {
     }
 
     db.execute_unprepared(
+        "INSERT INTO store_products
+         (id, kind, name, description, price_currency, price_minor, duration_seconds,
+          group_ids, sort_order, enabled, revision, created_at, updated_at)
+         VALUES
+         ('product-1', 'balance', 'Guard product', '', 'CNY', '1000', NULL,
+          '[]', 0, 1, 1, '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z')",
+    )
+    .await
+    .expect("insert guarded product");
+
+    db.execute_unprepared(
         "INSERT INTO store_orders
          (id, order_number, user_id, product_id, product_kind, payment_state,
           fulfillment_state, dispute_state, payment_hold, payment_channel_id,
