@@ -21,8 +21,8 @@
 Define `payment_state`, `fulfillment_state`, `refund_state`, `dispute_state`, versioned attempts, immutable quotes, economic recovery, official Channel capability, credential versions, redemption recovery, quota gate, availability profile, and retention invariants. Delete SB-O-7 through SB-O-11 semantics that allow an Admin to complete an unpaid order.
 
 ```text
-payment_state = unpaid | processing | paid | failed | closed
-fulfillment_state = pending | fulfilled | failed | reversed
+payment_state = unpaid | paid | refund_pending | refunded | closed
+fulfillment_state = pending | fulfilled | failed
 POST /api/dashboard/store/admin/orders/{id}/complete = absent
 ```
 
@@ -42,11 +42,12 @@ POST /api/dashboard/store/admin/redemption-codes/{id}/reveal
 Run:
 
 ```powershell
-rg -n "complete|manual paid|TBD|TODO|placeholder" spec/store-billing.spec.md
+rg -n "TBD|TODO|placeholder" spec/store-billing.spec.md
+rg -n "MUST NOT expose a manual paid|admin/orders/\{id\}/complete.*MUST NOT exist" spec/store-billing.spec.md
 rg -n "Alipay|WeChat|Stripe|payment_state|fulfillment_state|economic recovery|privacy|RTO|RPO" spec/store-billing.spec.md
 ```
 
-Expected: no active manual-completion requirement and no placeholder; every required invariant has at least one match.
+Expected: no placeholder; both manual-completion prohibitions exist; every required invariant has at least one match.
 
 - [ ] **Step 4: Commit the contract**
 
@@ -68,14 +69,14 @@ git commit -m "docs: freeze store payment milestone one"
 - [ ] **Step 1: Add dependencies with Cargo**
 
 ```powershell
-cargo add aes-gcm ed25519-dalek hmac rsa subtle url zeroize
+cargo add aes-gcm chacha20poly1305 ed25519-dalek hmac rsa subtle url zeroize
 ```
 
 Expected: Cargo resolves versions compatible with Rust 2024 and updates both Cargo files.
 
 - [ ] **Step 2: Write failing key-ring and signature tests**
 
-Cover AES-256-GCM associated data, wrong-key rejection, active/prior key lookup, RSA-SHA256 sign/verify, Stripe HMAC constant-time verification, Ed25519 key IDs, and secret redaction.
+Cover XChaCha20-Poly1305 associated data, wrong-key rejection, active/prior key lookup, RSA-SHA256 sign/verify, Stripe HMAC constant-time verification, WeChat AES-256-GCM decryption, Ed25519 key IDs, and secret redaction.
 
 ```rust
 #[test]
@@ -484,7 +485,7 @@ git commit -m "feat: expose verified store payments"
 
 - [ ] **Step 1: Write failing frontend tests**
 
-Cover effective Channel availability, WeChat QR action, Alipay/Stripe redirect action, stable order summary, automatic SWR polling, paid/pending fulfillment, payment failure, expired attempts, plan gate disablement, refund state, full generated code display, scoped reveal/export, skeletons, optimistic mutation rollback, and no manual paid control.
+Cover effective Channel availability, WeChat QR action, Alipay and Stripe redirect actions, stable order summary, automatic SWR polling, paid/pending fulfillment, payment failure, expired attempts, plan gate disablement, refund state, full generated code display, scoped reveal/export, skeletons, optimistic mutation rollback, and no manual paid control.
 
 ```ts
 expect(source).not.toContain('/complete')
@@ -501,7 +502,7 @@ bun test tests/store-payment-flow.test.ts tests/store-admin.test.ts
 
 - [ ] **Step 3: Implement the real payment flow**
 
-Create the local order first, then request a provider attempt. Render `redirect`, `qr`, and `stripe_checkout` actions. Poll with SWR until payment and fulfillment are terminal. Keep payment methods as one independent row. Show actionable unavailable reasons without exposing internal configuration.
+Create the local order first, then request a provider attempt. Render `redirect`, `qr`, and `form` actions. Poll with SWR until payment and fulfillment are terminal. Keep payment methods as one independent row. Show actionable unavailable reasons without exposing internal configuration.
 
 - [ ] **Step 4: Implement operations UI**
 
