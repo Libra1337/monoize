@@ -131,6 +131,7 @@ pub struct CreatePaymentChannelInput {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdatePaymentChannelInput {
+    pub expected_revision: i64,
     pub adapter_kind: Option<PaymentAdapterKind>,
     pub name: Option<String>,
     pub icon_kind: Option<IconKind>,

@@ -4,6 +4,7 @@ const STORE_API_BASE = "/api/dashboard/store";
 
 export type ProductKind = "balance" | "plan";
 export type PaymentAdapterKind = "alipay" | "wechat" | "stripe" | "http";
+export type OfficialPaymentAdapterKind = Exclude<PaymentAdapterKind, "http">;
 export type PaymentChannelIconKind = "builtin" | "url" | "upload";
 export type PlanWindowKind = "5h" | "12h" | "day" | "week" | "month" | "custom";
 export type StorePaymentState = "unpaid" | "paid" | "refund_pending" | "refunded" | "closed";
@@ -70,7 +71,7 @@ export interface PaymentChannelInput {
   enabled: boolean;
 }
 
-export type PaymentChannelUpdate = Partial<PaymentChannelInput>;
+export type PaymentChannelUpdate = Partial<PaymentChannelInput> & { expected_revision: number };
 
 export interface StorePaymentChannel {
   id: string;
@@ -83,6 +84,53 @@ export interface StorePaymentChannel {
   revision: number;
   created_at: string;
   updated_at: string;
+}
+
+export type PaymentCredentialInput =
+  | {
+      adapter_kind: "stripe";
+      secret_key: string;
+      publishable_key: string;
+      webhook_signing_secret: string;
+      api_version: string;
+      account_id: string;
+      live_mode: boolean;
+    }
+  | {
+      adapter_kind: "alipay";
+      app_id: string;
+      seller_id: string;
+      merchant_private_key_pem: string;
+      alipay_public_key_pem: string;
+      environment: "production" | "sandbox";
+    }
+  | {
+      adapter_kind: "wechat";
+      merchant_id: string;
+      app_id: string;
+      api_v3_key: string;
+      merchant_certificate_serial: string;
+      merchant_private_key_pem: string;
+    };
+
+export type PaymentCredentialPayload =
+  | Omit<Extract<PaymentCredentialInput, { adapter_kind: "stripe" }>, "adapter_kind">
+  | Omit<Extract<PaymentCredentialInput, { adapter_kind: "alipay" }>, "adapter_kind">
+  | Omit<Extract<PaymentCredentialInput, { adapter_kind: "wechat" }>, "adapter_kind">;
+
+export interface StoreReauthGrant {
+  token: string;
+  scope: "credential_update";
+  expires_at: string;
+}
+
+export interface SavedPaymentCredential {
+  id: string;
+  channel_id: string;
+  adapter_kind: OfficialPaymentAdapterKind;
+  account_identity_digest: string;
+  status: "active";
+  created_at: string;
 }
 
 export interface StoreCatalog {
@@ -338,6 +386,24 @@ export const storeApi = {
       storeRequest<DeleteStoreRecordResponse>(
         `/admin/payment-channels/${encodeURIComponent(id)}`,
         { method: "DELETE" },
+      ),
+    createReauthGrant: (currentPassword: string) =>
+      jsonMutation<StoreReauthGrant>("/admin/reauth", "POST", {
+        current_password: currentPassword,
+        scope: "credential_update",
+      }),
+    replacePaymentCredential: (
+      id: string,
+      credential: PaymentCredentialPayload,
+      reauthToken: string,
+    ) =>
+      storeRequest<SavedPaymentCredential>(
+        `/admin/payment-channels/${encodeURIComponent(id)}/credential`,
+        {
+          method: "PUT",
+          headers: { "X-Store-Reauth-Token": reauthToken },
+          body: JSON.stringify(credential),
+        },
       ),
     uploadIcon: async (file: File) => {
       const formData = new FormData();

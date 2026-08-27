@@ -1,15 +1,17 @@
 use async_trait::async_trait;
 use axum::body::Body;
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, ORIGIN};
 use axum::http::{Method, Request, StatusCode};
 use chrono::{TimeZone, Utc};
 use http_body_util::BodyExt;
+use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::{
     ExchangeRateFetcher, ExchangeRateService, ExchangeRateSnapshot, ExchangeRateStore,
 };
 use monoize::users::UserRole;
 use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use tower::ServiceExt;
 
 use super::setup;
@@ -102,6 +104,271 @@ async fn json_request(
         .unwrap();
     let status = response.status();
     (status, response_json(response).await)
+}
+
+async fn json_request_with_reauth(
+    ctx: &super::TestContext,
+    method: Method,
+    path: &str,
+    authorization: &str,
+    reauth_token: Option<&str>,
+    body: Value,
+) -> (StatusCode, Value, axum::http::HeaderMap) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(AUTHORIZATION, authorization)
+        .header(CONTENT_TYPE, "application/json");
+    if let Some(token) = reauth_token {
+        builder = builder.header("X-Store-Reauth-Token", token);
+    }
+    let response = ctx
+        .router
+        .clone()
+        .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
+    (status, value, headers)
+}
+
+async fn cookie_json_request(
+    ctx: &super::TestContext,
+    method: Method,
+    path: &str,
+    session_token: &str,
+    origin: Option<&str>,
+    reauth_token: Option<&str>,
+    body: Value,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(COOKIE, format!("monoize_session={session_token}"))
+        .header(CONTENT_TYPE, "application/json");
+    if let Some(origin) = origin {
+        builder = builder.header(ORIGIN, origin);
+    }
+    if let Some(token) = reauth_token {
+        builder = builder.header("X-Store-Reauth-Token", token);
+    }
+    let response = ctx
+        .router
+        .clone()
+        .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response_json(response).await)
+}
+
+#[tokio::test]
+async fn credential_replacement_requires_scoped_reauth_and_never_returns_secrets() {
+    let mut ctx = setup().await;
+    let admin = dashboard_session(&ctx, "credential_admin", UserRole::Admin).await;
+    ctx.state.payment_keys = Some(Arc::new(
+        PaymentKeyRing::new(
+            PaymentKey::new("credential-key", [31_u8; 32]).unwrap(),
+            vec![],
+        )
+        .unwrap(),
+    ));
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+    let credential = json!({
+        "secret_key":"sk_test_reauth",
+        "publishable_key":"pk_test_reauth",
+        "webhook_signing_secret":"whsec_reauth",
+        "api_version":"2026-08-01",
+        "account_id":"acct_reauth",
+        "live_mode":false
+    });
+
+    let (status, error, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/credential",
+        &admin,
+        None,
+        credential.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+
+    let (status, grant, headers) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        &admin,
+        None,
+        json!({"current_password":"test-password","scope":"credential_update"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{grant}");
+    assert_eq!(headers.get("cache-control").unwrap(), "no-store");
+    let token = grant["token"].as_str().unwrap();
+
+    let (status, saved, headers) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/credential",
+        &admin,
+        Some(token),
+        credential,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(headers.get("cache-control").unwrap(), "no-store");
+    let serialized = saved.to_string();
+    for forbidden in [
+        "sk_test_reauth",
+        "whsec_reauth",
+        "ciphertext",
+        "nonce_base64",
+    ] {
+        assert!(
+            !serialized.contains(forbidden),
+            "response exposed {forbidden}"
+        );
+    }
+
+    let row = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT c.ciphertext_base64, c.status, p.enabled
+             FROM store_channel_credentials c
+             JOIN store_payment_channels p ON p.id = c.channel_id
+             WHERE c.channel_id = 'store-channel-stripe' AND c.status = 'active'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        row.try_get::<String>("", "ciphertext_base64").unwrap(),
+        "sk_test_reauth"
+    );
+    assert_eq!(row.try_get::<i32>("", "enabled").unwrap(), 0);
+
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "INSERT INTO store_merchant_capabilities
+             (id, channel_id, capability, state, environment, merchant_account_digest,
+              provider_product, evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES
+             ('capability-before-replace', 'store-channel-stripe', 'refund', 'supported',
+              'sandbox', 'old-account', 'checkout', 'evidence', 'credential_admin',
+              '2026-08-27T00:00:00Z', '2026-11-25T00:00:00Z')",
+        )
+        .await
+        .unwrap();
+    let (status, _, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/credential",
+        &admin,
+        Some(token),
+        json!({
+            "secret_key":"sk_test_reauth_2",
+            "publishable_key":"pk_test_reauth_2",
+            "webhook_signing_secret":"whsec_reauth_2",
+            "api_version":"2026-08-01",
+            "account_id":"acct_reauth_2",
+            "live_mode":false
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let counts = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_count,
+                SUM(CASE WHEN status = 'retired' THEN 1 ELSE 0 END) AS retired_count,
+                (SELECT COUNT(*) FROM store_merchant_capabilities
+                 WHERE channel_id = 'store-channel-stripe') AS capability_count
+             FROM store_channel_credentials
+             WHERE channel_id = 'store-channel-stripe'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(counts.try_get::<i64>("", "active_count").unwrap(), 1);
+    assert_eq!(counts.try_get::<i64>("", "retired_count").unwrap(), 1);
+    assert_eq!(counts.try_get::<i64>("", "capability_count").unwrap(), 0);
+}
+
+#[tokio::test]
+async fn cookie_store_secret_mutations_require_the_configured_origin() {
+    let mut ctx = setup().await;
+    let admin = dashboard_session(&ctx, "origin_admin", UserRole::Admin).await;
+    let session_token = admin.strip_prefix("Bearer ").unwrap();
+    ctx.state.payment_public_origin = Some(url::Url::parse("https://lynshen.org").unwrap());
+    ctx.state.payment_keys = Some(Arc::new(
+        PaymentKeyRing::new(PaymentKey::new("origin-key", [47_u8; 32]).unwrap(), vec![]).unwrap(),
+    ));
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+    let reauth_body = json!({
+        "current_password":"test-password",
+        "scope":"credential_update"
+    });
+
+    for origin in [None, Some("https://attacker.example")] {
+        let (status, body) = cookie_json_request(
+            &ctx,
+            Method::POST,
+            "/api/dashboard/store/admin/reauth",
+            session_token,
+            origin,
+            None,
+            reauth_body.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_store_origin");
+    }
+
+    let (status, grant) = cookie_json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        session_token,
+        Some("https://lynshen.org"),
+        None,
+        reauth_body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{grant}");
+
+    let (status, body) = cookie_json_request(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/credential",
+        session_token,
+        None,
+        grant["token"].as_str(),
+        json!({
+            "secret_key":"sk_test_origin",
+            "publishable_key":"pk_test_origin",
+            "webhook_signing_secret":"whsec_origin",
+            "api_version":"2026-08-01",
+            "account_id":"acct_origin",
+            "live_mode":false
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "invalid_store_origin");
 }
 
 async fn idempotent_json_request(

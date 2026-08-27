@@ -54,6 +54,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260827_000049_store_billing::Migration),
             Box::new(m20260827_000050_store_payment_icons::Migration),
             Box::new(m20260827_000051_store_payment_core::Migration),
+            Box::new(m20260827_000052_store_reauth_and_credential_guard::Migration),
         ]
     }
 }
@@ -237,6 +238,7 @@ mod m20260826_000048_provider_pricing_flatten;
 mod m20260827_000049_store_billing;
 mod m20260827_000050_store_payment_icons;
 mod m20260827_000051_store_payment_core;
+mod m20260827_000052_store_reauth_and_credential_guard;
 
 #[cfg(test)]
 mod tests {

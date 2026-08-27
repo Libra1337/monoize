@@ -116,6 +116,14 @@ SB-C-2. The migration MUST create disabled, unconfigured Alipay, WeChat Pay, and
 
 SB-C-3. A saved Channel credential MUST create a new immutable encrypted credential version. It MUST NOT overwrite a prior version.
 
+SB-C-3A. `POST /api/dashboard/store/admin/reauth` MUST accept an Admin password and scope. Scope `credential_update` MUST return one random token with a five-minute expiry. The database MUST store only the token SHA-256 digest and current session-token SHA-256 digest. A grant MUST be invalid after its session becomes invalid, its user loses Admin role, or its expiry passes.
+
+SB-C-3B. `PUT /api/dashboard/store/admin/payment-channels/{id}/credential` MUST require header `X-Store-Reauth-Token` with a valid `credential_update` grant. It MUST validate the adapter-specific credential, encrypt the exact JSON with record-bound AAD, insert one active version, retire every prior active version, invalidate merchant capabilities, and disable the Channel in one transaction.
+
+SB-C-3C. A successful credential replacement response MUST contain only credential version ID, Channel ID, adapter kind, account-identity digest, status, and creation time. It MUST set `Cache-Control: no-store`. It MUST NOT return any credential field or ciphertext field.
+
+SB-C-3D. A persisted Channel adapter kind MUST be immutable. `PUT /api/dashboard/store/admin/payment-channels/{id}` MUST require `expected_revision`. It MUST return HTTP `409` when the stored revision differs. Credential replacement MUST lock the Channel row, increment its revision, and disable it in the credential transaction.
+
 SB-C-4. Credentials and recoverable redemption codes MUST use XChaCha20-Poly1305 with a 256-bit key, a random nonce, and associated data containing table name, row ID, and field name.
 
 SB-C-5. The key ring MUST name one active encryption key and zero or more decrypt-only prior keys. An encrypted row without a matching key MUST block checkout and code reveal.
@@ -525,6 +533,8 @@ SB-UI-12. Orders MUST show payment and fulfillment state separately. It MUST exp
 SB-UI-13. Generated redemption codes MUST remain fully visible in the generation result. List rows MUST remain masked until scoped reveal.
 
 SB-UI-14. Main Store cards MUST use a 16-pixel radius. Interactive controls SHOULD use a 12-pixel radius. Product lists MUST expand naturally.
+
+SB-UI-15. Store Management MUST edit Channel metadata and Channel credentials with separate save actions. The credential form MUST render only for an existing official Channel. It MUST start empty whenever the dialog opens. It MUST NOT render a saved credential value. Credential save MUST request the current Admin password, obtain a `credential_update` reauthentication grant, replace the credential, optimistically mark the Channel disabled, and revalidate the Channel list.
 
 ## 15. Migration And Verification
 

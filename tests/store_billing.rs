@@ -176,7 +176,7 @@ async fn catalog_filters_disabled_records_and_uses_stable_order() {
 }
 
 #[tokio::test]
-async fn payment_channel_uses_adapter_kind_and_monotonic_revision() {
+async fn payment_channel_adapter_is_immutable_and_updates_require_the_current_revision() {
     let (_db, store) = setup().await;
     let channel = store
         .create_payment_channel(payment_channel("Custom provider", 0, false))
@@ -185,19 +185,47 @@ async fn payment_channel_uses_adapter_kind_and_monotonic_revision() {
     assert_eq!(channel.adapter_kind, PaymentAdapterKind::Http);
     assert_eq!(channel.revision, 1);
 
-    let updated = store
+    let error = store
         .update_payment_channel(
             &channel.id,
             UpdatePaymentChannelInput {
                 adapter_kind: Some(PaymentAdapterKind::Stripe),
+                expected_revision: channel.revision,
                 name: Some("Stripe backup".to_string()),
                 ..Default::default()
             },
         )
         .await
+        .unwrap_err();
+    assert_eq!(error, StoreBillingError::InvalidPaymentChannel);
+
+    let updated = store
+        .update_payment_channel(
+            &channel.id,
+            UpdatePaymentChannelInput {
+                adapter_kind: Some(PaymentAdapterKind::Http),
+                expected_revision: channel.revision,
+                name: Some("Custom backup".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
         .unwrap();
-    assert_eq!(updated.adapter_kind, PaymentAdapterKind::Stripe);
+    assert_eq!(updated.adapter_kind, PaymentAdapterKind::Http);
     assert_eq!(updated.revision, 2);
+
+    let stale = store
+        .update_payment_channel(
+            &channel.id,
+            UpdatePaymentChannelInput {
+                expected_revision: channel.revision,
+                name: Some("Stale update".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(stale, StoreBillingError::Conflict);
 }
 
 #[tokio::test]

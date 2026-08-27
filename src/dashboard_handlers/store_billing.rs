@@ -1,10 +1,12 @@
 use crate::app::AppState;
 use crate::error::{AppError, AppResult};
 use crate::store_billing::checkout::{CheckoutError, CheckoutService};
+use crate::store_billing::credentials::{CredentialStore, CredentialStoreError};
 use crate::store_billing::exchange_rate::ExchangeRateError;
 use crate::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
 };
+use crate::store_billing::reauth::{ReauthError, ReauthStore};
 use crate::store_billing::{
     CreatePaymentChannelInput, CreateProductInput, Currency, GenerateRedemptionCodesInput,
     PAYMENT_ICON_MAX_BYTES, StoreBillingError, StoreSettings, UpdatePaymentChannelInput,
@@ -13,14 +15,19 @@ use axum::Json;
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
+use axum::http::header::{
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, ORIGIN,
+    X_CONTENT_TYPE_OPTIONS,
+};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::session_helpers::{get_current_user, require_admin};
+use crate::users::UserStore;
+
+use super::session_helpers::{extract_session_token, get_current_user, require_admin};
 
 const DEFAULT_PAGE_SIZE: u64 = 100;
 const MAX_PAGE_SIZE: u64 = 100;
@@ -52,6 +59,87 @@ pub struct CreatePaymentOrderRequest {
     pub payment_channel_id: String,
     pub payment_currency: Currency,
     pub custom_recharge_minor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StoreReauthRequest {
+    pub current_password: String,
+    pub scope: String,
+}
+
+fn no_store_headers() -> [(axum::http::HeaderName, HeaderValue); 1] {
+    [(CACHE_CONTROL, HeaderValue::from_static("no-store"))]
+}
+
+fn require_store_mutation_origin(headers: &HeaderMap, state: &AppState) -> AppResult<()> {
+    let uses_bearer = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("Bearer "));
+    if uses_bearer {
+        return Ok(());
+    }
+    let expected = state
+        .payment_public_origin
+        .as_ref()
+        .map(|origin| origin.origin().ascii_serialization());
+    let actual = headers.get(ORIGIN).and_then(|value| value.to_str().ok());
+    if !matches!((expected.as_deref(), actual), (Some(expected), Some(actual)) if expected == actual)
+    {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_store_origin",
+            "Store mutation origin is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn map_reauth_error(error: ReauthError) -> AppError {
+    match error {
+        ReauthError::InvalidScope => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_reauth_scope",
+            "reauthentication scope is invalid",
+        ),
+        ReauthError::InvalidGrant => AppError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_reauth_grant",
+            "reauthentication grant is invalid or expired",
+        ),
+        ReauthError::Storage(detail) => AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "reauthentication failed",
+        )
+        .with_internal_message(detail),
+    }
+}
+
+fn map_credential_store_error(error: CredentialStoreError) -> AppError {
+    match error {
+        CredentialStoreError::ChannelNotFound => AppError::new(
+            StatusCode::NOT_FOUND,
+            "payment_channel_not_found",
+            "payment Channel was not found",
+        ),
+        CredentialStoreError::InvalidCredential => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_payment_credential",
+            "payment credential is invalid",
+        ),
+        CredentialStoreError::EncryptionUnavailable => AppError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "payment_configuration_unavailable",
+            "payment credential encryption is unavailable",
+        ),
+        CredentialStoreError::Storage(detail) => AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "payment credential storage failed",
+        )
+        .with_internal_message(detail),
+    }
 }
 
 fn map_store_error(error: StoreBillingError) -> AppError {
@@ -525,6 +613,83 @@ pub async fn list_store_payment_channels_admin(
         .await
         .map_err(map_store_error)?;
     Ok(Json(channels))
+}
+
+pub async fn create_store_reauth_grant(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<StoreReauthRequest>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    require_store_mutation_origin(&headers, &state)?;
+    let request = parse_store_json(body)?;
+    let password_is_valid =
+        UserStore::verify_password_async(&request.current_password, &admin.password_hash)
+            .await
+            .map_err(|detail| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "reauthentication failed",
+                )
+                .with_internal_message(detail)
+            })?;
+    if !password_is_valid {
+        return Err(AppError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_current_password",
+            "current password is incorrect",
+        ));
+    }
+    let session_token = extract_session_token(&headers).ok_or_else(|| {
+        AppError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "missing dashboard session",
+        )
+    })?;
+    let grant = ReauthStore::new(state.db_pool.clone())
+        .issue(&admin.id, &session_token, &request.scope)
+        .await
+        .map_err(map_reauth_error)?;
+    Ok((StatusCode::CREATED, no_store_headers(), Json(grant)))
+}
+
+pub async fn replace_store_payment_credential_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    require_store_mutation_origin(&headers, &state)?;
+    let credential = parse_store_json(body)?;
+    let session_token = extract_session_token(&headers).ok_or_else(|| {
+        AppError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "missing dashboard session",
+        )
+    })?;
+    let grant_token = headers
+        .get("X-Store-Reauth-Token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| map_reauth_error(ReauthError::InvalidGrant))?;
+    ReauthStore::new(state.db_pool.clone())
+        .verify(&admin.id, &session_token, grant_token, "credential_update")
+        .await
+        .map_err(map_reauth_error)?;
+    let key_ring = state
+        .payment_keys
+        .clone()
+        .ok_or_else(|| map_credential_store_error(CredentialStoreError::EncryptionUnavailable))?;
+    let saved = CredentialStore::new(state.db_pool.clone(), key_ring)
+        .replace(&id, credential)
+        .await
+        .map_err(map_credential_store_error)?;
+    Ok((no_store_headers(), Json(saved)))
 }
 
 pub async fn create_store_payment_channel_admin(

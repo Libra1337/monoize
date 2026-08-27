@@ -2157,6 +2157,14 @@ fn build_dashboard_api_router() -> Router<AppState> {
                 .delete(crate::dashboard_handlers::delete_store_payment_channel_admin),
         )
         .route(
+            "/dashboard/store/admin/reauth",
+            post(crate::dashboard_handlers::create_store_reauth_grant),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}/credential",
+            put(crate::dashboard_handlers::replace_store_payment_credential_admin),
+        )
+        .route(
             "/dashboard/store/admin/orders",
             get(crate::dashboard_handlers::list_all_store_orders_admin),
         )

@@ -492,6 +492,13 @@ impl StoreBillingStore {
             .payment_channel_by_id(id, false)
             .await?
             .ok_or(StoreBillingError::InvalidPaymentChannel)?;
+        if input.expected_revision <= 0
+            || input
+                .adapter_kind
+                .is_some_and(|adapter_kind| adapter_kind != current.adapter_kind)
+        {
+            return Err(StoreBillingError::InvalidPaymentChannel);
+        }
         let name = input.name.unwrap_or(current.name);
         let icon_kind = input.icon_kind.unwrap_or(current.icon_kind);
         let icon_value = input.icon_value.or(current.icon_value);
@@ -504,26 +511,23 @@ impl StoreBillingStore {
                     adapter_kind = $2, name = $3, icon_kind = $4, icon_value = $5,
                     sort_order = $6, enabled = $7, revision = revision + 1,
                     updated_at = $8
-                 WHERE id = $1",
+                 WHERE id = $1 AND revision = $9",
                 vec![
                     id.into(),
-                    input
-                        .adapter_kind
-                        .unwrap_or(current.adapter_kind)
-                        .as_str()
-                        .into(),
+                    current.adapter_kind.as_str().into(),
                     name.trim().to_string().into(),
                     icon_kind.as_str().into(),
                     icon_value.into(),
                     input.sort_order.unwrap_or(current.sort_order).into(),
                     i32::from(input.enabled.unwrap_or(current.enabled)).into(),
                     timestamp(Utc::now()).into(),
+                    input.expected_revision.into(),
                 ],
             ))
             .await
             .map_err(storage)?;
         if result.rows_affected() == 0 {
-            return Err(StoreBillingError::InvalidPaymentChannel);
+            return Err(StoreBillingError::Conflict);
         }
         drop(write);
         self.payment_channel_by_id(id, false)

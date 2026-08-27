@@ -66,11 +66,12 @@ pub use settings::{
 };
 pub use store_billing::{
     create_store_order, create_store_payment_attempt, create_store_payment_channel_admin,
-    create_store_product_admin, delete_store_payment_channel_admin, delete_store_product_admin,
-    generate_store_redemption_codes_admin, get_store_catalog, get_store_entitlement,
-    get_store_exchange_rate, get_store_order, get_store_payment_icon, get_store_settings_admin,
-    list_all_store_orders_admin, list_store_orders, list_store_payment_channels_admin,
-    list_store_products_admin, list_store_redemption_codes_admin, redeem_store_code,
+    create_store_product_admin, create_store_reauth_grant, delete_store_payment_channel_admin,
+    delete_store_product_admin, generate_store_redemption_codes_admin, get_store_catalog,
+    get_store_entitlement, get_store_exchange_rate, get_store_order, get_store_payment_icon,
+    get_store_settings_admin, list_all_store_orders_admin, list_store_orders,
+    list_store_payment_channels_admin, list_store_products_admin,
+    list_store_redemption_codes_admin, redeem_store_code, replace_store_payment_credential_admin,
     update_store_payment_channel_admin, update_store_product_admin, update_store_settings_admin,
     upload_store_payment_icon_admin,
 };

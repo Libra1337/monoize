@@ -22,6 +22,7 @@ import {
   storeApi,
   type GenerateRedemptionCodesInput,
   type PaymentChannelInput,
+  type PaymentCredentialPayload,
   type StorePaymentChannel,
   type StoreProduct,
   type StoreProductInput,
@@ -138,12 +139,44 @@ export function StoreAdminPage() {
     const optimistic = optimisticChannel(input, target?.id ?? `optimistic-${Date.now()}`);
     try {
       await channels.mutate(async (current = []) => {
-        const saved = target ? await storeApi.admin.updatePaymentChannel(target.id, input) : await storeApi.admin.createPaymentChannel(input);
+        const saved = target ? await storeApi.admin.updatePaymentChannel(target.id, { ...input, expected_revision: target.revision }) : await storeApi.admin.createPaymentChannel(input);
         return target ? current.map((item) => item.id === target.id ? saved : item) : [...current.filter((item) => item.id !== optimistic.id), saved];
       }, { optimisticData: (current = []) => target ? current.map((item) => item.id === target.id ? { ...optimistic, created_at: item.created_at, revision: item.revision + 1 } : item) : [...current, optimistic], rollbackOnError: true, revalidate: false });
       toast.success(t("store.admin.saved"));
       setChannelDialogOpen(false);
     } catch (cause) { toast.error(cause instanceof Error ? cause.message : t("common.error")); } finally { setSaving(false); }
+  };
+
+  const saveChannelCredential = async (
+    channelId: string,
+    credential: PaymentCredentialPayload,
+    currentPassword: string,
+  ) => {
+    try {
+      await channels.mutate(
+        async (current = []) => {
+          const grant = await storeApi.admin.createReauthGrant(currentPassword);
+          await storeApi.admin.replacePaymentCredential(channelId, credential, grant.token);
+          return current.map((item) =>
+            item.id === channelId
+              ? { ...item, enabled: false, revision: item.revision + 1 }
+              : item,
+          );
+        },
+        {
+          optimisticData: (current = []) =>
+            current.map((item) =>
+              item.id === channelId ? { ...item, enabled: false } : item,
+            ),
+          rollbackOnError: true,
+          revalidate: true,
+        },
+      );
+      toast.success(t("store.admin.channels.credential.saved"));
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : t("common.error"));
+      throw cause;
+    }
   };
 
   const deleteChannel = async (channel: StorePaymentChannel) => {
@@ -200,7 +233,7 @@ export function StoreAdminPage() {
       {activeTab === "redemptions" && <AdminLoadState loading={redemptions.isLoading || products.isLoading} error={redemptions.error || products.error} onRetry={() => { void redemptions.mutate(); void products.mutate(); }}><RedemptionsPanel codes={redemptions.data ?? []} onGenerate={() => setRedemptionDialogOpen(true)} /></AdminLoadState>}
     </div>
     <ProductDialog open={productDialogOpen} product={selectedProduct} groups={groups.data?.groups ?? []} saving={saving} onOpenChange={setProductDialogOpen} onSave={saveProduct} />
-    <ChannelDialog open={channelDialogOpen} channel={selectedChannel} saving={saving} onOpenChange={setChannelDialogOpen} onSave={saveChannel} />
+    <ChannelDialog open={channelDialogOpen} channel={selectedChannel} saving={saving} onOpenChange={setChannelDialogOpen} onSave={saveChannel} onSaveCredential={saveChannelCredential} />
     <RedemptionDialog open={redemptionDialogOpen} plans={(products.data ?? []).filter((product) => product.kind === "plan" && product.enabled)} generating={saving} onOpenChange={setRedemptionDialogOpen} onGenerate={generateCodes} />
     <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
       <AlertDialogContent className="rounded-2xl">

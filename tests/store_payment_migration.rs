@@ -4,6 +4,7 @@ use sea_orm_migration::MigratorTrait;
 
 const PAYMENT_TABLES: &[&str] = &[
     "store_channel_credentials",
+    "store_reauth_grants",
     "store_payment_compliance",
     "store_merchant_capabilities",
     "store_payment_attempts",
@@ -191,4 +192,45 @@ async fn payment_migration_installs_transition_and_recovery_guards() {
         .is_err(),
         "immutable quote must reject update"
     );
+}
+
+#[tokio::test]
+async fn reauth_migration_allows_only_one_active_credential_per_channel() {
+    let db = migrated_database().await;
+    db.execute_unprepared(
+        "INSERT INTO store_channel_credentials
+         (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+          ciphertext_base64, account_identity_digest, status, created_at)
+         VALUES
+         ('credential-active-1', 'store-channel-stripe', 'stripe', 1, 'key-1',
+          'nonce-1', 'ciphertext-1', 'account-1', 'active', '2026-08-27T00:00:00Z')",
+    )
+    .await
+    .expect("insert first active credential");
+
+    assert!(
+        db.execute_unprepared(
+            "INSERT INTO store_channel_credentials
+             (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+              ciphertext_base64, account_identity_digest, status, created_at)
+             VALUES
+             ('credential-active-2', 'store-channel-stripe', 'stripe', 1, 'key-1',
+              'nonce-2', 'ciphertext-2', 'account-1', 'active', '2026-08-27T00:00:01Z')",
+        )
+        .await
+        .is_err(),
+        "a Channel must not have two active credential versions"
+    );
+
+    db.execute_unprepared(
+        "INSERT INTO store_channel_credentials
+         (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+          ciphertext_base64, account_identity_digest, status, created_at, retired_at)
+         VALUES
+         ('credential-retired', 'store-channel-stripe', 'stripe', 1, 'key-1',
+          'nonce-3', 'ciphertext-3', 'account-1', 'retired',
+          '2026-08-27T00:00:02Z', '2026-08-27T00:00:03Z')",
+    )
+    .await
+    .expect("retired credential versions remain allowed");
 }

@@ -94,6 +94,22 @@ describe("Store admin page", () => {
     expect(apiSource).toContain('`${STORE_API_BASE}/admin/icons`');
   });
 
+  test("replaces official credentials through scoped reauthentication without prefilling secrets", () => {
+    expect(apiSource).toContain("createReauthGrant");
+    expect(apiSource).toContain("replacePaymentCredential");
+    expect(apiSource).toContain('"X-Store-Reauth-Token"');
+    expect(apiSource).toContain("expected_revision");
+    expect(channelSource).toContain("onSaveCredential");
+    expect(channelSource).toContain('type="password"');
+    expect(channelSource).toContain("merchant_private_key_pem");
+    expect(channelSource).toContain("webhook_signing_secret");
+    expect(channelSource).toContain("api_v3_key");
+    expect(channelSource).not.toContain("credential_version_id");
+    expect(pageSource).toContain("saveChannelCredential");
+    expect(pageSource).toContain("revalidate: true");
+    expect(channelSource).toContain("clearSensitiveFields");
+  });
+
   test("removes manual order completion and keeps optimistic rollback", () => {
     expect(pageSource).not.toContain("completeOrder");
     expect(pageSource).not.toContain("cancelOrder");
