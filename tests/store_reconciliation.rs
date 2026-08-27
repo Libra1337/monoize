@@ -219,23 +219,23 @@ async fn expired_presented_order(suffix: &str) -> PresentedFixture {
 
 async fn make_attempt_recoverable_wechat(fixture: &PresentedFixture, suffix: &str, state: &str) {
     let credential_id = format!("query-credential-{suffix}");
-    let account_digest = Sha256::digest(b"1900000109")
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let credential_json = br#"{
+        "merchant_id":"1900000109",
+        "app_id":"wx1234567890",
+        "api_v3_key":"0123456789abcdef0123456789abcdef",
+        "merchant_certificate_serial":"MERCHANT-CERTIFICATE-RECOVERY",
+        "merchant_private_key_pem":"private",
+        "platform_certificate_serial":"PLATFORM-CERTIFICATE-RECOVERY",
+        "platform_public_key_pem":"public"
+    }"#;
+    let account_digest = WechatCredential::from_json(credential_json)
+        .unwrap()
+        .account_identity_digest();
     let encrypted = fixture
         .key_ring
         .encrypt(
             &format!("store_channel_credentials:{credential_id}:secret"),
-            br#"{
-                "merchant_id":"1900000109",
-                "app_id":"wx1234567890",
-                "api_v3_key":"0123456789abcdef0123456789abcdef",
-                "merchant_certificate_serial":"MERCHANT-CERTIFICATE-RECOVERY",
-                "merchant_private_key_pem":"private",
-                "platform_certificate_serial":"PLATFORM-CERTIFICATE-RECOVERY",
-                "platform_public_key_pem":"public"
-            }"#,
+            credential_json,
         )
         .unwrap();
     let failure_kind = (state == "failed").then_some("provider_rejected");

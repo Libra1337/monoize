@@ -283,4 +283,23 @@ async fn reconciliation_migration_adds_bounded_fulfillment_retry_state() {
             .iter()
             .any(|value| value == "idx_store_fulfillment_retries_due")
     );
+    assert!(
+        indexes
+            .iter()
+            .any(|value| value == "idx_store_attempt_order_candidates")
+    );
+    let candidate_index_sql = db
+        .query_one(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+            ["idx_store_attempt_order_candidates".into()],
+        ))
+        .await
+        .expect("query candidate index")
+        .expect("candidate index exists");
+    assert!(
+        String::try_get(&candidate_index_sql, "", "sql")
+            .unwrap()
+            .contains("(order_id, channel_id, adapter_kind, created_at DESC, id DESC)")
+    );
 }

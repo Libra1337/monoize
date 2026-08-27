@@ -569,6 +569,7 @@ fn common_index_statements() -> Vec<String> {
         "CREATE UNIQUE INDEX uq_store_orders_order_number_v2 ON store_orders (order_number)",
         "CREATE INDEX idx_store_orders_user_created_v2 ON store_orders (user_id, created_at DESC, id DESC)",
         "CREATE INDEX idx_store_orders_reconcile ON store_orders (payment_state, fulfillment_state, updated_at, id)",
+        "CREATE INDEX idx_store_attempt_order_candidates ON store_payment_attempts (order_id, channel_id, adapter_kind, created_at DESC, id DESC)",
         "CREATE UNIQUE INDEX uq_store_orders_creation_idempotency ON store_orders (user_id, creation_idempotency_key)",
         "CREATE UNIQUE INDEX uq_store_credentials_channel_active ON store_channel_credentials (channel_id, id)",
         "CREATE UNIQUE INDEX uq_store_capability_channel_kind ON store_merchant_capabilities (channel_id, capability)",

@@ -4,6 +4,7 @@ use monoize::db::DbPool;
 use monoize::migration::Migrator;
 use monoize::store_billing::callbacks::{
     ApplyProviderEventInput, CallbackApplyResult, PaymentCallbackStore,
+    RecordUnboundProviderEventInput,
 };
 use monoize::store_billing::crypto::EncryptedSecret;
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
@@ -119,6 +120,7 @@ fn success_event(order_id: &str, order_number: &str, attempt_id: &str) -> ApplyP
     ApplyProviderEventInput {
         event_row_id: uuid::Uuid::new_v4().to_string(),
         credential_version_id: "callback-credential".to_string(),
+        verification_credential_version_id: "callback-credential".to_string(),
         provider_event_id: "evt-payment-1".to_string(),
         event_kind: "payment_succeeded".to_string(),
         order_id: order_id.to_string(),
@@ -141,6 +143,358 @@ fn success_event(order_id: &str, order_number: &str, attempt_id: &str) -> ApplyP
         user_agent: Some("Stripe/1.0".to_string()),
         received_at: Utc::now(),
     }
+}
+
+async fn add_null_alipay_candidate(db: &DbPool, attempt_id: &str, candidate_id: &str) {
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_payment_attempts
+                (id, order_id, channel_id, adapter_kind, credential_version_id,
+                 merchant_account_identity, expected_payment_method,
+                 payment_contract_version, state, idempotency_key,
+                 created_at, updated_at)
+             SELECT $2, order_id, channel_id, 'alipay', credential_version_id,
+                    merchant_account_identity, expected_payment_method,
+                    payment_contract_version, 'created', $3,
+                    '2026-08-27T00:00:02Z', '2026-08-27T00:00:02Z'
+             FROM store_payment_attempts WHERE id = $1",
+            vec![
+                attempt_id.into(),
+                candidate_id.into(),
+                format!("{candidate_id}-key").into(),
+            ],
+        ))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn projection_rechecks_candidates_for_a_nonnull_expired_alipay_attempt() {
+    let (db, order_id, order_number, attempt_id) = setup().await;
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_payment_attempts
+             SET adapter_kind = 'alipay', state = 'expired'
+             WHERE id = $1",
+            vec![attempt_id.clone().into()],
+        ))
+        .await
+        .unwrap();
+    add_null_alipay_candidate(&db, &attempt_id, "callback-new-null-attempt").await;
+    let mut event = success_event(&order_id, &order_number, &attempt_id);
+    event.provider_event_id = "evt-nonnull-racing-candidate".to_string();
+
+    assert_eq!(
+        PaymentCallbackStore::new(db.clone())
+            .apply_verified_payment(event)
+            .await
+            .unwrap(),
+        CallbackApplyResult::ManualReview
+    );
+    let selected_state = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT state FROM store_payment_attempts WHERE id = $1",
+            vec![attempt_id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<String>("", "state")
+        .unwrap();
+    assert_eq!(selected_state, "expired");
+}
+
+#[tokio::test]
+async fn ambiguous_rotated_wechat_projection_is_idempotent_by_verification_credential() {
+    let (db, order_id, order_number, attempt_id) = setup().await;
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_payment_attempts
+             SET adapter_kind = 'wechat', state = 'expired',
+                 merchant_account_identity = $2
+             WHERE id = $1",
+            vec![attempt_id.clone().into(), "b".repeat(64).into()],
+        ))
+        .await
+        .unwrap();
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_payment_attempts
+                (id, order_id, channel_id, adapter_kind, credential_version_id,
+                 merchant_account_identity, expected_payment_method,
+                 payment_contract_version, state, idempotency_key,
+                 created_at, updated_at)
+             SELECT 'callback-wechat-null-attempt', order_id, channel_id, 'wechat',
+                    credential_version_id, merchant_account_identity,
+                    expected_payment_method, payment_contract_version, 'created',
+                    'callback-wechat-null-attempt-key',
+                    '2026-08-27T00:00:02Z', '2026-08-27T00:00:02Z'
+             FROM store_payment_attempts WHERE id = $1",
+            vec![attempt_id.clone().into()],
+        ))
+        .await
+        .unwrap();
+    let mut event = success_event(&order_id, &order_number, &attempt_id);
+    event.provider_event_id = "evt-wechat-rotated-race".to_string();
+    event.merchant_account_identity = "b".repeat(64);
+    event.verification_credential_version_id = "callback-verification-rotated".to_string();
+    let store = PaymentCallbackStore::new(db.clone());
+    for _ in 0..2 {
+        assert_eq!(
+            store.apply_verified_payment(event.clone()).await.unwrap(),
+            CallbackApplyResult::ManualReview
+        );
+    }
+    let event_counts = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT
+                SUM(CASE WHEN credential_version_id = $1 THEN 1 ELSE 0 END) AS verification_count,
+                SUM(CASE WHEN credential_version_id = $2 THEN 1 ELSE 0 END) AS attempt_count
+             FROM store_provider_events WHERE provider_event_id = $3",
+            vec![
+                "callback-verification-rotated".into(),
+                "callback-credential".into(),
+                "evt-wechat-rotated-race".into(),
+            ],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        event_counts
+            .try_get::<i64>("", "verification_count")
+            .unwrap(),
+        1
+    );
+    assert_eq!(event_counts.try_get::<i64>("", "attempt_count").unwrap(), 0);
+    let application_count = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM store_order_event_applications",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "value")
+        .unwrap();
+    assert_eq!(application_count, 0);
+}
+
+#[tokio::test]
+async fn applied_duplicate_with_changed_evidence_opens_one_identity_conflict_case() {
+    let (db, order_id, order_number, attempt_id) = setup().await;
+    let store = PaymentCallbackStore::new(db.clone());
+    let original = success_event(&order_id, &order_number, &attempt_id);
+    assert_eq!(
+        store
+            .apply_verified_payment(original.clone())
+            .await
+            .unwrap(),
+        CallbackApplyResult::Applied
+    );
+    let mut changed = original.clone();
+    changed.event_row_id = uuid::Uuid::new_v4().to_string();
+    changed.body_digest = "b".repeat(64);
+    changed.parsed_json = serde_json::json!({"type":"payment_succeeded","changed":true});
+    for _ in 0..2 {
+        assert_eq!(
+            store.apply_verified_payment(changed.clone()).await.unwrap(),
+            CallbackApplyResult::ManualReview
+        );
+    }
+    let stored = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT body_digest, parsed_json FROM store_provider_events
+             WHERE credential_version_id = $1 AND provider_event_id = $2",
+            vec![
+                original.credential_version_id.into(),
+                original.provider_event_id.into(),
+            ],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.try_get::<String>("", "body_digest").unwrap(),
+        "a".repeat(64)
+    );
+    assert_eq!(
+        stored.try_get::<String>("", "parsed_json").unwrap(),
+        original.parsed_json.to_string()
+    );
+    let case_count = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM store_reconciliation_cases
+             WHERE kind = 'provider_event_identity_conflict'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "value")
+        .unwrap();
+    assert_eq!(case_count, 1);
+    let ledger_count = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM billing_ledger
+             WHERE idempotency_key = $1",
+            vec![format!("store:fulfillment:{order_id}").into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "value")
+        .unwrap();
+    assert_eq!(ledger_count, 1);
+}
+
+#[tokio::test]
+async fn unbound_duplicate_with_changed_evidence_opens_one_identity_conflict_case() {
+    let (db, _, _, _) = setup().await;
+    let store = PaymentCallbackStore::new(db.clone());
+    let original = RecordUnboundProviderEventInput {
+        event_row_id: uuid::Uuid::new_v4().to_string(),
+        credential_version_id: "callback-verification-credential".to_string(),
+        provider_event_id: "evt-unbound-evidence-conflict".to_string(),
+        event_kind: "payment_succeeded".to_string(),
+        body_digest: "c".repeat(64),
+        parsed_json: serde_json::json!({"event_id":"evt-unbound-evidence-conflict"}),
+        raw_body: EncryptedSecret {
+            version: 1,
+            key_id: "callback-key".to_string(),
+            nonce_base64: "bm9uY2U=".to_string(),
+            ciphertext_base64: "Y2lwaGVydGV4dA==".to_string(),
+        },
+        source_ip: None,
+        user_agent: None,
+        received_at: Utc::now(),
+    };
+    assert_eq!(
+        store
+            .record_unbound_verified_event(original.clone())
+            .await
+            .unwrap(),
+        CallbackApplyResult::ManualReview
+    );
+    let mut changed = original.clone();
+    changed.event_row_id = uuid::Uuid::new_v4().to_string();
+    changed.body_digest = "d".repeat(64);
+    for _ in 0..2 {
+        assert_eq!(
+            store
+                .record_unbound_verified_event(changed.clone())
+                .await
+                .unwrap(),
+            CallbackApplyResult::ManualReview
+        );
+    }
+    let stored_digest = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT body_digest FROM store_provider_events
+             WHERE credential_version_id = $1 AND provider_event_id = $2",
+            vec![
+                original.credential_version_id.into(),
+                original.provider_event_id.into(),
+            ],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<String>("", "body_digest")
+        .unwrap();
+    assert_eq!(stored_digest, "c".repeat(64));
+    let case_count = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM store_reconciliation_cases
+             WHERE kind = 'provider_event_identity_conflict'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "value")
+        .unwrap();
+    assert_eq!(case_count, 1);
+}
+
+#[tokio::test]
+async fn projection_rejects_a_second_null_provider_candidate_created_after_lookup() {
+    let (db, order_id, order_number, attempt_id) = setup().await;
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_payment_attempts
+             SET adapter_kind = 'alipay', state = 'created', provider_object_id = NULL
+             WHERE id = $1",
+            vec![attempt_id.clone().into()],
+        ))
+        .await
+        .unwrap();
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_payment_attempts
+                (id, order_id, channel_id, adapter_kind, credential_version_id,
+                 merchant_account_identity, expected_payment_method,
+                 payment_contract_version, state, failure_kind, idempotency_key,
+                 created_at, updated_at)
+             SELECT 'callback-racing-attempt', order_id, channel_id, adapter_kind,
+                    credential_version_id, merchant_account_identity,
+                    expected_payment_method, payment_contract_version, 'failed',
+                    'provider_rejected', 'callback-racing-attempt-key',
+                    '2026-08-27T00:00:01Z', '2026-08-27T00:00:01Z'
+             FROM store_payment_attempts WHERE id = $1",
+            vec![attempt_id.clone().into()],
+        ))
+        .await
+        .unwrap();
+    let mut event = success_event(&order_id, &order_number, &attempt_id);
+    event.provider_event_id = "evt-racing-candidate".to_string();
+    event.provider_object_id = order_number;
+
+    assert_eq!(
+        PaymentCallbackStore::new(db.clone())
+            .apply_verified_payment(event)
+            .await
+            .unwrap(),
+        CallbackApplyResult::ManualReview
+    );
+    let event = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT projection_state FROM store_provider_events
+             WHERE provider_event_id = 'evt-racing-candidate'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        event.try_get::<String>("", "projection_state").unwrap(),
+        "manual_review"
+    );
+    let application_count = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM store_order_event_applications",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(application_count.try_get::<i64>("", "value").unwrap(), 0);
 }
 
 #[tokio::test]

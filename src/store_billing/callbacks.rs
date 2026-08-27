@@ -1,6 +1,7 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use sea_orm::{ConnectionTrait, QueryResult};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::crypto::EncryptedSecret;
@@ -13,6 +14,7 @@ use crate::db::DbPool;
 pub struct ApplyProviderEventInput {
     pub event_row_id: String,
     pub credential_version_id: String,
+    pub verification_credential_version_id: String,
     pub provider_event_id: String,
     pub event_kind: String,
     pub order_id: String,
@@ -26,6 +28,20 @@ pub struct ApplyProviderEventInput {
     pub body_digest: String,
     pub parsed_json: serde_json::Value,
     pub raw_body: Option<EncryptedSecret>,
+    pub source_ip: Option<String>,
+    pub user_agent: Option<String>,
+    pub received_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordUnboundProviderEventInput {
+    pub event_row_id: String,
+    pub credential_version_id: String,
+    pub provider_event_id: String,
+    pub event_kind: String,
+    pub body_digest: String,
+    pub parsed_json: serde_json::Value,
+    pub raw_body: EncryptedSecret,
     pub source_ip: Option<String>,
     pub user_agent: Option<String>,
     pub received_at: DateTime<Utc>,
@@ -70,6 +86,85 @@ impl PaymentCallbackStore {
         self.apply_verified_payment_inner(input, None, true).await
     }
 
+    pub async fn record_unbound_verified_event(
+        &self,
+        input: RecordUnboundProviderEventInput,
+    ) -> Result<CallbackApplyResult, CallbackStoreError> {
+        if input.event_row_id.trim().is_empty()
+            || input.credential_version_id.trim().is_empty()
+            || input.provider_event_id.trim().is_empty()
+            || input.event_kind != "payment_succeeded"
+            || input.body_digest.trim().is_empty()
+        {
+            return Err(CallbackStoreError::InvalidInput);
+        }
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let inserted = tx
+            .execute(self.db.stmt(
+                "INSERT INTO store_provider_events
+                    (id, credential_version_id, provider_event_id, event_kind,
+                     body_digest, parsed_json, verification_result, projection_state,
+                     raw_format_version, raw_key_id, raw_nonce_base64, raw_ciphertext_base64,
+                     source_ip, user_agent, state_revision, received_at, applied_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'verified', 'manual_review',
+                         $7, $8, $9, $10, $11, $12, 0, $13, NULL)
+                 ON CONFLICT (credential_version_id, provider_event_id) DO NOTHING",
+                vec![
+                    input.event_row_id.into(),
+                    input.credential_version_id.clone().into(),
+                    input.provider_event_id.clone().into(),
+                    input.event_kind.into(),
+                    input.body_digest.clone().into(),
+                    input.parsed_json.to_string().into(),
+                    i32::from(input.raw_body.version).into(),
+                    input.raw_body.key_id.into(),
+                    input.raw_body.nonce_base64.into(),
+                    input.raw_body.ciphertext_base64.into(),
+                    input.source_ip.into(),
+                    input.user_agent.into(),
+                    timestamp(input.received_at).into(),
+                ],
+            ))
+            .await
+            .map_err(storage)?;
+        let result = if inserted.rows_affected() == 1 {
+            CallbackApplyResult::ManualReview
+        } else {
+            let duplicate = tx
+                .query_one(self.db.stmt(
+                    "SELECT projection_state, body_digest, parsed_json
+                     FROM store_provider_events
+                     WHERE credential_version_id = $1 AND provider_event_id = $2",
+                    vec![
+                        input.credential_version_id.clone().into(),
+                        input.provider_event_id.clone().into(),
+                    ],
+                ))
+                .await
+                .map_err(storage)?
+                .ok_or_else(|| {
+                    CallbackStoreError::Storage(
+                        "conflicting unbound callback event is missing".to_string(),
+                    )
+                })?;
+            duplicate_result_with_evidence(
+                &self.db,
+                &*tx,
+                &duplicate,
+                &input.credential_version_id,
+                &input.provider_event_id,
+                &input.body_digest,
+                &input.parsed_json,
+                None,
+                None,
+                input.received_at,
+            )
+            .await?
+        };
+        tx.commit().await.map_err(storage)?;
+        Ok(result)
+    }
+
     pub(crate) async fn apply_verified_payment_fenced(
         &self,
         input: ApplyProviderEventInput,
@@ -100,12 +195,20 @@ impl PaymentCallbackStore {
         if let Some((owner_id, epoch, now)) = fence {
             validate_reconciliation_fence(&self.db, &*tx, owner_id, epoch, now, lock).await?;
         }
+        tx.query_one(self.db.stmt(
+            &format!("SELECT id FROM store_orders WHERE id = $1{lock}"),
+            vec![input.order_id.clone().into()],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or(CallbackStoreError::NotFound)?;
         let row = tx
             .query_one(self.db.stmt(
                 &format!(
-                    "SELECT a.id AS attempt_id, a.order_id, a.adapter_kind,
+                    "SELECT a.id AS attempt_id, a.order_id, a.channel_id, a.adapter_kind,
                             a.credential_version_id,
-                            a.state AS attempt_state, o.user_id, o.product_kind,
+                            a.state AS attempt_state, a.failure_kind,
+                            o.user_id, o.product_kind,
                             o.payment_state, o.fulfillment_state, o.payment_hold,
                             a.provider_object_id, a.merchant_account_identity,
                             o.order_number, o.payment_minor, o.payment_currency, o.rate_numerator,
@@ -124,9 +227,101 @@ impl PaymentCallbackStore {
             .map_err(storage)?
             .ok_or(CallbackStoreError::NotFound)?;
 
+        let stored_provider_object = row_optional_string(&row, "provider_object_id")?;
+        let adapter_kind = row_string(&row, "adapter_kind")?;
+        let channel_id = row_string(&row, "channel_id")?;
+        let callback_requires_unique_binding = input.event_kind == "payment_succeeded"
+            && input.raw_body.is_some()
+            && matches!(adapter_kind.as_str(), "alipay" | "wechat");
+        if callback_requires_unique_binding {
+            let identity_column = if adapter_kind == "alipay" {
+                "credential_version_id"
+            } else {
+                "merchant_account_identity"
+            };
+            let identity = if adapter_kind == "alipay" {
+                &input.credential_version_id
+            } else {
+                &input.merchant_account_identity
+            };
+            let candidates = tx
+                .query_all(self.db.stmt(
+                    &format!(
+                        "SELECT a.id AS attempt_id
+                         FROM store_payment_attempts a
+                         JOIN store_orders o ON o.id = a.order_id
+                         WHERE o.id = $1 AND o.order_number = $2
+                           AND a.channel_id = $3 AND a.adapter_kind = $4
+                           AND a.{identity_column} = $5
+                           AND (a.provider_object_id = $6
+                                OR (a.provider_object_id IS NULL
+                                    AND (a.state = 'created'
+                                         OR (a.state = 'failed'
+                                             AND a.failure_kind = 'provider_rejected'))))
+                         ORDER BY a.created_at DESC, a.id DESC
+                         LIMIT 2"
+                    ),
+                    vec![
+                        input.order_id.clone().into(),
+                        input.order_number.clone().into(),
+                        channel_id.clone().into(),
+                        adapter_kind.clone().into(),
+                        identity.clone().into(),
+                        input.provider_object_id.clone().into(),
+                    ],
+                ))
+                .await
+                .map_err(storage)?;
+            if candidates.len() != 1
+                || row_string(&candidates[0], "attempt_id")? != input.attempt_id
+            {
+                let duplicate = tx
+                    .query_one(self.db.stmt(
+                        "SELECT projection_state, body_digest, parsed_json
+                         FROM store_provider_events
+                         WHERE credential_version_id = $1 AND provider_event_id = $2",
+                        vec![
+                            input.verification_credential_version_id.clone().into(),
+                            input.provider_event_id.clone().into(),
+                        ],
+                    ))
+                    .await
+                    .map_err(storage)?;
+                if let Some(duplicate) = duplicate {
+                    let result = duplicate_result_with_evidence(
+                        &self.db,
+                        &*tx,
+                        &duplicate,
+                        &input.verification_credential_version_id,
+                        &input.provider_event_id,
+                        &input.body_digest,
+                        &input.parsed_json,
+                        Some(&input.order_id),
+                        Some(&channel_id),
+                        input.received_at,
+                    )
+                    .await?;
+                    tx.commit().await.map_err(storage)?;
+                    return Ok(result);
+                }
+                insert_event(
+                    &self.db,
+                    &*tx,
+                    &input.event_row_id,
+                    &input.verification_credential_version_id,
+                    &input,
+                    "manual_review",
+                )
+                .await?;
+                tx.commit().await.map_err(storage)?;
+                return Ok(CallbackApplyResult::ManualReview);
+            }
+        }
+
         let duplicate = tx
             .query_one(self.db.stmt(
-                "SELECT projection_state FROM store_provider_events
+                "SELECT projection_state, body_digest, parsed_json
+                 FROM store_provider_events
                  WHERE credential_version_id = $1 AND provider_event_id = $2",
                 vec![
                     input.credential_version_id.clone().into(),
@@ -136,29 +331,41 @@ impl PaymentCallbackStore {
             .await
             .map_err(storage)?;
         if let Some(duplicate) = duplicate {
-            let result = match row_string(&duplicate, "projection_state")?.as_str() {
-                "applied" => CallbackApplyResult::Duplicate,
-                "manual_review" => CallbackApplyResult::ManualReview,
-                value => {
-                    return Err(CallbackStoreError::Storage(format!(
-                        "unknown callback projection state: {value}"
-                    )));
-                }
-            };
+            let result = duplicate_result_with_evidence(
+                &self.db,
+                &*tx,
+                &duplicate,
+                &input.credential_version_id,
+                &input.provider_event_id,
+                &input.body_digest,
+                &input.parsed_json,
+                Some(&input.order_id),
+                Some(&channel_id),
+                input.received_at,
+            )
+            .await?;
             tx.commit().await.map_err(storage)?;
             return Ok(result);
         }
 
-        let stored_provider_object = row_optional_string(&row, "provider_object_id")?;
+        let absent_provider_object_may_bind = if stored_provider_object.is_none()
+            && matches!(adapter_kind.as_str(), "alipay" | "wechat")
+            && input.provider_object_id == input.order_number
+            && matches!(
+                (
+                    row_string(&row, "attempt_state")?.as_str(),
+                    row_optional_string(&row, "failure_kind")?.as_deref(),
+                ),
+                ("created", None) | ("failed", Some("provider_rejected"))
+            ) {
+            true
+        } else {
+            false
+        };
         let provider_object_matches = stored_provider_object
             .as_deref()
             .is_some_and(|value| value == input.provider_object_id)
-            || (stored_provider_object.is_none()
-                && matches!(
-                    row_string(&row, "adapter_kind")?.as_str(),
-                    "alipay" | "wechat"
-                )
-                && input.provider_object_id == input.order_number);
+            || absent_provider_object_may_bind;
         let matches_contract = row_string(&row, "credential_version_id")?
             == input.credential_version_id
             && provider_object_matches
@@ -168,7 +375,15 @@ impl PaymentCallbackStore {
             && row_string(&row, "payment_currency")? == currency_string(input.currency);
         let event_row_id = input.event_row_id.clone();
         if !matches_contract {
-            insert_event(&self.db, &*tx, &event_row_id, &input, "manual_review").await?;
+            insert_event(
+                &self.db,
+                &*tx,
+                &event_row_id,
+                &input.credential_version_id,
+                &input,
+                "manual_review",
+            )
+            .await?;
             tx.commit().await.map_err(storage)?;
             return Ok(CallbackApplyResult::ManualReview);
         }
@@ -180,12 +395,28 @@ impl PaymentCallbackStore {
             || (payment_state == "closed" && contract_version == 2)
             || payment_state == "paid";
         if !can_apply {
-            insert_event(&self.db, &*tx, &event_row_id, &input, "manual_review").await?;
+            insert_event(
+                &self.db,
+                &*tx,
+                &event_row_id,
+                &input.credential_version_id,
+                &input,
+                "manual_review",
+            )
+            .await?;
             tx.commit().await.map_err(storage)?;
             return Ok(CallbackApplyResult::ManualReview);
         }
 
-        insert_event(&self.db, &*tx, &event_row_id, &input, "applied").await?;
+        insert_event(
+            &self.db,
+            &*tx,
+            &event_row_id,
+            &input.credential_version_id,
+            &input,
+            "applied",
+        )
+        .await?;
         let now = timestamp(input.received_at);
         tx.execute(self.db.stmt(
             "UPDATE store_payment_attempts
@@ -457,6 +688,7 @@ async fn insert_event<C: ConnectionTrait>(
     db: &DbPool,
     connection: &C,
     id: &str,
+    credential_version_id: &str,
     input: &ApplyProviderEventInput,
     projection_state: &str,
 ) -> Result<(), CallbackStoreError> {
@@ -471,7 +703,7 @@ async fn insert_event<C: ConnectionTrait>(
                      $8, $9, $10, $11, $12, $13, 0, $14, $15)",
             vec![
                 id.into(),
-                input.credential_version_id.clone().into(),
+                credential_version_id.into(),
                 input.provider_event_id.clone().into(),
                 input.event_kind.clone().into(),
                 input.body_digest.clone().into(),
@@ -506,6 +738,119 @@ async fn insert_event<C: ConnectionTrait>(
     Ok(())
 }
 
+fn duplicate_result(row: &QueryResult) -> Result<CallbackApplyResult, CallbackStoreError> {
+    match row_string(row, "projection_state")?.as_str() {
+        "applied" => Ok(CallbackApplyResult::Duplicate),
+        "manual_review" => Ok(CallbackApplyResult::ManualReview),
+        value => Err(CallbackStoreError::Storage(format!(
+            "unknown callback projection state: {value}"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn duplicate_result_with_evidence<C: ConnectionTrait>(
+    db: &DbPool,
+    connection: &C,
+    row: &QueryResult,
+    credential_version_id: &str,
+    provider_event_id: &str,
+    body_digest: &str,
+    parsed_json: &serde_json::Value,
+    order_id: Option<&str>,
+    channel_id: Option<&str>,
+    received_at: DateTime<Utc>,
+) -> Result<CallbackApplyResult, CallbackStoreError> {
+    let stored_body_digest = row_string(row, "body_digest")?;
+    let stored_parsed_json = row_string(row, "parsed_json")?;
+    let stored_parsed_value = serde_json::from_str(&stored_parsed_json).map_err(storage)?;
+    let stored_identity = immutable_parsed_identity(&stored_parsed_value).to_string();
+    let incoming_identity = immutable_parsed_identity(parsed_json).to_string();
+    if stored_body_digest == body_digest && stored_identity == incoming_identity {
+        return duplicate_result(row);
+    }
+
+    let case_id = format!(
+        "provider-event-identity-conflict:{}",
+        length_prefixed_sha256(&[credential_version_id, provider_event_id])
+    );
+    let evidence = serde_json::json!({
+        "credential_version_id": credential_version_id,
+        "provider_event_id": provider_event_id,
+        "stored_body_digest": stored_body_digest,
+        "incoming_body_digest": body_digest,
+        "stored_parsed_identity_digest": length_prefixed_sha256(&[&stored_identity]),
+        "incoming_parsed_identity_digest": length_prefixed_sha256(&[&incoming_identity]),
+    })
+    .to_string();
+    let now = timestamp(received_at);
+    connection
+        .execute(db.stmt(
+            "INSERT INTO store_reconciliation_cases
+                (id, order_id, channel_id, severity, kind, state, evidence_json,
+                 created_at, updated_at)
+             VALUES ($1, $2, $3, 'high', 'provider_event_identity_conflict',
+                     'open', $4, $5, $5)
+             ON CONFLICT (id) DO UPDATE SET
+                state = 'open', evidence_json = $4, updated_at = $5, closed_at = NULL",
+            vec![
+                case_id.into(),
+                order_id.map(str::to_string).into(),
+                channel_id.map(str::to_string).into(),
+                evidence.into(),
+                now.into(),
+            ],
+        ))
+        .await
+        .map_err(storage)?;
+    Ok(CallbackApplyResult::ManualReview)
+}
+
+fn immutable_parsed_identity(value: &serde_json::Value) -> serde_json::Value {
+    const KEYS: &[&str] = &[
+        "event_id",
+        "event_kind",
+        "type",
+        "checkout_session_id",
+        "payment_intent_id",
+        "attempt_id",
+        "trade_no",
+        "transaction_id",
+        "provider_object_id",
+        "provider_transaction_id",
+        "order_number",
+        "amount_minor",
+        "currency",
+    ];
+    let mut identity = serde_json::Map::new();
+    if let Some(object) = value.as_object() {
+        for key in KEYS {
+            if let Some(field) = object.get(*key) {
+                identity.insert((*key).to_string(), field.clone());
+            }
+        }
+    }
+    serde_json::Value::Object(identity)
+}
+
+fn length_prefixed_sha256(values: &[&str]) -> String {
+    let mut digest = Sha256::new();
+    for value in values {
+        let bytes = value.as_bytes();
+        digest.update(
+            u64::try_from(bytes.len())
+                .expect("identity field length fits u64")
+                .to_be_bytes(),
+        );
+        digest.update(bytes);
+    }
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[derive(Debug, Deserialize)]
 struct OrderQuote {
     product: ProductQuote,
@@ -524,6 +869,7 @@ struct BalanceQuote {
 fn validate_input(input: &ApplyProviderEventInput) -> Result<(), CallbackStoreError> {
     if Uuid::parse_str(&input.event_row_id).is_err()
         || input.credential_version_id.is_empty()
+        || input.verification_credential_version_id.is_empty()
         || input.provider_event_id.is_empty()
         || !matches!(
             input.event_kind.as_str(),

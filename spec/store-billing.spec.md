@@ -200,6 +200,8 @@ SB-O-12B. Missing runtime keys, missing public origin, credential decryption fai
 
 SB-O-12D. An order with a failed `provider_rejected` Alipay or WeChat attempt MUST reject a new attempt key with HTTP `409` and code `provider_query_required`. Only a verified Provider `NotFound` or `Closed` query result MAY clear this block. A Stripe rejection classified under SB-A-10B MUST permit a new attempt key because no Checkout Session exists. Rejection MUST occur before another checkout mutation.
 
+SB-O-12E. A new payment-attempt transaction MUST lock its `store_orders` row before it counts or inserts attempts. A payment callback projection transaction MUST lock the same row before it validates or changes an attempt. PostgreSQL MUST use `SELECT ... FOR UPDATE`. SQLite MUST hold the serialized write transaction.
+
 SB-O-12C. A first successful attempt response MUST use HTTP `201`. A repeated successful attempt response MUST use HTTP `200` and MUST return the persisted action without a provider request when the attempt is `presented` or `paid`.
 
 SB-O-13. A custom return or cancel URL MUST match the configured HTTPS origin allow-list exactly. A rejected URL MUST create no local order and no provider object.
@@ -256,6 +258,10 @@ SB-A-7B. A decrypted WeChat payment resource MUST contain the configured merchan
 
 SB-A-7C. A WeChat platform-verification credential version MAY differ from the payment attempt credential version after platform certificate rotation. The callback MUST bind the attempt by Channel, order number, adapter kind, and the exact merchant-account identity digest. The provider event `credential_version_id` MUST remain the attempt credential version. The allow-listed parsed event MUST record the platform-verification credential version ID.
 
+SB-A-7C1. A WeChat merchant-account identity digest MUST equal the lowercase SHA-256 hexadecimal digest of canonical merchant-side credential bytes. The canonical bytes MUST contain `merchant_id`, `app_id`, `api_v3_key`, `merchant_certificate_serial`, and `merchant_private_key_pem` in that order. Each field MUST be encoded as its unsigned 64-bit big-endian byte length followed by its exact UTF-8 bytes. The canonical bytes MUST exclude `platform_certificate_serial` and `platform_public_key_pem`. A callback MAY use a different verification credential only when its merchant-account identity digest equals the attempt digest.
+
+SB-A-7C2. WeChat callback selection MUST evaluate every stored credential that can verify and decrypt the callback. It MUST bind each verified credential by Channel, order number, adapter kind, and merchant-account identity. Multiple verification credentials that bind the same attempt MUST form one binding. The selected verification credential MUST be the first credential in active-first, creation-time-descending, ID-descending order that belongs to that binding. Zero bound attempts or more than one distinct bound attempt MUST use the unbound manual-review path.
+
 SB-A-7D. An Alipay or WeChat callback MAY bind one attempt whose Provider object ID equals the immutable order number or is null. The Channel, order number, adapter identity, credential identity, and merchant identity rules for that adapter MUST still match. The callback MUST reject zero matches or more than one match. A verified payment projection MUST set a null Provider object ID to the immutable order number.
 
 SB-A-8. WeChat Pay MUST support order query, refund notification, refund query, and bill download. Complaint automation MUST remain unavailable unless the merchant capability test proves it.
@@ -308,9 +314,17 @@ SB-EV-3. A callback event MUST store credential version, provider event identity
 
 SB-EV-4. `(credential_version_id, provider_event_id)` MUST be unique. One verified event MUST project to at most one order.
 
+SB-EV-4A. A verified Alipay or WeChat payment callback MAY bind an attempt whose Provider object ID is absent only when exactly one attempt matches the callback Channel, adapter kind, immutable order number, and required credential or merchant-account identity. A candidate with an absent Provider object ID MUST be `created` or `failed` with `failure_kind = provider_rejected`. The payment projection transaction MUST repeat the candidate query after it locks the order row for every Alipay or WeChat payment callback, including a selected attempt with a nonempty Provider object ID. The selected attempt MUST be the only matching candidate in that transaction. The transaction MUST set the absent Provider object ID to the immutable order number. It MUST NOT change a nonempty Provider object ID or bind an attempt from another order.
+
+SB-EV-4B. A verified Alipay or WeChat callback with zero or multiple matching attempts MUST insert one `store_provider_events` row with `projection_state = manual_review` before it returns the adapter-defined non-200 response. The row MUST use the verification credential version, encrypted raw body, body digest, and allow-listed parsed fields. A retry with the same `(credential_version_id, provider_event_id)` MUST NOT insert another event. This path MUST NOT insert `store_order_event_applications`.
+
+SB-EV-4C. Callback projection input MUST carry the attempt credential version and the verification credential version as separate fields. An applied event MUST use the attempt credential version. A lock-time zero-candidate or multiple-candidate event MUST use the verification credential version. A synthetic Provider query MUST set both fields to the same attempt credential version and MUST NOT enter the unbound callback event path.
+
 SB-EV-5. Projection state MUST be `pending`, `applied`, `superseded`, or `manual_review`.
 
-SB-EV-6. A duplicate verified event MUST return the provider success acknowledgement and MUST create no second ledger, recovery, fulfillment, or state transition.
+SB-EV-6. A duplicate verified event with the same body digest and immutable parsed identity MUST return the provider success acknowledgement and MUST create no second ledger, recovery, fulfillment, or state transition. A duplicate `(credential_version_id, provider_event_id)` with a different body digest or immutable parsed identity MUST preserve the original event, return manual review, and idempotently create one open `provider_event_identity_conflict` reconciliation case. The case ID MUST be deterministic for the credential version and Provider event identity.
+
+SB-EV-6A. The payment migration MUST create `idx_store_attempt_order_candidates` on `store_payment_attempts`. Its leading columns MUST be `(order_id, channel_id, adapter_kind, created_at DESC, id DESC)`.
 
 SB-EV-7. An event received before prerequisite payment evidence MUST remain pending and trigger provider query. It MUST NOT be discarded because of arrival order.
 

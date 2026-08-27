@@ -110,7 +110,8 @@ impl CredentialStore {
         let plaintext = Zeroizing::new(
             serde_json::to_vec(&credential).map_err(|_| CredentialStoreError::InvalidCredential)?,
         );
-        let account_id = validate_credential(&adapter_kind, plaintext.as_slice())?;
+        let account_identity_digest =
+            validate_credential_identity(&adapter_kind, plaintext.as_slice())?;
         let id = Uuid::new_v4().to_string();
         let encrypted = self
             .key_ring
@@ -119,7 +120,6 @@ impl CredentialStore {
                 plaintext.as_slice(),
             )
             .map_err(|_| CredentialStoreError::EncryptionUnavailable)?;
-        let account_identity_digest = digest(&account_id);
         let created_at = Utc::now();
         tx.execute(self.db.stmt(
             "UPDATE store_channel_credentials
@@ -178,19 +178,19 @@ impl CredentialStore {
     }
 }
 
-fn validate_credential(
+fn validate_credential_identity(
     adapter_kind: &str,
     plaintext: &[u8],
 ) -> Result<String, CredentialStoreError> {
     match adapter_kind {
         "stripe" => StripeCredential::from_json(plaintext)
-            .map(|credential| credential.account_id().to_string())
+            .map(|credential| digest(credential.account_id()))
             .map_err(|_| CredentialStoreError::InvalidCredential),
         "alipay" => AlipayCredential::from_json(plaintext)
-            .map(|credential| credential.seller_id().to_string())
+            .map(|credential| digest(credential.seller_id()))
             .map_err(|_| CredentialStoreError::InvalidCredential),
         "wechat" => WechatCredential::from_json(plaintext)
-            .map(|credential| credential.merchant_id().to_string())
+            .map(|credential| credential.account_identity_digest())
             .map_err(|_| CredentialStoreError::InvalidCredential),
         _ => Err(CredentialStoreError::InvalidCredential),
     }

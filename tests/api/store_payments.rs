@@ -23,7 +23,7 @@ use monoize::store_billing::exchange_rate::{
 };
 use monoize::store_billing::payment::{AdapterError, CheckoutAction, CheckoutRequest};
 use monoize::users::UserRole;
-use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::rand_core::OsRng;
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use sea_orm::ConnectionTrait;
@@ -291,26 +291,25 @@ async fn configure_wechat_runtime(
         vec![],
     )
     .unwrap();
+    let plaintext = serde_json::json!({
+        "merchant_id":"1900000109",
+        "app_id":"wx1234567890",
+        "api_v3_key":"0123456789abcdef0123456789abcdef",
+        "merchant_certificate_serial":"7777777777777777777777777777777777777777",
+        "merchant_private_key_pem":platform_private_pem.as_str(),
+        "platform_certificate_serial":"PLATFORM-CERTIFICATE-1",
+        "platform_public_key_pem":platform_public_pem
+    })
+    .to_string();
+    let account_digest = WechatCredential::from_json(plaintext.as_bytes())
+        .unwrap()
+        .account_identity_digest();
     let encrypted = ring
         .encrypt(
             "store_channel_credentials:api-wechat-credential:secret",
-            serde_json::json!({
-                "merchant_id":"1900000109",
-                "app_id":"wx1234567890",
-                "api_v3_key":"0123456789abcdef0123456789abcdef",
-                "merchant_certificate_serial":"7777777777777777777777777777777777777777",
-                "merchant_private_key_pem":platform_private_pem.as_str(),
-                "platform_certificate_serial":"PLATFORM-CERTIFICATE-1",
-                "platform_public_key_pem":platform_public_pem
-            })
-            .to_string()
-            .as_bytes(),
+            plaintext.as_bytes(),
         )
         .unwrap();
-    let account_digest = Sha256::digest(b"1900000109")
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
     let write = ctx.state.db_pool.write().await;
     write
         .execute(ctx.state.db_pool.stmt(
@@ -345,7 +344,10 @@ async fn configure_wechat_runtime(
     platform_private_pem
 }
 
-async fn rotate_wechat_platform_credential(ctx: &super::TestContext) -> String {
+async fn rotate_wechat_platform_credential(
+    ctx: &super::TestContext,
+    merchant_private_key_pem: &str,
+) -> String {
     let platform_private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
     let platform_public = RsaPublicKey::from(&platform_private);
     let platform_private_pem = platform_private
@@ -358,26 +360,25 @@ async fn rotate_wechat_platform_credential(ctx: &super::TestContext) -> String {
         vec![],
     )
     .unwrap();
+    let plaintext = serde_json::json!({
+        "merchant_id":"1900000109",
+        "app_id":"wx1234567890",
+        "api_v3_key":"0123456789abcdef0123456789abcdef",
+        "merchant_certificate_serial":"7777777777777777777777777777777777777777",
+        "merchant_private_key_pem":merchant_private_key_pem,
+        "platform_certificate_serial":"PLATFORM-CERTIFICATE-2",
+        "platform_public_key_pem":platform_public_pem
+    })
+    .to_string();
+    let account_digest = WechatCredential::from_json(plaintext.as_bytes())
+        .unwrap()
+        .account_identity_digest();
     let encrypted = ring
         .encrypt(
             "store_channel_credentials:api-wechat-credential-rotated:secret",
-            serde_json::json!({
-                "merchant_id":"1900000109",
-                "app_id":"wx1234567890",
-                "api_v3_key":"0123456789abcdef0123456789abcdef",
-                "merchant_certificate_serial":"7777777777777777777777777777777777777777",
-                "merchant_private_key_pem":platform_private_pem.as_str(),
-                "platform_certificate_serial":"PLATFORM-CERTIFICATE-2",
-                "platform_public_key_pem":platform_public_pem
-            })
-            .to_string()
-            .as_bytes(),
+            plaintext.as_bytes(),
         )
         .unwrap();
-    let account_digest = Sha256::digest(b"1900000109")
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
     let write = ctx.state.db_pool.write().await;
     write
         .execute_unprepared(
@@ -394,6 +395,151 @@ async fn rotate_wechat_platform_credential(ctx: &super::TestContext) -> String {
              VALUES ('api-wechat-credential-rotated', 'store-channel-wechat', 'wechat',
                      $1, $2, $3, $4, $5, 'active', '2026-08-27T00:01:00Z')",
             vec![
+                i32::from(encrypted.version).into(),
+                encrypted.key_id.into(),
+                encrypted.nonce_base64.into(),
+                encrypted.ciphertext_base64.into(),
+                account_digest.into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    platform_private_pem
+}
+
+async fn add_active_wechat_merchant_rotation_with_same_platform(
+    ctx: &super::TestContext,
+    platform_private_pem: &str,
+) {
+    let platform_private = RsaPrivateKey::from_pkcs8_pem(platform_private_pem).unwrap();
+    let platform_public_pem = RsaPublicKey::from(&platform_private)
+        .to_public_key_pem(LineEnding::LF)
+        .unwrap();
+    let plaintext = serde_json::json!({
+        "merchant_id":"1900000109",
+        "app_id":"wx1234567890",
+        "api_v3_key":"0123456789abcdef0123456789abcdef",
+        "merchant_certificate_serial":"MERCHANT-CERTIFICATE-ACTIVE-ROTATED",
+        "merchant_private_key_pem":"merchant-private-key-active-rotated",
+        "platform_certificate_serial":"PLATFORM-CERTIFICATE-2",
+        "platform_public_key_pem":platform_public_pem
+    })
+    .to_string();
+    let account_digest = WechatCredential::from_json(plaintext.as_bytes())
+        .unwrap()
+        .account_identity_digest();
+    let encrypted = ctx
+        .state
+        .payment_keys
+        .as_ref()
+        .unwrap()
+        .encrypt(
+            "store_channel_credentials:api-wechat-credential-merchant-active:secret",
+            plaintext.as_bytes(),
+        )
+        .unwrap();
+    let write = ctx.state.db_pool.write().await;
+    write
+        .execute_unprepared(
+            "UPDATE store_channel_credentials SET status = 'retired'
+             WHERE channel_id = 'store-channel-wechat' AND status = 'active'",
+        )
+        .await
+        .unwrap();
+    write
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_channel_credentials
+                (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+                 ciphertext_base64, account_identity_digest, status, created_at)
+             VALUES ('api-wechat-credential-merchant-active', 'store-channel-wechat',
+                     'wechat', $1, $2, $3, $4, $5, 'active',
+                     '2026-08-27T00:02:00Z')",
+            vec![
+                i32::from(encrypted.version).into(),
+                encrypted.key_id.into(),
+                encrypted.nonce_base64.into(),
+                encrypted.ciphertext_base64.into(),
+                account_digest.into(),
+            ],
+        ))
+        .await
+        .unwrap();
+}
+
+fn wechat_merchant_identity_digest(
+    app_id: &str,
+    api_v3_key: &str,
+    merchant_certificate_serial: &str,
+    merchant_private_key_pem: &str,
+) -> String {
+    WechatCredential::from_json(
+        serde_json::json!({
+            "merchant_id":"1900000109",
+            "app_id":app_id,
+            "api_v3_key":api_v3_key,
+            "merchant_certificate_serial":merchant_certificate_serial,
+            "merchant_private_key_pem":merchant_private_key_pem,
+            "platform_certificate_serial":"digest-only-platform-certificate",
+            "platform_public_key_pem":"digest-only-platform-public-key"
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap()
+    .account_identity_digest()
+}
+
+async fn rotate_wechat_merchant_credential(
+    ctx: &super::TestContext,
+    credential_id: &str,
+    app_id: &str,
+    api_v3_key: &str,
+    merchant_certificate_serial: &str,
+    merchant_private_key_pem: &str,
+) -> String {
+    let platform_private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let platform_public = RsaPublicKey::from(&platform_private);
+    let platform_private_pem = platform_private
+        .to_pkcs8_pem(LineEnding::LF)
+        .unwrap()
+        .to_string();
+    let platform_public_pem = platform_public.to_public_key_pem(LineEnding::LF).unwrap();
+    let plaintext = serde_json::json!({
+        "merchant_id":"1900000109",
+        "app_id":app_id,
+        "api_v3_key":api_v3_key,
+        "merchant_certificate_serial":merchant_certificate_serial,
+        "merchant_private_key_pem":merchant_private_key_pem,
+        "platform_certificate_serial":"PLATFORM-CERTIFICATE-MERCHANT-ROTATED",
+        "platform_public_key_pem":platform_public_pem
+    })
+    .to_string();
+    let credential = WechatCredential::from_json(plaintext.as_bytes()).unwrap();
+    let account_digest = credential.account_identity_digest();
+    let ring = ctx.state.payment_keys.as_ref().unwrap();
+    let encrypted = ring
+        .encrypt(
+            &format!("store_channel_credentials:{credential_id}:secret"),
+            plaintext.as_bytes(),
+        )
+        .unwrap();
+    let write = ctx.state.db_pool.write().await;
+    write
+        .execute_unprepared(
+            "UPDATE store_channel_credentials SET status = 'retired'
+             WHERE channel_id = 'store-channel-wechat' AND status = 'active'",
+        )
+        .await
+        .unwrap();
+    write
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_channel_credentials
+                (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+                 ciphertext_base64, account_identity_digest, status, created_at)
+             VALUES ($1, 'store-channel-wechat', 'wechat', $2, $3, $4, $5, $6,
+                     'active', '2026-08-27T00:02:00Z')",
+            vec![
+                credential_id.into(),
                 i32::from(encrypted.version).into(),
                 encrypted.key_id.into(),
                 encrypted.nonce_base64.into(),
@@ -793,6 +939,150 @@ async fn stripe_callback_is_public_verified_encrypted_and_idempotent() {
 }
 
 #[tokio::test]
+async fn alipay_callback_rejects_an_attempt_bound_to_the_wechat_adapter() {
+    let mut ctx = setup().await;
+    configure_payment_fixture(&mut ctx).await;
+    let private_pem = configure_alipay_runtime(&mut ctx, ApiCheckoutProvider::default()).await;
+    let user = session(&ctx, "alipay-adapter-mismatch-user").await;
+    let (_, order) = json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/orders",
+        &user,
+        Some("alipay-adapter-mismatch-order"),
+        Some(json!({
+            "product_id": "api-payment-product",
+            "payment_channel_id": "store-channel-alipay",
+            "payment_currency": "CNY"
+        })),
+    )
+    .await;
+    let order_id = order["id"].as_str().unwrap();
+    let order_number = order["order_number"].as_str().unwrap();
+    let (status, checkout) = json_request(
+        &ctx,
+        Method::POST,
+        &format!("/api/dashboard/store/orders/{order_id}/attempts"),
+        &user,
+        Some("alipay-adapter-mismatch-attempt"),
+        Some(json!({"expected_payment_method":"computer_web"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{checkout}");
+    let attempt_id = checkout["attempt"]["id"].as_str().unwrap();
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute(ctx.state.db_pool.stmt(
+            "UPDATE store_payment_attempts
+             SET adapter_kind = 'wechat', state = 'created', provider_object_id = NULL
+             WHERE id = $1",
+            vec![attempt_id.into()],
+        ))
+        .await
+        .unwrap();
+
+    let mut fields = BTreeMap::from([
+        (
+            "notify_id".to_string(),
+            "notify-api-alipay-adapter-mismatch".to_string(),
+        ),
+        ("app_id".to_string(), "2026000000000001".to_string()),
+        ("seller_id".to_string(), "2088000000000001".to_string()),
+        ("out_trade_no".to_string(), order_number.to_string()),
+        ("trade_no".to_string(), "2026082722001003".to_string()),
+        ("trade_status".to_string(), "TRADE_SUCCESS".to_string()),
+        ("total_amount".to_string(), "10.00".to_string()),
+        ("charset".to_string(), "utf-8".to_string()),
+        ("sign_type".to_string(), "RSA2".to_string()),
+    ]);
+    let canonical = canonical_alipay_parameters(&fields);
+    fields.insert(
+        "sign".to_string(),
+        monoize::store_billing::crypto::sign_rsa_sha256_base64(&private_pem, canonical.as_bytes())
+            .unwrap(),
+    );
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(fields.iter())
+        .finish();
+
+    for _ in 0..2 {
+        let (status, _) = alipay_callback_request(&ctx, &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    let event = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT COUNT(*) AS value, MIN(credential_version_id) AS credential_version_id,
+                    MIN(projection_state) AS projection_state,
+                    MIN(raw_key_id) AS raw_key_id, MIN(parsed_json) AS parsed_json
+             FROM store_provider_events
+             WHERE provider_event_id = 'notify-api-alipay-adapter-mismatch'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(event.try_get::<i64>("", "value").unwrap(), 1);
+    assert_eq!(
+        event
+            .try_get::<String>("", "credential_version_id")
+            .unwrap(),
+        "api-alipay-credential"
+    );
+    assert_eq!(
+        event.try_get::<String>("", "projection_state").unwrap(),
+        "manual_review"
+    );
+    assert!(
+        !event
+            .try_get::<String>("", "raw_key_id")
+            .unwrap()
+            .is_empty()
+    );
+    let parsed: Value =
+        serde_json::from_str(&event.try_get::<String>("", "parsed_json").unwrap()).unwrap();
+    assert_eq!(parsed["order_number"], order_number);
+    assert!(parsed.get("sign").is_none());
+    let application_count = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT COUNT(*) AS value FROM store_order_event_applications",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "value")
+        .unwrap();
+    assert_eq!(application_count, 0);
+    let row = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT payment_state, fulfillment_state FROM store_orders WHERE id = $1",
+            vec![order_id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.try_get::<String>("", "payment_state").unwrap(),
+        "unpaid"
+    );
+    assert_eq!(
+        row.try_get::<String>("", "fulfillment_state").unwrap(),
+        "pending"
+    );
+}
+
+#[tokio::test]
 async fn alipay_callback_returns_success_after_verified_idempotent_fulfillment() {
     let mut ctx = setup().await;
     configure_payment_fixture(&mut ctx).await;
@@ -836,6 +1126,25 @@ async fn alipay_callback_returns_success_after_verified_idempotent_fulfillment()
         ))
         .await
         .unwrap();
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_payment_attempts
+                (id, order_id, channel_id, adapter_kind, credential_version_id,
+                 merchant_account_identity, expected_payment_method,
+                 payment_contract_version, state, idempotency_key, created_at, updated_at)
+             SELECT 'stale-alipay-attempt', order_id, channel_id, adapter_kind,
+                    credential_version_id, merchant_account_identity,
+                    expected_payment_method, payment_contract_version, 'expired',
+                    'stale-alipay-attempt-key', '2026-08-26T23:59:00Z',
+                    '2026-08-26T23:59:00Z'
+             FROM store_payment_attempts WHERE id = $1",
+            vec![attempt_id.into()],
+        ))
+        .await
+        .unwrap();
 
     let mut fields = BTreeMap::from([
         ("notify_id".to_string(), "notify-api-alipay-1".to_string()),
@@ -863,6 +1172,69 @@ async fn alipay_callback_returns_success_after_verified_idempotent_fulfillment()
         assert_eq!(status, StatusCode::OK, "{response}");
         assert_eq!(response, "success");
     }
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_payment_attempts
+                (id, order_id, channel_id, adapter_kind, credential_version_id,
+                 merchant_account_identity, expected_payment_method,
+                 payment_contract_version, state, failure_kind, idempotency_key,
+                 created_at, updated_at)
+             SELECT 'ambiguous-alipay-attempt', order_id, channel_id, adapter_kind,
+                    credential_version_id, merchant_account_identity,
+                    expected_payment_method, payment_contract_version, 'failed',
+                    'provider_rejected', 'ambiguous-alipay-attempt-key',
+                    '2026-08-27T00:00:02Z', '2026-08-27T00:00:02Z'
+             FROM store_payment_attempts WHERE id = $1",
+            vec![attempt_id.into()],
+        ))
+        .await
+        .unwrap();
+    fields.insert(
+        "notify_id".to_string(),
+        "notify-api-alipay-ambiguous".to_string(),
+    );
+    fields.insert("trade_no".to_string(), "2026082722001004".to_string());
+    fields.remove("sign");
+    let ambiguous_canonical = canonical_alipay_parameters(&fields);
+    fields.insert(
+        "sign".to_string(),
+        monoize::store_billing::crypto::sign_rsa_sha256_base64(
+            &private_pem,
+            ambiguous_canonical.as_bytes(),
+        )
+        .unwrap(),
+    );
+    let ambiguous_body = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(fields.iter())
+        .finish();
+    for _ in 0..2 {
+        let (status, _) = alipay_callback_request(&ctx, &ambiguous_body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    let ambiguous_event = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT COUNT(*) AS value, MIN(projection_state) AS projection_state
+             FROM store_provider_events
+             WHERE credential_version_id = 'api-alipay-credential'
+               AND provider_event_id = 'notify-api-alipay-ambiguous'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ambiguous_event.try_get::<i64>("", "value").unwrap(), 1);
+    assert_eq!(
+        ambiguous_event
+            .try_get::<String>("", "projection_state")
+            .unwrap(),
+        "manual_review"
+    );
     fields.insert(
         "notify_id".to_string(),
         "notify-api-alipay-mismatch".to_string(),
@@ -893,8 +1265,8 @@ async fn alipay_callback_returns_success_after_verified_idempotent_fulfillment()
                     a.state AS attempt_state, a.provider_object_id
              FROM store_orders o
              JOIN store_payment_attempts a ON a.order_id = o.id
-             WHERE o.id = $1",
-            vec![order_id.into()],
+             WHERE o.id = $1 AND a.id = $2",
+            vec![order_id.into(), attempt_id.into()],
         ))
         .await
         .unwrap()
@@ -927,10 +1299,178 @@ async fn alipay_callback_returns_success_after_verified_idempotent_fulfillment()
 }
 
 #[tokio::test]
+async fn wechat_callback_rejects_rotated_merchant_side_identity_fields() {
+    let scenarios = [
+        (
+            "app-id",
+            "wx-different",
+            "0123456789abcdef0123456789abcdef",
+            "7777777777777777777777777777777777777777",
+            false,
+        ),
+        (
+            "api-v3-key",
+            "wx1234567890",
+            "abcdef0123456789abcdef0123456789",
+            "7777777777777777777777777777777777777777",
+            false,
+        ),
+        (
+            "merchant-signing",
+            "wx1234567890",
+            "0123456789abcdef0123456789abcdef",
+            "merchant-certificate-rotated",
+            true,
+        ),
+    ];
+    for (suffix, app_id, api_v3_key, merchant_certificate_serial, rotate_private_key) in scenarios {
+        let mut ctx = setup().await;
+        configure_payment_fixture(&mut ctx).await;
+        let original_merchant_private =
+            configure_wechat_runtime(&mut ctx, ApiCheckoutProvider::default()).await;
+        let user = session(&ctx, &format!("wechat-identity-{suffix}-user")).await;
+        let (_, order) = json_request(
+            &ctx,
+            Method::POST,
+            "/api/dashboard/store/orders",
+            &user,
+            Some(&format!("wechat-identity-{suffix}-order")),
+            Some(json!({
+                "product_id": "api-payment-product",
+                "payment_channel_id": "store-channel-wechat",
+                "payment_currency": "CNY"
+            })),
+        )
+        .await;
+        let order_id = order["id"].as_str().unwrap();
+        let order_number = order["order_number"].as_str().unwrap();
+        let (status, checkout) = json_request(
+            &ctx,
+            Method::POST,
+            &format!("/api/dashboard/store/orders/{order_id}/attempts"),
+            &user,
+            Some(&format!("wechat-identity-{suffix}-attempt")),
+            Some(json!({"expected_payment_method":"native"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{checkout}");
+        let attempt_id = checkout["attempt"]["id"].as_str().unwrap();
+        let original_digest = wechat_merchant_identity_digest(
+            "wx1234567890",
+            "0123456789abcdef0123456789abcdef",
+            "7777777777777777777777777777777777777777",
+            &original_merchant_private,
+        );
+        ctx.state
+            .db_pool
+            .write()
+            .await
+            .execute(ctx.state.db_pool.stmt(
+                "UPDATE store_payment_attempts
+                 SET state = 'created', provider_object_id = NULL,
+                     merchant_account_identity = $2
+                 WHERE id = $1",
+                vec![attempt_id.into(), original_digest.into()],
+            ))
+            .await
+            .unwrap();
+        let rotated_merchant_private = if rotate_private_key {
+            "merchant-private-key-rotated"
+        } else {
+            &original_merchant_private
+        };
+        let credential_id = format!("api-wechat-credential-{suffix}");
+        let platform_private = rotate_wechat_merchant_credential(
+            &ctx,
+            &credential_id,
+            app_id,
+            api_v3_key,
+            merchant_certificate_serial,
+            rotated_merchant_private,
+        )
+        .await;
+        let resource_nonce = *b"0123456789ad";
+        let resource = serde_json::to_vec(&json!({
+            "appid":app_id,
+            "mchid":"1900000109",
+            "out_trade_no":order_number,
+            "transaction_id":format!("transaction-{suffix}"),
+            "trade_state":"SUCCESS",
+            "amount":{"total":1000,"currency":"CNY"}
+        }))
+        .unwrap();
+        let encrypted = Aes256Gcm::new_from_slice(api_v3_key.as_bytes())
+            .unwrap()
+            .encrypt(
+                &Nonce::try_from(resource_nonce.as_slice()).unwrap(),
+                Payload {
+                    msg: &resource,
+                    aad: b"transaction",
+                },
+            )
+            .unwrap();
+        let provider_event_id = format!("event-api-wechat-identity-{suffix}");
+        let body = serde_json::to_vec(&json!({
+            "id":provider_event_id,
+            "event_type":"TRANSACTION.SUCCESS",
+            "resource":{
+                "original_type":"transaction",
+                "algorithm":"AEAD_AES_256_GCM",
+                "ciphertext":STANDARD.encode(encrypted),
+                "associated_data":"transaction",
+                "nonce":"0123456789ad"
+            }
+        }))
+        .unwrap();
+        let timestamp = Utc::now().timestamp().to_string();
+        let nonce = format!("wechat-identity-{suffix}-nonce");
+        let signature = monoize::store_billing::crypto::sign_rsa_sha256_base64(
+            &platform_private,
+            &wechat_callback_signature_message(&timestamp, &nonce, &body),
+        )
+        .unwrap();
+
+        let (status, _) = wechat_callback_request(
+            &ctx,
+            &body,
+            &timestamp,
+            &nonce,
+            "PLATFORM-CERTIFICATE-MERCHANT-ROTATED",
+            &signature,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "scenario {suffix}");
+        let event = ctx
+            .state
+            .db_pool
+            .read()
+            .query_one(ctx.state.db_pool.stmt(
+                "SELECT credential_version_id, projection_state
+                 FROM store_provider_events WHERE provider_event_id = $1",
+                vec![provider_event_id.into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            event
+                .try_get::<String>("", "credential_version_id")
+                .unwrap(),
+            credential_id
+        );
+        assert_eq!(
+            event.try_get::<String>("", "projection_state").unwrap(),
+            "manual_review"
+        );
+    }
+}
+
+#[tokio::test]
 async fn wechat_callback_returns_official_success_after_verified_idempotent_fulfillment() {
     let mut ctx = setup().await;
     configure_payment_fixture(&mut ctx).await;
-    configure_wechat_runtime(&mut ctx, ApiCheckoutProvider::default()).await;
+    let merchant_private_pem =
+        configure_wechat_runtime(&mut ctx, ApiCheckoutProvider::default()).await;
     let user = session(&ctx, "wechat-callback-user").await;
     let (_, order) = json_request(
         &ctx,
@@ -970,7 +1510,27 @@ async fn wechat_callback_returns_official_success_after_verified_idempotent_fulf
         ))
         .await
         .unwrap();
-    let platform_private_pem = rotate_wechat_platform_credential(&ctx).await;
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_payment_attempts
+                (id, order_id, channel_id, adapter_kind, credential_version_id,
+                 merchant_account_identity, expected_payment_method,
+                 payment_contract_version, state, idempotency_key, created_at, updated_at)
+             SELECT 'stale-wechat-attempt', order_id, channel_id, adapter_kind,
+                    credential_version_id, merchant_account_identity,
+                    expected_payment_method, payment_contract_version, 'expired',
+                    'stale-wechat-attempt-key', '2026-08-26T23:59:00Z',
+                    '2026-08-26T23:59:00Z'
+             FROM store_payment_attempts WHERE id = $1",
+            vec![attempt_id.into()],
+        ))
+        .await
+        .unwrap();
+    let platform_private_pem = rotate_wechat_platform_credential(&ctx, &merchant_private_pem).await;
+    add_active_wechat_merchant_rotation_with_same_platform(&ctx, &platform_private_pem).await;
 
     let resource_nonce = *b"0123456789ab";
     let resource = serde_json::to_vec(&json!({
@@ -1103,8 +1663,8 @@ async fn wechat_callback_returns_official_success_after_verified_idempotent_fulf
                     a.state AS attempt_state, a.provider_object_id
              FROM store_orders o
              JOIN store_payment_attempts a ON a.order_id = o.id
-             WHERE o.id = $1",
-            vec![order_id.into()],
+             WHERE o.id = $1 AND a.id = $2",
+            vec![order_id.into(), attempt_id.into()],
         ))
         .await
         .unwrap()

@@ -4,6 +4,7 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, ORIGIN};
 use axum::http::{Method, Request, StatusCode};
 use chrono::{TimeZone, Utc};
 use http_body_util::BodyExt;
+use monoize::store_billing::adapters::wechat::WechatCredential;
 use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::{
     ExchangeRateFetcher, ExchangeRateService, ExchangeRateSnapshot, ExchangeRateStore,
@@ -197,6 +198,70 @@ async fn raw_request_with_reauth(
         .to_bytes()
         .to_vec();
     (status, headers, bytes)
+}
+
+#[tokio::test]
+async fn wechat_credential_replacement_persists_the_merchant_side_identity_digest() {
+    let mut ctx = setup().await;
+    let admin = dashboard_session(&ctx, "wechat_credential_admin", UserRole::Admin).await;
+    ctx.state.payment_keys = Some(Arc::new(
+        PaymentKeyRing::new(
+            PaymentKey::new("wechat-credential-key", [37_u8; 32]).unwrap(),
+            vec![],
+        )
+        .unwrap(),
+    ));
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+    let credential = json!({
+        "merchant_id":"1900000109",
+        "app_id":"wx1234567890",
+        "api_v3_key":"0123456789abcdef0123456789abcdef",
+        "merchant_certificate_serial":"merchant-certificate-1",
+        "merchant_private_key_pem":"merchant-private-key-1",
+        "platform_certificate_serial":"platform-certificate-1",
+        "platform_public_key_pem":"platform-public-key-1"
+    });
+    let expected_digest = WechatCredential::from_json(credential.to_string().as_bytes())
+        .unwrap()
+        .account_identity_digest();
+    let (status, grant, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        &admin,
+        None,
+        json!({"current_password":"test-password","scope":"credential_update"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{grant}");
+    let (status, saved, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-wechat/credential",
+        &admin,
+        grant["token"].as_str(),
+        credential,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["account_identity_digest"], expected_digest);
+    assert!(!saved.to_string().contains("0123456789abcdef"));
+    assert!(!saved.to_string().contains("merchant-private-key-1"));
+    let persisted = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT account_identity_digest FROM store_channel_credentials
+             WHERE channel_id = 'store-channel-wechat' AND status = 'active'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<String>("", "account_identity_digest")
+        .unwrap();
+    assert_eq!(persisted, expected_digest);
 }
 
 #[tokio::test]

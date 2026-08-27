@@ -188,7 +188,7 @@ impl PaymentQueryOperations {
             "wechat" => {
                 let credential = WechatCredential::from_json(&plaintext)
                     .map_err(|_| PaymentOperationsError::CredentialInvalid)?;
-                validate_account_identity(credential.merchant_id(), &loaded)?;
+                validate_account_identity_digest(&credential.account_identity_digest(), &loaded)?;
                 let verifiers = load_wechat_platform_verifiers(
                     &self.db,
                     &self.key_ring,
@@ -261,10 +261,7 @@ async fn load_wechat_platform_verifiers(
         let Ok(credential) = WechatCredential::from_json(&plaintext) else {
             continue;
         };
-        let digest = Sha256::digest(credential.merchant_id().as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let digest = credential.account_identity_digest();
         if digest != account_identity_digest {
             continue;
         }
@@ -392,6 +389,13 @@ fn validate_account_identity(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
+    validate_account_identity_digest(&digest, loaded)
+}
+
+fn validate_account_identity_digest(
+    digest: &str,
+    loaded: &LoadedPaymentQuery,
+) -> Result<(), PaymentOperationsError> {
     if digest != loaded.merchant_account_identity {
         return Err(PaymentOperationsError::AccountIdentityMismatch);
     }

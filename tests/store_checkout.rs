@@ -264,10 +264,16 @@ async fn replace_checkout_adapter(
             credential_json,
         )
         .unwrap();
-    let digest = Sha256::digest(account_id.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let digest = if adapter_kind == "wechat" {
+        WechatCredential::from_json(credential_json)
+            .unwrap()
+            .account_identity_digest()
+    } else {
+        Sha256::digest(account_id.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
     let write = db.write().await;
     write
         .execute(db.stmt(
@@ -572,6 +578,20 @@ async fn stripe_ambiguous_replay_keeps_attempt_blocking_when_configuration_is_un
     assert_eq!(
         row.try_get::<Option<String>>("", "failure_kind").unwrap(),
         None
+    );
+    assert_eq!(
+        unavailable
+            .create_attempt(
+                "checkout-user",
+                &order_id,
+                CreatePaymentAttemptInput {
+                    idempotency_key: "checkout-ambiguous-config-new-key".to_string(),
+                    expected_payment_method: Some("card".to_string()),
+                },
+            )
+            .await
+            .unwrap_err(),
+        CheckoutError::Order(monoize::store_billing::order::PaymentOrderError::ActiveAttemptExists)
     );
 
     let recovered = configured

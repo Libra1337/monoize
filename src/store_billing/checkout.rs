@@ -333,7 +333,7 @@ impl CheckoutService {
             "wechat" => {
                 let credential = WechatCredential::from_json(&plaintext)
                     .map_err(|_| CheckoutError::ConfigurationUnavailable)?;
-                validate_account_identity(credential.merchant_id(), attempt)?;
+                validate_account_identity_digest(&credential.account_identity_digest(), attempt)?;
                 let product = match attempt.expected_payment_method.as_deref() {
                     None | Some("native") => WechatProduct::Native,
                     Some("h5") => WechatProduct::H5,
@@ -437,7 +437,14 @@ fn validate_account_identity(
     account_id: &str,
     attempt: &PaymentAttempt,
 ) -> Result<(), CheckoutError> {
-    if account_identity_digest(account_id) != attempt.merchant_account_identity {
+    validate_account_identity_digest(&account_identity_digest(account_id), attempt)
+}
+
+fn validate_account_identity_digest(
+    digest: &str,
+    attempt: &PaymentAttempt,
+) -> Result<(), CheckoutError> {
+    if digest != attempt.merchant_account_identity {
         return Err(CheckoutError::ConfigurationUnavailable);
     }
     Ok(())

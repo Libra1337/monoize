@@ -106,6 +106,47 @@ fn wechat_signature_message_preserves_required_terminal_newline() {
 }
 
 #[test]
+fn wechat_account_identity_covers_only_merchant_side_credential_fields() {
+    fn credential(overrides: serde_json::Value) -> zeroize::Zeroizing<WechatCredential> {
+        let mut value = serde_json::json!({
+            "merchant_id":"1900000109",
+            "app_id":"wx1234567890",
+            "api_v3_key":"0123456789abcdef0123456789abcdef",
+            "merchant_certificate_serial":"merchant-certificate-1",
+            "merchant_private_key_pem":"merchant-private-key-1",
+            "platform_certificate_serial":"platform-certificate-1",
+            "platform_public_key_pem":"platform-public-key-1"
+        });
+        for (key, replacement) in overrides.as_object().unwrap() {
+            value[key] = replacement.clone();
+        }
+        WechatCredential::from_json(value.to_string().as_bytes()).unwrap()
+    }
+
+    let original = credential(serde_json::json!({}));
+    let original_digest = original.account_identity_digest();
+    for changed in [
+        serde_json::json!({"app_id":"wx-different"}),
+        serde_json::json!({"api_v3_key":"abcdef0123456789abcdef0123456789"}),
+        serde_json::json!({"merchant_certificate_serial":"merchant-certificate-2"}),
+        serde_json::json!({"merchant_private_key_pem":"merchant-private-key-2"}),
+    ] {
+        assert_ne!(
+            credential(changed).account_identity_digest(),
+            original_digest
+        );
+    }
+    assert_eq!(
+        credential(serde_json::json!({
+            "platform_certificate_serial":"platform-certificate-2",
+            "platform_public_key_pem":"platform-public-key-2"
+        }))
+        .account_identity_digest(),
+        original_digest
+    );
+}
+
+#[test]
 fn wechat_callback_verifies_platform_signature_and_decrypted_payment() {
     let platform_private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
     let platform_public = RsaPublicKey::from(&platform_private);

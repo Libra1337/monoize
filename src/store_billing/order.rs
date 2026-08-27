@@ -474,7 +474,7 @@ impl PaymentOrderStore {
         if let Some(existing) = query_attempt_by_key(&self.db, &*tx, &input.idempotency_key).await?
         {
             if existing.order_id == order_id {
-                query_order_by_id(&self.db, &*tx, order_id, Some(user_id))
+                query_order_by_id_for_update(&self.db, &*tx, order_id, Some(user_id))
                     .await?
                     .ok_or(PaymentOrderError::OrderNotFound)?;
                 tx.commit().await.map_err(storage)?;
@@ -485,7 +485,7 @@ impl PaymentOrderStore {
             }
             return Err(PaymentOrderError::IdempotencyConflict);
         }
-        let order = query_order_by_id(&self.db, &*tx, order_id, Some(user_id))
+        let order = query_order_by_id_for_update(&self.db, &*tx, order_id, Some(user_id))
             .await?
             .ok_or(PaymentOrderError::OrderNotFound)?;
         if order.payment_state != PaymentState::Unpaid || order.expires_at <= Utc::now() {
@@ -787,13 +787,40 @@ async fn query_order_by_id<C: ConnectionTrait>(
     order_id: &str,
     user_id: Option<&str>,
 ) -> Result<Option<PaymentOrder>, PaymentOrderError> {
+    query_order_by_id_with_lock(db, connection, order_id, user_id, false).await
+}
+
+async fn query_order_by_id_for_update<C: ConnectionTrait>(
+    db: &DbPool,
+    connection: &C,
+    order_id: &str,
+    user_id: Option<&str>,
+) -> Result<Option<PaymentOrder>, PaymentOrderError> {
+    query_order_by_id_with_lock(db, connection, order_id, user_id, true).await
+}
+
+async fn query_order_by_id_with_lock<C: ConnectionTrait>(
+    db: &DbPool,
+    connection: &C,
+    order_id: &str,
+    user_id: Option<&str>,
+    for_update: bool,
+) -> Result<Option<PaymentOrder>, PaymentOrderError> {
     let (suffix, values) = if let Some(user_id) = user_id {
         (" AND user_id = $2", vec![order_id.into(), user_id.into()])
     } else {
         ("", vec![order_id.into()])
     };
+    let lock = if for_update && db.is_postgres() {
+        " FOR UPDATE"
+    } else {
+        ""
+    };
     connection
-        .query_one(db.stmt(&format!("{} WHERE id = $1{suffix}", order_select()), values))
+        .query_one(db.stmt(
+            &format!("{} WHERE id = $1{suffix}{lock}", order_select()),
+            values,
+        ))
         .await
         .map_err(storage)?
         .map(payment_order_from_row)

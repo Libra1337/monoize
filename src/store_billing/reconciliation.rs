@@ -690,6 +690,7 @@ fn payment_query_event(
     Ok(ApplyProviderEventInput {
         event_row_id: Uuid::new_v4().to_string(),
         credential_version_id: query.credential_version_id.clone(),
+        verification_credential_version_id: query.credential_version_id.clone(),
         provider_event_id: format!(
             "payment-query:{}:{provider_transaction_id}",
             query.attempt_id

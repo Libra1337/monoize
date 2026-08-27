@@ -4,6 +4,7 @@ use std::net::IpAddr;
 use chrono::{SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -41,6 +42,30 @@ impl WechatCredential {
 
     pub fn merchant_id(&self) -> &str {
         &self.merchant_id
+    }
+
+    pub fn account_identity_digest(&self) -> String {
+        let mut digest = Sha256::new();
+        for value in [
+            &self.merchant_id,
+            &self.app_id,
+            &self.api_v3_key,
+            &self.merchant_certificate_serial,
+            &self.merchant_private_key_pem,
+        ] {
+            let bytes = value.as_bytes();
+            digest.update(
+                u64::try_from(bytes.len())
+                    .expect("credential field length fits u64")
+                    .to_be_bytes(),
+            );
+            digest.update(bytes);
+        }
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 
     pub fn platform_verifier(&self) -> Result<WechatPlatformVerifier, AdapterError> {

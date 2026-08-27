@@ -176,10 +176,16 @@ async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
         ),
         _ => panic!("unsupported fixture adapter"),
     };
-    let account_digest = Sha256::digest(account_id.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let account_digest = if adapter_kind == "wechat" {
+        WechatCredential::from_json(credential_json)
+            .unwrap()
+            .account_identity_digest()
+    } else {
+        Sha256::digest(account_id.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
     let key_ring = PaymentKeyRing::new(
         PaymentKey::new("operations-key", [23_u8; 32]).unwrap(),
         vec![],
@@ -285,8 +291,8 @@ async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
                         "merchant_id":"1900000109",
                         "app_id":"wx1234567890",
                         "api_v3_key":"0123456789abcdef0123456789abcdef",
-                        "merchant_certificate_serial":"MERCHANT-CERTIFICATE-2",
-                        "merchant_private_key_pem":"private-rotated",
+                        "merchant_certificate_serial":"MERCHANT-CERTIFICATE-1",
+                        "merchant_private_key_pem":"private",
                         "platform_certificate_serial":"PLATFORM-CERTIFICATE-2",
                         "platform_public_key_pem":"public-rotated"
                     }"#,
