@@ -3,6 +3,7 @@ use sea_orm::{ConnectionTrait, QueryResult};
 use serde::Deserialize;
 use uuid::Uuid;
 
+use super::crypto::EncryptedSecret;
 use super::money::{
     Currency, ExchangeRateRational, cny_fen_to_nano_usd, parse_minor, quoted_received_to_nano_usd,
 };
@@ -10,16 +11,23 @@ use crate::db::DbPool;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyProviderEventInput {
+    pub event_row_id: String,
     pub credential_version_id: String,
     pub provider_event_id: String,
     pub event_kind: String,
     pub order_id: String,
     pub attempt_id: String,
     pub provider_transaction_id: String,
+    pub provider_object_id: String,
+    pub order_number: String,
+    pub merchant_account_identity: String,
     pub amount_minor: String,
     pub currency: Currency,
     pub body_digest: String,
     pub parsed_json: serde_json::Value,
+    pub raw_body: EncryptedSecret,
+    pub source_ip: Option<String>,
+    pub user_agent: Option<String>,
     pub received_at: DateTime<Utc>,
 }
 
@@ -85,7 +93,8 @@ impl PaymentCallbackStore {
                     "SELECT a.id AS attempt_id, a.order_id, a.credential_version_id,
                             a.state AS attempt_state, o.user_id, o.product_kind,
                             o.payment_state, o.fulfillment_state, o.payment_hold,
-                            o.payment_minor, o.payment_currency, o.rate_numerator,
+                            a.provider_object_id, a.merchant_account_identity,
+                            o.order_number, o.payment_minor, o.payment_currency, o.rate_numerator,
                             o.rate_denominator, o.quote_json, o.contract_version,
                             o.state_revision
                      FROM store_payment_attempts a
@@ -103,9 +112,12 @@ impl PaymentCallbackStore {
 
         let matches_contract = row_string(&row, "credential_version_id")?
             == input.credential_version_id
+            && row_string(&row, "provider_object_id")? == input.provider_object_id
+            && row_string(&row, "merchant_account_identity")? == input.merchant_account_identity
+            && row_string(&row, "order_number")? == input.order_number
             && row_string(&row, "payment_minor")? == input.amount_minor
             && row_string(&row, "payment_currency")? == currency_string(input.currency);
-        let event_row_id = Uuid::new_v4().to_string();
+        let event_row_id = input.event_row_id.clone();
         if !matches_contract {
             insert_event(&self.db, &*tx, &event_row_id, &input, "manual_review").await?;
             tx.commit().await.map_err(storage)?;
@@ -321,8 +333,10 @@ async fn insert_event<C: ConnectionTrait>(
             "INSERT INTO store_provider_events
                 (id, credential_version_id, provider_event_id, event_kind,
                  body_digest, parsed_json, verification_result, projection_state,
-                 state_revision, received_at, applied_at)
-             VALUES ($1, $2, $3, $4, $5, $6, 'verified', $7, 0, $8, $9)",
+                 raw_format_version, raw_key_id, raw_nonce_base64, raw_ciphertext_base64,
+                 source_ip, user_agent, state_revision, received_at, applied_at)
+             VALUES ($1, $2, $3, $4, $5, $6, 'verified', $7,
+                     $8, $9, $10, $11, $12, $13, 0, $14, $15)",
             vec![
                 id.into(),
                 input.credential_version_id.clone().into(),
@@ -331,6 +345,12 @@ async fn insert_event<C: ConnectionTrait>(
                 input.body_digest.clone().into(),
                 input.parsed_json.to_string().into(),
                 projection_state.into(),
+                i32::from(input.raw_body.version).into(),
+                input.raw_body.key_id.clone().into(),
+                input.raw_body.nonce_base64.clone().into(),
+                input.raw_body.ciphertext_base64.clone().into(),
+                input.source_ip.clone().into(),
+                input.user_agent.clone().into(),
                 timestamp(input.received_at).into(),
                 (projection_state == "applied")
                     .then(|| timestamp(input.received_at))
@@ -358,12 +378,24 @@ struct BalanceQuote {
 }
 
 fn validate_input(input: &ApplyProviderEventInput) -> Result<(), CallbackStoreError> {
-    if input.credential_version_id.is_empty()
+    if Uuid::parse_str(&input.event_row_id).is_err()
+        || input.credential_version_id.is_empty()
         || input.provider_event_id.is_empty()
         || input.event_kind != "payment_succeeded"
         || input.order_id.is_empty()
         || input.attempt_id.is_empty()
         || input.provider_transaction_id.is_empty()
+        || input.provider_object_id.is_empty()
+        || input.order_number.is_empty()
+        || input.merchant_account_identity.len() != 64
+        || !input
+            .merchant_account_identity
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || input.raw_body.version == 0
+        || input.raw_body.key_id.is_empty()
+        || input.raw_body.nonce_base64.is_empty()
+        || input.raw_body.ciphertext_base64.is_empty()
         || input.body_digest.len() != 64
         || !input
             .body_digest

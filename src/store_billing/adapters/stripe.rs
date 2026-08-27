@@ -268,6 +268,18 @@ pub struct VerifiedStripeEvent {
     pub api_version: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StripePaymentEvent {
+    pub provider_event_id: String,
+    pub attempt_id: String,
+    pub order_number: String,
+    pub checkout_session_id: String,
+    pub payment_intent_id: String,
+    pub amount_minor: String,
+    pub currency: Currency,
+    pub account_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StripeWebhookError {
     #[error("Stripe-Signature is invalid")]
@@ -280,6 +292,8 @@ pub enum StripeWebhookError {
     InvalidEvent,
     #[error("Stripe event API version differs from configured version")]
     ApiVersionMismatch,
+    #[error("Stripe payment event fields are invalid")]
+    InvalidPaymentEvent,
 }
 
 pub fn verify_stripe_webhook(
@@ -348,6 +362,78 @@ pub fn verify_stripe_webhook(
         id: event.id,
         kind: event.kind,
         api_version: event.api_version,
+    })
+}
+
+pub fn parse_stripe_payment_event(
+    body: &[u8],
+    verified: &VerifiedStripeEvent,
+    expected_account_id: &str,
+) -> Result<StripePaymentEvent, StripeWebhookError> {
+    #[derive(Deserialize)]
+    struct Event {
+        id: String,
+        #[serde(rename = "type")]
+        kind: String,
+        account: String,
+        data: EventData,
+    }
+
+    #[derive(Deserialize)]
+    struct EventData {
+        object: CheckoutSession,
+    }
+
+    #[derive(Deserialize)]
+    struct CheckoutSession {
+        id: String,
+        object: String,
+        amount_total: u64,
+        currency: String,
+        client_reference_id: String,
+        metadata: CheckoutMetadata,
+        payment_intent: String,
+        payment_status: String,
+    }
+
+    #[derive(Deserialize)]
+    struct CheckoutMetadata {
+        store_attempt_id: String,
+    }
+
+    let event: Event =
+        serde_json::from_slice(body).map_err(|_| StripeWebhookError::InvalidPaymentEvent)?;
+    if event.id != verified.id
+        || event.kind != verified.kind
+        || !matches!(
+            event.kind.as_str(),
+            "checkout.session.completed" | "checkout.session.async_payment_succeeded"
+        )
+        || event.account != expected_account_id
+        || event.data.object.object != "checkout.session"
+        || event.data.object.id.is_empty()
+        || event.data.object.amount_total == 0
+        || event.data.object.client_reference_id.is_empty()
+        || event.data.object.metadata.store_attempt_id.is_empty()
+        || event.data.object.payment_intent.is_empty()
+        || event.data.object.payment_status != "paid"
+    {
+        return Err(StripeWebhookError::InvalidPaymentEvent);
+    }
+    let currency = match event.data.object.currency.as_str() {
+        "cny" => Currency::CNY,
+        "usd" => Currency::USD,
+        _ => return Err(StripeWebhookError::InvalidPaymentEvent),
+    };
+    Ok(StripePaymentEvent {
+        provider_event_id: event.id,
+        attempt_id: event.data.object.metadata.store_attempt_id,
+        order_number: event.data.object.client_reference_id,
+        checkout_session_id: event.data.object.id,
+        payment_intent_id: event.data.object.payment_intent,
+        amount_minor: event.data.object.amount_total.to_string(),
+        currency,
+        account_id: event.account,
     })
 }
 

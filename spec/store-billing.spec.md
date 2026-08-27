@@ -236,6 +236,8 @@ SB-A-10B. A Stripe client-error response MUST be a definite rejection only when 
 
 SB-A-11. Stripe Webhook verification MUST check signature, configured API version, Checkout Session, PaymentIntent, amount, currency, merchant account, and payment state.
 
+SB-A-11A. A Stripe payment success event MUST use type `checkout.session.completed` or `checkout.session.async_payment_succeeded`. Its `data.object` MUST be a Checkout Session with nonempty `id`, `payment_intent`, `client_reference_id`, and `metadata.store_attempt_id`. `amount_total` MUST be a positive integer. `currency` MUST be `cny` or `usd`. `payment_status` MUST be `paid`. The event `account` MUST equal the credential `account_id`.
+
 SB-A-12. Stripe MUST classify Checkout completion, asynchronous success, asynchronous failure, expiration, refund, dispute, and chargeback as distinct events.
 
 SB-A-13. Stripe amount minimums MUST come from a versioned capability table bound to account country, currency, and configured API version. An unknown combination MUST disable that currency.
@@ -249,6 +251,8 @@ SB-A-15. The implementation MUST NOT copy AGPL source, tests, comments, UI, or i
 SB-EV-1. A callback endpoint MUST be public and MUST require successful adapter verification before state projection.
 
 SB-EV-2. A callback body MUST be at most 131,072 bytes and MUST complete reading within five seconds.
+
+SB-EV-2A. A verified Stripe callback MUST return HTTP `200` with `{ "received": true }` after an applied, duplicate, or manual-review projection. Invalid signatures and invalid verified fields MUST return HTTP `400`. Missing callback keys MUST return HTTP `503`. A storage or fulfillment error MUST return HTTP `500`.
 
 SB-EV-3. A callback event MUST store credential version, provider event identity, body digest, allow-listed verified fields, verification result, encrypted raw body, projection state, and state revision.
 

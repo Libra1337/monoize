@@ -3,6 +3,7 @@ use axum::body::Body;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{Method, Request, StatusCode};
 use chrono::{TimeZone, Utc};
+use hmac::{Hmac, KeyInit, Mac};
 use http_body_util::BodyExt;
 use monoize::store_billing::adapters::stripe::{StripeCheckoutResult, StripeCredential};
 use monoize::store_billing::checkout::CheckoutProvider;
@@ -208,6 +209,49 @@ async fn json_request(
     (status, value)
 }
 
+fn stripe_signature(secret: &[u8], timestamp: i64, body: &[u8]) -> String {
+    let mut signed = timestamp.to_string().into_bytes();
+    signed.push(b'.');
+    signed.extend_from_slice(body);
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).unwrap();
+    mac.update(&signed);
+    let signature = mac
+        .finalize()
+        .into_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("t={timestamp},v1={signature}")
+}
+
+async fn stripe_callback_request(
+    ctx: &super::TestContext,
+    body: &[u8],
+    signature: &str,
+) -> (StatusCode, Value) {
+    let response = ctx
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/store/callbacks/store-channel-stripe")
+                .header("Stripe-Signature", signature)
+                .header(
+                    "User-Agent",
+                    "Stripe/1.0 (+https://stripe.com/docs/webhooks)",
+                )
+                .body(Body::from(body.to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
+    (status, value)
+}
+
 #[tokio::test]
 async fn payment_order_api_requires_idempotency_and_persists_attempt_first() {
     let mut ctx = setup().await;
@@ -328,6 +372,132 @@ async fn payment_order_api_is_user_scoped_and_has_no_manual_complete_route() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn stripe_callback_is_public_verified_encrypted_and_idempotent() {
+    let mut ctx = setup().await;
+    configure_payment_fixture(&mut ctx).await;
+    configure_checkout_runtime(&mut ctx, ApiCheckoutProvider::default()).await;
+    let user = session(&ctx, "stripe-callback-user").await;
+    let (_, order) = json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/orders",
+        &user,
+        Some("stripe-callback-order"),
+        Some(json!({
+            "product_id": "api-payment-product",
+            "payment_channel_id": "store-channel-stripe",
+            "payment_currency": "CNY"
+        })),
+    )
+    .await;
+    let order_id = order["id"].as_str().unwrap();
+    let order_number = order["order_number"].as_str().unwrap();
+    let (status, checkout) = json_request(
+        &ctx,
+        Method::POST,
+        &format!("/api/dashboard/store/orders/{order_id}/attempts"),
+        &user,
+        Some("stripe-callback-attempt"),
+        Some(json!({"expected_payment_method":"card"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{checkout}");
+    let attempt_id = checkout["attempt"]["id"].as_str().unwrap();
+    let event = json!({
+        "id": "evt_store_paid_1",
+        "object": "event",
+        "api_version": "2026-08-01",
+        "type": "checkout.session.completed",
+        "account": "acct_api",
+        "data": {"object": {
+            "id": "cs_api_checkout",
+            "object": "checkout.session",
+            "amount_total": 1000,
+            "currency": "cny",
+            "client_reference_id": order_number,
+            "metadata": {"store_attempt_id": attempt_id},
+            "payment_intent": "pi_store_paid_1",
+            "payment_status": "paid",
+            "status": "complete"
+        }}
+    });
+    let body = serde_json::to_vec(&event).unwrap();
+    let timestamp = Utc::now().timestamp();
+    let signature = stripe_signature(b"whsec_api", timestamp, &body);
+
+    let (status, error) =
+        stripe_callback_request(&ctx, &body, &format!("t={timestamp},v1={}", "0".repeat(64))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["error"]["code"], "invalid_payment_callback");
+
+    for _ in 0..2 {
+        let (status, response) = stripe_callback_request(&ctx, &body, &signature).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(response, json!({"received": true}));
+    }
+
+    let row = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT o.payment_state, o.fulfillment_state,
+                    e.raw_key_id, e.raw_nonce_base64, e.raw_ciphertext_base64
+             FROM store_orders o
+             JOIN store_provider_events e ON e.provider_event_id = $2
+             WHERE o.id = $1",
+            vec![order_id.into(), "evt_store_paid_1".into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.try_get::<String>("", "payment_state").unwrap(), "paid");
+    assert_eq!(
+        row.try_get::<String>("", "fulfillment_state").unwrap(),
+        "fulfilled"
+    );
+    assert!(!row.try_get::<String>("", "raw_key_id").unwrap().is_empty());
+    assert!(
+        !row.try_get::<String>("", "raw_nonce_base64")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !row.try_get::<String>("", "raw_ciphertext_base64")
+            .unwrap()
+            .is_empty()
+    );
+    let ledger_count: i64 = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT COUNT(*) AS value FROM billing_ledger
+             WHERE idempotency_key = $1",
+            vec![format!("store:fulfillment:{order_id}").into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "value")
+        .unwrap();
+    assert_eq!(ledger_count, 1);
+}
+
+#[tokio::test]
+async fn stripe_callback_rejects_a_body_larger_than_128_kib() {
+    let ctx = setup().await;
+    let body = vec![b'x'; 131_073];
+    let timestamp = Utc::now().timestamp();
+    let signature = stripe_signature(b"irrelevant", timestamp, &body);
+
+    let (status, error) = stripe_callback_request(&ctx, &body, &signature).await;
+
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{error}");
+    assert_eq!(error["error"]["code"], "callback_body_too_large");
 }
 
 #[tokio::test]

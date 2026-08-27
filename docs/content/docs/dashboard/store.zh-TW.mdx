@@ -30,6 +30,12 @@ Checkout 結束後，商店每兩秒檢查一次訂單。付款和履約完成�
 
 Monoize 僅在驗證 Channel 付款後發放餘額。管理員不能把未付款訂單標記為已付款或已履約。
 
+## 設定 Stripe 回呼
+
+把 Stripe Webhook 端點設為 `https://lynshen.org/api/store/callbacks/{channel_id}`。使用 Stripe Channel ID 取代 `{channel_id}`。
+
+訂閱 `checkout.session.completed` 和 `checkout.session.async_payment_succeeded`。把端點簽章密鑰儲存在加密的 Stripe 憑證中。
+
 ## 購買方案
 
 選擇方案和付款 Channel。一個方案可以同時套用多個額度週期。週期可以是 5 小時、12 小時、每日、每週、每月或自訂整數小時。

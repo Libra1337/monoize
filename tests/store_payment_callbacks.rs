@@ -5,6 +5,7 @@ use monoize::migration::Migrator;
 use monoize::store_billing::callbacks::{
     ApplyProviderEventInput, CallbackApplyResult, PaymentCallbackStore,
 };
+use monoize::store_billing::crypto::EncryptedSecret;
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
 use monoize::store_billing::money::Currency;
 use monoize::store_billing::order::{
@@ -13,7 +14,7 @@ use monoize::store_billing::order::{
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
 
-async fn setup() -> (DbPool, String, String) {
+async fn setup() -> (DbPool, String, String, String) {
     let db = DbPool::connect("sqlite::memory:")
         .await
         .expect("connect SQLite");
@@ -63,7 +64,9 @@ async fn setup() -> (DbPool, String, String) {
                      ciphertext_base64, account_identity_digest, status, created_at)
                  VALUES
                     ('callback-credential', 'store-channel-stripe', 'stripe', 1, 'key-1',
-                     'bm9uY2U=', 'Y2lwaGVydGV4dA==', 'acct-digest', 'active',
+                      'bm9uY2U=', 'Y2lwaGVydGV4dA==',
+                      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                      'active',
                      '2026-08-27T00:00:00Z')",
             )
             .await
@@ -101,32 +104,52 @@ async fn setup() -> (DbPool, String, String) {
         )
         .await
         .unwrap();
-    (db, order.id, attempt.id)
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_payment_attempts SET provider_object_id = $2 WHERE id = $1",
+            vec![attempt.id.clone().into(), "cs-callback".into()],
+        ))
+        .await
+        .unwrap();
+    (db, order.id, order.order_number, attempt.id)
 }
 
-fn success_event(order_id: &str, attempt_id: &str) -> ApplyProviderEventInput {
+fn success_event(order_id: &str, order_number: &str, attempt_id: &str) -> ApplyProviderEventInput {
     ApplyProviderEventInput {
+        event_row_id: uuid::Uuid::new_v4().to_string(),
         credential_version_id: "callback-credential".to_string(),
         provider_event_id: "evt-payment-1".to_string(),
         event_kind: "payment_succeeded".to_string(),
         order_id: order_id.to_string(),
         attempt_id: attempt_id.to_string(),
         provider_transaction_id: "pi-payment-1".to_string(),
+        provider_object_id: "cs-callback".to_string(),
+        order_number: order_number.to_string(),
+        merchant_account_identity: "a".repeat(64),
         amount_minor: "1000".to_string(),
         currency: Currency::CNY,
         body_digest: "a".repeat(64),
         parsed_json: serde_json::json!({"type":"payment_succeeded"}),
+        raw_body: EncryptedSecret {
+            version: 1,
+            key_id: "callback-key".to_string(),
+            nonce_base64: "bm9uY2U=".to_string(),
+            ciphertext_base64: "Y2lwaGVydGV4dA==".to_string(),
+        },
+        source_ip: Some("203.0.113.1".to_string()),
+        user_agent: Some("Stripe/1.0".to_string()),
         received_at: Utc::now(),
     }
 }
 
 #[tokio::test]
 async fn concurrent_duplicate_callbacks_fulfill_once() {
-    let (db, order_id, attempt_id) = setup().await;
+    let (db, order_id, order_number, attempt_id) = setup().await;
     let callback_store = PaymentCallbackStore::new(db.clone());
     let futures = (0..20).map(|_| {
         let store = callback_store.clone();
-        let event = success_event(&order_id, &attempt_id);
+        let event = success_event(&order_id, &order_number, &attempt_id);
         async move { store.apply_verified_payment(event).await.unwrap() }
     });
     let results = join_all(futures).await;
@@ -202,7 +225,7 @@ async fn concurrent_duplicate_callbacks_fulfill_once() {
 
 #[tokio::test]
 async fn verified_late_payment_clears_a_prior_attempt_failure() {
-    let (db, order_id, attempt_id) = setup().await;
+    let (db, order_id, order_number, attempt_id) = setup().await;
     db.write()
         .await
         .execute(db.stmt(
@@ -215,7 +238,7 @@ async fn verified_late_payment_clears_a_prior_attempt_failure() {
         .unwrap();
 
     PaymentCallbackStore::new(db.clone())
-        .apply_verified_payment(success_event(&order_id, &attempt_id))
+        .apply_verified_payment(success_event(&order_id, &order_number, &attempt_id))
         .await
         .unwrap();
 
@@ -237,9 +260,9 @@ async fn verified_late_payment_clears_a_prior_attempt_failure() {
 
 #[tokio::test]
 async fn callback_mismatch_is_persisted_for_manual_review_without_fulfillment() {
-    let (db, order_id, attempt_id) = setup().await;
+    let (db, order_id, order_number, attempt_id) = setup().await;
     let store = PaymentCallbackStore::new(db.clone());
-    let mut event = success_event(&order_id, &attempt_id);
+    let mut event = success_event(&order_id, &order_number, &attempt_id);
     event.provider_event_id = "evt-mismatch".to_string();
     event.amount_minor = "999".to_string();
 

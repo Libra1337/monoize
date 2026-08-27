@@ -30,6 +30,12 @@ Open `/dashboard/orders` to review the order. Check the payment state and the fu
 
 Monoize grants the balance only after it verifies the provider payment. An administrator cannot mark an unpaid order as paid or fulfilled.
 
+## Configure Stripe callbacks
+
+Set the Stripe Webhook endpoint to `https://lynshen.org/api/store/callbacks/{channel_id}`. Replace `{channel_id}` with the Stripe Channel ID.
+
+Subscribe to `checkout.session.completed` and `checkout.session.async_payment_succeeded`. Save the endpoint signing secret in the encrypted Stripe credential.
+
 ## Buy a plan
 
 Select a plan and a payment Channel. Each plan can apply several quota windows at the same time. A window can use 5 hours, 12 hours, a day, a week, a month, or a custom whole-hour duration.

@@ -30,6 +30,12 @@ Checkout の終了後、Store は注文を 2 秒ごとに確認します。支�
 
 Monoize は Channel の支払いを検証した後にのみ残高を付与します。管理者は未払いの注文を支払い済みまたは履行済みに変更できません。
 
+## Stripe コールバックを設定する
+
+Stripe Webhook エンドポイントを `https://lynshen.org/api/store/callbacks/{channel_id}` に設定します。`{channel_id}` を Stripe Channel ID に置き換えます。
+
+`checkout.session.completed` と `checkout.session.async_payment_succeeded` を購読します。エンドポイント署名シークレットを暗号化された Stripe 認証情報に保存します。
+
 ## プランを購入する
 
 プランと支払い Channel を選択します。1 つのプランに複数の上限期間を同時に適用できます。期間には、5 時間、12 時間、日、週、月、または任意の整数時間を指定できます。

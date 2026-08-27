@@ -1,6 +1,8 @@
 use hmac::{Hmac, KeyInit, Mac};
 use monoize::store_billing::adapters::alipay::canonical_alipay_parameters;
-use monoize::store_billing::adapters::stripe::{StripeWebhookError, verify_stripe_webhook};
+use monoize::store_billing::adapters::stripe::{
+    StripeWebhookError, parse_stripe_payment_event, verify_stripe_webhook,
+};
 use monoize::store_billing::adapters::wechat::wechat_signature_message;
 use monoize::store_billing::payment::{CheckoutAction, validate_return_url};
 use sha2::Sha256;
@@ -106,6 +108,35 @@ fn stripe_webhook_checks_timestamp_signature_and_api_version() {
     assert_eq!(
         verify_stripe_webhook(secret, &header, body, timestamp, 300, "2025-12-01").unwrap_err(),
         StripeWebhookError::ApiVersionMismatch
+    );
+}
+
+#[test]
+fn stripe_payment_event_requires_exact_checkout_contract_fields() {
+    let body = br#"{
+        "id":"evt_paid","type":"checkout.session.completed","api_version":"2026-08-01",
+        "account":"acct_1","data":{"object":{
+            "id":"cs_1","object":"checkout.session","amount_total":1000,"currency":"cny",
+            "client_reference_id":"LS-1","metadata":{"store_attempt_id":"attempt-1"},
+            "payment_intent":"pi_1","payment_status":"paid","status":"complete"
+        }}
+    }"#;
+    let verified = monoize::store_billing::adapters::stripe::VerifiedStripeEvent {
+        id: "evt_paid".to_string(),
+        kind: "checkout.session.completed".to_string(),
+        api_version: "2026-08-01".to_string(),
+    };
+
+    let event = parse_stripe_payment_event(body, &verified, "acct_1").unwrap();
+    assert_eq!(event.attempt_id, "attempt-1");
+    assert_eq!(event.order_number, "LS-1");
+    assert_eq!(event.checkout_session_id, "cs_1");
+    assert_eq!(event.payment_intent_id, "pi_1");
+    assert_eq!(event.amount_minor, "1000");
+
+    assert_eq!(
+        parse_stripe_payment_event(body, &verified, "acct_other").unwrap_err(),
+        StripeWebhookError::InvalidPaymentEvent
     );
 }
 

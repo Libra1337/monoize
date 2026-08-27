@@ -30,6 +30,12 @@ Checkout 结束后，商店每两秒检查一次订单。支付和履约完成�
 
 Monoize 仅在验证渠道支付后发放余额。管理员不能把未支付订单标记为已支付或已履约。
 
+## 配置 Stripe 回调
+
+把 Stripe Webhook 端点设为 `https://lynshen.org/api/store/callbacks/{channel_id}`。用 Stripe Channel ID 替换 `{channel_id}`。
+
+订阅 `checkout.session.completed` 和 `checkout.session.async_payment_succeeded`。把端点签名密钥保存到加密的 Stripe 凭据中。
+
 ## 购买套餐
 
 选择套餐和支付 Channel。一个套餐可以同时应用多个额度周期。周期可以是 5 小时、12 小时、每日、每周、每月或自定义整数小时。

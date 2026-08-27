@@ -186,6 +186,7 @@ pub struct AppState {
     pub payment_public_origin: Option<url::Url>,
     pub checkout_provider: Arc<dyn crate::store_billing::checkout::CheckoutProvider>,
     pub store_order_poll_limiter: crate::store_billing::poll_limit::StoreOrderPollLimiter,
+    pub store_callback_limiter: crate::store_billing::callback_limit::StoreCallbackLimiter,
     pub node: Arc<NodeSettings>,
     pub db_pool: DbPool,
     /// Present on replicas; drives the metering shipment pipeline.
@@ -989,6 +990,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         payment_public_origin,
         checkout_provider,
         store_order_poll_limiter: crate::store_billing::poll_limit::StoreOrderPollLimiter::default(
+        ),
+        store_callback_limiter: crate::store_billing::callback_limit::StoreCallbackLimiter::default(
         ),
         node,
         db_pool: db.clone(),
@@ -1937,7 +1940,10 @@ pub fn build_app(state: AppState) -> Router {
         // D1/D2: API-only surface; /v1/** and /metrics stay local.
         app = app.fallback(replica_disabled_fallback);
     } else {
-        let api_router = root_api_router.clone().merge(dashboard_api_router);
+        let api_router = root_api_router
+            .clone()
+            .merge(dashboard_api_router)
+            .merge(build_store_callback_router());
         app = app.nest("/api", api_router);
         if state.metering_token_digest.is_some() {
             // PRP6/I1: ingest mounted only when a replica token is configured.
@@ -2065,6 +2071,13 @@ fn build_balance_compatibility_router() -> Router<AppState> {
         .route("/api/codex/usage", get(crate::handlers::codex_usage))
         .route("/user/balance", get(crate::handlers::deepseek_user_balance))
         .layer(CorsLayer::very_permissive())
+}
+
+fn build_store_callback_router() -> Router<AppState> {
+    Router::new().route(
+        "/store/callbacks/{channel_id}",
+        post(crate::store_billing::webhooks::store_payment_callback),
+    )
 }
 
 fn build_dashboard_api_router() -> Router<AppState> {
