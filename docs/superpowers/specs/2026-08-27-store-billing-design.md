@@ -13,6 +13,8 @@ The Store sells one-time balance recharge products and one-time plan products. I
 
 The first release does not support recurring subscriptions. An Admin cannot mark an unpaid order as paid.
 
+Implementation is split into two separately approved milestones. Milestone 1 contains the Store layout, payment core, Alipay, WeChat Pay, Stripe, reconciliation, refunds, and redemption protection. Milestone 2 contains verified configurable HTTP templates. Milestone 2 cannot weaken or bypass Milestone 1 security rules.
+
 The logged-in Model Marketplace redesign is a separate subsystem. It is not part of this design.
 
 ## 2. Approved Layout
@@ -50,7 +52,19 @@ Plan quota values use CNY as their stored base. The currency control changes pre
 
 The primary node requests `https://open.er-api.com/v6/latest/USD` at startup and no more than once per 15 minutes. It stores the exact decimal `rates.CNY`, the source timestamp, and the local refresh timestamp. Replicas only read the stored snapshot.
 
+The response must be valid JSON with `result = success`, `base_code = USD`, a positive integer source timestamp, and one finite decimal `rates.CNY`. The rate must be between 1 and 20 CNY per USD and contain at most 18 fractional digits.
+
+Let `R` be CNY per USD. USD cents convert to CNY fen as `round(cents * R)`. CNY fen convert to USD cents as `round(fen / R)`. The service never persists a rounded reciprocal.
+
+USD cents convert to nano USD exactly as `cents * 10,000,000`. CNY fen convert to nano USD as `round(fen * 10,000,000 / R)`. Each formula rounds half away from zero only at its final integer result.
+
 The decimal exchange rate contains at most 18 fractional digits. A checkout that needs conversion fails when the last successful refresh is older than 60 minutes or the source timestamp is older than 48 hours. A failed refresh retains the prior snapshot but does not extend its validity.
+
+A candidate that differs from the active rate by more than five percent is quarantined and does not replace it. Admin can approve or reject the candidate. Admin can pause conversion-based checkout. Same-currency checkout can continue only when its reward and entitlement calculations do not require the rate.
+
+The service retains accepted snapshots for 30 days. Admin can restore the immediately prior accepted snapshot only while its original age limits still pass. Restore does not change its source or refresh timestamp. If no accepted snapshot is valid, conversion-based checkout remains paused.
+
+At startup, a network failure uses the stored active snapshot only while both age limits pass. Without a valid snapshot, dependent checkout returns HTTP 503. The process remains available for non-Store traffic.
 
 Conversion happens once during order quotation. The service converts from the product currency to the settlement currency, then rounds half away from zero to the settlement minor unit. The immutable quote stores the unrounded decimal inputs, rounded settlement amount, rate, and timestamps.
 
@@ -70,6 +84,22 @@ The customer charge equals the quoted product price. The first release does not 
 
 Order creation stores an immutable exchange-rate snapshot. A later rate refresh does not change an existing order amount.
 
+### 3.1 Product And Plan Lifecycle
+
+Product edits affect only later orders. Every order stores an immutable product, price, reward, duration, Group, and quota snapshot.
+
+Disabling or editing a product does not change an existing unpaid order. That order remains payable until its 30-minute expiration. An emergency Admin action can close every unpaid order for one product before changing it.
+
+A referenced product cannot be physically deleted. Admin can disable it. Unreferenced products can be deleted with an audit record.
+
+A plan duration is 3,600 through 31,536,000 seconds. It starts when fulfillment succeeds and ends exactly one duration later. An expired plan grants no access or quota.
+
+Buying or redeeming another plan replaces the active plan immediately. Unused time and quota do not carry forward. The order summary shows this replacement before checkout.
+
+All quota rules in a plan apply concurrently. Five-hour, 12-hour, and custom-hour windows are rolling. Day, week, and month windows use Asia/Shanghai calendar boundaries, with Monday as the first day of a week.
+
+Quota checks use settled request charges. A request is denied before routing when any quota has no remaining amount. One already-routed request can cross a limit; later requests are denied.
+
 ## 4. Payment Core
 
 The payment core owns order state, payment attempts, callback events, fulfillment, refunds, and audit records.
@@ -82,6 +112,8 @@ Each adapter implements these operations:
 4. `refund_payment`
 
 An adapter cannot write a user balance or activate a plan. Only the payment core can fulfill an order.
+
+Every provider mutation uses a stable idempotency key. After a request may have reached a provider, the payment core treats every timeout, disconnect, HTTP 5xx, and unrecognized response as ambiguous. It calls `query_payment` or the matching refund query before any retry. Only a verified not-found result permits another mutation.
 
 Creating a checkout returns one of these actions:
 
@@ -137,7 +169,13 @@ The Store can show card, Apple Pay, Google Pay, and other methods that the Strip
 
 ## 6. Configurable HTTP Adapter
 
-The configurable HTTP adapter supports JSON and form-encoded checkout requests.
+The configurable HTTP adapter is a separate milestone after the three official adapters. Its unfinished or disabled state does not block Alipay, WeChat Pay, or Stripe release.
+
+Production Channels use versioned server allow-listed templates. Admin supplies endpoints, credentials, and documented template values. Adding a new production template requires adapter fixtures, callback tests, query tests, refund tests, and one controlled provider transaction.
+
+Admin can create an unverified draft mapping for local validation. A draft cannot be enabled for production and cannot receive a public callback URL.
+
+Verified templates can support JSON and form-encoded checkout requests.
 
 Admin configuration defines:
 
@@ -168,7 +206,9 @@ Checkout requests use a two-second connection timeout and a five-second total ti
 
 Amount fields use either integer minor units or a decimal with exactly two fractional digits. The Channel configuration selects one representation. The adapter does not infer a representation from a response.
 
-Every checkout request includes a stable idempotency key. The adapter retries one definite connection failure or HTTP 502, 503, or 504 response. It does not retry a timeout or other ambiguous result until `query_payment` proves that no payment attempt exists.
+Every checkout request includes a stable idempotency key. DNS rejection, validation failure, or connection failure before request bytes are sent fails without an automatic retry.
+
+After any request byte is sent, a timeout, disconnect, malformed response, HTTP 5xx, or unmapped response is ambiguous. The adapter calls `query_payment` with the merchant order number before retrying. It retries only after a verified not-found result. A template without a query operation cannot be enabled for production.
 
 Generic callbacks accept a timestamp skew of at most five minutes. A Channel that cannot supply a signed timestamp and nonce cannot be enabled for production.
 
@@ -182,9 +222,15 @@ Encryption uses XChaCha20-Poly1305. Associated data includes the table name, row
 
 Admin reads never return a saved payment credential. Admin can only replace it.
 
+Replacing a Channel credential creates an immutable encrypted credential version. It does not overwrite the prior version. Each payment attempt stores its credential-version ID and adapter account identity.
+
+A retired credential version remains decryptable until every referenced order is outside the provider refund, dispute, callback, and reconciliation window. Deletion requires a preflight that finds zero active references and an audit record.
+
 If encrypted rows exist and no matching key is available, the service rejects payment creation and redemption-code reveal. It does not delete or overwrite encrypted values.
 
 The deployment backup must include the database and the matching key ring. Restoring only one of them is not a valid recovery.
+
+Key rotation adds a new active key, keeps prior keys decrypt-only, and re-encrypts rows in bounded idempotent batches. A prior key cannot be removed until the database reports zero ciphertext rows for its key ID and a restore drill passes with the new key ring.
 
 ## 8. Order And Callback State
 
@@ -226,6 +272,12 @@ The allowed fulfillment-state transitions are:
 A fulfilled order cannot return to pending or failed.
 
 Order creation inserts an unpaid order and one payment attempt. It stores the product snapshot, reward snapshot, settlement amount, settlement currency, exchange rate, Channel ID, and adapter kind.
+
+Order creation requires an `Idempotency-Key` containing one UUID v4. The database makes `(user_id, idempotency_key)` unique and stores a digest of the canonical request. Repeating the same key and request returns the original order. Reusing the key with different input returns HTTP 409.
+
+Order creation allows at most ten requests per minute per user and source IP. One user can have at most 20 unpaid orders. Exceeding either limit returns HTTP 429 with `Retry-After` and does not insert an order.
+
+Order status reads require ownership or Admin. Polling allows at most 60 reads per minute per user and order, and 300 reads per minute per source IP. The client keeps one polling loop per visible order and honors `Retry-After`.
 
 An order and its attempt expire 30 minutes after creation. Expiration does not discard a callback. A verified late payment follows the same idempotent fulfillment path and creates an alert.
 
@@ -272,6 +324,8 @@ For eligible orders, the first release supports only full refunds. It does not i
 
 A new `store_balance_reservations` table records refund reserves. Each row contains order ID, user ID, nano USD amount, state, reserve ledger key, release ledger key, and timestamps. Order ID is unique.
 
+Fulfillment and refund start both lock the order first. Balance operations then lock the user row. This lock order is fixed. Refund start requires payment state `paid`; fulfillment requires payment state `paid` and no reservation. The first committed transition makes the competing transition fail its predicate and retry from fresh state.
+
 A paid but unfulfilled order needs no reward reversal.
 
 A fulfilled balance order can start a refund only when the user balance is at least the original credited nano USD amount. One transaction locks the user balance, inserts the reservation, writes one negative ledger entry, updates the balance, and changes payment state to `refund_pending`. The unique order ID and ledger idempotency key prevent a second reserve.
@@ -285,6 +339,8 @@ The first release does not refund a fulfilled plan order. It permits a plan-orde
 A provider timeout or unknown result leaves the order in `refund_pending`. Admin must query provider status before retrying. The service does not create a second refund request for the same order.
 
 The refund request uses a stable provider idempotency key. A reconciler, not an Admin repeat click, resolves an ambiguous provider result.
+
+The reconciler never retries fulfillment for `refund_pending` or `refunded`. It never starts a refund while a fulfillment transaction holds the order lock.
 
 Every Admin order action records the Admin user ID, order ID, action, result, and timestamp.
 
@@ -304,6 +360,10 @@ The generation dialog keeps the returned codes visible until the Admin closes it
 The Redemption Codes page masks codes by default. An Admin can reveal, copy, batch copy, or export full unused codes. Each reveal or export writes an audit record.
 
 Reveal and export require a reauthentication grant created from the Admin current password. The grant is bound to the Admin user and dashboard session, is scoped to redemption-code access, and expires after five minutes. The server stores only a hash of the grant token.
+
+The current account model requires a local password hash. If a future SSO or passwordless Admin has no locally verifiable password, sensitive Store actions fail closed until an explicit step-up provider supplies a signed assertion with an authentication time no older than five minutes. A normal SSO login assertion is not sufficient.
+
+Logout, password change, session rotation, session expiration, Admin-role removal, or account disablement invalidates every related reauthentication grant.
 
 Reveal returns at most 20 selected codes. Export returns at most 100 selected codes. Responses set `Cache-Control: no-store`, `Pragma: no-cache`, `Referrer-Policy: no-referrer`, and `X-Content-Type-Options: nosniff`. CSV uses `Content-Disposition: attachment`.
 
@@ -378,6 +438,12 @@ Existing completed orders migrate to payment state `paid` and fulfillment state 
 
 Existing Alipay and WeChat Channel rows become disabled, unconfigured official Channels. Existing custom Channel rows become disabled, unconfigured HTTP Channels. The migration creates one disabled, unconfigured Stripe Channel when none exists.
 
+The current application has no provider checkout, transaction, callback, query, or refund fields. Its Channel `config_secret` is not an official credential contract. Migration encrypts each non-empty legacy value as a retired legacy credential version and does not use it for a new official adapter.
+
+If preflight finds provider transaction data, callback data, or a credential format outside the current schema contract, migration aborts. A dedicated importer must preserve that adapter account and bind every historical order to an immutable credential version before migration can continue.
+
+Future Channel edits never remove credentials needed by historical attempts. Late callbacks, queries, disputes, and refunds resolve credentials through the attempt credential-version ID, not the Channel current configuration.
+
 The migration adds encrypted-code fields without changing existing digests. Existing redemption codes cannot be recovered because the prior digest is irreversible.
 
 The migration writes a versioned manifest containing the preflight counts and migrated counts. A count mismatch aborts and rolls back the migration.
@@ -400,24 +466,33 @@ Generic callback replay protection validates timestamp and nonce when the config
 
 Callback admission allows at most 600 requests per minute per Channel and source IP. Rate limiting does not replace signature verification.
 
-Payment and reveal endpoints require the existing dashboard authorization model. Reveal, export, refund, reprocess, and credential updates require Admin.
+Payment and reveal endpoints require the existing dashboard authorization model. Reveal, export, refund, reprocess, exchange-rate override, key rotation, and credential updates require Admin plus a matching five-minute reauthentication scope.
+
+Every cookie-authenticated Store mutation requires `Content-Type: application/json` or the documented multipart icon type and an `Origin` equal to the configured public origin. A missing or mismatched Origin fails. State-changing actions never use GET. Provider callbacks are exempt from session CSRF checks and require provider verification instead.
+
+The dashboard session cookie remains HttpOnly, Secure, SameSite Strict, and Path `/`. Session invalidation is checked before accepting a reauthentication grant or a sensitive mutation.
 
 ## 16. Verification
 
 Backend tests cover:
 
 - Official signature and callback test vectors.
-- Exchange-rate age, decimal precision, exact conversion, one rounding point, and provider minimum amounts.
+- Both exchange directions, nano USD conversion, rate age, anomaly quarantine, startup failure, one rounding point, and provider minimum amounts.
 - Amount, currency, merchant, and order mismatch.
 - Twenty concurrent copies of one callback with one fulfillment.
 - Callback versus expiration, close, refund, and a second provider transaction.
 - Retry after verified payment and failed fulfillment.
 - Balance refund reservation, concurrent spending, one compensation, and ambiguous provider results.
+- Every ordering of fulfillment, refund start, callback retry, and reconciliation, with one final reward state.
 - Plan refund rejection after fulfillment.
-- HTTP JSON, form, redirect, QR, and form actions.
-- HTTP DNS rebinding, private addresses, redirect rejection, timeout, response limits, template limits, and ambiguous retry behavior.
+- Order idempotency-key replay, mismatched input, open-order cap, creation rate limit, and polling rate limit.
+- Product edit, disable, emergency close, immutable quote, plan replacement, plan expiration, and every quota window.
+- HTTP milestone JSON, form, redirect, QR, and form actions.
+- HTTP milestone DNS rebinding, private addresses, redirect rejection, timeout, response limits, template limits, and query-before-retry behavior.
 - Encryption, wrong-key failure, and prior-key decryption.
+- Key rotation, bounded re-encryption, referenced credential retention, and old-key removal refusal.
 - New-code reveal, reauthentication expiry, response headers, rate limits, and existing-code non-recoverability.
+- CSRF Origin rejection, session invalidation, role removal, and passwordless Admin fail-closed behavior.
 - Reconciler lease fencing, due-order selection, retry schedule, and alert thresholds.
 - SQLite migration and isolated PostgreSQL migration.
 - Migration preflight rejection for every unknown or inconsistent legacy state.
@@ -440,7 +515,7 @@ Release verification uses:
 - Alipay sandbox.
 - Stripe test mode.
 - One CNY 0.01 WeChat Pay transaction and refund after credentials are configured.
-- One controlled transaction for each enabled configurable HTTP Channel.
+- One controlled transaction for each verified HTTP template before that separate milestone can enable a production Channel.
 
 ## 17. Production Gate
 
