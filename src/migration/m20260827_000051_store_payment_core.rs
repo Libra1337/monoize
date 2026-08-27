@@ -115,6 +115,7 @@ fn up_statements(backend: DbBackend) -> Vec<String> {
 
 fn sqlite_rebuild_statements() -> Vec<String> {
     vec![
+        "ALTER TABLE store_products ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0)".to_string(),
         "CREATE TABLE store_payment_channels_v2 (
             id TEXT NOT NULL PRIMARY KEY,
             adapter_kind TEXT NOT NULL,
@@ -151,7 +152,8 @@ fn sqlite_rebuild_statements() -> Vec<String> {
              fulfillment_state, dispute_state, payment_hold, payment_channel_id,
              payment_currency, payment_minor, cny_per_usd, rate_numerator,
              rate_denominator, rate_source_updated_at, quote_json, contract_version,
-             state_revision, expires_at, created_at, updated_at, paid_at,
+             state_revision, creation_idempotency_key, creation_request_digest,
+             expires_at, created_at, updated_at, paid_at,
              fulfillment_started_at, fulfilled_at, fulfillment_failed_at, closed_at,
              refund_pending_at, refunded_at)
          SELECT id, order_number, user_id, product_id, product_kind,
@@ -161,7 +163,7 @@ fn sqlite_rebuild_statements() -> Vec<String> {
                 cny_per_usd, replace(cny_per_usd, '.', ''),
                 CASE WHEN instr(cny_per_usd, '.') = 0 THEN '1'
                      ELSE '1' || substr('000000000000000000', 1, length(cny_per_usd) - instr(cny_per_usd, '.')) END,
-                rate_source_updated_at, quote_json, 1, 0,
+                rate_source_updated_at, quote_json, 1, 0, NULL, NULL,
                 datetime(created_at, '+30 minutes'), created_at, updated_at,
                 completed_at, completed_at, completed_at, NULL,
                 CASE WHEN status = 'completed' THEN NULL ELSE COALESCE(cancelled_at, updated_at) END,
@@ -175,6 +177,7 @@ fn sqlite_rebuild_statements() -> Vec<String> {
 
 fn postgres_rebuild_statements() -> Vec<String> {
     vec![
+        "ALTER TABLE store_products ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0)".to_string(),
         "ALTER TABLE store_payment_channels RENAME TO store_payment_channels_legacy".to_string(),
         "CREATE TABLE store_payment_channels (
             id TEXT NOT NULL PRIMARY KEY,
@@ -208,7 +211,8 @@ fn postgres_rebuild_statements() -> Vec<String> {
              fulfillment_state, dispute_state, payment_hold, payment_channel_id,
              payment_currency, payment_minor, cny_per_usd, rate_numerator,
              rate_denominator, rate_source_updated_at, quote_json, contract_version,
-             state_revision, expires_at, created_at, updated_at, paid_at,
+             state_revision, creation_idempotency_key, creation_request_digest,
+             expires_at, created_at, updated_at, paid_at,
              fulfillment_started_at, fulfilled_at, fulfillment_failed_at, closed_at,
              refund_pending_at, refunded_at)
          SELECT id, order_number, user_id, product_id, product_kind,
@@ -218,7 +222,7 @@ fn postgres_rebuild_statements() -> Vec<String> {
                 cny_per_usd, replace(cny_per_usd, '.', ''),
                 CASE WHEN strpos(cny_per_usd, '.') = 0 THEN '1'
                      ELSE '1' || repeat('0', length(cny_per_usd) - strpos(cny_per_usd, '.')) END,
-                rate_source_updated_at, quote_json, 1, 0,
+                rate_source_updated_at, quote_json, 1, 0, NULL, NULL,
                 ((created_at::timestamptz + interval '30 minutes')::text), created_at, updated_at,
                 completed_at, completed_at, completed_at, NULL,
                 CASE WHEN status = 'completed' THEN NULL ELSE COALESCE(cancelled_at, updated_at) END,
@@ -260,6 +264,8 @@ fn create_orders_v2(prefix: &str) -> String {
             quote_json TEXT NOT NULL,
             contract_version INTEGER NOT NULL DEFAULT 2 CHECK (contract_version IN (1, 2)),
             state_revision INTEGER NOT NULL DEFAULT 0 CHECK (state_revision >= 0),
+            creation_idempotency_key TEXT,
+            creation_request_digest TEXT,
             expires_at TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -415,10 +421,12 @@ fn common_index_statements() -> Vec<String> {
         "CREATE UNIQUE INDEX uq_store_orders_order_number_v2 ON store_orders (order_number)",
         "CREATE INDEX idx_store_orders_user_created_v2 ON store_orders (user_id, created_at DESC, id DESC)",
         "CREATE INDEX idx_store_orders_reconcile ON store_orders (payment_state, fulfillment_state, updated_at, id)",
+        "CREATE UNIQUE INDEX uq_store_orders_creation_idempotency ON store_orders (user_id, creation_idempotency_key)",
         "CREATE UNIQUE INDEX uq_store_credentials_channel_active ON store_channel_credentials (channel_id, id)",
         "CREATE UNIQUE INDEX uq_store_capability_channel_kind ON store_merchant_capabilities (channel_id, capability)",
         "CREATE UNIQUE INDEX uq_store_attempt_idempotency ON store_payment_attempts (idempotency_key)",
         "CREATE UNIQUE INDEX uq_store_attempt_provider_transaction ON store_payment_attempts (credential_version_id, provider_transaction_id)",
+        "CREATE UNIQUE INDEX uq_store_attempt_active_order ON store_payment_attempts (order_id) WHERE state IN ('created', 'presented')",
         "CREATE UNIQUE INDEX uq_store_provider_event_identity ON store_provider_events (credential_version_id, provider_event_id)",
         "CREATE UNIQUE INDEX uq_store_refund_idempotency ON store_refunds (idempotency_key)",
         "CREATE UNIQUE INDEX uq_store_recovery_order ON store_order_reward_recoveries (order_id)",
