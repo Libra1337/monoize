@@ -216,11 +216,21 @@ SB-A-2. An adapter MUST NOT modify a user balance, entitlement, order state, or 
 
 SB-A-3. Alipay MUST support computer website and mobile website payment and MUST sign with RSA2.
 
+SB-A-3A. An Alipay credential plaintext MUST be JSON with exactly `app_id`, `seller_id`, `merchant_private_key_pem`, `alipay_public_key_pem`, and `environment`. `environment` MUST be `production` or `sandbox`. Checkout MUST use `alipay.trade.page.pay` for `computer_web` and `alipay.trade.wap.pay` for `mobile_web`. The signed form MUST use the fixed official gateway for the selected environment.
+
+SB-A-3B. Alipay checkout MUST settle in CNY. `biz_content` MUST contain the immutable order number, decimal amount with two fractional digits, subject, and a product code. Computer website payment MUST use `FAST_INSTANT_TRADE_PAY`. Mobile website payment MUST use `QUICK_WAP_WAY`. Common parameters MUST use `RSA2`, `utf-8`, JSON, version `1.0`, configured App ID, return URL, notify URL, and a UTC+08:00 timestamp.
+
 SB-A-4. Alipay callback verification MUST check signature, App ID, seller identity, order number, amount, currency, and success state.
 
 SB-A-5. Alipay MUST support trade query, refund, refund query, and bill download. Automated dispute support MUST remain unavailable unless the merchant capability test proves it.
 
 SB-A-6. WeChat Pay MUST support Native QR and H5 payment using API v3.
+
+SB-A-6A. A WeChat Pay credential plaintext MUST be JSON with exactly `merchant_id`, `app_id`, `api_v3_key`, `merchant_certificate_serial`, and `merchant_private_key_pem`. Every field MUST be nonempty. `api_v3_key` MUST contain exactly 32 UTF-8 bytes.
+
+SB-A-6B. WeChat Native checkout MUST POST to `/v3/pay/transactions/native`. WeChat H5 checkout MUST POST to `/v3/pay/transactions/h5`. The JSON body MUST contain the configured App ID and merchant ID, immutable order number, description, callback URL, positive integer CNY fen, and `CNY`. H5 checkout MUST also contain the canonical client IP and `scene_info.h5_info.type = Wap`.
+
+SB-A-6C. WeChat authorization MUST use scheme `WECHATPAY2-SHA256-RSA2048`. It MUST sign the exact method, canonical path, timestamp, nonce, and JSON body with the merchant private key. It MUST include merchant ID and merchant certificate serial.
 
 SB-A-7. WeChat callback verification MUST verify the platform certificate signature, decrypt the AES-256-GCM resource, and check merchant ID, App ID, order number, amount, currency, and success state.
 
@@ -505,6 +515,8 @@ SB-UI-9. An unpaid order MUST poll every two seconds until payment state is `pai
 SB-UI-9A. The browser MUST persist one pending checkout fingerprint, order idempotency key, attempt idempotency key, and optional order ID in tab-scoped session storage. A retry with the same user and canonical purchase input MUST reuse these values. Only `payment_configuration_unavailable` and `payment_provider_rejected` MAY rotate the attempt key after the order ID is known. Network failures, `internal_error`, `payment_provider_ambiguous`, and unrecognized errors MUST retain both keys.
 
 SB-UI-10. Alipay and Stripe MUST use provider redirects. WeChat desktop MUST use a QR modal. WeChat mobile MUST use H5 redirect.
+
+SB-UI-10A. The WeChat Native QR modal MUST render the exact verified Provider payload as a scannable SVG QR code. It MUST NOT display the payload as plain text instead of a QR code.
 
 SB-UI-11. Store Management MUST have Products, Payment Channels, Orders, and Redemption Codes child pages with an animated active indicator.
 

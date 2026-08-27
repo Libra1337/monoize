@@ -88,6 +88,11 @@ describe("Store user pages", () => {
     expect(checkoutStateSource).toContain("crypto.randomUUID()");
     expect(storeSource).toContain("window.sessionStorage");
     expect(storeSource).toContain("window.location.assign(checkout.action.url)");
+    expect(storeSource).toContain('stripe: "card"');
+    expect(storeSource).toContain('? "mobile_web" : "computer_web"');
+    expect(storeSource).toContain('selectedChannel.adapter_kind === "wechat"');
+    expect(storeSource).toContain('(max-width: 767px)');
+    expect(storeSource).toContain('? "h5" : "native"');
   });
 
   test("polls a pending payment every two seconds and revalidates account data", () => {
@@ -97,6 +102,11 @@ describe("Store user pages", () => {
     expect(storeSource).toContain("entitlement.mutate()");
     expect(storeSource).toContain("isPaymentPollingTerminal(order.payment_state)");
     expect(ordersSource).toContain("isPaymentPollingTerminal(current.payment_state)");
+  });
+
+  test("renders a scannable SVG for WeChat Native checkout", () => {
+    expect(storeSource).toContain("QRCodeSVG");
+    expect(storeSource).toContain("value={qrAction.payload}");
   });
 
   test("rotates an attempt key only after a definite provider failure", () => {

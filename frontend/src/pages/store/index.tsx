@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, Check, Infinity as InfinityIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { QRCodeSVG } from "qrcode.react";
 import useSWR, { mutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -488,10 +489,19 @@ export function StorePage() {
       );
       const createdOrder = updatedOrders?.[0];
       if (!createdOrder) throw new Error(t("store.ui.orderFailed"));
+      const mobileCheckout = window.matchMedia("(max-width: 767px)").matches;
+      const expectedPaymentMethod = selectedChannel.adapter_kind === "wechat"
+        ? (mobileCheckout ? "h5" : "native")
+        : selectedChannel.adapter_kind === "alipay"
+          ? (mobileCheckout ? "mobile_web" : "computer_web")
+        : {
+            stripe: "card",
+            http: null,
+          }[selectedChannel.adapter_kind];
       const checkout = await storeApi.createPaymentAttempt(
         createdOrder.id,
         pendingCheckout.attemptIdempotencyKey,
-        selectedChannel.adapter_kind === "stripe" ? "card" : null,
+        expectedPaymentMethod,
       );
       if (checkout.action.kind === "redirect") {
         window.location.assign(checkout.action.url);
@@ -556,8 +566,18 @@ export function StorePage() {
             <DialogTitle>{t("store.payment.qrTitle")}</DialogTitle>
             <DialogDescription>{t("store.payment.qrDescription")}</DialogDescription>
           </DialogHeader>
-          <div className="break-all rounded-xl border bg-muted/40 p-4 text-center font-mono text-sm">
-            {qrAction?.payload}
+          <div className="mx-auto grid size-[252px] place-items-center rounded-2xl border bg-white p-4 shadow-sm">
+            {qrAction && (
+              <QRCodeSVG
+                value={qrAction.payload}
+                size={220}
+                level="M"
+                marginSize={1}
+                bgColor="#ffffff"
+                fgColor="#111111"
+                title={t("store.payment.qrTitle")}
+              />
+            )}
           </div>
         </DialogContent>
       </Dialog>

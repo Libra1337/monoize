@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -5,8 +6,16 @@ use sea_orm::{ConnectionTrait, QueryResult};
 use sha2::{Digest, Sha256};
 use url::Url;
 
+use super::adapters::alipay::{
+    AlipayCheckoutResult, AlipayCredential, AlipayProduct,
+    prepare_checkout as prepare_alipay_checkout,
+};
 use super::adapters::stripe::{
     StripeCheckoutResult, StripeCredential, create_checkout as create_stripe_checkout,
+};
+use super::adapters::wechat::{
+    WechatCheckoutResult, WechatCredential, WechatProduct,
+    create_checkout as create_wechat_checkout,
 };
 use super::crypto::{EncryptedSecret, PaymentKeyRing};
 use super::order::{
@@ -42,6 +51,27 @@ pub trait CheckoutProvider: Send + Sync {
         credential: &StripeCredential,
         request: &CheckoutRequest,
     ) -> Result<StripeCheckoutResult, AdapterError>;
+
+    async fn create_alipay_checkout(
+        &self,
+        _credential: &AlipayCredential,
+        _request: &CheckoutRequest,
+        _product: AlipayProduct,
+        _notify_url: Url,
+    ) -> Result<AlipayCheckoutResult, AdapterError> {
+        Err(AdapterError::Unsupported)
+    }
+
+    async fn create_wechat_checkout(
+        &self,
+        _credential: &WechatCredential,
+        _request: &CheckoutRequest,
+        _product: WechatProduct,
+        _notify_url: Url,
+        _client_ip: Option<IpAddr>,
+    ) -> Result<WechatCheckoutResult, AdapterError> {
+        Err(AdapterError::Unsupported)
+    }
 }
 
 #[derive(Clone)]
@@ -64,6 +94,35 @@ impl CheckoutProvider for ReqwestCheckoutProvider {
     ) -> Result<StripeCheckoutResult, AdapterError> {
         create_stripe_checkout(&self.client, credential, request).await
     }
+
+    async fn create_alipay_checkout(
+        &self,
+        credential: &AlipayCredential,
+        request: &CheckoutRequest,
+        product: AlipayProduct,
+        notify_url: Url,
+    ) -> Result<AlipayCheckoutResult, AdapterError> {
+        prepare_alipay_checkout(credential, request, product, notify_url, chrono::Utc::now())
+    }
+
+    async fn create_wechat_checkout(
+        &self,
+        credential: &WechatCredential,
+        request: &CheckoutRequest,
+        product: WechatProduct,
+        notify_url: Url,
+        client_ip: Option<IpAddr>,
+    ) -> Result<WechatCheckoutResult, AdapterError> {
+        create_wechat_checkout(
+            &self.client,
+            credential,
+            request,
+            product,
+            notify_url,
+            client_ip,
+        )
+        .await
+    }
 }
 
 #[derive(Clone)]
@@ -72,6 +131,7 @@ pub struct CheckoutService {
     payment_keys: Option<Arc<PaymentKeyRing>>,
     public_origin: Option<Url>,
     provider: Arc<dyn CheckoutProvider>,
+    client_ip: Option<IpAddr>,
 }
 
 impl CheckoutService {
@@ -86,7 +146,13 @@ impl CheckoutService {
             payment_keys,
             public_origin,
             provider,
+            client_ip: None,
         }
+    }
+
+    pub fn with_client_ip(mut self, client_ip: Option<IpAddr>) -> Self {
+        self.client_ip = client_ip;
+        self
     }
 
     pub async fn create_attempt(
@@ -165,7 +231,7 @@ impl CheckoutService {
         &self,
         attempt: &PaymentAttempt,
         order: &PaymentOrder,
-    ) -> Result<StripeCheckoutResult, CheckoutError> {
+    ) -> Result<ProviderCheckoutResult, CheckoutError> {
         let payment_keys = self
             .payment_keys
             .as_ref()
@@ -175,8 +241,7 @@ impl CheckoutService {
             .as_ref()
             .ok_or(CheckoutError::ConfigurationUnavailable)?;
         let stored = load_credential(&self.db, &attempt.credential_version_id).await?;
-        if attempt.adapter_kind != "stripe"
-            || stored.adapter_kind != attempt.adapter_kind
+        if stored.adapter_kind != attempt.adapter_kind
             || stored.channel_id != attempt.channel_id
             || stored.account_identity_digest != attempt.merchant_account_identity
         {
@@ -189,11 +254,6 @@ impl CheckoutService {
         let plaintext = payment_keys
             .decrypt(&aad, &stored.encrypted_secret)
             .map_err(|_| CheckoutError::ConfigurationUnavailable)?;
-        let credential = StripeCredential::from_json(&plaintext)
-            .map_err(|_| CheckoutError::ConfigurationUnavailable)?;
-        if account_identity_digest(credential.account_id()) != attempt.merchant_account_identity {
-            return Err(CheckoutError::ConfigurationUnavailable);
-        }
         let (success_url, cancel_url) = return_urls(public_origin, &order.id)?;
         let request = CheckoutRequest {
             attempt_id: attempt.id.clone(),
@@ -203,11 +263,71 @@ impl CheckoutService {
             success_url,
             cancel_url,
         };
-        self.provider
-            .create_stripe_checkout(&credential, &request)
-            .await
-            .map_err(map_adapter_error)
+        let notify_url = callback_url(public_origin, &attempt.channel_id)?;
+        match attempt.adapter_kind.as_str() {
+            "stripe" => {
+                let credential = StripeCredential::from_json(&plaintext)
+                    .map_err(|_| CheckoutError::ConfigurationUnavailable)?;
+                validate_account_identity(credential.account_id(), attempt)?;
+                self.provider
+                    .create_stripe_checkout(&credential, &request)
+                    .await
+                    .map(|result| ProviderCheckoutResult {
+                        provider_object_id: result.provider_object_id,
+                        action: result.action,
+                    })
+                    .map_err(map_adapter_error)
+            }
+            "alipay" => {
+                let credential = AlipayCredential::from_json(&plaintext)
+                    .map_err(|_| CheckoutError::ConfigurationUnavailable)?;
+                validate_account_identity(credential.seller_id(), attempt)?;
+                let product = match attempt.expected_payment_method.as_deref() {
+                    None | Some("computer_web") => AlipayProduct::ComputerWeb,
+                    Some("mobile_web") => AlipayProduct::MobileWeb,
+                    _ => return Err(CheckoutError::ConfigurationUnavailable),
+                };
+                self.provider
+                    .create_alipay_checkout(&credential, &request, product, notify_url)
+                    .await
+                    .map(|result| ProviderCheckoutResult {
+                        provider_object_id: result.provider_object_id,
+                        action: result.action,
+                    })
+                    .map_err(map_adapter_error)
+            }
+            "wechat" => {
+                let credential = WechatCredential::from_json(&plaintext)
+                    .map_err(|_| CheckoutError::ConfigurationUnavailable)?;
+                validate_account_identity(credential.merchant_id(), attempt)?;
+                let product = match attempt.expected_payment_method.as_deref() {
+                    None | Some("native") => WechatProduct::Native,
+                    Some("h5") => WechatProduct::H5,
+                    _ => return Err(CheckoutError::ConfigurationUnavailable),
+                };
+                self.provider
+                    .create_wechat_checkout(
+                        &credential,
+                        &request,
+                        product,
+                        notify_url,
+                        self.client_ip,
+                    )
+                    .await
+                    .map(|result| ProviderCheckoutResult {
+                        provider_object_id: result.provider_object_id,
+                        action: result.action,
+                    })
+                    .map_err(map_adapter_error)
+            }
+            _ => Err(CheckoutError::ConfigurationUnavailable),
+        }
     }
+}
+
+struct ProviderCheckoutResult {
+    provider_object_id: String,
+    action: CheckoutAction,
 }
 
 struct StoredCredential {
@@ -267,6 +387,26 @@ fn return_urls(public_origin: &Url, order_id: &str) -> Result<(Url, Url), Checko
         .append_pair("order_id", order_id)
         .append_pair("checkout", "cancel");
     Ok((success, cancel))
+}
+
+fn callback_url(public_origin: &Url, channel_id: &str) -> Result<Url, CheckoutError> {
+    let mut callback = public_origin.clone();
+    callback.set_path("");
+    callback
+        .path_segments_mut()
+        .map_err(|_| CheckoutError::ConfigurationUnavailable)?
+        .extend(["api", "store", "callbacks", channel_id]);
+    Ok(callback)
+}
+
+fn validate_account_identity(
+    account_id: &str,
+    attempt: &PaymentAttempt,
+) -> Result<(), CheckoutError> {
+    if account_identity_digest(account_id) != attempt.merchant_account_identity {
+        return Err(CheckoutError::ConfigurationUnavailable);
+    }
+    Ok(())
 }
 
 fn account_identity_digest(account_id: &str) -> String {

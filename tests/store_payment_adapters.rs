@@ -1,3 +1,4 @@
+use chrono::{TimeZone, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use monoize::store_billing::adapters::alipay::canonical_alipay_parameters;
 use monoize::store_billing::adapters::stripe::{
@@ -5,8 +6,12 @@ use monoize::store_billing::adapters::stripe::{
 };
 use monoize::store_billing::adapters::wechat::wechat_signature_message;
 use monoize::store_billing::payment::{CheckoutAction, validate_return_url};
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::rand_core::OsRng;
+use rsa::{RsaPrivateKey, RsaPublicKey};
 use sha2::Sha256;
 use std::collections::BTreeMap;
+use url::Url;
 
 fn hmac_hex(secret: &[u8], payload: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret).unwrap();
@@ -182,6 +187,171 @@ fn stripe_credentials_are_strict_and_redacted() {
             }"#,
         )
         .is_err()
+    );
+}
+
+#[test]
+fn alipay_checkout_builds_a_signed_official_form() {
+    let private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let public = RsaPublicKey::from(&private);
+    let private_pem = private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let public_pem = public.to_public_key_pem(LineEnding::LF).unwrap();
+    let credential = monoize::store_billing::adapters::alipay::AlipayCredential::from_json(
+        serde_json::json!({
+            "app_id":"2026000000000001",
+            "seller_id":"2088000000000001",
+            "merchant_private_key_pem":private_pem.as_str(),
+            "alipay_public_key_pem":public_pem,
+            "environment":"sandbox"
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let checkout = monoize::store_billing::payment::CheckoutRequest {
+        attempt_id: "attempt-alipay".to_string(),
+        order_number: "LS-ALIPAY-1".to_string(),
+        amount_minor: "1234".to_string(),
+        currency: monoize::store_billing::money::Currency::CNY,
+        success_url: Url::parse("https://lynshen.org/dashboard/store?checkout=success").unwrap(),
+        cancel_url: Url::parse("https://lynshen.org/dashboard/store?checkout=cancel").unwrap(),
+    };
+    let result = monoize::store_billing::adapters::alipay::prepare_checkout(
+        &credential,
+        &checkout,
+        monoize::store_billing::adapters::alipay::AlipayProduct::ComputerWeb,
+        Url::parse("https://lynshen.org/api/store/callbacks/alipay-1").unwrap(),
+        Utc.with_ymd_and_hms(2026, 8, 27, 17, 2, 3).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(result.provider_object_id, "LS-ALIPAY-1");
+    let monoize::store_billing::payment::CheckoutAction::Form { action, fields, .. } =
+        result.action
+    else {
+        panic!("expected form")
+    };
+    assert_eq!(
+        action,
+        "https://openapi-sandbox.dl.alipaydev.com/gateway.do"
+    );
+    let fields = fields.into_iter().collect::<BTreeMap<_, _>>();
+    assert_eq!(fields["method"], "alipay.trade.page.pay");
+    assert_eq!(fields["sign_type"], "RSA2");
+    assert!(!fields["sign"].is_empty());
+    assert!(fields["biz_content"].contains("\"total_amount\":\"12.34\""));
+    let canonical = fields
+        .iter()
+        .filter(|(key, value)| key.as_str() != "sign" && !value.is_empty())
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    monoize::store_billing::crypto::verify_rsa_sha256_base64(
+        &public_pem,
+        canonical.as_bytes(),
+        &fields["sign"],
+    )
+    .unwrap();
+    let mobile = monoize::store_billing::adapters::alipay::prepare_checkout(
+        &credential,
+        &checkout,
+        monoize::store_billing::adapters::alipay::AlipayProduct::MobileWeb,
+        Url::parse("https://lynshen.org/api/store/callbacks/alipay-1").unwrap(),
+        Utc.with_ymd_and_hms(2026, 8, 27, 17, 2, 3).unwrap(),
+    )
+    .unwrap();
+    let CheckoutAction::Form { fields, .. } = mobile.action else {
+        panic!("expected mobile form")
+    };
+    let fields = fields.into_iter().collect::<BTreeMap<_, _>>();
+    assert_eq!(fields["method"], "alipay.trade.wap.pay");
+    assert!(fields["biz_content"].contains("\"product_code\":\"QUICK_WAP_WAY\""));
+    assert!(!format!("{credential:?}").contains("PRIVATE KEY"));
+}
+
+#[test]
+fn wechat_native_checkout_builds_exact_v3_authorization() {
+    let private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let private_pem = private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let credential = monoize::store_billing::adapters::wechat::WechatCredential::from_json(
+        serde_json::json!({
+            "merchant_id":"1900000109",
+            "app_id":"wx1234567890",
+            "api_v3_key":"0123456789abcdef0123456789abcdef",
+            "merchant_certificate_serial":"7777777777777777777777777777777777777777",
+            "merchant_private_key_pem":private_pem.as_str()
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let checkout = monoize::store_billing::payment::CheckoutRequest {
+        attempt_id: "attempt-wechat".to_string(),
+        order_number: "LS-WECHAT-1".to_string(),
+        amount_minor: "100".to_string(),
+        currency: monoize::store_billing::money::Currency::CNY,
+        success_url: Url::parse("https://lynshen.org/dashboard/store?checkout=success").unwrap(),
+        cancel_url: Url::parse("https://lynshen.org/dashboard/store?checkout=cancel").unwrap(),
+    };
+    let prepared = monoize::store_billing::adapters::wechat::prepare_checkout_request(
+        &credential,
+        &checkout,
+        monoize::store_billing::adapters::wechat::WechatProduct::Native,
+        Url::parse("https://lynshen.org/api/store/callbacks/wechat-1").unwrap(),
+        None,
+        1_777_000_000,
+        "nonce-1",
+    )
+    .unwrap();
+
+    assert_eq!(prepared.canonical_path, "/v3/pay/transactions/native");
+    assert_eq!(
+        prepared.endpoint,
+        "https://api.mch.weixin.qq.com/v3/pay/transactions/native"
+    );
+    assert!(
+        prepared
+            .authorization
+            .starts_with("WECHATPAY2-SHA256-RSA2048 ")
+    );
+    assert!(prepared.authorization.contains("mchid=\"1900000109\""));
+    assert_eq!(prepared.body["amount"]["total"], 100);
+    assert_eq!(prepared.body["amount"]["currency"], "CNY");
+    assert!(!format!("{credential:?}").contains("PRIVATE KEY"));
+}
+
+#[test]
+fn wechat_checkout_response_returns_qr_or_h5_redirect() {
+    let native = monoize::store_billing::adapters::wechat::parse_checkout_response(
+        br#"{"code_url":"weixin://wxpay/bizpayurl?pr=test"}"#,
+        monoize::store_billing::adapters::wechat::WechatProduct::Native,
+        "LS-WECHAT-1",
+        "2026-08-28T01:00:00Z",
+    )
+    .unwrap();
+    assert!(matches!(
+        native.action,
+        CheckoutAction::Qr { payload, .. } if payload.starts_with("weixin://")
+    ));
+
+    let h5 = monoize::store_billing::adapters::wechat::parse_checkout_response(
+        br#"{"h5_url":"https://wx.tenpay.com/cgi-bin/mmpayweb-bin/checkmweb?prepay_id=test"}"#,
+        monoize::store_billing::adapters::wechat::WechatProduct::H5,
+        "LS-WECHAT-2",
+        "2026-08-28T01:00:00Z",
+    )
+    .unwrap();
+    assert!(matches!(h5.action, CheckoutAction::Redirect { .. }));
+
+    assert_eq!(
+        monoize::store_billing::adapters::wechat::parse_checkout_response(
+            br#"{"code_url":"https://example.com/not-wechat"}"#,
+            monoize::store_billing::adapters::wechat::WechatProduct::Native,
+            "LS-WECHAT-3",
+            "2026-08-28T01:00:00Z",
+        )
+        .unwrap_err(),
+        monoize::store_billing::payment::AdapterError::Ambiguous
     );
 }
 

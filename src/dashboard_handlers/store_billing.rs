@@ -417,7 +417,8 @@ pub async fn create_store_payment_attempt(
         state.payment_keys.clone(),
         state.payment_public_origin.clone(),
         state.checkout_provider.clone(),
-    );
+    )
+    .with_client_ip(crate::client_ip::canonical_client_ip_from_headers(&headers));
     let result = checkout
         .create_attempt(&user.id, &id, input)
         .await

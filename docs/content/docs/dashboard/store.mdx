@@ -22,6 +22,8 @@ Monoize refreshes the USD/CNY rate at most once every 15 minutes. It keeps the l
 
 Monoize saves the payment attempt before it contacts the Provider. Stripe then opens its hosted Checkout page.
 
+Alipay submits a signed official payment form. WeChat Native shows a scannable QR code. WeChat H5 opens the official mobile payment page.
+
 Do not create another attempt when the Provider result is unknown. Wait for Monoize to reconcile the existing attempt.
 
 The Store checks the order every two seconds after checkout. It stops after payment and fulfillment finish, the order closes, or the order expires.
