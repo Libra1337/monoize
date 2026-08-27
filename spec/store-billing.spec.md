@@ -38,7 +38,7 @@ SB-P-3. `group_ids` MUST follow `groups-registry.spec.md` GR-C1 through GR-C3. P
 
 SB-P-4. A balance product MUST have `duration_seconds = NULL`. A plan product MUST have `duration_seconds` between `3600` and `31_536_000` inclusive.
 
-SB-P-5. Public Store reads MUST return only enabled products ordered by `sort_order ASC`, `created_at ASC`, then `id ASC`. Admin reads MUST return enabled and disabled products in the same order.
+SB-P-5. Public Store reads MUST return only enabled products ordered by `sort_order ASC`, `created_at ASC`, then `id ASC`. Admin reads MUST return enabled and disabled products in the same order. The public catalog MUST include `settings` with the four custom recharge bound fields from SB-P-8 and MUST NOT include any other system setting.
 
 ### 2.2 Balance Products
 
@@ -142,6 +142,7 @@ SB-A-1. Session user endpoints are:
 
 - `GET /api/dashboard/store/catalog`
 - `GET /api/dashboard/store/exchange-rate`
+- `GET /api/dashboard/store/entitlement`
 - `GET /api/dashboard/store/orders`
 - `POST /api/dashboard/store/orders`
 - `POST /api/dashboard/store/redeem`
@@ -163,6 +164,8 @@ Every endpoint in SB-A-2 MUST require an admin session.
 SB-A-3. User mutations MUST reject replica nodes by the repository's shared write policy. Admin mutations MUST use the same policy.
 
 SB-A-4. API errors MUST use the dashboard JSON error envelope. Invalid money uses code `invalid_amount`. Invalid currency uses code `invalid_currency`. Arithmetic overflow uses HTTP `409` code `amount_overflow`.
+
+SB-A-5. `GET /api/dashboard/store/entitlement` MUST derive the user from the session. It MUST return the active entitlement from SB-E-5 or JSON `null`.
 
 ## 8. Frontend
 

@@ -89,6 +89,7 @@
 		"storeManagement": "商店管理"
 	},
 	"store": {
+		"ui": { "tabsLabel": "商店分区", "accountLabel": "账户状态", "accountUnlimited": "不限额度", "accountEnds": "有效期至 {{date}}", "loadFailed": "暂时无法加载商店数据", "retry": "重试", "balanceEmpty": "暂无可购买的充值商品", "planEmpty": "暂无可购买的套餐", "orderSuccess": "订单已创建", "orderFailed": "订单创建失败", "customAmountInvalid": "请输入 {{minimum}} 至 {{maximum}} 之间的金额", "redeeming": "正在兑换", "close": "关闭" },
 		"title": "商店",
 		"description": "充值余额、购买套餐或兑换兑换码。",
 		"tabs": { "balance": "余额充值", "plan": "套餐购买", "redeem": "兑换码" },

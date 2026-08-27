@@ -2018,6 +2018,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
             get(crate::dashboard_handlers::get_store_exchange_rate),
         )
         .route(
+            "/dashboard/store/entitlement",
+            get(crate::dashboard_handlers::get_store_entitlement),
+        )
+        .route(
             "/dashboard/store/orders",
             get(crate::dashboard_handlers::list_store_orders)
                 .post(crate::dashboard_handlers::create_store_order),

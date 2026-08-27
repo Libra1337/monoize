@@ -160,6 +160,7 @@ async fn catalog_filters_disabled_records_and_uses_stable_order() {
         .unwrap();
 
     let catalog = store.catalog().await.unwrap();
+    assert_eq!(catalog.settings, StoreSettings::default());
     assert_eq!(
         catalog
             .products

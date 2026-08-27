@@ -92,6 +92,7 @@ export interface StorePaymentChannel {
 export interface StoreCatalog {
   products: StoreProduct[];
   payment_channels: StorePaymentChannel[];
+  settings: StoreSettings;
 }
 
 export interface StoreExchangeRate {
@@ -238,6 +239,7 @@ function jsonMutation<T>(path: string, method: "POST" | "PUT", body: unknown): P
 export const storeApi = {
   getCatalog: () => storeRequest<StoreCatalog>("/catalog"),
   getExchangeRate: () => storeRequest<StoreExchangeRate>("/exchange-rate"),
+  getEntitlement: () => storeRequest<StorePlanEntitlement | null>("/entitlement"),
   listOrders: (limit = 100) => storeRequest<StoreOrder[]>(listPath("/orders", limit)),
   createOrder: (input: CreateStoreOrderInput) =>
     jsonMutation<StoreOrder>("/orders", "POST", input),

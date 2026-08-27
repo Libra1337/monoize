@@ -77,6 +77,7 @@
 		"storeManagement": "商店管理"
 	},
 	"store": {
+		"ui": { "tabsLabel": "商店分區", "accountLabel": "帳戶狀態", "accountUnlimited": "不限額度", "accountEnds": "有效期至 {{date}}", "loadFailed": "暫時無法載入商店資料", "retry": "重試", "balanceEmpty": "目前沒有可購買的儲值商品", "planEmpty": "目前沒有可購買的方案", "orderSuccess": "訂單已建立", "orderFailed": "訂單建立失敗", "customAmountInvalid": "請輸入 {{minimum}} 至 {{maximum}} 之間的金額", "redeeming": "正在兌換", "close": "關閉" },
 		"title": "商店",
 		"description": "儲值餘額、購買方案或兌換兌換碼。",
 		"tabs": { "balance": "餘額儲值", "plan": "方案購買", "redeem": "兌換碼" },

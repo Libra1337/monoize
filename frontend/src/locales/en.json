@@ -120,6 +120,7 @@
 		"storeManagement": "Store Management"
 	},
 	"store": {
+		"ui": { "tabsLabel": "Store sections", "accountLabel": "Account status", "accountUnlimited": "Unlimited", "accountEnds": "Ends {{date}}", "loadFailed": "Store data could not be loaded", "retry": "Retry", "balanceEmpty": "No balance product is available", "planEmpty": "No plan is available", "orderSuccess": "Order created", "orderFailed": "Order creation failed", "customAmountInvalid": "Enter an amount from {{minimum}} to {{maximum}}", "redeeming": "Redeeming code", "close": "Close" },
 		"title": "Store",
 		"description": "Recharge balance, purchase a plan, or redeem a code.",
 		"tabs": { "balance": "Balance", "plan": "Plans", "redeem": "Redeem code" },

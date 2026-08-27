@@ -171,6 +171,7 @@ pub struct PaymentChannel {
 pub struct StoreCatalog {
     pub products: Vec<StoreProduct>,
     pub payment_channels: Vec<PaymentChannel>,
+    pub settings: StoreSettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  addMinor,
   convertMinor,
   formatMinor,
   formatPlanQuota,
@@ -15,6 +16,14 @@ describe("Store money helpers", () => {
   test("converts CNY and USD minor units at the exact decimal rate", () => {
     expect(convertMinor("5900", "CNY", "USD", "6.7370")).toBe("876");
     expect(convertMinor("876", "USD", "CNY", "6.7370")).toBe("5902");
+  });
+
+  test("adds separately converted recharge and bonus amounts without a second rounding step", () => {
+    const recharge = convertMinor("1", "CNY", "USD", "2");
+    const bonus = convertMinor("1", "CNY", "USD", "2");
+
+    expect(addMinor(recharge, bonus)).toBe("2");
+    expect(convertMinor("2", "CNY", "USD", "2")).toBe("1");
   });
 
   test("rounds plan quota from its CNY base to whole display units", () => {

@@ -64,6 +64,10 @@ export function convertMinor(
   return converted.toString();
 }
 
+export function addMinor(left: string, right: string): string {
+  return (parseMinor(left) + parseMinor(right)).toString();
+}
+
 export function formatPlanQuota(
   quotaFenCny: string,
   currency: StoreCurrency,
@@ -80,4 +84,36 @@ export function formatPlanQuota(
     100n * rate.numerator,
   );
   return `$${wholeUsd}`;
+}
+
+const DECIMAL_MINOR_INPUT = /^(?:0|[1-9][0-9]*)(?:\.([0-9]{0,2}))?$/;
+
+export function decimalToMinor(value: string): string | null {
+  const normalized = value.trim();
+  const match = DECIMAL_MINOR_INPUT.exec(normalized);
+  if (!match) return null;
+  const [whole, fraction = ""] = normalized.split(".");
+  return (BigInt(whole) * 100n + BigInt(fraction.padEnd(2, "0") || "0")).toString();
+}
+
+export function formatNanoUsd(
+  nanoUsd: string,
+  currency: StoreCurrency = "USD",
+  cnyPerUsd = "1",
+): string {
+  const nano = parseMinor(nanoUsd);
+  const nanoPerMinor = 10_000_000n;
+  if (currency === "USD") {
+    return formatMinor(
+      divideRoundHalfAwayFromZero(nano, nanoPerMinor).toString(),
+      "USD",
+    );
+  }
+
+  const rate = parseRate(cnyPerUsd);
+  const cnyMinor = divideRoundHalfAwayFromZero(
+    nano * rate.numerator,
+    nanoPerMinor * rate.denominator,
+  );
+  return formatMinor(cnyMinor.toString(), "CNY");
 }

@@ -540,6 +540,7 @@ impl StoreBillingStore {
         Ok(StoreCatalog {
             products,
             payment_channels,
+            settings: self.get_settings().await?,
         })
     }
 

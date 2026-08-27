@@ -201,6 +201,19 @@ pub async fn get_store_exchange_rate(
     Ok(Json(current_rate(&state).await?))
 }
 
+pub async fn get_store_entitlement(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let entitlement = state
+        .store_billing
+        .current_entitlement(&user.id)
+        .await
+        .map_err(map_store_error)?;
+    Ok(Json(entitlement))
+}
+
 pub async fn list_store_orders(
     State(state): State<AppState>,
     headers: HeaderMap,

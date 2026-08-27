@@ -77,6 +77,7 @@
 		"storeManagement": "ストア管理"
 	},
 	"store": {
+		"ui": { "tabsLabel": "ストア区分", "accountLabel": "アカウント状態", "accountUnlimited": "上限なし", "accountEnds": "有効期限: {{date}}", "loadFailed": "ストアデータを読み込めませんでした", "retry": "再試行", "balanceEmpty": "購入できる残高追加商品はありません", "planEmpty": "購入できるプランはありません", "orderSuccess": "注文を作成しました", "orderFailed": "注文を作成できませんでした", "customAmountInvalid": "{{minimum}} から {{maximum}} までの金額を入力してください", "redeeming": "コードを引き換えています", "close": "閉じる" },
 		"title": "ストア",
 		"description": "残高を追加し、プランを購入し、またはコードを引き換えます。",
 		"tabs": { "balance": "残高追加", "plan": "プラン購入", "redeem": "コード引換" },

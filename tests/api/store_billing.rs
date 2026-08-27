@@ -156,6 +156,24 @@ async fn store_catalog_requires_a_dashboard_session() {
 }
 
 #[tokio::test]
+async fn entitlement_endpoint_returns_null_without_an_active_store_plan() {
+    let ctx = setup().await;
+    let user = dashboard_session(&ctx, "store_entitlement_user", UserRole::User).await;
+
+    let (status, body) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/entitlement",
+        Some(&user),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, Value::Null);
+}
+
+#[tokio::test]
 async fn store_admin_guards_and_product_channel_order_lifecycle() {
     let mut ctx = setup().await;
     configure_rate(&mut ctx).await;
