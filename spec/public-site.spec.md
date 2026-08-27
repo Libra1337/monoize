@@ -58,6 +58,11 @@ MUST NOT mutate server state.
 PS-S5. The login page MUST continue to use the existing login-settings endpoint for
 registration and CAPTCHA behavior. It MUST NOT use PS-S1 as an authentication policy.
 
+PS-S6. A dashboard session transition MUST clear every non-public SWR cache entry and MUST
+preserve every string cache key that starts with `/api/public/`. An HTTP `401` from
+`GET /api/dashboard/auth/me` MUST NOT delete a public response that completed before,
+during, or after that authentication request.
+
 ## 3. Shared public API controls
 
 PS-A1. The public API set is exactly:
@@ -203,3 +208,6 @@ PS-T5. Browser tests MUST cover keyboard navigation, skip links, focus visibilit
 motion, and PS-V4 viewports.
 
 PS-T6. Locale validation MUST fail when one PS-L1 catalog lacks a public key.
+
+PS-T7. A cache test MUST store one `/api/public/` key and one dashboard key, execute the
+dashboard session cache clear, and assert that only the public value remains.

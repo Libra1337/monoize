@@ -1125,5 +1125,9 @@ export function revalidateAll() {
 }
 
 export function clearCache() {
-  return mutate(() => true, undefined, { revalidate: false });
+  return mutate(
+    (key) => !(typeof key === "string" && key.startsWith("/api/public/")),
+    undefined,
+    { revalidate: false }
+  );
 }
