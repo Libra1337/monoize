@@ -44,6 +44,12 @@ Monoize 僅在驗證 Channel 付款後發放餘額。管理員不能把未付款
 
 在商店管理中儲存支付寶應用程式 ID、賣家 ID、商戶私鑰、支付寶公鑰和環境。Monoize 驗證 RSA2，並只在儲存已驗證事件後回傳 `success`。
 
+## 設定微信支付回呼
+
+把微信支付通知網址設為 `https://lynshen.org/api/store/callbacks/{channel_id}`。使用微信支付 Channel ID 取代 `{channel_id}`。
+
+儲存商戶號、應用程式 ID、API v3 密鑰、商戶憑證序號、商戶私鑰、平台憑證序號和平台公開金鑰。Monoize 在履約前驗證平台簽章並解密付款資源。
+
 ## 購買方案
 
 選擇方案和付款 Channel。一個方案可以同時套用多個額度週期。週期可以是 5 小時、12 小時、每日、每週、每月或自訂整數小時。

@@ -105,9 +105,18 @@ impl PaymentCallbackStore {
             ))
             .await
             .map_err(storage)?;
-        if duplicate.is_some() {
+        if let Some(duplicate) = duplicate {
+            let result = match row_string(&duplicate, "projection_state")?.as_str() {
+                "applied" => CallbackApplyResult::Duplicate,
+                "manual_review" => CallbackApplyResult::ManualReview,
+                value => {
+                    return Err(CallbackStoreError::Storage(format!(
+                        "unknown callback projection state: {value}"
+                    )));
+                }
+            };
             tx.commit().await.map_err(storage)?;
-            return Ok(CallbackApplyResult::Duplicate);
+            return Ok(result);
         }
 
         let matches_contract = row_string(&row, "credential_version_id")?

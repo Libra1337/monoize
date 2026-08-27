@@ -234,13 +234,19 @@ SB-A-5. Alipay MUST support trade query, refund, refund query, and bill download
 
 SB-A-6. WeChat Pay MUST support Native QR and H5 payment using API v3.
 
-SB-A-6A. A WeChat Pay credential plaintext MUST be JSON with exactly `merchant_id`, `app_id`, `api_v3_key`, `merchant_certificate_serial`, and `merchant_private_key_pem`. Every field MUST be nonempty. `api_v3_key` MUST contain exactly 32 UTF-8 bytes.
+SB-A-6A. A WeChat Pay credential plaintext MUST be JSON with exactly `merchant_id`, `app_id`, `api_v3_key`, `merchant_certificate_serial`, `merchant_private_key_pem`, `platform_certificate_serial`, and `platform_public_key_pem`. Every field MUST be nonempty. `api_v3_key` MUST contain exactly 32 UTF-8 bytes. The merchant certificate fields MUST authorize outbound requests. The platform certificate fields MUST verify inbound callbacks.
 
 SB-A-6B. WeChat Native checkout MUST POST to `/v3/pay/transactions/native`. WeChat H5 checkout MUST POST to `/v3/pay/transactions/h5`. The JSON body MUST contain the configured App ID and merchant ID, immutable order number, description, callback URL, positive integer CNY fen, and `CNY`. H5 checkout MUST also contain the canonical client IP and `scene_info.h5_info.type = Wap`.
 
 SB-A-6C. WeChat authorization MUST use scheme `WECHATPAY2-SHA256-RSA2048`. It MUST sign the exact method, canonical path, timestamp, nonce, and JSON body with the merchant private key. It MUST include merchant ID and merchant certificate serial.
 
-SB-A-7. WeChat callback verification MUST verify the platform certificate signature, decrypt the AES-256-GCM resource, and check merchant ID, App ID, order number, amount, currency, and success state.
+SB-A-7. WeChat callback verification MUST require `Wechatpay-Timestamp`, `Wechatpay-Nonce`, `Wechatpay-Serial`, and `Wechatpay-Signature`. `Wechatpay-Serial` MUST equal the credential platform certificate serial. The signed bytes MUST be the exact timestamp, LF, nonce, LF, raw body, and LF. The timestamp MUST differ from Store Primary time by at most 300 seconds.
+
+SB-A-7A. A WeChat payment callback body MUST be JSON with one nonempty event `id`, `event_type = TRANSACTION.SUCCESS`, and one `resource`. The resource MUST use `original_type = transaction` and `algorithm = AEAD_AES_256_GCM`. The service MUST decrypt it with the 32-byte API v3 key, the exact 12-byte nonce, and the exact associated data.
+
+SB-A-7B. A decrypted WeChat payment resource MUST contain the configured merchant ID, configured App ID, nonempty order number, nonempty transaction ID, `trade_state = SUCCESS`, positive integer amount in fen, and `currency = CNY`. The verified payment event ID MUST equal the outer event `id`.
+
+SB-A-7C. A WeChat platform-verification credential version MAY differ from the payment attempt credential version after platform certificate rotation. The callback MUST bind the attempt by Channel, order number, adapter kind, and the exact merchant-account identity digest. The provider event `credential_version_id` MUST remain the attempt credential version. The allow-listed parsed event MUST record the platform-verification credential version ID.
 
 SB-A-8. WeChat Pay MUST support order query, refund notification, refund query, and bill download. Complaint automation MUST remain unavailable unless the merchant capability test proves it.
 
@@ -273,6 +279,8 @@ SB-EV-2. A callback body MUST be at most 131,072 bytes and MUST complete reading
 SB-EV-2A. A verified Stripe callback MUST return HTTP `200` with `{ "received": true }` after an applied, duplicate, or manual-review projection. Invalid signatures and invalid verified fields MUST return HTTP `400`. Missing callback keys MUST return HTTP `503`. A storage or fulfillment error MUST return HTTP `500`.
 
 SB-EV-2B. A verified Alipay callback MUST return HTTP `200` with UTF-8 text `success` after an applied or duplicate projection. A manual-review projection caused by an order, attempt, credential, merchant, amount, or currency mismatch MUST return a non-200 response. The request MUST use `application/x-www-form-urlencoded`. Each decoded field name MUST occur once. An invalid signature, `sign_type`, App ID, seller ID, order number, trade number, amount, or trade state MUST return a non-200 response. A non-200 response MUST NOT contain a credential or raw callback body.
+
+SB-EV-2C. A verified WeChat callback MUST return HTTP `200` with JSON `{ "code": "SUCCESS", "message": "成功" }` after an applied or duplicate projection. A manual-review projection MUST return a non-200 response. The request MUST use `application/json`. An invalid header, signature, timestamp, certificate serial, resource, merchant ID, App ID, order number, transaction ID, amount, currency, or trade state MUST return a non-200 response. A non-200 response MUST NOT contain a credential, decrypted resource, or raw callback body.
 
 SB-EV-3. A callback event MUST store credential version, provider event identity, body digest, allow-listed verified fields, verification result, encrypted raw body, projection state, and state revision.
 

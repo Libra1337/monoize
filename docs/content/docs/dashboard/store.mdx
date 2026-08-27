@@ -44,6 +44,12 @@ Set the Alipay asynchronous notification URL to `https://lynshen.org/api/store/c
 
 Save the Alipay App ID, seller ID, merchant private key, Alipay public key, and environment in Store Management. Monoize verifies RSA2 and returns `success` only after it stores the verified event.
 
+## Configure WeChat Pay callbacks
+
+Set the WeChat Pay notification URL to `https://lynshen.org/api/store/callbacks/{channel_id}`. Replace `{channel_id}` with the WeChat Pay Channel ID.
+
+Save the merchant ID, App ID, API v3 key, merchant certificate serial, merchant private key, platform certificate serial, and platform public key. Monoize verifies the platform signature and decrypts each payment resource before fulfillment.
+
 ## Buy a plan
 
 Select a plan and a payment Channel. Each plan can apply several quota windows at the same time. A window can use 5 hours, 12 hours, a day, a week, a month, or a custom whole-hour duration.

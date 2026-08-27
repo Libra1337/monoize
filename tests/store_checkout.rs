@@ -332,7 +332,9 @@ async fn checkout_dispatches_alipay_and_wechat_credentials() {
             "merchant_id":"1900000109","app_id":"wx1234567890",
             "api_v3_key":"0123456789abcdef0123456789abcdef",
             "merchant_certificate_serial":"7777777777777777777777777777777777777777",
-            "merchant_private_key_pem":"private"
+            "merchant_private_key_pem":"private",
+            "platform_certificate_serial":"PLATFORM-CERTIFICATE-1",
+            "platform_public_key_pem":"public"
         }"#,
     )
     .await;

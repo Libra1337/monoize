@@ -18,6 +18,9 @@ use super::adapters::alipay::{
 use super::adapters::stripe::{
     StripeCredential, StripeWebhookError, parse_stripe_payment_event, verify_stripe_webhook,
 };
+use super::adapters::wechat::{
+    WechatCallbackError, WechatCredential, verify_wechat_payment_callback,
+};
 use super::callbacks::{
     ApplyProviderEventInput, CallbackApplyResult, CallbackStoreError, PaymentCallbackStore,
 };
@@ -30,6 +33,7 @@ use crate::error::{AppError, AppResult};
 const CALLBACK_BODY_MAX_BYTES: usize = 131_072;
 const CALLBACK_BODY_TIMEOUT: Duration = Duration::from_secs(5);
 const STRIPE_SIGNATURE_TOLERANCE_SECONDS: i64 = 300;
+const WECHAT_SIGNATURE_TOLERANCE_SECONDS: i64 = 300;
 
 struct StoredCallbackCredential {
     id: String,
@@ -62,6 +66,17 @@ pub async fn store_payment_callback(
     })?;
     if adapter_kind == "alipay" {
         return handle_alipay_callback(
+            &state,
+            &channel_id,
+            &headers,
+            &body,
+            source_ip,
+            payment_keys,
+        )
+        .await;
+    }
+    if adapter_kind == "wechat" {
+        return handle_wechat_callback(
             &state,
             &channel_id,
             &headers,
@@ -263,7 +278,7 @@ async fn handle_alipay_callback(
         ));
     };
     let (attempt_id, order_id) =
-        load_alipay_attempt(state, channel_id, &stored.id, &payment.order_number).await?;
+        load_bound_order_attempt(state, channel_id, &stored.id, &payment.order_number).await?;
     let event_row_id = Uuid::new_v4().to_string();
     let raw_body = payment_keys
         .encrypt(
@@ -329,6 +344,151 @@ async fn handle_alipay_callback(
         HeaderValue::from_static("text/plain; charset=utf-8"),
     );
     Ok(response)
+}
+
+async fn handle_wechat_callback(
+    state: &AppState,
+    channel_id: &str,
+    headers: &HeaderMap,
+    body: &[u8],
+    source_ip: Option<std::net::IpAddr>,
+    payment_keys: &PaymentKeyRing,
+) -> AppResult<Response> {
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim);
+    if !content_type.is_some_and(|value| value.eq_ignore_ascii_case("application/json")) {
+        return Err(invalid_wechat_event(WechatCallbackError::InvalidHeaders));
+    }
+    let timestamp = required_wechat_header(headers, "wechatpay-timestamp")?;
+    let nonce = required_wechat_header(headers, "wechatpay-nonce")?;
+    let certificate_serial = required_wechat_header(headers, "wechatpay-serial")?;
+    let signature = required_wechat_header(headers, "wechatpay-signature")?;
+    let credentials = load_callback_credentials(state, channel_id, "wechat").await?;
+    if credentials.is_empty() {
+        return Err(AppError::new(
+            StatusCode::NOT_FOUND,
+            "payment_channel_not_found",
+            "payment Channel was not found",
+        ));
+    }
+    let mut usable_credential = false;
+    let mut authenticated_error = None;
+    let mut selected = None;
+    for stored in credentials {
+        let aad = format!("store_channel_credentials:{}:secret", stored.id);
+        let Ok(plaintext) = payment_keys.decrypt(&aad, &stored.encrypted_secret) else {
+            continue;
+        };
+        let Ok(credential) = WechatCredential::from_json(&plaintext) else {
+            continue;
+        };
+        if account_identity_digest(credential.merchant_id()) != stored.account_identity_digest {
+            continue;
+        }
+        usable_credential = true;
+        match verify_wechat_payment_callback(
+            &credential,
+            &timestamp,
+            &nonce,
+            &certificate_serial,
+            &signature,
+            body,
+            Utc::now().timestamp(),
+            WECHAT_SIGNATURE_TOLERANCE_SECONDS,
+        ) {
+            Ok(payment) => {
+                selected = Some((stored, payment));
+                break;
+            }
+            Err(WechatCallbackError::Authentication) => {}
+            Err(error) => authenticated_error = Some(error),
+        }
+    }
+    let Some((stored, payment)) = selected else {
+        if !usable_credential {
+            return Err(AppError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "payment_configuration_unavailable",
+                "payment callback configuration is unavailable",
+            ));
+        }
+        return Err(invalid_wechat_event(
+            authenticated_error.unwrap_or(WechatCallbackError::Authentication),
+        ));
+    };
+    let verification_credential_version_id = stored.id;
+    let merchant_account_identity = stored.account_identity_digest;
+    let (attempt_id, order_id, attempt_credential_version_id) = load_wechat_order_attempt(
+        state,
+        channel_id,
+        &merchant_account_identity,
+        &payment.order_number,
+    )
+    .await?;
+    let event_row_id = Uuid::new_v4().to_string();
+    let raw_body = payment_keys
+        .encrypt(
+            &format!("store_provider_events:{event_row_id}:raw_body"),
+            body,
+        )
+        .map_err(|error| {
+            AppError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "payment_configuration_unavailable",
+                "payment callback configuration is unavailable",
+            )
+            .with_internal_message(error.to_string())
+        })?;
+    let body_digest = Sha256::digest(body)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let parsed_json = json!({
+        "event_id": &payment.provider_event_id,
+        "event_kind": "payment_succeeded",
+        "transaction_id": &payment.provider_transaction_id,
+        "order_number": &payment.order_number,
+        "amount_minor": &payment.amount_minor,
+        "currency": Currency::CNY,
+        "account_identity": &merchant_account_identity,
+        "verification_credential_version_id": &verification_credential_version_id,
+    });
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.chars().take(512).collect::<String>());
+    let result = PaymentCallbackStore::new(state.db_pool.clone())
+        .apply_verified_payment(ApplyProviderEventInput {
+            event_row_id,
+            credential_version_id: attempt_credential_version_id,
+            provider_event_id: payment.provider_event_id,
+            event_kind: "payment_succeeded".to_string(),
+            order_id,
+            attempt_id,
+            provider_transaction_id: payment.provider_transaction_id,
+            provider_object_id: payment.order_number.clone(),
+            order_number: payment.order_number,
+            merchant_account_identity,
+            amount_minor: payment.amount_minor,
+            currency: Currency::CNY,
+            body_digest,
+            parsed_json,
+            raw_body,
+            source_ip: source_ip.map(|ip| ip.to_string()),
+            user_agent,
+            received_at: Utc::now(),
+        })
+        .await
+        .map_err(map_callback_store_error)?;
+    if result == CallbackApplyResult::ManualReview {
+        return Err(invalid_wechat_event(
+            WechatCallbackError::InvalidPaymentEvent,
+        ));
+    }
+    Ok(Json(json!({"code":"SUCCESS","message":"成功"})).into_response())
 }
 
 async fn read_callback_body(body: Body) -> AppResult<Bytes> {
@@ -425,7 +585,7 @@ fn stored_credential(row: &QueryResult) -> AppResult<StoredCallbackCredential> {
     })
 }
 
-async fn load_alipay_attempt(
+async fn load_bound_order_attempt(
     state: &AppState,
     channel_id: &str,
     credential_version_id: &str,
@@ -458,6 +618,44 @@ async fn load_alipay_attempt(
     Ok((
         row_string(&rows[0], "attempt_id")?,
         row_string(&rows[0], "order_id")?,
+    ))
+}
+
+async fn load_wechat_order_attempt(
+    state: &AppState,
+    channel_id: &str,
+    merchant_account_identity: &str,
+    order_number: &str,
+) -> AppResult<(String, String, String)> {
+    let rows = state
+        .db_pool
+        .read()
+        .query_all(state.db_pool.stmt(
+            "SELECT a.id AS attempt_id, a.order_id, a.credential_version_id
+             FROM store_payment_attempts a
+             JOIN store_orders o ON o.id = a.order_id
+             WHERE a.channel_id = $1 AND a.adapter_kind = 'wechat'
+               AND a.merchant_account_identity = $2
+               AND a.provider_object_id = $3 AND o.order_number = $3
+             ORDER BY a.created_at DESC, a.id DESC
+             LIMIT 2",
+            vec![
+                channel_id.into(),
+                merchant_account_identity.into(),
+                order_number.into(),
+            ],
+        ))
+        .await
+        .map_err(callback_storage_error)?;
+    if rows.len() != 1 {
+        return Err(invalid_wechat_event(
+            WechatCallbackError::InvalidPaymentEvent,
+        ));
+    }
+    Ok((
+        row_string(&rows[0], "attempt_id")?,
+        row_string(&rows[0], "order_id")?,
+        row_string(&rows[0], "credential_version_id")?,
     ))
 }
 
@@ -496,6 +694,24 @@ fn invalid_stripe_event(error: StripeWebhookError) -> AppError {
 }
 
 fn invalid_alipay_event(error: AlipayCallbackError) -> AppError {
+    AppError::new(
+        StatusCode::BAD_REQUEST,
+        "invalid_payment_callback",
+        "payment callback verification failed",
+    )
+    .with_internal_message(error.to_string())
+}
+
+fn required_wechat_header(headers: &HeaderMap, name: &'static str) -> AppResult<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| invalid_wechat_event(WechatCallbackError::InvalidHeaders))
+}
+
+fn invalid_wechat_event(error: WechatCallbackError) -> AppError {
     AppError::new(
         StatusCode::BAD_REQUEST,
         "invalid_payment_callback",

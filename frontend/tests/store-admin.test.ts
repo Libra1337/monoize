@@ -104,6 +104,10 @@ describe("Store admin page", () => {
     expect(channelSource).toContain("merchant_private_key_pem");
     expect(channelSource).toContain("webhook_signing_secret");
     expect(channelSource).toContain("api_v3_key");
+    expect(channelSource).toContain("platform_certificate_serial");
+    expect(channelSource).toContain("platform_public_key_pem");
+    expect(apiSource).toContain("platform_certificate_serial");
+    expect(apiSource).toContain("platform_public_key_pem");
     expect(channelSource).not.toContain("credential_version_id");
     expect(pageSource).toContain("saveChannelCredential");
     expect(pageSource).toContain("revalidate: true");

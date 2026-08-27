@@ -1,12 +1,20 @@
+use aes_gcm::aead::{Aead, KeyInit as AesKeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Nonce};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use chrono::{TimeZone, Utc};
-use hmac::{Hmac, KeyInit, Mac};
+use hmac::{Hmac, Mac};
 use monoize::store_billing::adapters::alipay::{
     AlipayCallbackError, canonical_alipay_parameters, verify_alipay_payment_callback,
 };
 use monoize::store_billing::adapters::stripe::{
     StripeWebhookError, parse_stripe_payment_event, verify_stripe_webhook,
 };
-use monoize::store_billing::adapters::wechat::wechat_signature_message;
+use monoize::store_billing::adapters::wechat::{
+    WechatCallbackError, WechatCredential, verify_wechat_payment_callback,
+    wechat_callback_signature_message, wechat_signature_message,
+};
+use monoize::store_billing::crypto::sign_rsa_sha256_base64;
 use monoize::store_billing::payment::{CheckoutAction, validate_return_url};
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::rand_core::OsRng;
@@ -91,6 +99,111 @@ fn wechat_signature_message_preserves_required_terminal_newline() {
             r#"{"mchid":"merchant-1"}"#,
         ),
         "POST\n/v3/pay/transactions/native\n1710000000\nnonce-1\n{\"mchid\":\"merchant-1\"}\n"
+    );
+}
+
+#[test]
+fn wechat_callback_verifies_platform_signature_and_decrypted_payment() {
+    let platform_private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let platform_public = RsaPublicKey::from(&platform_private);
+    let platform_private_pem = platform_private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let platform_public_pem = platform_public.to_public_key_pem(LineEnding::LF).unwrap();
+    let credential = WechatCredential::from_json(
+        serde_json::json!({
+            "merchant_id":"1900000109",
+            "app_id":"wx1234567890",
+            "api_v3_key":"0123456789abcdef0123456789abcdef",
+            "merchant_certificate_serial":"7777777777777777777777777777777777777777",
+            "merchant_private_key_pem":platform_private_pem.as_str(),
+            "platform_certificate_serial":"PLATFORM-CERTIFICATE-1",
+            "platform_public_key_pem":platform_public_pem
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let resource_nonce = *b"0123456789ab";
+    let associated_data = b"transaction";
+    let resource = serde_json::to_vec(&serde_json::json!({
+        "appid":"wx1234567890",
+        "mchid":"1900000109",
+        "out_trade_no":"LS-WECHAT-CALLBACK-1",
+        "transaction_id":"4200000001202608270001",
+        "trade_state":"SUCCESS",
+        "amount":{"total":1234,"currency":"CNY"}
+    }))
+    .unwrap();
+    let key = *b"0123456789abcdef0123456789abcdef";
+    let ciphertext = Aes256Gcm::new_from_slice(&key)
+        .unwrap()
+        .encrypt(
+            &Nonce::try_from(resource_nonce.as_slice()).unwrap(),
+            Payload {
+                msg: &resource,
+                aad: associated_data,
+            },
+        )
+        .unwrap();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "id":"event-wechat-1",
+        "event_type":"TRANSACTION.SUCCESS",
+        "resource":{
+            "original_type":"transaction",
+            "algorithm":"AEAD_AES_256_GCM",
+            "ciphertext":STANDARD.encode(ciphertext),
+            "associated_data":"transaction",
+            "nonce":"0123456789ab"
+        }
+    }))
+    .unwrap();
+    let timestamp = "1777000000";
+    let nonce = "callback-nonce-1";
+    let message = wechat_callback_signature_message(timestamp, nonce, &body);
+    let signature = sign_rsa_sha256_base64(platform_private_pem.as_str(), &message).unwrap();
+
+    let payment = verify_wechat_payment_callback(
+        &credential,
+        timestamp,
+        nonce,
+        "PLATFORM-CERTIFICATE-1",
+        &signature,
+        &body,
+        1_777_000_030,
+        300,
+    )
+    .unwrap();
+    assert_eq!(payment.provider_event_id, "event-wechat-1");
+    assert_eq!(payment.provider_transaction_id, "4200000001202608270001");
+    assert_eq!(payment.order_number, "LS-WECHAT-CALLBACK-1");
+    assert_eq!(payment.amount_minor, "1234");
+
+    assert_eq!(
+        verify_wechat_payment_callback(
+            &credential,
+            timestamp,
+            nonce,
+            "OTHER-CERTIFICATE",
+            &signature,
+            &body,
+            1_777_000_030,
+            300,
+        )
+        .unwrap_err(),
+        WechatCallbackError::Authentication
+    );
+    assert_eq!(
+        verify_wechat_payment_callback(
+            &credential,
+            timestamp,
+            nonce,
+            "PLATFORM-CERTIFICATE-1",
+            &signature,
+            &body,
+            1_777_000_301,
+            300,
+        )
+        .unwrap_err(),
+        WechatCallbackError::TimestampOutsideTolerance
     );
 }
 
@@ -331,14 +444,18 @@ fn alipay_callback_verifies_rsa2_and_exact_payment_fields() {
 #[test]
 fn wechat_native_checkout_builds_exact_v3_authorization() {
     let private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let public = RsaPublicKey::from(&private);
     let private_pem = private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let public_pem = public.to_public_key_pem(LineEnding::LF).unwrap();
     let credential = monoize::store_billing::adapters::wechat::WechatCredential::from_json(
         serde_json::json!({
             "merchant_id":"1900000109",
             "app_id":"wx1234567890",
             "api_v3_key":"0123456789abcdef0123456789abcdef",
             "merchant_certificate_serial":"7777777777777777777777777777777777777777",
-            "merchant_private_key_pem":private_pem.as_str()
+            "merchant_private_key_pem":private_pem.as_str(),
+            "platform_certificate_serial":"PLATFORM-CERTIFICATE-1",
+            "platform_public_key_pem":public_pem
         })
         .to_string()
         .as_bytes(),

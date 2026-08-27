@@ -44,6 +44,12 @@ Alipay 非同期通知 URL を `https://lynshen.org/api/store/callbacks/{channel
 
 Store Management で Alipay アプリ ID、販売者 ID、加盟店秘密鍵、Alipay 公開鍵、環境を保存します。Monoize は RSA2 を検証し、検証済みイベントを保存した後だけ `success` を返します。
 
+## WeChat Pay コールバックを設定する
+
+WeChat Pay 通知 URL を `https://lynshen.org/api/store/callbacks/{channel_id}` に設定します。`{channel_id}` を WeChat Pay Channel ID に置き換えます。
+
+加盟店 ID、アプリ ID、API v3 キー、加盟店証明書シリアル、加盟店秘密鍵、プラットフォーム証明書シリアル、プラットフォーム公開鍵を保存します。Monoize は履行前にプラットフォーム署名を検証し、支払いリソースを復号します。
+
 ## プランを購入する
 
 プランと支払い Channel を選択します。1 つのプランに複数の上限期間を同時に適用できます。期間には、5 時間、12 時間、日、週、月、または任意の整数時間を指定できます。

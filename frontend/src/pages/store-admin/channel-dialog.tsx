@@ -56,6 +56,8 @@ interface CredentialDraft {
   apiV3Key: string;
   certificateSerial: string;
   merchantPrivateKeyPem: string;
+  platformCertificateSerial: string;
+  platformPublicKeyPem: string;
   alipayPublicKeyPem: string;
   environment: "production" | "sandbox";
   liveMode: boolean;
@@ -73,6 +75,8 @@ const EMPTY_CREDENTIAL: CredentialDraft = {
   apiV3Key: "",
   certificateSerial: "",
   merchantPrivateKeyPem: "",
+  platformCertificateSerial: "",
+  platformPublicKeyPem: "",
   alipayPublicKeyPem: "",
   environment: "sandbox",
   liveMode: false,
@@ -123,6 +127,8 @@ function buildCredential(
       draft.apiV3Key,
       draft.certificateSerial,
       draft.merchantPrivateKeyPem,
+      draft.platformCertificateSerial,
+      draft.platformPublicKeyPem,
     ].map((value) => value.trim());
     if (values.some((value) => !value)) return null;
     return {
@@ -131,6 +137,8 @@ function buildCredential(
       api_v3_key: values[2],
       merchant_certificate_serial: values[3],
       merchant_private_key_pem: values[4],
+      platform_certificate_serial: values[5],
+      platform_public_key_pem: values[6],
     };
   }
   return null;
@@ -330,9 +338,11 @@ export function ChannelDialog({ open, channel, saving, onOpenChange, onSave, onS
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="grid gap-2"><Label htmlFor="store-wechat-merchant">{t("store.admin.channels.credential.merchantId")}</Label><Input id="store-wechat-merchant" className="min-h-11 rounded-xl" value={credential.merchantId} onChange={(event) => updateCredential("merchantId", event.target.value)} /></div>
                   <div className="grid gap-2"><Label htmlFor="store-wechat-app">{t("store.admin.channels.credential.appId")}</Label><Input id="store-wechat-app" className="min-h-11 rounded-xl" value={credential.appId} onChange={(event) => updateCredential("appId", event.target.value)} /></div>
-                  <div className="grid gap-2"><Label htmlFor="store-wechat-serial">{t("store.admin.channels.credential.certificateSerial")}</Label><Input id="store-wechat-serial" className="min-h-11 rounded-xl" value={credential.certificateSerial} onChange={(event) => updateCredential("certificateSerial", event.target.value)} /></div>
+                  <div className="grid gap-2"><Label htmlFor="store-wechat-serial">{t("store.admin.channels.credential.merchantCertificateSerial")}</Label><Input id="store-wechat-serial" className="min-h-11 rounded-xl" value={credential.certificateSerial} onChange={(event) => updateCredential("certificateSerial", event.target.value)} /></div>
                   <div className="grid gap-2"><Label htmlFor="store-wechat-v3">{t("store.admin.channels.credential.apiV3Key")}</Label><Input id="store-wechat-v3" className="min-h-11 rounded-xl" type="password" autoComplete="new-password" value={credential.apiV3Key} onChange={(event) => updateCredential("apiV3Key", event.target.value)} /></div>
                   <div className="grid gap-2 sm:col-span-2"><Label htmlFor="store-wechat-private">{t("store.admin.channels.credential.merchantPrivateKey")}</Label><Textarea id="store-wechat-private" className="min-h-28 rounded-xl font-mono text-xs" value={credential.merchantPrivateKeyPem} onChange={(event) => updateCredential("merchantPrivateKeyPem", event.target.value)} /></div>
+                  <div className="grid gap-2"><Label htmlFor="store-wechat-platform-serial">{t("store.admin.channels.credential.platformCertificateSerial")}</Label><Input id="store-wechat-platform-serial" className="min-h-11 rounded-xl" value={credential.platformCertificateSerial} onChange={(event) => updateCredential("platformCertificateSerial", event.target.value)} /></div>
+                  <div className="grid gap-2 sm:col-span-2"><Label htmlFor="store-wechat-platform-public">{t("store.admin.channels.credential.platformPublicKey")}</Label><Textarea id="store-wechat-platform-public" className="min-h-28 rounded-xl font-mono text-xs" value={credential.platformPublicKeyPem} onChange={(event) => updateCredential("platformPublicKeyPem", event.target.value)} /></div>
                 </div>
               )}
 

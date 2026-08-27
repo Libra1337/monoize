@@ -7,7 +7,9 @@ use serde_json::Value;
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::store_billing::crypto::sign_rsa_sha256_base64;
+use crate::store_billing::crypto::{
+    sign_rsa_sha256_base64, verify_rsa_sha256_base64, wechat_decrypt_resource,
+};
 use crate::store_billing::money::Currency;
 use crate::store_billing::payment::CheckoutAction;
 use crate::store_billing::payment::{AdapterError, CheckoutRequest};
@@ -23,6 +25,8 @@ pub struct WechatCredential {
     api_v3_key: String,
     merchant_certificate_serial: String,
     merchant_private_key_pem: String,
+    platform_certificate_serial: String,
+    platform_public_key_pem: String,
 }
 
 impl WechatCredential {
@@ -44,6 +48,8 @@ impl WechatCredential {
             &self.api_v3_key,
             &self.merchant_certificate_serial,
             &self.merchant_private_key_pem,
+            &self.platform_certificate_serial,
+            &self.platform_public_key_pem,
         ]
         .into_iter()
         .any(|value| value.trim().is_empty())
@@ -67,6 +73,11 @@ impl fmt::Debug for WechatCredential {
                 &self.merchant_certificate_serial,
             )
             .field("merchant_private_key_pem", &"[REDACTED]")
+            .field(
+                "platform_certificate_serial",
+                &self.platform_certificate_serial,
+            )
+            .field("platform_public_key_pem", &"[PUBLIC KEY]")
             .finish()
     }
 }
@@ -106,6 +117,28 @@ pub struct WechatCheckoutResult {
     pub action: CheckoutAction,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedWechatPayment {
+    pub provider_event_id: String,
+    pub provider_transaction_id: String,
+    pub order_number: String,
+    pub amount_minor: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum WechatCallbackError {
+    #[error("WeChat callback headers are invalid")]
+    InvalidHeaders,
+    #[error("WeChat callback timestamp is outside tolerance")]
+    TimestampOutsideTolerance,
+    #[error("WeChat callback authentication failed")]
+    Authentication,
+    #[error("WeChat callback resource is invalid")]
+    InvalidResource,
+    #[error("WeChat callback payment fields are invalid")]
+    InvalidPaymentEvent,
+}
+
 pub fn wechat_signature_message(
     method: &str,
     canonical_url: &str,
@@ -114,6 +147,140 @@ pub fn wechat_signature_message(
     body: &str,
 ) -> String {
     format!("{method}\n{canonical_url}\n{timestamp}\n{nonce}\n{body}\n")
+}
+
+pub fn wechat_callback_signature_message(timestamp: &str, nonce: &str, body: &[u8]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(timestamp.len() + nonce.len() + body.len() + 3);
+    message.extend_from_slice(timestamp.as_bytes());
+    message.push(b'\n');
+    message.extend_from_slice(nonce.as_bytes());
+    message.push(b'\n');
+    message.extend_from_slice(body);
+    message.push(b'\n');
+    message
+}
+
+pub fn verify_wechat_payment_callback(
+    credential: &WechatCredential,
+    timestamp: &str,
+    nonce: &str,
+    certificate_serial: &str,
+    signature: &str,
+    body: &[u8],
+    now_timestamp: i64,
+    tolerance_seconds: i64,
+) -> Result<VerifiedWechatPayment, WechatCallbackError> {
+    #[derive(Deserialize)]
+    struct Callback {
+        id: String,
+        event_type: String,
+        resource: EncryptedResource,
+    }
+
+    #[derive(Deserialize)]
+    struct EncryptedResource {
+        original_type: String,
+        algorithm: String,
+        ciphertext: String,
+        associated_data: String,
+        nonce: String,
+    }
+
+    #[derive(Deserialize)]
+    struct PaymentResource {
+        appid: String,
+        mchid: String,
+        out_trade_no: String,
+        transaction_id: String,
+        trade_state: String,
+        amount: PaymentAmount,
+    }
+
+    #[derive(Deserialize)]
+    struct PaymentAmount {
+        total: u64,
+        currency: String,
+    }
+
+    credential
+        .validate()
+        .map_err(|_| WechatCallbackError::Authentication)?;
+    if timestamp.is_empty()
+        || timestamp.len() > 20
+        || !timestamp.bytes().all(|byte| byte.is_ascii_digit())
+        || nonce.is_empty()
+        || nonce.len() > 256
+        || nonce.trim() != nonce
+        || certificate_serial != credential.platform_certificate_serial
+        || signature.is_empty()
+        || tolerance_seconds < 0
+    {
+        return Err(WechatCallbackError::Authentication);
+    }
+    let timestamp_value = timestamp
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or(WechatCallbackError::InvalidHeaders)?;
+    if now_timestamp.abs_diff(timestamp_value) > tolerance_seconds as u64 {
+        return Err(WechatCallbackError::TimestampOutsideTolerance);
+    }
+    let message = wechat_callback_signature_message(timestamp, nonce, body);
+    verify_rsa_sha256_base64(&credential.platform_public_key_pem, &message, signature)
+        .map_err(|_| WechatCallbackError::Authentication)?;
+
+    let callback: Callback =
+        serde_json::from_slice(body).map_err(|_| WechatCallbackError::InvalidResource)?;
+    if !valid_required(&callback.id) || callback.event_type != "TRANSACTION.SUCCESS" {
+        return Err(WechatCallbackError::InvalidPaymentEvent);
+    }
+    if callback.resource.original_type != "transaction"
+        || callback.resource.algorithm != "AEAD_AES_256_GCM"
+        || callback.resource.nonce.as_bytes().len() != 12
+        || callback.resource.ciphertext.is_empty()
+    {
+        return Err(WechatCallbackError::InvalidResource);
+    }
+    let api_v3_key: &[u8; 32] = credential
+        .api_v3_key
+        .as_bytes()
+        .try_into()
+        .map_err(|_| WechatCallbackError::Authentication)?;
+    let resource_nonce: &[u8; 12] = callback
+        .resource
+        .nonce
+        .as_bytes()
+        .try_into()
+        .map_err(|_| WechatCallbackError::InvalidResource)?;
+    let plaintext = wechat_decrypt_resource(
+        api_v3_key,
+        resource_nonce,
+        callback.resource.associated_data.as_bytes(),
+        &callback.resource.ciphertext,
+    )
+    .map_err(|_| WechatCallbackError::InvalidResource)?;
+    let payment: PaymentResource =
+        serde_json::from_slice(&plaintext).map_err(|_| WechatCallbackError::InvalidPaymentEvent)?;
+    if payment.mchid != credential.merchant_id
+        || payment.appid != credential.app_id
+        || !valid_required(&payment.out_trade_no)
+        || !valid_required(&payment.transaction_id)
+        || payment.trade_state != "SUCCESS"
+        || payment.amount.total == 0
+        || payment.amount.currency != "CNY"
+    {
+        return Err(WechatCallbackError::InvalidPaymentEvent);
+    }
+    Ok(VerifiedWechatPayment {
+        provider_event_id: callback.id,
+        provider_transaction_id: payment.transaction_id,
+        order_number: payment.out_trade_no,
+        amount_minor: payment.amount.total.to_string(),
+    })
+}
+
+fn valid_required(value: &str) -> bool {
+    !value.is_empty() && value.trim() == value
 }
 
 pub fn prepare_checkout_request(

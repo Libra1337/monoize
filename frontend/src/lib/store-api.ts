@@ -111,6 +111,8 @@ export type PaymentCredentialInput =
       api_v3_key: string;
       merchant_certificate_serial: string;
       merchant_private_key_pem: string;
+      platform_certificate_serial: string;
+      platform_public_key_pem: string;
     };
 
 export type PaymentCredentialPayload =
