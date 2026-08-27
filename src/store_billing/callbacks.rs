@@ -25,7 +25,7 @@ pub struct ApplyProviderEventInput {
     pub currency: Currency,
     pub body_digest: String,
     pub parsed_json: serde_json::Value,
-    pub raw_body: EncryptedSecret,
+    pub raw_body: Option<EncryptedSecret>,
     pub source_ip: Option<String>,
     pub user_agent: Option<String>,
     pub received_at: DateTime<Utc>,
@@ -64,6 +64,32 @@ impl PaymentCallbackStore {
         &self,
         input: ApplyProviderEventInput,
     ) -> Result<CallbackApplyResult, CallbackStoreError> {
+        if input.event_kind != "payment_succeeded" || input.raw_body.is_none() {
+            return Err(CallbackStoreError::InvalidInput);
+        }
+        self.apply_verified_payment_inner(input, None, true).await
+    }
+
+    pub(crate) async fn apply_verified_payment_fenced(
+        &self,
+        input: ApplyProviderEventInput,
+        owner_id: &str,
+        epoch: i64,
+        now: DateTime<Utc>,
+    ) -> Result<CallbackApplyResult, CallbackStoreError> {
+        if input.event_kind != "payment_query_succeeded" || input.raw_body.is_some() {
+            return Err(CallbackStoreError::InvalidInput);
+        }
+        self.apply_verified_payment_inner(input, Some((owner_id, epoch, now)), false)
+            .await
+    }
+
+    async fn apply_verified_payment_inner(
+        &self,
+        input: ApplyProviderEventInput,
+        fence: Option<(&str, i64, DateTime<Utc>)>,
+        fulfill_after_projection: bool,
+    ) -> Result<CallbackApplyResult, CallbackStoreError> {
         validate_input(&input)?;
         let tx = self.db.begin_write().await.map_err(storage)?;
         let lock = if self.db.is_postgres() {
@@ -71,10 +97,14 @@ impl PaymentCallbackStore {
         } else {
             ""
         };
+        if let Some((owner_id, epoch, now)) = fence {
+            validate_reconciliation_fence(&self.db, &*tx, owner_id, epoch, now, lock).await?;
+        }
         let row = tx
             .query_one(self.db.stmt(
                 &format!(
-                    "SELECT a.id AS attempt_id, a.order_id, a.credential_version_id,
+                    "SELECT a.id AS attempt_id, a.order_id, a.adapter_kind,
+                            a.credential_version_id,
                             a.state AS attempt_state, o.user_id, o.product_kind,
                             o.payment_state, o.fulfillment_state, o.payment_hold,
                             a.provider_object_id, a.merchant_account_identity,
@@ -119,9 +149,19 @@ impl PaymentCallbackStore {
             return Ok(result);
         }
 
+        let stored_provider_object = row_optional_string(&row, "provider_object_id")?;
+        let provider_object_matches = stored_provider_object
+            .as_deref()
+            .is_some_and(|value| value == input.provider_object_id)
+            || (stored_provider_object.is_none()
+                && matches!(
+                    row_string(&row, "adapter_kind")?.as_str(),
+                    "alipay" | "wechat"
+                )
+                && input.provider_object_id == input.order_number);
         let matches_contract = row_string(&row, "credential_version_id")?
             == input.credential_version_id
-            && row_string(&row, "provider_object_id")? == input.provider_object_id
+            && provider_object_matches
             && row_string(&row, "merchant_account_identity")? == input.merchant_account_identity
             && row_string(&row, "order_number")? == input.order_number
             && row_string(&row, "payment_minor")? == input.amount_minor
@@ -134,6 +174,7 @@ impl PaymentCallbackStore {
         }
 
         let payment_state = row_string(&row, "payment_state")?;
+        let payment_hold = row_i32(&row, "payment_hold")? != 0;
         let contract_version = row_i32(&row, "contract_version")?;
         let can_apply = payment_state == "unpaid"
             || (payment_state == "closed" && contract_version == 2)
@@ -149,11 +190,14 @@ impl PaymentCallbackStore {
         tx.execute(self.db.stmt(
             "UPDATE store_payment_attempts
              SET state = 'paid', failure_kind = NULL,
-                 provider_transaction_id = $2, paid_at = $3, updated_at = $3
+                 provider_transaction_id = $2,
+                 provider_object_id = COALESCE(provider_object_id, $3),
+                 paid_at = $4, updated_at = $4
              WHERE id = $1",
             vec![
                 input.attempt_id.clone().into(),
                 input.provider_transaction_id.clone().into(),
+                input.provider_object_id.clone().into(),
                 now.clone().into(),
             ],
         ))
@@ -195,7 +239,15 @@ impl PaymentCallbackStore {
         .map_err(storage)?;
         tx.commit().await.map_err(storage)?;
 
-        self.fulfill_paid_order(&input.order_id).await?;
+        if payment_hold || !fulfill_after_projection {
+            return Ok(CallbackApplyResult::Applied);
+        }
+        if let Some((owner_id, epoch, now)) = fence {
+            self.fulfill_paid_order_fenced(&input.order_id, owner_id, epoch, now)
+                .await?;
+        } else {
+            self.fulfill_paid_order(&input.order_id).await?;
+        }
         Ok(CallbackApplyResult::Applied)
     }
 
@@ -425,10 +477,22 @@ async fn insert_event<C: ConnectionTrait>(
                 input.body_digest.clone().into(),
                 input.parsed_json.to_string().into(),
                 projection_state.into(),
-                i32::from(input.raw_body.version).into(),
-                input.raw_body.key_id.clone().into(),
-                input.raw_body.nonce_base64.clone().into(),
-                input.raw_body.ciphertext_base64.clone().into(),
+                input
+                    .raw_body
+                    .as_ref()
+                    .map(|raw| i32::from(raw.version))
+                    .into(),
+                input.raw_body.as_ref().map(|raw| raw.key_id.clone()).into(),
+                input
+                    .raw_body
+                    .as_ref()
+                    .map(|raw| raw.nonce_base64.clone())
+                    .into(),
+                input
+                    .raw_body
+                    .as_ref()
+                    .map(|raw| raw.ciphertext_base64.clone())
+                    .into(),
                 input.source_ip.clone().into(),
                 input.user_agent.clone().into(),
                 timestamp(input.received_at).into(),
@@ -461,7 +525,10 @@ fn validate_input(input: &ApplyProviderEventInput) -> Result<(), CallbackStoreEr
     if Uuid::parse_str(&input.event_row_id).is_err()
         || input.credential_version_id.is_empty()
         || input.provider_event_id.is_empty()
-        || input.event_kind != "payment_succeeded"
+        || !matches!(
+            input.event_kind.as_str(),
+            "payment_succeeded" | "payment_query_succeeded"
+        )
         || input.order_id.is_empty()
         || input.attempt_id.is_empty()
         || input.provider_transaction_id.is_empty()
@@ -472,10 +539,14 @@ fn validate_input(input: &ApplyProviderEventInput) -> Result<(), CallbackStoreEr
             .merchant_account_identity
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
-        || input.raw_body.version == 0
-        || input.raw_body.key_id.is_empty()
-        || input.raw_body.nonce_base64.is_empty()
-        || input.raw_body.ciphertext_base64.is_empty()
+        || input.raw_body.as_ref().is_some_and(|raw| {
+            raw.version == 0
+                || raw.key_id.is_empty()
+                || raw.nonce_base64.is_empty()
+                || raw.ciphertext_base64.is_empty()
+        })
+        || (input.event_kind == "payment_succeeded" && input.raw_body.is_none())
+        || (input.event_kind == "payment_query_succeeded" && input.raw_body.is_some())
         || input.body_digest.len() != 64
         || !input
             .body_digest
@@ -496,6 +567,13 @@ fn currency_string(currency: Currency) -> &'static str {
 }
 
 fn row_string(row: &QueryResult, column: &str) -> Result<String, CallbackStoreError> {
+    row.try_get("", column).map_err(storage)
+}
+
+fn row_optional_string(
+    row: &QueryResult,
+    column: &str,
+) -> Result<Option<String>, CallbackStoreError> {
     row.try_get("", column).map_err(storage)
 }
 

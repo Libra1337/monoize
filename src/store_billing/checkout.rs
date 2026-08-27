@@ -179,6 +179,40 @@ impl CheckoutService {
                         replayed: true,
                     })
                 }
+                PaymentAttemptState::Created if attempt.adapter_kind == "stripe" => {
+                    let order = orders
+                        .get_order_for_user(user_id, order_id)
+                        .await?
+                        .ok_or(PaymentOrderError::OrderNotFound)?;
+                    let provider_result =
+                        match self.create_provider_checkout(&attempt, &order).await {
+                            Ok(result) => result,
+                            Err(error @ CheckoutError::ProviderRejected) => {
+                                orders
+                                    .fail_attempt(
+                                        user_id,
+                                        &attempt.id,
+                                        PaymentAttemptFailureKind::ProviderRejected,
+                                    )
+                                    .await?;
+                                return Err(error);
+                            }
+                            Err(error) => return Err(error),
+                        };
+                    let attempt = orders
+                        .present_attempt(
+                            user_id,
+                            &attempt.id,
+                            &provider_result.provider_object_id,
+                            &provider_result.action,
+                        )
+                        .await?;
+                    Ok(CheckoutResult {
+                        action: provider_result.action,
+                        attempt,
+                        replayed: true,
+                    })
+                }
                 PaymentAttemptState::Created => Err(CheckoutError::ProviderAmbiguous),
                 PaymentAttemptState::Failed => match attempt.failure_kind {
                     Some(PaymentAttemptFailureKind::ProviderRejected) => {

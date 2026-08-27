@@ -66,8 +66,32 @@ export function isDefiniteAttemptFailure(code: string): boolean {
   return code === "payment_configuration_unavailable" || code === "payment_provider_rejected";
 }
 
+export function rotatePendingAttemptAfterFailure(
+  storage: Storage,
+  pending: PendingCheckoutState,
+  code: string | null,
+): boolean {
+  if (!pending.orderId || code === null || !isDefiniteAttemptFailure(code)) return false;
+  rotatePendingAttempt(storage, pending);
+  return true;
+}
+
 export function isPaymentPollingTerminal(paymentState: string): boolean {
   return paymentState === "paid" || paymentState === "refunded" || paymentState === "closed";
+}
+
+export function shouldContinueCheckoutPolling(
+  state: {
+    paymentState: string;
+    fulfillmentState: string;
+    expiresAt: string;
+  },
+  now: number,
+): boolean {
+  return !isPaymentPollingTerminal(state.paymentState)
+    && state.fulfillmentState !== "fulfilled"
+    && state.fulfillmentState !== "failed"
+    && Date.parse(state.expiresAt) > now;
 }
 
 export function clearPendingCheckout(storage: Storage, orderId?: string): void {

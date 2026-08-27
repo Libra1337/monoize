@@ -3,8 +3,10 @@ import {
   checkoutFingerprint,
   isDefiniteAttemptFailure,
   isPaymentPollingTerminal,
+  rotatePendingAttemptAfterFailure,
   preparePendingCheckout,
   savePendingCheckout,
+  shouldContinueCheckoutPolling,
 } from "../src/pages/store/checkout-state";
 
 class MemoryStorage implements Storage {
@@ -49,10 +51,57 @@ describe("Store checkout idempotency state", () => {
     expect(isPaymentPollingTerminal("unpaid")).toBe(false);
   });
 
+  test("stops polling after payment succeeds while fulfillment remains pending", () => {
+    expect(shouldContinueCheckoutPolling({
+      paymentState: "paid",
+      fulfillmentState: "pending",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    }, Date.parse("2026-08-28T00:00:00.000Z"))).toBe(false);
+  });
+
   test("rotates attempt keys only for definite checkout failures", () => {
     expect(isDefiniteAttemptFailure("payment_configuration_unavailable")).toBe(true);
     expect(isDefiniteAttemptFailure("payment_provider_rejected")).toBe(true);
     expect(isDefiniteAttemptFailure("payment_provider_ambiguous")).toBe(false);
     expect(isDefiniteAttemptFailure("internal_error")).toBe(false);
+  });
+
+  test("rotates an attempt key only for the two allowed failures after order creation", () => {
+    for (const code of ["payment_configuration_unavailable", "payment_provider_rejected"]) {
+      const storage = new MemoryStorage();
+      const pending = preparePendingCheckout(storage, code);
+      pending.orderId = "order-1";
+      savePendingCheckout(storage, pending);
+      const previousKey = pending.attemptIdempotencyKey;
+
+      expect(rotatePendingAttemptAfterFailure(storage, pending, code)).toBe(true);
+      expect(pending.attemptIdempotencyKey).not.toBe(previousKey);
+    }
+  });
+
+  test("retains the attempt key for network, internal, ambiguous, and unrecognized failures", () => {
+    for (const code of [null, "internal_error", "payment_provider_ambiguous", "unexpected_error"]) {
+      const storage = new MemoryStorage();
+      const pending = preparePendingCheckout(storage, code ?? "network");
+      pending.orderId = "order-1";
+      savePendingCheckout(storage, pending);
+      const previousKey = pending.attemptIdempotencyKey;
+
+      expect(rotatePendingAttemptAfterFailure(storage, pending, code)).toBe(false);
+      expect(pending.attemptIdempotencyKey).toBe(previousKey);
+    }
+  });
+
+  test("retains the attempt key before an order ID exists", () => {
+    const storage = new MemoryStorage();
+    const pending = preparePendingCheckout(storage, "request-a");
+    const previousKey = pending.attemptIdempotencyKey;
+
+    expect(rotatePendingAttemptAfterFailure(
+      storage,
+      pending,
+      "payment_provider_rejected",
+    )).toBe(false);
+    expect(pending.attemptIdempotencyKey).toBe(previousKey);
   });
 });

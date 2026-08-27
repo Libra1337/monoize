@@ -12,7 +12,9 @@ use crate::store_billing::crypto::{
 };
 use crate::store_billing::money::Currency;
 use crate::store_billing::payment::CheckoutAction;
-use crate::store_billing::payment::{AdapterError, CheckoutRequest};
+use crate::store_billing::payment::{
+    AdapterError, CheckoutRequest, PaymentQuery, ProviderPaymentState, validate_payment_query,
+};
 
 const WECHAT_API_ORIGIN: &str = "https://api.mch.weixin.qq.com";
 
@@ -41,6 +43,13 @@ impl WechatCredential {
         &self.merchant_id
     }
 
+    pub fn platform_verifier(&self) -> Result<WechatPlatformVerifier, AdapterError> {
+        WechatPlatformVerifier::new(
+            self.platform_certificate_serial.clone(),
+            self.platform_public_key_pem.clone(),
+        )
+    }
+
     fn validate(&self) -> Result<(), AdapterError> {
         if [
             &self.merchant_id,
@@ -58,6 +67,38 @@ impl WechatCredential {
             return Err(AdapterError::InvalidConfiguration);
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct WechatPlatformVerifier {
+    certificate_serial: String,
+    public_key_pem: String,
+}
+
+impl WechatPlatformVerifier {
+    pub fn new(certificate_serial: String, public_key_pem: String) -> Result<Self, AdapterError> {
+        if !valid_required(&certificate_serial) || public_key_pem.trim().is_empty() {
+            return Err(AdapterError::InvalidConfiguration);
+        }
+        Ok(Self {
+            certificate_serial,
+            public_key_pem,
+        })
+    }
+
+    pub fn certificate_serial(&self) -> &str {
+        &self.certificate_serial
+    }
+}
+
+impl fmt::Debug for WechatPlatformVerifier {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WechatPlatformVerifier")
+            .field("certificate_serial", &self.certificate_serial)
+            .field("public_key_pem", &"[PUBLIC KEY]")
+            .finish()
     }
 }
 
@@ -115,6 +156,24 @@ impl fmt::Debug for PreparedWechatCheckout {
 pub struct WechatCheckoutResult {
     pub provider_object_id: String,
     pub action: CheckoutAction,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PreparedWechatPaymentQuery {
+    pub endpoint: String,
+    pub canonical_url: String,
+    pub authorization: Zeroizing<String>,
+}
+
+impl fmt::Debug for PreparedWechatPaymentQuery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedWechatPaymentQuery")
+            .field("endpoint", &self.endpoint)
+            .field("canonical_url", &self.canonical_url)
+            .field("authorization", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,6 +340,262 @@ pub fn verify_wechat_payment_callback(
 
 fn valid_required(value: &str) -> bool {
     !value.is_empty() && value.trim() == value
+}
+
+pub fn prepare_payment_query(
+    credential: &WechatCredential,
+    query: &PaymentQuery,
+    timestamp: i64,
+    nonce: &str,
+) -> Result<PreparedWechatPaymentQuery, AdapterError> {
+    credential.validate()?;
+    validate_payment_query(query)?;
+    if query.currency != Currency::CNY
+        || query.provider_object_id != query.merchant_order_number
+        || timestamp <= 0
+        || !valid_required(nonce)
+    {
+        return Err(AdapterError::InvalidRequest);
+    }
+
+    let mut endpoint =
+        Url::parse(WECHAT_API_ORIGIN).map_err(|_| AdapterError::InvalidConfiguration)?;
+    endpoint
+        .path_segments_mut()
+        .map_err(|_| AdapterError::InvalidConfiguration)?
+        .extend(["v3", "pay", "transactions", "out-trade-no"])
+        .push(&query.merchant_order_number);
+    endpoint
+        .query_pairs_mut()
+        .append_pair("mchid", &credential.merchant_id);
+    let canonical_url = format!(
+        "{}?{}",
+        endpoint.path(),
+        endpoint.query().ok_or(AdapterError::InvalidConfiguration)?
+    );
+    let timestamp_text = timestamp.to_string();
+    let message = wechat_signature_message("GET", &canonical_url, &timestamp_text, nonce, "");
+    let signature =
+        sign_rsa_sha256_base64(&credential.merchant_private_key_pem, message.as_bytes())
+            .map_err(|_| AdapterError::InvalidConfiguration)?;
+    let authorization = Zeroizing::new(format!(
+        "WECHATPAY2-SHA256-RSA2048 mchid=\"{}\",nonce_str=\"{}\",timestamp=\"{}\",serial_no=\"{}\",signature=\"{}\"",
+        credential.merchant_id,
+        nonce,
+        timestamp_text,
+        credential.merchant_certificate_serial,
+        signature,
+    ));
+    Ok(PreparedWechatPaymentQuery {
+        endpoint: endpoint.to_string(),
+        canonical_url,
+        authorization,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn parse_payment_query_response(
+    status: reqwest::StatusCode,
+    timestamp: &str,
+    nonce: &str,
+    certificate_serial: &str,
+    signature: &str,
+    body: &[u8],
+    credential: &WechatCredential,
+    query: &PaymentQuery,
+    now_timestamp: i64,
+    tolerance_seconds: i64,
+) -> Result<ProviderPaymentState, AdapterError> {
+    let verifier = credential.platform_verifier()?;
+    parse_payment_query_response_with_verifier(
+        status,
+        timestamp,
+        nonce,
+        certificate_serial,
+        signature,
+        body,
+        credential,
+        &verifier,
+        query,
+        now_timestamp,
+        tolerance_seconds,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn parse_payment_query_response_with_verifier(
+    status: reqwest::StatusCode,
+    timestamp: &str,
+    nonce: &str,
+    certificate_serial: &str,
+    signature: &str,
+    body: &[u8],
+    credential: &WechatCredential,
+    verifier: &WechatPlatformVerifier,
+    query: &PaymentQuery,
+    now_timestamp: i64,
+    tolerance_seconds: i64,
+) -> Result<ProviderPaymentState, AdapterError> {
+    #[derive(Deserialize)]
+    struct ErrorResponse {
+        code: String,
+        message: String,
+    }
+    #[derive(Deserialize)]
+    struct QueryResponse {
+        appid: String,
+        mchid: String,
+        out_trade_no: String,
+        transaction_id: Option<String>,
+        trade_state: String,
+        amount: QueryAmount,
+    }
+    #[derive(Deserialize)]
+    struct QueryAmount {
+        total: u64,
+        currency: String,
+    }
+
+    credential.validate()?;
+    let expected_amount = validate_payment_query(query)?;
+    if query.currency != Currency::CNY
+        || query.provider_object_id != query.merchant_order_number
+        || !valid_required(timestamp)
+        || timestamp.len() > 20
+        || !timestamp.bytes().all(|byte| byte.is_ascii_digit())
+        || !valid_required(nonce)
+        || nonce.len() > 256
+        || certificate_serial != verifier.certificate_serial
+        || signature.is_empty()
+        || tolerance_seconds < 0
+    {
+        return Err(AdapterError::Verification);
+    }
+    let response_timestamp = timestamp
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or(AdapterError::Verification)?;
+    if now_timestamp.abs_diff(response_timestamp) > tolerance_seconds as u64 {
+        return Err(AdapterError::Verification);
+    }
+    let message = wechat_callback_signature_message(timestamp, nonce, body);
+    verify_rsa_sha256_base64(&verifier.public_key_pem, &message, signature)
+        .map_err(|_| AdapterError::Verification)?;
+
+    if !status.is_success() {
+        let error: ErrorResponse =
+            serde_json::from_slice(body).map_err(|_| AdapterError::Verification)?;
+        if status == reqwest::StatusCode::NOT_FOUND
+            && error.code == "ORDER_NOT_EXIST"
+            && valid_required(&error.message)
+        {
+            return Ok(ProviderPaymentState::NotFound);
+        }
+        return Ok(ProviderPaymentState::Ambiguous);
+    }
+
+    let response: QueryResponse =
+        serde_json::from_slice(body).map_err(|_| AdapterError::Verification)?;
+    if response.appid != credential.app_id
+        || response.mchid != credential.merchant_id
+        || response.out_trade_no != query.merchant_order_number
+        || response.amount.total != expected_amount
+        || response.amount.currency != "CNY"
+    {
+        return Err(AdapterError::Verification);
+    }
+    match response.trade_state.as_str() {
+        "SUCCESS" => response
+            .transaction_id
+            .filter(|value| valid_required(value))
+            .map(|provider_transaction_id| ProviderPaymentState::Paid {
+                provider_transaction_id,
+            })
+            .ok_or(AdapterError::Verification),
+        "NOTPAY" | "USERPAYING" => Ok(ProviderPaymentState::Unpaid),
+        "CLOSED" | "REVOKED" | "PAYERROR" => Ok(ProviderPaymentState::Closed),
+        "REFUND" => Ok(ProviderPaymentState::Ambiguous),
+        _ => Ok(ProviderPaymentState::Ambiguous),
+    }
+}
+
+pub async fn query_payment(
+    client: &reqwest::Client,
+    credential: &WechatCredential,
+    query: &PaymentQuery,
+) -> Result<ProviderPaymentState, AdapterError> {
+    let verifier = credential.platform_verifier()?;
+    query_payment_with_verifiers(client, credential, std::slice::from_ref(&verifier), query).await
+}
+
+pub async fn query_payment_with_verifiers(
+    client: &reqwest::Client,
+    credential: &WechatCredential,
+    verifiers: &[WechatPlatformVerifier],
+    query: &PaymentQuery,
+) -> Result<ProviderPaymentState, AdapterError> {
+    if verifiers.is_empty() {
+        return Err(AdapterError::InvalidConfiguration);
+    }
+    let timestamp = Utc::now().timestamp();
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let prepared = prepare_payment_query(credential, query, timestamp, &nonce)?;
+    let response = client
+        .get(&prepared.endpoint)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            prepared.authorization.as_str(),
+        )
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    let status = response.status();
+    let response_timestamp = response
+        .headers()
+        .get("Wechatpay-Timestamp")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .ok_or(AdapterError::Verification)?;
+    let response_nonce = response
+        .headers()
+        .get("Wechatpay-Nonce")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .ok_or(AdapterError::Verification)?;
+    let response_serial = response
+        .headers()
+        .get("Wechatpay-Serial")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .ok_or(AdapterError::Verification)?;
+    let response_signature = response
+        .headers()
+        .get("Wechatpay-Signature")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .ok_or(AdapterError::Verification)?;
+    let verifier = verifiers
+        .iter()
+        .find(|verifier| verifier.certificate_serial == response_serial)
+        .ok_or(AdapterError::Verification)?;
+    let body = crate::bounded_response::read_response_body_with_limit(response, 65_536)
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    parse_payment_query_response_with_verifier(
+        status,
+        &response_timestamp,
+        &response_nonce,
+        &response_serial,
+        &response_signature,
+        &body,
+        credential,
+        verifier,
+        query,
+        Utc::now().timestamp(),
+        300,
+    )
 }
 
 pub fn prepare_checkout_request(

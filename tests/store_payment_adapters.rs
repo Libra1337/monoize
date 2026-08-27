@@ -11,11 +11,14 @@ use monoize::store_billing::adapters::stripe::{
     StripeWebhookError, parse_stripe_payment_event, verify_stripe_webhook,
 };
 use monoize::store_billing::adapters::wechat::{
-    WechatCallbackError, WechatCredential, verify_wechat_payment_callback,
+    WechatCallbackError, WechatCredential, WechatPlatformVerifier, verify_wechat_payment_callback,
     wechat_callback_signature_message, wechat_signature_message,
 };
 use monoize::store_billing::crypto::sign_rsa_sha256_base64;
-use monoize::store_billing::payment::{CheckoutAction, validate_return_url};
+use monoize::store_billing::money::Currency;
+use monoize::store_billing::payment::{
+    AdapterError, CheckoutAction, PaymentQuery, ProviderPaymentState, validate_return_url,
+};
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::rand_core::OsRng;
 use rsa::{RsaPrivateKey, RsaPublicKey};
@@ -204,6 +207,376 @@ fn wechat_callback_verifies_platform_signature_and_decrypted_payment() {
         )
         .unwrap_err(),
         WechatCallbackError::TimestampOutsideTolerance
+    );
+}
+
+#[test]
+fn stripe_payment_query_requires_the_exact_checkout_contract() {
+    let credential = monoize::store_billing::adapters::stripe::StripeCredential::from_json(
+        br#"{
+            "secret_key":"sk_test_query",
+            "publishable_key":"pk_test_query",
+            "webhook_signing_secret":"whsec_query",
+            "api_version":"2026-08-01",
+            "account_id":"acct_query",
+            "live_mode":false
+        }"#,
+    )
+    .unwrap();
+    let query = PaymentQuery {
+        provider_object_id: "cs_query_1".to_string(),
+        merchant_order_number: "LS-QUERY-1".to_string(),
+        amount_minor: "1234".to_string(),
+        currency: monoize::store_billing::money::Currency::CNY,
+    };
+    let prepared =
+        monoize::store_billing::adapters::stripe::prepare_payment_query(&credential, &query)
+            .unwrap();
+    assert_eq!(
+        prepared.endpoint,
+        "https://api.stripe.com/v1/checkout/sessions/cs_query_1"
+    );
+    assert_eq!(prepared.api_version, "2026-08-01");
+    assert!(!format!("{prepared:?}").contains("sk_test_query"));
+
+    let paid = br#"{
+        "id":"cs_query_1","object":"checkout.session","amount_total":1234,
+        "currency":"cny","client_reference_id":"LS-QUERY-1",
+        "payment_intent":"pi_query_1","payment_status":"paid","status":"complete"
+    }"#;
+    assert_eq!(
+        monoize::store_billing::adapters::stripe::parse_payment_query_response(
+            reqwest::StatusCode::OK,
+            paid,
+            &query,
+        )
+        .unwrap(),
+        ProviderPaymentState::Paid {
+            provider_transaction_id: "pi_query_1".to_string()
+        }
+    );
+    let not_found = br#"{"error":{"type":"invalid_request_error","code":"resource_missing","message":"missing"}}"#;
+    assert_eq!(
+        monoize::store_billing::adapters::stripe::parse_payment_query_response(
+            reqwest::StatusCode::NOT_FOUND,
+            not_found,
+            &query,
+        )
+        .unwrap(),
+        ProviderPaymentState::NotFound
+    );
+    assert_eq!(
+        monoize::store_billing::adapters::stripe::parse_payment_query_response(
+            reqwest::StatusCode::OK,
+            br#"{
+                "id":"cs_query_1","object":"checkout.session","amount_total":1235,
+                "currency":"cny","client_reference_id":"LS-QUERY-1",
+                "payment_intent":"pi_query_1","payment_status":"paid","status":"complete"
+            }"#,
+            &query,
+        )
+        .unwrap_err(),
+        AdapterError::Verification
+    );
+}
+
+#[test]
+fn alipay_payment_query_verifies_the_exact_signed_response_node() {
+    let private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let public = RsaPublicKey::from(&private);
+    let private_pem = private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let public_pem = public.to_public_key_pem(LineEnding::LF).unwrap();
+    let credential = monoize::store_billing::adapters::alipay::AlipayCredential::from_json(
+        serde_json::json!({
+            "app_id":"2026000000000001",
+            "seller_id":"2088000000000001",
+            "merchant_private_key_pem":private_pem.as_str(),
+            "alipay_public_key_pem":public_pem,
+            "environment":"sandbox"
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let query = PaymentQuery {
+        provider_object_id: "LS-ALIPAY-QUERY-1".to_string(),
+        merchant_order_number: "LS-ALIPAY-QUERY-1".to_string(),
+        amount_minor: "1234".to_string(),
+        currency: monoize::store_billing::money::Currency::CNY,
+    };
+    let prepared = monoize::store_billing::adapters::alipay::prepare_payment_query(
+        &credential,
+        &query,
+        Utc.with_ymd_and_hms(2026, 8, 27, 12, 0, 0).unwrap(),
+    )
+    .unwrap();
+    assert!(prepared.endpoint.contains("sandbox"));
+    assert_eq!(prepared.fields["method"], "alipay.trade.query");
+    assert!(prepared.fields["biz_content"].contains("LS-ALIPAY-QUERY-1"));
+
+    let node = r#"{"code":"10000","msg":"Success","out_trade_no":"LS-ALIPAY-QUERY-1","trade_no":"2026082722001003","trade_status":"TRADE_SUCCESS","total_amount":"12.34","seller_id":"2088000000000001"}"#;
+    let signature = sign_rsa_sha256_base64(private_pem.as_str(), node.as_bytes()).unwrap();
+    let response = format!(r#"{{"alipay_trade_query_response":{node},"sign":"{signature}"}}"#);
+    assert_eq!(
+        monoize::store_billing::adapters::alipay::parse_payment_query_response(
+            reqwest::StatusCode::OK,
+            response.as_bytes(),
+            &credential,
+            &query,
+        )
+        .unwrap(),
+        ProviderPaymentState::Paid {
+            provider_transaction_id: "2026082722001003".to_string()
+        }
+    );
+    let tampered = response.replace("12.34", "12.35");
+    assert_eq!(
+        monoize::store_billing::adapters::alipay::parse_payment_query_response(
+            reqwest::StatusCode::OK,
+            tampered.as_bytes(),
+            &credential,
+            &query,
+        )
+        .unwrap_err(),
+        AdapterError::Verification
+    );
+}
+
+#[test]
+fn wechat_payment_query_signs_request_and_verifies_response() {
+    let platform_private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let platform_public = RsaPublicKey::from(&platform_private);
+    let private_pem = platform_private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let public_pem = platform_public.to_public_key_pem(LineEnding::LF).unwrap();
+    let credential = WechatCredential::from_json(
+        serde_json::json!({
+            "merchant_id":"1900000109",
+            "app_id":"wx1234567890",
+            "api_v3_key":"0123456789abcdef0123456789abcdef",
+            "merchant_certificate_serial":"7777777777777777777777777777777777777777",
+            "merchant_private_key_pem":private_pem.as_str(),
+            "platform_certificate_serial":"PLATFORM-CERTIFICATE-QUERY",
+            "platform_public_key_pem":public_pem
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let query = PaymentQuery {
+        provider_object_id: "LS-WECHAT-QUERY-1".to_string(),
+        merchant_order_number: "LS-WECHAT-QUERY-1".to_string(),
+        amount_minor: "1234".to_string(),
+        currency: monoize::store_billing::money::Currency::CNY,
+    };
+    let prepared = monoize::store_billing::adapters::wechat::prepare_payment_query(
+        &credential,
+        &query,
+        1_777_000_000,
+        "query-nonce-1",
+    )
+    .unwrap();
+    assert_eq!(
+        prepared.canonical_url,
+        "/v3/pay/transactions/out-trade-no/LS-WECHAT-QUERY-1?mchid=1900000109"
+    );
+    assert!(!format!("{prepared:?}").contains("PRIVATE KEY"));
+
+    let body = serde_json::to_vec(&serde_json::json!({
+        "appid":"wx1234567890","mchid":"1900000109",
+        "out_trade_no":"LS-WECHAT-QUERY-1","transaction_id":"4200000001202608270004",
+        "trade_state":"SUCCESS","amount":{"total":1234,"currency":"CNY"}
+    }))
+    .unwrap();
+    let response_timestamp = "1777000010";
+    let response_nonce = "response-nonce-1";
+    let signature = sign_rsa_sha256_base64(
+        private_pem.as_str(),
+        &wechat_callback_signature_message(response_timestamp, response_nonce, &body),
+    )
+    .unwrap();
+    assert_eq!(
+        monoize::store_billing::adapters::wechat::parse_payment_query_response(
+            reqwest::StatusCode::OK,
+            response_timestamp,
+            response_nonce,
+            "PLATFORM-CERTIFICATE-QUERY",
+            &signature,
+            &body,
+            &credential,
+            &query,
+            1_777_000_020,
+            300,
+        )
+        .unwrap(),
+        ProviderPaymentState::Paid {
+            provider_transaction_id: "4200000001202608270004".to_string()
+        }
+    );
+
+    let refund_body = serde_json::to_vec(&serde_json::json!({
+        "appid":"wx1234567890","mchid":"1900000109",
+        "out_trade_no":"LS-WECHAT-QUERY-1","transaction_id":"4200000001202608270004",
+        "trade_state":"REFUND","amount":{"total":1234,"currency":"CNY"}
+    }))
+    .unwrap();
+    let refund_signature = sign_rsa_sha256_base64(
+        private_pem.as_str(),
+        &wechat_callback_signature_message(response_timestamp, response_nonce, &refund_body),
+    )
+    .unwrap();
+    assert_eq!(
+        monoize::store_billing::adapters::wechat::parse_payment_query_response(
+            reqwest::StatusCode::OK,
+            response_timestamp,
+            response_nonce,
+            "PLATFORM-CERTIFICATE-QUERY",
+            &refund_signature,
+            &refund_body,
+            &credential,
+            &query,
+            1_777_000_020,
+            300,
+        )
+        .unwrap(),
+        ProviderPaymentState::Ambiguous
+    );
+
+    let not_found_body = br#"{"code":"ORDER_NOT_EXIST","message":"order does not exist"}"#;
+    let not_found_signature = sign_rsa_sha256_base64(
+        private_pem.as_str(),
+        &wechat_callback_signature_message(response_timestamp, response_nonce, not_found_body),
+    )
+    .unwrap();
+    assert_eq!(
+        monoize::store_billing::adapters::wechat::parse_payment_query_response(
+            reqwest::StatusCode::NOT_FOUND,
+            response_timestamp,
+            response_nonce,
+            "PLATFORM-CERTIFICATE-QUERY",
+            &not_found_signature,
+            not_found_body,
+            &credential,
+            &query,
+            1_777_000_020,
+            300,
+        )
+        .unwrap(),
+        ProviderPaymentState::NotFound
+    );
+    assert_eq!(
+        monoize::store_billing::adapters::wechat::parse_payment_query_response(
+            reqwest::StatusCode::NOT_FOUND,
+            response_timestamp,
+            response_nonce,
+            "PLATFORM-CERTIFICATE-QUERY",
+            &signature,
+            not_found_body,
+            &credential,
+            &query,
+            1_777_000_020,
+            300,
+        )
+        .unwrap_err(),
+        AdapterError::Verification
+    );
+
+    let wrong_amount_body = serde_json::to_vec(&serde_json::json!({
+        "appid":"wx1234567890","mchid":"1900000109",
+        "out_trade_no":"LS-WECHAT-QUERY-1","transaction_id":"4200000001202608270004",
+        "trade_state":"SUCCESS","amount":{"total":1235,"currency":"CNY"}
+    }))
+    .unwrap();
+    let wrong_amount_signature = sign_rsa_sha256_base64(
+        private_pem.as_str(),
+        &wechat_callback_signature_message(response_timestamp, response_nonce, &wrong_amount_body),
+    )
+    .unwrap();
+    assert_eq!(
+        monoize::store_billing::adapters::wechat::parse_payment_query_response(
+            reqwest::StatusCode::OK,
+            response_timestamp,
+            response_nonce,
+            "PLATFORM-CERTIFICATE-QUERY",
+            &wrong_amount_signature,
+            &wrong_amount_body,
+            &credential,
+            &query,
+            1_777_000_020,
+            300,
+        )
+        .unwrap_err(),
+        AdapterError::Verification
+    );
+}
+
+#[test]
+fn wechat_payment_query_accepts_a_rotated_platform_verifier() {
+    let merchant_private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let merchant_private_pem = merchant_private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let old_platform_private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let old_platform_public = RsaPublicKey::from(&old_platform_private)
+        .to_public_key_pem(LineEnding::LF)
+        .unwrap();
+    let credential = WechatCredential::from_json(
+        serde_json::json!({
+            "merchant_id":"1900000109",
+            "app_id":"wx1234567890",
+            "api_v3_key":"0123456789abcdef0123456789abcdef",
+            "merchant_certificate_serial":"MERCHANT-CERTIFICATE-QUERY",
+            "merchant_private_key_pem":merchant_private_pem.as_str(),
+            "platform_certificate_serial":"PLATFORM-CERTIFICATE-OLD",
+            "platform_public_key_pem":old_platform_public
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let rotated_private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let rotated_private_pem = rotated_private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let rotated_public = RsaPublicKey::from(&rotated_private)
+        .to_public_key_pem(LineEnding::LF)
+        .unwrap();
+    let verifier =
+        WechatPlatformVerifier::new("PLATFORM-CERTIFICATE-NEW".to_string(), rotated_public)
+            .unwrap();
+    let query = PaymentQuery {
+        provider_object_id: "LS-WECHAT-ROTATED-1".to_string(),
+        merchant_order_number: "LS-WECHAT-ROTATED-1".to_string(),
+        amount_minor: "1234".to_string(),
+        currency: Currency::CNY,
+    };
+    let body = serde_json::to_vec(&serde_json::json!({
+        "appid":"wx1234567890","mchid":"1900000109",
+        "out_trade_no":"LS-WECHAT-ROTATED-1","transaction_id":"4200000001202608270099",
+        "trade_state":"SUCCESS","amount":{"total":1234,"currency":"CNY"}
+    }))
+    .unwrap();
+    let timestamp = "1777000010";
+    let nonce = "rotated-response-nonce";
+    let signature = sign_rsa_sha256_base64(
+        rotated_private_pem.as_str(),
+        &wechat_callback_signature_message(timestamp, nonce, &body),
+    )
+    .unwrap();
+
+    assert_eq!(
+        monoize::store_billing::adapters::wechat::parse_payment_query_response_with_verifier(
+            reqwest::StatusCode::OK,
+            timestamp,
+            nonce,
+            "PLATFORM-CERTIFICATE-NEW",
+            &signature,
+            &body,
+            &credential,
+            &verifier,
+            &query,
+            1_777_000_020,
+            300,
+        )
+        .unwrap(),
+        ProviderPaymentState::Paid {
+            provider_transaction_id: "4200000001202608270099".to_string()
+        }
     );
 }
 

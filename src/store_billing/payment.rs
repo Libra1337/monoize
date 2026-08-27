@@ -34,8 +34,28 @@ pub struct CheckoutRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaymentQuery {
-    pub provider_transaction_id: Option<String>,
+    pub provider_object_id: String,
     pub merchant_order_number: String,
+    pub amount_minor: String,
+    pub currency: Currency,
+}
+
+pub(crate) fn validate_payment_query(query: &PaymentQuery) -> Result<u64, AdapterError> {
+    if query.provider_object_id.is_empty()
+        || query.provider_object_id.len() > 255
+        || query.provider_object_id.trim() != query.provider_object_id
+        || query.merchant_order_number.is_empty()
+        || query.merchant_order_number.len() > 255
+        || query.merchant_order_number.trim() != query.merchant_order_number
+    {
+        return Err(AdapterError::InvalidRequest);
+    }
+    query
+        .amount_minor
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or(AdapterError::InvalidRequest)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

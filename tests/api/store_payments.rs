@@ -823,6 +823,19 @@ async fn alipay_callback_returns_success_after_verified_idempotent_fulfillment()
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{checkout}");
+    let attempt_id = checkout["attempt"]["id"].as_str().unwrap();
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute(ctx.state.db_pool.stmt(
+            "UPDATE store_payment_attempts
+             SET state = 'created', provider_object_id = NULL
+             WHERE id = $1",
+            vec![attempt_id.into()],
+        ))
+        .await
+        .unwrap();
 
     let mut fields = BTreeMap::from([
         ("notify_id".to_string(), "notify-api-alipay-1".to_string()),
@@ -876,7 +889,11 @@ async fn alipay_callback_returns_success_after_verified_idempotent_fulfillment()
         .db_pool
         .read()
         .query_one(ctx.state.db_pool.stmt(
-            "SELECT payment_state, fulfillment_state FROM store_orders WHERE id = $1",
+            "SELECT o.payment_state, o.fulfillment_state,
+                    a.state AS attempt_state, a.provider_object_id
+             FROM store_orders o
+             JOIN store_payment_attempts a ON a.order_id = o.id
+             WHERE o.id = $1",
             vec![order_id.into()],
         ))
         .await
@@ -887,6 +904,26 @@ async fn alipay_callback_returns_success_after_verified_idempotent_fulfillment()
         row.try_get::<String>("", "fulfillment_state").unwrap(),
         "fulfilled"
     );
+    assert_eq!(row.try_get::<String>("", "attempt_state").unwrap(), "paid");
+    assert_eq!(
+        row.try_get::<String>("", "provider_object_id").unwrap(),
+        order_number
+    );
+    let ledger_count: i64 = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT COUNT(*) AS value FROM billing_ledger
+             WHERE idempotency_key = $1",
+            vec![format!("store:fulfillment:{order_id}").into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "value")
+        .unwrap();
+    assert_eq!(ledger_count, 1);
 }
 
 #[tokio::test]
@@ -920,6 +957,19 @@ async fn wechat_callback_returns_official_success_after_verified_idempotent_fulf
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{checkout}");
+    let attempt_id = checkout["attempt"]["id"].as_str().unwrap();
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute(ctx.state.db_pool.stmt(
+            "UPDATE store_payment_attempts
+             SET state = 'created', provider_object_id = NULL
+             WHERE id = $1",
+            vec![attempt_id.into()],
+        ))
+        .await
+        .unwrap();
     let platform_private_pem = rotate_wechat_platform_credential(&ctx).await;
 
     let resource_nonce = *b"0123456789ab";
@@ -1049,7 +1099,11 @@ async fn wechat_callback_returns_official_success_after_verified_idempotent_fulf
         .db_pool
         .read()
         .query_one(ctx.state.db_pool.stmt(
-            "SELECT payment_state, fulfillment_state FROM store_orders WHERE id = $1",
+            "SELECT o.payment_state, o.fulfillment_state,
+                    a.state AS attempt_state, a.provider_object_id
+             FROM store_orders o
+             JOIN store_payment_attempts a ON a.order_id = o.id
+             WHERE o.id = $1",
             vec![order_id.into()],
         ))
         .await
@@ -1060,6 +1114,26 @@ async fn wechat_callback_returns_official_success_after_verified_idempotent_fulf
         row.try_get::<String>("", "fulfillment_state").unwrap(),
         "fulfilled"
     );
+    assert_eq!(row.try_get::<String>("", "attempt_state").unwrap(), "paid");
+    assert_eq!(
+        row.try_get::<String>("", "provider_object_id").unwrap(),
+        order_number
+    );
+    let ledger_count: i64 = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT COUNT(*) AS value FROM billing_ledger
+             WHERE idempotency_key = $1",
+            vec![format!("store:fulfillment:{order_id}").into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "value")
+        .unwrap();
+    assert_eq!(ledger_count, 1);
 }
 
 #[tokio::test]

@@ -24,7 +24,7 @@ pdf-extract = "0.10.0"
 regex = "1.12.2"
 reqwest = { version = "0.13.1", features = ["json", "stream", "rustls-native-certs", "query", "multipart", "rustls-no-provider", "charset", "http2", "system-proxy", "form"], default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = { version = "1.0.149", features = ["arbitrary_precision"] }
+serde_json = { version = "1.0.149", features = ["arbitrary_precision", "raw_value"] }
 rust_decimal = "1.39.0"
 sea-orm = { version = "1.1", features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls", "macros", "with-json", "with-chrono", "with-uuid", "with-rust_decimal"] }
 sea-orm-migration = { version = "1.1", features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls", "with-chrono", "with-rust_decimal"] }

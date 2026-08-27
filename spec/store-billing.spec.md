@@ -184,9 +184,13 @@ SB-O-9. Every provider mutation MUST use a stable idempotency key derived from t
 
 SB-O-10. A timeout, disconnect, HTTP 5xx, or unrecognized response after any provider request byte is sent MUST be ambiguous. The service MUST query provider state before retry.
 
-SB-O-10A. A repeated attempt request that finds the same attempt in `created` state MUST return HTTP `502` with code `payment_provider_ambiguous`. It MUST NOT send another checkout mutation.
+SB-O-10A. A repeated attempt request that finds the same attempt in `created` state MUST return HTTP `502` with code `payment_provider_ambiguous` unless SB-O-10B applies. It MUST NOT create a second local attempt or use a new Provider idempotency key.
 
-SB-O-11. Only a verified provider not-found result MAY permit a second checkout or refund mutation.
+SB-O-10B. Stripe does not expose a Checkout Session query key before Checkout Session creation returns. A repeated request for the same `created` Stripe attempt MUST resend the byte-equivalent creation contract with the same `Idempotency-Key`. Stripe idempotency replay is recovery of the first mutation. It MUST NOT count as a second checkout mutation. A successful replay MUST persist the returned Checkout Session on the original attempt.
+
+SB-O-10C. A Stripe idempotency replay that cannot load its historical credential or runtime configuration MUST return `payment_configuration_unavailable`. It MUST leave the original attempt in `created` state with no failure kind. A later replay with restored configuration MUST reuse the same local attempt and Provider idempotency contract.
+
+SB-O-11. Only a verified Provider `NotFound` result or a Provider rejection that proves no payment object was created MAY permit a second checkout or refund mutation. SB-A-10B is such proof for Stripe Checkout Session creation. A transport error, HTTP 5xx, or unrecognized response is not proof.
 
 SB-O-12. Checkout MUST return one action: `redirect`, `qr`, or `form`. Redirect and form action URLs MUST use HTTPS.
 
@@ -194,7 +198,7 @@ SB-O-12A. `POST /api/dashboard/store/orders/{id}/attempts` MUST commit the attem
 
 SB-O-12B. Missing runtime keys, missing public origin, credential decryption failure, credential mismatch, and unsupported adapter checkout MUST set a new attempt to `failed` with failure kind `configuration_unavailable`. The endpoint MUST return HTTP `503` with code `payment_configuration_unavailable`. A definite provider rejection MUST set the attempt to `failed` with failure kind `provider_rejected` and return HTTP `422` with code `payment_provider_rejected`. An ambiguous provider result MUST leave the attempt in `created` state and return HTTP `502` with code `payment_provider_ambiguous`. Replaying a failed attempt MUST return the error mapped by its persisted failure kind without another provider request.
 
-SB-O-12D. An order with a failed `provider_rejected` attempt MUST reject a new attempt key with HTTP `409` and code `provider_query_required`. Only a verified Provider `not_found` query result MAY clear this block. Rejection MUST occur before another checkout mutation.
+SB-O-12D. An order with a failed `provider_rejected` Alipay or WeChat attempt MUST reject a new attempt key with HTTP `409` and code `provider_query_required`. Only a verified Provider `NotFound` or `Closed` query result MAY clear this block. A Stripe rejection classified under SB-A-10B MUST permit a new attempt key because no Checkout Session exists. Rejection MUST occur before another checkout mutation.
 
 SB-O-12C. A first successful attempt response MUST use HTTP `201`. A repeated successful attempt response MUST use HTTP `200` and MUST return the persisted action without a provider request when the attempt is `presented` or `paid`.
 
@@ -232,6 +236,10 @@ SB-A-4. Alipay callback verification MUST check signature, App ID, seller identi
 
 SB-A-5. Alipay MUST support trade query, refund, refund query, and bill download. Automated dispute support MUST remain unavailable unless the merchant capability test proves it.
 
+SB-A-5A. Alipay payment query MUST call `alipay.trade.query` at the fixed gateway for the credential environment. It MUST sign App ID, method, format, charset, sign type, timestamp, version, and `biz_content` with RSA2. `biz_content` MUST contain the exact immutable order number.
+
+SB-A-5B. An Alipay query response MUST use HTTP `200` and contain `alipay_trade_query_response` plus `sign`. The service MUST verify `sign` over the exact raw response-node JSON bytes with the configured Alipay public key. Code `40004` with sub-code `ACQ.TRADE_NOT_EXIST` MUST map to `NotFound`. Code `10000` MUST match order number, seller ID, CNY amount, and one documented trade state before projection.
+
 SB-A-6. WeChat Pay MUST support Native QR and H5 payment using API v3.
 
 SB-A-6A. A WeChat Pay credential plaintext MUST be JSON with exactly `merchant_id`, `app_id`, `api_v3_key`, `merchant_certificate_serial`, `merchant_private_key_pem`, `platform_certificate_serial`, and `platform_public_key_pem`. Every field MUST be nonempty. `api_v3_key` MUST contain exactly 32 UTF-8 bytes. The merchant certificate fields MUST authorize outbound requests. The platform certificate fields MUST verify inbound callbacks.
@@ -248,7 +256,17 @@ SB-A-7B. A decrypted WeChat payment resource MUST contain the configured merchan
 
 SB-A-7C. A WeChat platform-verification credential version MAY differ from the payment attempt credential version after platform certificate rotation. The callback MUST bind the attempt by Channel, order number, adapter kind, and the exact merchant-account identity digest. The provider event `credential_version_id` MUST remain the attempt credential version. The allow-listed parsed event MUST record the platform-verification credential version ID.
 
+SB-A-7D. An Alipay or WeChat callback MAY bind one attempt whose Provider object ID equals the immutable order number or is null. The Channel, order number, adapter identity, credential identity, and merchant identity rules for that adapter MUST still match. The callback MUST reject zero matches or more than one match. A verified payment projection MUST set a null Provider object ID to the immutable order number.
+
 SB-A-8. WeChat Pay MUST support order query, refund notification, refund query, and bill download. Complaint automation MUST remain unavailable unless the merchant capability test proves it.
+
+SB-A-8A. WeChat payment query MUST send a signed GET to `/v3/pay/transactions/out-trade-no/{order_number}?mchid={merchant_id}`. The path segment and query value MUST use percent encoding. The signed canonical URL MUST equal the transmitted path and query.
+
+SB-A-8B. Every WeChat query response, including `ORDER_NOT_EXIST`, MUST pass platform certificate serial, timestamp, nonce, and RSA signature verification over the exact raw body. A successful response MUST match merchant ID, App ID, order number, CNY amount, and one documented trade state before projection.
+
+SB-A-8C. A WeChat query request MUST use the attempt's historical merchant signing credential. Response verification MUST select a stored platform certificate by `Wechatpay-Serial` from credential versions with the same Channel, adapter kind, and merchant-account identity. Platform certificate rotation MUST NOT replace the historical merchant signing credential.
+
+SB-A-8D. WeChat query state `REFUND` MUST map to `Ambiguous` until a verified refund event or refund query establishes the refund transition. It MUST NOT project payment success or start fulfillment.
 
 SB-A-9. Stripe MUST use hosted Checkout. Monoize MUST NOT collect or store card numbers.
 
@@ -257,6 +275,10 @@ SB-A-10. Stripe MUST create a Checkout Session with the Store order number as id
 SB-A-10A. Stripe Checkout creation MUST send `mode=payment`, one line item, `client_reference_id=order_number`, `metadata[store_attempt_id]=attempt_id`, `success_url`, and `cancel_url`. It MUST send the order number as `Idempotency-Key`. It MUST authenticate with the credential `secret_key`. It MUST reject a non-HTTPS action URL.
 
 SB-A-10B. A Stripe client-error response MUST be a definite rejection only when its JSON contains one nonempty `error.type` and one nonempty `error.message`. A redirect, server error, malformed body, or unrecognized body MUST be ambiguous.
+
+SB-A-10C. Stripe payment query MUST send an authenticated GET to `/v1/checkout/sessions/{provider_object_id}` with the credential API version. A response with `error.type = invalid_request_error` and `error.code = resource_missing` at HTTP `404` MUST map to `NotFound`. A successful Checkout Session MUST match its ID, client reference, amount, currency, and payment state before projection.
+
+SB-A-10D. A payment query contract MUST contain the exact Provider object ID, immutable merchant order number, integer minor amount, and currency. A missing or mismatched contract field MUST fail verification. It MUST NOT map to a Provider payment state.
 
 SB-A-11. Stripe Webhook verification MUST check signature, configured API version, Checkout Session, PaymentIntent, amount, currency, merchant account, and payment state.
 
@@ -414,9 +436,27 @@ SB-OP-0. The application MUST keep the periodic reconciliation scheduler disable
 
 SB-OP-1. Only the Store Primary MUST run reconciliation. The reconciler MUST acquire the `store_reconciler` row in `store_reconciliation_leases`. A lease MUST contain an opaque owner ID, a strictly increasing fencing epoch, and an expiry 90 seconds after acquisition. A second owner MUST NOT process work before expiry. Every reconciled fulfillment transaction MUST lock and validate the exact owner and fencing epoch before it changes financial state.
 
+SB-OP-1A. Each fenced transaction MUST compare lease expiry with the run start time plus the elapsed monotonic run duration. It MUST NOT reuse the unadjusted run start time after a Provider call. A run that reaches lease expiry without renewal MUST stop before another state change.
+
 SB-OP-2. After SB-OP-0 opens the scheduler gate, reconciliation MUST run once per minute. One fulfillment-recovery run MUST select at most 100 candidates ordered by `paid_at ASC, id ASC`.
 
 SB-OP-3. Reconciliation MUST scan expired presented attempts, paid/pending orders older than 30 seconds, paid/failed orders, refund-pending orders, and retryable provider events.
+
+SB-OP-3A. An expired presented-attempt scan MUST select at most 100 attempts with `provider_expires_at <= now`, ordered by `provider_expires_at ASC, id ASC`. It MUST query with the attempt's exact historical credential version and immutable order contract.
+
+SB-OP-3AA. The reconciler MUST also query `created` and `failed/provider_rejected` Alipay or WeChat attempts at least 30 seconds after their last update. These adapters MUST use the immutable merchant order number when no Provider object ID was persisted. Stripe attempts without a Checkout Session ID MUST use SB-O-10B and MUST NOT fabricate a query result.
+
+SB-OP-3B. A verified `Paid` query result MUST enter the same idempotent payment projection as a verified callback. The projection and any resulting fulfillment MUST validate the active reconciliation owner and fencing epoch before financial state changes.
+
+SB-OP-3C. A verified `NotFound`, `Unpaid`, or `Closed` result for an expired presented attempt MUST change that attempt from `presented` to `expired` and its order from `unpaid` to `closed` in one fenced transaction. A verified `Ambiguous` result, a verification failure, and a transport failure MUST leave both states unchanged. A contract-version 2 order that later receives verified payment MAY transition from `closed` to `paid` under SB-O-16.
+
+SB-OP-3D. A payment projected from a verified query MUST create one deterministic `payment_query_succeeded` provider-event identity per credential version, attempt, and Provider transaction. A repeated query MUST reuse that projection identity and MUST NOT fulfill twice.
+
+SB-OP-3E. A verified `NotFound` or `Closed` result for a `created` or `failed/provider_rejected` attempt MUST change that attempt to `expired`, clear `failure_kind`, and leave the order `unpaid`. This transition permits one new attempt. A verified `Unpaid` result MUST keep the attempt blocked because a Provider object may still accept payment.
+
+SB-OP-3F. A query verification error, credential error, unsupported recovery path, `Ambiguous` result, or blocked `Unpaid` result MUST upsert one open reconciliation case with deterministic ID `payment-query:{attempt_id}`. The case MUST store only an error category and non-secret attempt evidence. A definite terminal result MUST close the case.
+
+SB-OP-3G. An attempt with an open payment-query reconciliation case MUST NOT be queried again until at least 60 seconds after the case `updated_at` time.
 
 SB-OP-4. A paid order without a retry row becomes eligible 30 seconds after `paid_at`. After the first failed reconciliation, the next delay MUST be two minutes. After the second failure, the next delay MUST be ten minutes. After every later failure, the next delay MUST be one hour.
 

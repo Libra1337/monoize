@@ -17,7 +17,7 @@ use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
 use monoize::store_billing::money::Currency;
 use monoize::store_billing::order::{
-    CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
+    CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderStore,
 };
 use monoize::store_billing::payment::{AdapterError, CheckoutAction, CheckoutRequest};
 use sea_orm::ConnectionTrait;
@@ -31,8 +31,9 @@ struct RecordingProvider {
 }
 
 #[derive(Clone, Default)]
-struct AmbiguousProvider {
+struct RecoveringStripeProvider {
     calls: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<CheckoutRequest>>>,
 }
 
 #[derive(Clone, Default)]
@@ -110,14 +111,23 @@ impl CheckoutProvider for RejectedProvider {
 }
 
 #[async_trait]
-impl CheckoutProvider for AmbiguousProvider {
+impl CheckoutProvider for RecoveringStripeProvider {
     async fn create_stripe_checkout(
         &self,
         _credential: &StripeCredential,
-        _request: &CheckoutRequest,
+        request: &CheckoutRequest,
     ) -> Result<StripeCheckoutResult, AdapterError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(AdapterError::Ambiguous)
+        self.requests.lock().unwrap().push(request.clone());
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(AdapterError::Ambiguous);
+        }
+        Ok(StripeCheckoutResult {
+            provider_object_id: "cs_recovered".to_string(),
+            action: CheckoutAction::Redirect {
+                url: "https://checkout.stripe.com/c/pay_recovered".to_string(),
+                expires_at: "2026-08-27T01:00:00Z".to_string(),
+            },
+        })
     }
 }
 
@@ -474,9 +484,9 @@ async fn missing_payment_keys_fails_after_persisting_the_attempt() {
 }
 
 #[tokio::test]
-async fn ambiguous_created_attempt_is_not_sent_to_provider_twice() {
+async fn ambiguous_stripe_attempt_replays_the_same_provider_mutation() {
     let (db, key_ring, order_id) = checkout_fixture().await;
-    let provider = AmbiguousProvider::default();
+    let provider = RecoveringStripeProvider::default();
     let service = CheckoutService::new(
         db,
         Some(Arc::new(key_ring)),
@@ -495,14 +505,93 @@ async fn ambiguous_created_attempt_is_not_sent_to_provider_twice() {
             .unwrap_err(),
         CheckoutError::ProviderAmbiguous
     );
+    let recovered = service
+        .create_attempt("checkout-user", &order_id, input)
+        .await
+        .unwrap();
+    assert!(recovered.replayed);
+    assert_eq!(recovered.attempt.state.as_str(), "presented");
     assert_eq!(
-        service
-            .create_attempt("checkout-user", &order_id, input)
+        recovered.attempt.provider_object_id.as_deref(),
+        Some("cs_recovered")
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0], requests[1]);
+}
+
+#[tokio::test]
+async fn stripe_ambiguous_replay_keeps_attempt_blocking_when_configuration_is_unavailable() {
+    let (db, key_ring, order_id) = checkout_fixture().await;
+    let key_ring = Arc::new(key_ring);
+    let provider = RecoveringStripeProvider::default();
+    let configured = CheckoutService::new(
+        db.clone(),
+        Some(key_ring.clone()),
+        Some(Url::parse("https://lynshen.org").unwrap()),
+        Arc::new(provider.clone()),
+    );
+    let input = CreatePaymentAttemptInput {
+        idempotency_key: "checkout-ambiguous-config".to_string(),
+        expected_payment_method: Some("card".to_string()),
+    };
+
+    assert_eq!(
+        configured
+            .create_attempt("checkout-user", &order_id, input.clone())
             .await
             .unwrap_err(),
         CheckoutError::ProviderAmbiguous
     );
+    let unavailable = CheckoutService::new(
+        db.clone(),
+        None,
+        Some(Url::parse("https://lynshen.org").unwrap()),
+        Arc::new(provider.clone()),
+    );
+    assert_eq!(
+        unavailable
+            .create_attempt("checkout-user", &order_id, input.clone())
+            .await
+            .unwrap_err(),
+        CheckoutError::ConfigurationUnavailable
+    );
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    let row = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT state, failure_kind FROM store_payment_attempts
+             WHERE idempotency_key = $1",
+            vec![input.idempotency_key.clone().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.try_get::<String>("", "state").unwrap(), "created");
+    assert_eq!(
+        row.try_get::<Option<String>>("", "failure_kind").unwrap(),
+        None
+    );
+
+    let recovered = configured
+        .create_attempt("checkout-user", &order_id, input)
+        .await
+        .unwrap();
+    assert_eq!(recovered.attempt.state.as_str(), "presented");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    let attempt_count: i64 = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM store_payment_attempts WHERE order_id = $1",
+            vec![order_id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "value")
+        .unwrap();
+    assert_eq!(attempt_count, 1);
 }
 
 #[tokio::test]
@@ -547,9 +636,9 @@ async fn definite_provider_rejection_marks_attempt_failed() {
             )
             .await
             .unwrap_err(),
-        CheckoutError::Order(PaymentOrderError::ProviderQueryRequired)
+        CheckoutError::ProviderRejected
     );
-    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
     let row = db
         .read()
         .query_one(db.stmt(

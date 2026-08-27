@@ -205,7 +205,7 @@ pub async fn store_payment_callback(
             currency: payment.currency,
             body_digest,
             parsed_json,
-            raw_body,
+            raw_body: Some(raw_body),
             source_ip: source_ip.map(|ip| ip.to_string()),
             user_agent,
             received_at: Utc::now(),
@@ -326,7 +326,7 @@ async fn handle_alipay_callback(
             currency: Currency::CNY,
             body_digest,
             parsed_json,
-            raw_body,
+            raw_body: Some(raw_body),
             source_ip: source_ip.map(|ip| ip.to_string()),
             user_agent,
             received_at: Utc::now(),
@@ -476,7 +476,7 @@ async fn handle_wechat_callback(
             currency: Currency::CNY,
             body_digest,
             parsed_json,
-            raw_body,
+            raw_body: Some(raw_body),
             source_ip: source_ip.map(|ip| ip.to_string()),
             user_agent,
             received_at: Utc::now(),
@@ -599,7 +599,8 @@ async fn load_bound_order_attempt(
              FROM store_payment_attempts a
              JOIN store_orders o ON o.id = a.order_id
              WHERE a.channel_id = $1 AND a.credential_version_id = $2
-               AND a.provider_object_id = $3 AND o.order_number = $3
+               AND (a.provider_object_id = $3 OR a.provider_object_id IS NULL)
+               AND o.order_number = $3
              ORDER BY a.created_at DESC, a.id DESC
              LIMIT 2",
             vec![
@@ -636,7 +637,8 @@ async fn load_wechat_order_attempt(
              JOIN store_orders o ON o.id = a.order_id
              WHERE a.channel_id = $1 AND a.adapter_kind = 'wechat'
                AND a.merchant_account_identity = $2
-               AND a.provider_object_id = $3 AND o.order_number = $3
+               AND (a.provider_object_id = $3 OR a.provider_object_id IS NULL)
+               AND o.order_number = $3
              ORDER BY a.created_at DESC, a.id DESC
              LIMIT 2",
             vec![

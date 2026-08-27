@@ -45,12 +45,11 @@ import { StoreTabs, type StoreTab } from "./store-tabs";
 import {
   checkoutFingerprint,
   clearPendingCheckout,
-  isDefiniteAttemptFailure,
-  isPaymentPollingTerminal,
   loadPendingCheckout,
   preparePendingCheckout,
-  rotatePendingAttempt,
+  rotatePendingAttemptAfterFailure,
   savePendingCheckout,
+  shouldContinueCheckoutPolling,
 } from "./checkout-state";
 
 const CATALOG_KEY = "/api/dashboard/store/catalog";
@@ -400,10 +399,11 @@ export function StorePage() {
           (current = []) => [order, ...current.filter((item) => item.id !== order.id)],
           { revalidate: false },
         );
-        const paymentTerminal = isPaymentPollingTerminal(order.payment_state);
-        const fulfillmentTerminal = order.fulfillment_state === "fulfilled" || order.fulfillment_state === "failed";
-        const expired = Date.parse(order.expires_at) <= Date.now();
-        if (paymentTerminal || fulfillmentTerminal || expired) {
+        if (!shouldContinueCheckoutPolling({
+          paymentState: order.payment_state,
+          fulfillmentState: order.fulfillment_state,
+          expiresAt: order.expires_at,
+        }, Date.now())) {
           clearPendingCheckout(window.sessionStorage, order.id);
           await Promise.all([mutate(ORDERS_KEY), refreshUser(), mutateEntitlement()]);
           if (active) {
@@ -527,14 +527,13 @@ export function StorePage() {
     } catch (cause) {
       if (
         cause instanceof StoreApiError
-        && cause.code !== "payment_provider_ambiguous"
         && pendingCheckout.orderId
       ) {
-        if (cause.status === 404) {
-          clearPendingCheckout(window.sessionStorage, pendingCheckout.orderId);
-        } else if (isDefiniteAttemptFailure(cause.code)) {
-          rotatePendingAttempt(window.sessionStorage, pendingCheckout);
-        }
+        rotatePendingAttemptAfterFailure(
+          window.sessionStorage,
+          pendingCheckout,
+          cause.code,
+        );
       }
       toast.error(cause instanceof Error ? cause.message : t("store.ui.orderFailed"));
     } finally {

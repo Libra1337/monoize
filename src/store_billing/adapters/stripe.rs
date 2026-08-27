@@ -7,7 +7,9 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::store_billing::crypto::{CryptoError, verify_hmac_sha256_hex};
 use crate::store_billing::money::Currency;
 use crate::store_billing::payment::CheckoutAction;
-use crate::store_billing::payment::{AdapterError, CheckoutRequest};
+use crate::store_billing::payment::{
+    AdapterError, CheckoutRequest, PaymentQuery, ProviderPaymentState, validate_payment_query,
+};
 
 pub const STRIPE_CHECKOUT_SESSIONS_URL: &str = "https://api.stripe.com/v1/checkout/sessions";
 
@@ -103,6 +105,136 @@ impl fmt::Debug for PreparedStripeCheckout {
 pub struct StripeCheckoutResult {
     pub provider_object_id: String,
     pub action: CheckoutAction,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PreparedStripePaymentQuery {
+    pub endpoint: String,
+    pub authorization: Zeroizing<String>,
+    pub api_version: String,
+}
+
+impl fmt::Debug for PreparedStripePaymentQuery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedStripePaymentQuery")
+            .field("endpoint", &self.endpoint)
+            .field("authorization", &"[REDACTED]")
+            .field("api_version", &self.api_version)
+            .finish()
+    }
+}
+
+pub fn prepare_payment_query(
+    credential: &StripeCredential,
+    query: &PaymentQuery,
+) -> Result<PreparedStripePaymentQuery, AdapterError> {
+    credential.validate()?;
+    validate_payment_query(query)?;
+    let mut endpoint = url::Url::parse(STRIPE_CHECKOUT_SESSIONS_URL)
+        .map_err(|_| AdapterError::InvalidConfiguration)?;
+    endpoint
+        .path_segments_mut()
+        .map_err(|_| AdapterError::InvalidConfiguration)?
+        .push(&query.provider_object_id);
+    Ok(PreparedStripePaymentQuery {
+        endpoint: endpoint.to_string(),
+        authorization: Zeroizing::new(format!("Bearer {}", credential.secret_key)),
+        api_version: credential.api_version.clone(),
+    })
+}
+
+pub fn parse_payment_query_response(
+    status: reqwest::StatusCode,
+    body: &[u8],
+    query: &PaymentQuery,
+) -> Result<ProviderPaymentState, AdapterError> {
+    validate_payment_query(query)?;
+    if status == reqwest::StatusCode::NOT_FOUND {
+        #[derive(Deserialize)]
+        struct ErrorEnvelope {
+            error: QueryError,
+        }
+        #[derive(Deserialize)]
+        struct QueryError {
+            #[serde(rename = "type")]
+            kind: String,
+            code: String,
+            message: String,
+        }
+        let error: ErrorEnvelope =
+            serde_json::from_slice(body).map_err(|_| AdapterError::Ambiguous)?;
+        if error.error.kind == "invalid_request_error"
+            && error.error.code == "resource_missing"
+            && !error.error.message.trim().is_empty()
+        {
+            return Ok(ProviderPaymentState::NotFound);
+        }
+        return Err(AdapterError::Ambiguous);
+    }
+    if !status.is_success() {
+        return Err(AdapterError::Ambiguous);
+    }
+    #[derive(Deserialize)]
+    struct Session {
+        id: String,
+        object: String,
+        amount_total: u64,
+        currency: String,
+        client_reference_id: String,
+        payment_intent: Option<String>,
+        payment_status: String,
+        status: String,
+    }
+    let session: Session = serde_json::from_slice(body).map_err(|_| AdapterError::Verification)?;
+    let expected_currency = match query.currency {
+        Currency::CNY => "cny",
+        Currency::USD => "usd",
+    };
+    let expected_amount = validate_payment_query(query)?;
+    if session.id != query.provider_object_id
+        || session.object != "checkout.session"
+        || session.amount_total != expected_amount
+        || session.currency != expected_currency
+        || session.client_reference_id != query.merchant_order_number
+    {
+        return Err(AdapterError::Verification);
+    }
+    match (session.payment_status.as_str(), session.status.as_str()) {
+        ("paid", "complete") => session
+            .payment_intent
+            .filter(|value| !value.is_empty() && value.trim() == value)
+            .map(|provider_transaction_id| ProviderPaymentState::Paid {
+                provider_transaction_id,
+            })
+            .ok_or(AdapterError::Verification),
+        ("unpaid", "open") => Ok(ProviderPaymentState::Unpaid),
+        ("unpaid", "expired") => Ok(ProviderPaymentState::Closed),
+        _ => Ok(ProviderPaymentState::Ambiguous),
+    }
+}
+
+pub async fn query_payment(
+    client: &reqwest::Client,
+    credential: &StripeCredential,
+    query: &PaymentQuery,
+) -> Result<ProviderPaymentState, AdapterError> {
+    let prepared = prepare_payment_query(credential, query)?;
+    let response = client
+        .get(&prepared.endpoint)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            prepared.authorization.as_str(),
+        )
+        .header("Stripe-Version", prepared.api_version)
+        .send()
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    let status = response.status();
+    let body = crate::bounded_response::read_response_body_with_limit(response, 65_536)
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    parse_payment_query_response(status, &body, query)
 }
 
 pub fn prepare_checkout_request(

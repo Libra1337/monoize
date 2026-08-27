@@ -7,6 +7,7 @@ pub mod crypto;
 pub mod exchange_rate;
 pub mod models;
 pub mod money;
+pub mod operations;
 pub mod order;
 pub mod payment;
 pub mod poll_limit;

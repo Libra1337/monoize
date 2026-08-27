@@ -480,7 +480,8 @@ impl PaymentOrderStore {
         let rejected_count = count_value(
             tx.query_one(self.db.stmt(
                 "SELECT COUNT(*) AS value FROM store_payment_attempts
-                 WHERE order_id = $1 AND state = 'failed' AND failure_kind = 'provider_rejected'",
+                 WHERE order_id = $1 AND state = 'failed'
+                   AND failure_kind = 'provider_rejected' AND adapter_kind <> 'stripe'",
                 vec![order_id.into()],
             ))
             .await

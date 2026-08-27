@@ -131,12 +131,12 @@ fn success_event(order_id: &str, order_number: &str, attempt_id: &str) -> ApplyP
         currency: Currency::CNY,
         body_digest: "a".repeat(64),
         parsed_json: serde_json::json!({"type":"payment_succeeded"}),
-        raw_body: EncryptedSecret {
+        raw_body: Some(EncryptedSecret {
             version: 1,
             key_id: "callback-key".to_string(),
             nonce_base64: "bm9uY2U=".to_string(),
             ciphertext_base64: "Y2lwaGVydGV4dA==".to_string(),
-        },
+        }),
         source_ip: Some("203.0.113.1".to_string()),
         user_agent: Some("Stripe/1.0".to_string()),
         received_at: Utc::now(),
@@ -283,5 +283,70 @@ async fn callback_mismatch_is_persisted_for_manual_review_without_fulfillment() 
     assert_eq!(
         row.try_get::<String>("", "projection_state").unwrap(),
         "manual_review"
+    );
+}
+
+#[tokio::test]
+async fn verified_payment_during_hold_is_recorded_without_fulfillment() {
+    let (db, order_id, order_number, attempt_id) = setup().await;
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_orders SET payment_hold = 1 WHERE id = $1",
+            vec![order_id.clone().into()],
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        PaymentCallbackStore::new(db.clone())
+            .apply_verified_payment(success_event(&order_id, &order_number, &attempt_id))
+            .await
+            .unwrap(),
+        CallbackApplyResult::Applied
+    );
+    let order = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT payment_state, fulfillment_state FROM store_orders WHERE id = $1",
+            vec![order_id.clone().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let ledger_count = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM billing_ledger WHERE idempotency_key = $1",
+            vec![format!("store:fulfillment:{order_id}").into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        order.try_get::<String>("", "payment_state").unwrap(),
+        "paid"
+    );
+    assert_eq!(
+        order.try_get::<String>("", "fulfillment_state").unwrap(),
+        "pending"
+    );
+    assert_eq!(ledger_count.try_get::<i64>("", "value").unwrap(), 0);
+}
+
+#[tokio::test]
+async fn public_callback_projection_rejects_a_synthetic_query_event() {
+    let (db, order_id, order_number, attempt_id) = setup().await;
+    let mut event = success_event(&order_id, &order_number, &attempt_id);
+    event.event_kind = "payment_query_succeeded".to_string();
+    event.provider_event_id = "payment-query:forged".to_string();
+    event.raw_body = None;
+
+    assert_eq!(
+        PaymentCallbackStore::new(db)
+            .apply_verified_payment(event)
+            .await
+            .unwrap_err(),
+        monoize::store_billing::callbacks::CallbackStoreError::InvalidInput
     );
 }

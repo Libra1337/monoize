@@ -100,7 +100,8 @@ describe("Store user pages", () => {
     expect(storeSource).toContain("2_000");
     expect(storeSource).toContain("refreshUser()");
     expect(storeSource).toContain("entitlement.mutate()");
-    expect(storeSource).toContain("isPaymentPollingTerminal(order.payment_state)");
+    expect(storeSource).toContain("shouldContinueCheckoutPolling({");
+    expect(storeSource).toContain("paymentState: order.payment_state");
     expect(ordersSource).toContain("isPaymentPollingTerminal(current.payment_state)");
   });
 
@@ -110,7 +111,8 @@ describe("Store user pages", () => {
   });
 
   test("rotates an attempt key only after a definite provider failure", () => {
-    expect(storeSource).toContain("isDefiniteAttemptFailure(cause.code)");
+    expect(storeSource).toContain("rotatePendingAttemptAfterFailure(");
+    expect(storeSource).not.toContain("rotatePendingAttempt(");
   });
 
   test("renders an optimistic redemption status before the API finishes", () => {
