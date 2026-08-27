@@ -272,6 +272,8 @@ SB-EV-2. A callback body MUST be at most 131,072 bytes and MUST complete reading
 
 SB-EV-2A. A verified Stripe callback MUST return HTTP `200` with `{ "received": true }` after an applied, duplicate, or manual-review projection. Invalid signatures and invalid verified fields MUST return HTTP `400`. Missing callback keys MUST return HTTP `503`. A storage or fulfillment error MUST return HTTP `500`.
 
+SB-EV-2B. A verified Alipay callback MUST return HTTP `200` with UTF-8 text `success` after an applied or duplicate projection. A manual-review projection caused by an order, attempt, credential, merchant, amount, or currency mismatch MUST return a non-200 response. The request MUST use `application/x-www-form-urlencoded`. Each decoded field name MUST occur once. An invalid signature, `sign_type`, App ID, seller ID, order number, trade number, amount, or trade state MUST return a non-200 response. A non-200 response MUST NOT contain a credential or raw callback body.
+
 SB-EV-3. A callback event MUST store credential version, provider event identity, body digest, allow-listed verified fields, verification result, encrypted raw body, projection state, and state revision.
 
 SB-EV-4. `(credential_version_id, provider_event_id)` MUST be unique. One verified event MUST project to at most one order.

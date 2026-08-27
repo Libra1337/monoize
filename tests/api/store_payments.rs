@@ -5,6 +5,9 @@ use axum::http::{Method, Request, StatusCode};
 use chrono::{TimeZone, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use http_body_util::BodyExt;
+use monoize::store_billing::adapters::alipay::{
+    AlipayCheckoutResult, AlipayCredential, AlipayProduct, canonical_alipay_parameters,
+};
 use monoize::store_billing::adapters::stripe::{StripeCheckoutResult, StripeCredential};
 use monoize::store_billing::checkout::CheckoutProvider;
 use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
@@ -13,9 +16,13 @@ use monoize::store_billing::exchange_rate::{
 };
 use monoize::store_billing::payment::{AdapterError, CheckoutAction, CheckoutRequest};
 use monoize::users::UserRole;
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::rand_core::OsRng;
+use rsa::{RsaPrivateKey, RsaPublicKey};
 use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceExt;
@@ -42,6 +49,24 @@ impl CheckoutProvider for ApiCheckoutProvider {
             provider_object_id: "cs_api_checkout".to_string(),
             action: CheckoutAction::Redirect {
                 url: "https://checkout.stripe.com/c/pay_api".to_string(),
+                expires_at: "2026-08-27T18:00:00Z".to_string(),
+            },
+        })
+    }
+
+    async fn create_alipay_checkout(
+        &self,
+        _credential: &AlipayCredential,
+        request: &CheckoutRequest,
+        _product: AlipayProduct,
+        _notify_url: url::Url,
+    ) -> Result<AlipayCheckoutResult, AdapterError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(AlipayCheckoutResult {
+            provider_object_id: request.order_number.clone(),
+            action: CheckoutAction::Form {
+                action: "https://openapi.alipay.com/gateway.do".to_string(),
+                fields: vec![("out_trade_no".to_string(), request.order_number.clone())],
                 expires_at: "2026-08-27T18:00:00Z".to_string(),
             },
         })
@@ -160,6 +185,71 @@ async fn configure_checkout_runtime(ctx: &mut super::TestContext, provider: ApiC
     ctx.router = monoize::app::build_app(ctx.state.clone());
 }
 
+async fn configure_alipay_runtime(
+    ctx: &mut super::TestContext,
+    provider: ApiCheckoutProvider,
+) -> String {
+    let private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let public = RsaPublicKey::from(&private);
+    let private_pem = private.to_pkcs8_pem(LineEnding::LF).unwrap().to_string();
+    let public_pem = public.to_public_key_pem(LineEnding::LF).unwrap();
+    let ring = PaymentKeyRing::new(
+        PaymentKey::new("api-alipay-key", [29_u8; 32]).unwrap(),
+        vec![],
+    )
+    .unwrap();
+    let encrypted = ring
+        .encrypt(
+            "store_channel_credentials:api-alipay-credential:secret",
+            serde_json::json!({
+                "app_id":"2026000000000001",
+                "seller_id":"2088000000000001",
+                "merchant_private_key_pem":private_pem,
+                "alipay_public_key_pem":public_pem,
+                "environment":"sandbox"
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+    let account_digest = Sha256::digest(b"2088000000000001")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let write = ctx.state.db_pool.write().await;
+    write
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_channel_credentials
+                (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+                 ciphertext_base64, account_identity_digest, status, created_at)
+             VALUES ($1, 'store-channel-alipay', 'alipay', $2, $3, $4, $5, $6,
+                     'active', '2026-08-27T00:00:00Z')",
+            vec![
+                "api-alipay-credential".into(),
+                i32::from(encrypted.version).into(),
+                encrypted.key_id.into(),
+                encrypted.nonce_base64.into(),
+                encrypted.ciphertext_base64.into(),
+                account_digest.into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    write
+        .execute_unprepared(
+            "UPDATE store_payment_channels SET enabled = 1
+             WHERE id = 'store-channel-alipay'",
+        )
+        .await
+        .unwrap();
+    drop(write);
+    ctx.state.payment_keys = Some(Arc::new(ring));
+    ctx.state.payment_public_origin = Some(url::Url::parse("https://lynshen.org").unwrap());
+    ctx.state.checkout_provider = Arc::new(provider);
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+    private_pem
+}
+
 async fn session(ctx: &super::TestContext, username: &str) -> String {
     let user = ctx
         .state
@@ -250,6 +340,25 @@ async fn stripe_callback_request(
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
     (status, value)
+}
+
+async fn alipay_callback_request(ctx: &super::TestContext, body: &str) -> (StatusCode, String) {
+    let response = ctx
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/store/callbacks/store-channel-alipay")
+                .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
 }
 
 #[tokio::test]
@@ -433,6 +542,16 @@ async fn stripe_callback_is_public_verified_encrypted_and_idempotent() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
     assert_eq!(error["error"]["code"], "invalid_payment_callback");
 
+    let mut mismatched_event = event.clone();
+    mismatched_event["id"] = json!("evt_store_amount_mismatch");
+    mismatched_event["data"]["object"]["amount_total"] = json!(999);
+    let mismatched_body = serde_json::to_vec(&mismatched_event).unwrap();
+    let mismatched_signature = stripe_signature(b"whsec_api", timestamp, &mismatched_body);
+    let (status, response) =
+        stripe_callback_request(&ctx, &mismatched_body, &mismatched_signature).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response, json!({"received": true}));
+
     for _ in 0..2 {
         let (status, response) = stripe_callback_request(&ctx, &body, &signature).await;
         assert_eq!(status, StatusCode::OK, "{response}");
@@ -485,6 +604,101 @@ async fn stripe_callback_is_public_verified_encrypted_and_idempotent() {
         .try_get("", "value")
         .unwrap();
     assert_eq!(ledger_count, 1);
+}
+
+#[tokio::test]
+async fn alipay_callback_returns_success_after_verified_idempotent_fulfillment() {
+    let mut ctx = setup().await;
+    configure_payment_fixture(&mut ctx).await;
+    let private_pem = configure_alipay_runtime(&mut ctx, ApiCheckoutProvider::default()).await;
+    let user = session(&ctx, "alipay-callback-user").await;
+    let (_, order) = json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/orders",
+        &user,
+        Some("alipay-callback-order"),
+        Some(json!({
+            "product_id": "api-payment-product",
+            "payment_channel_id": "store-channel-alipay",
+            "payment_currency": "CNY"
+        })),
+    )
+    .await;
+    let order_id = order["id"].as_str().unwrap();
+    let order_number = order["order_number"].as_str().unwrap();
+    let (status, checkout) = json_request(
+        &ctx,
+        Method::POST,
+        &format!("/api/dashboard/store/orders/{order_id}/attempts"),
+        &user,
+        Some("alipay-callback-attempt"),
+        Some(json!({"expected_payment_method":"computer_web"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{checkout}");
+
+    let mut fields = BTreeMap::from([
+        ("notify_id".to_string(), "notify-api-alipay-1".to_string()),
+        ("app_id".to_string(), "2026000000000001".to_string()),
+        ("seller_id".to_string(), "2088000000000001".to_string()),
+        ("out_trade_no".to_string(), order_number.to_string()),
+        ("trade_no".to_string(), "2026082722001002".to_string()),
+        ("trade_status".to_string(), "TRADE_SUCCESS".to_string()),
+        ("total_amount".to_string(), "10.00".to_string()),
+        ("charset".to_string(), "utf-8".to_string()),
+        ("sign_type".to_string(), "RSA2".to_string()),
+    ]);
+    let canonical = canonical_alipay_parameters(&fields);
+    fields.insert(
+        "sign".to_string(),
+        monoize::store_billing::crypto::sign_rsa_sha256_base64(&private_pem, canonical.as_bytes())
+            .unwrap(),
+    );
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(fields.iter())
+        .finish();
+
+    for _ in 0..2 {
+        let (status, response) = alipay_callback_request(&ctx, &body).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(response, "success");
+    }
+    fields.insert(
+        "notify_id".to_string(),
+        "notify-api-alipay-mismatch".to_string(),
+    );
+    fields.insert("total_amount".to_string(), "10.01".to_string());
+    let mismatched_canonical = canonical_alipay_parameters(&fields);
+    fields.insert(
+        "sign".to_string(),
+        monoize::store_billing::crypto::sign_rsa_sha256_base64(
+            &private_pem,
+            mismatched_canonical.as_bytes(),
+        )
+        .unwrap(),
+    );
+    let mismatched_body = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(fields.iter())
+        .finish();
+    let (status, _) = alipay_callback_request(&ctx, &mismatched_body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let row = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT payment_state, fulfillment_state FROM store_orders WHERE id = $1",
+            vec![order_id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.try_get::<String>("", "payment_state").unwrap(), "paid");
+    assert_eq!(
+        row.try_get::<String>("", "fulfillment_state").unwrap(),
+        "fulfilled"
+    );
 }
 
 #[tokio::test]

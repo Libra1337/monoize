@@ -38,6 +38,12 @@ Monoize 仅在验证渠道支付后发放余额。管理员不能把未支付订
 
 订阅 `checkout.session.completed` 和 `checkout.session.async_payment_succeeded`。把端点签名密钥保存到加密的 Stripe 凭据中。
 
+## 配置支付宝回调
+
+把支付宝异步通知地址设为 `https://lynshen.org/api/store/callbacks/{channel_id}`。使用支付宝 Channel ID 替换 `{channel_id}`。
+
+在商店管理中保存支付宝应用 ID、卖家 ID、商户私钥、支付宝公钥和环境。Monoize 验证 RSA2，并仅在保存已验证事件后返回 `success`。
+
 ## 购买套餐
 
 选择套餐和支付 Channel。一个套餐可以同时应用多个额度周期。周期可以是 5 小时、12 小时、每日、每周、每月或自定义整数小时。

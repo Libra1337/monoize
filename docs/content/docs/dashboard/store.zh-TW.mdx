@@ -38,6 +38,12 @@ Monoize 僅在驗證 Channel 付款後發放餘額。管理員不能把未付款
 
 訂閱 `checkout.session.completed` 和 `checkout.session.async_payment_succeeded`。把端點簽章密鑰儲存在加密的 Stripe 憑證中。
 
+## 設定支付寶回呼
+
+把支付寶非同步通知網址設為 `https://lynshen.org/api/store/callbacks/{channel_id}`。使用支付寶 Channel ID 取代 `{channel_id}`。
+
+在商店管理中儲存支付寶應用程式 ID、賣家 ID、商戶私鑰、支付寶公鑰和環境。Monoize 驗證 RSA2，並只在儲存已驗證事件後回傳 `success`。
+
 ## 購買方案
 
 選擇方案和付款 Channel。一個方案可以同時套用多個額度週期。週期可以是 5 小時、12 小時、每日、每週、每月或自訂整數小時。

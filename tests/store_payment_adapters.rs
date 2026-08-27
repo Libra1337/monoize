@@ -1,6 +1,8 @@
 use chrono::{TimeZone, Utc};
 use hmac::{Hmac, KeyInit, Mac};
-use monoize::store_billing::adapters::alipay::canonical_alipay_parameters;
+use monoize::store_billing::adapters::alipay::{
+    AlipayCallbackError, canonical_alipay_parameters, verify_alipay_payment_callback,
+};
 use monoize::store_billing::adapters::stripe::{
     StripeWebhookError, parse_stripe_payment_event, verify_stripe_webhook,
 };
@@ -267,6 +269,63 @@ fn alipay_checkout_builds_a_signed_official_form() {
     assert_eq!(fields["method"], "alipay.trade.wap.pay");
     assert!(fields["biz_content"].contains("\"product_code\":\"QUICK_WAP_WAY\""));
     assert!(!format!("{credential:?}").contains("PRIVATE KEY"));
+}
+
+#[test]
+fn alipay_callback_verifies_rsa2_and_exact_payment_fields() {
+    let private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let public = RsaPublicKey::from(&private);
+    let private_pem = private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let public_pem = public.to_public_key_pem(LineEnding::LF).unwrap();
+    let credential = monoize::store_billing::adapters::alipay::AlipayCredential::from_json(
+        serde_json::json!({
+            "app_id":"2026000000000001",
+            "seller_id":"2088000000000001",
+            "merchant_private_key_pem":private_pem.as_str(),
+            "alipay_public_key_pem":public_pem,
+            "environment":"sandbox"
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let mut fields = BTreeMap::from([
+        ("notify_id".to_string(), "notify-alipay-1".to_string()),
+        ("app_id".to_string(), "2026000000000001".to_string()),
+        ("seller_id".to_string(), "2088000000000001".to_string()),
+        ("out_trade_no".to_string(), "LS-ALIPAY-1".to_string()),
+        ("trade_no".to_string(), "2026082722001001".to_string()),
+        ("trade_status".to_string(), "TRADE_SUCCESS".to_string()),
+        ("total_amount".to_string(), "12.34".to_string()),
+        ("charset".to_string(), "utf-8".to_string()),
+        ("sign_type".to_string(), "RSA2".to_string()),
+    ]);
+    let canonical = canonical_alipay_parameters(&fields);
+    fields.insert(
+        "sign".to_string(),
+        monoize::store_billing::crypto::sign_rsa_sha256_base64(&private_pem, canonical.as_bytes())
+            .unwrap(),
+    );
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(fields.iter())
+        .finish();
+
+    let payment = verify_alipay_payment_callback(&credential, body.as_bytes()).unwrap();
+    assert_eq!(payment.provider_event_id, "notify-alipay-1");
+    assert_eq!(payment.provider_transaction_id, "2026082722001001");
+    assert_eq!(payment.order_number, "LS-ALIPAY-1");
+    assert_eq!(payment.amount_minor, "1234");
+
+    let duplicate_body = format!("{body}&trade_no=duplicate");
+    assert_eq!(
+        verify_alipay_payment_callback(&credential, duplicate_body.as_bytes()).unwrap_err(),
+        AlipayCallbackError::InvalidEncoding
+    );
+    let tampered = body.replace("12.34", "12.35");
+    assert_eq!(
+        verify_alipay_payment_callback(&credential, tampered.as_bytes()).unwrap_err(),
+        AlipayCallbackError::Authentication
+    );
 }
 
 #[test]

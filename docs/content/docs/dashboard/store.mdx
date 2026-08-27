@@ -38,6 +38,12 @@ Set the Stripe Webhook endpoint to `https://lynshen.org/api/store/callbacks/{cha
 
 Subscribe to `checkout.session.completed` and `checkout.session.async_payment_succeeded`. Save the endpoint signing secret in the encrypted Stripe credential.
 
+## Configure Alipay callbacks
+
+Set the Alipay asynchronous notification URL to `https://lynshen.org/api/store/callbacks/{channel_id}`. Replace `{channel_id}` with the Alipay Channel ID.
+
+Save the Alipay App ID, seller ID, merchant private key, Alipay public key, and environment in Store Management. Monoize verifies RSA2 and returns `success` only after it stores the verified event.
+
 ## Buy a plan
 
 Select a plan and a payment Channel. Each plan can apply several quota windows at the same time. A window can use 5 hours, 12 hours, a day, a week, a month, or a custom whole-hour duration.

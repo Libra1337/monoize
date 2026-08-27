@@ -6,7 +6,7 @@ use serde::Deserialize;
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::store_billing::crypto::sign_rsa_sha256_base64;
+use crate::store_billing::crypto::{sign_rsa_sha256_base64, verify_rsa_sha256_base64};
 use crate::store_billing::money::Currency;
 use crate::store_billing::payment::{AdapterError, CheckoutAction, CheckoutRequest};
 
@@ -79,6 +79,24 @@ pub struct AlipayCheckoutResult {
     pub action: CheckoutAction,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedAlipayPayment {
+    pub provider_event_id: String,
+    pub provider_transaction_id: String,
+    pub order_number: String,
+    pub amount_minor: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AlipayCallbackError {
+    #[error("Alipay callback encoding is invalid")]
+    InvalidEncoding,
+    #[error("Alipay callback authentication failed")]
+    Authentication,
+    #[error("Alipay callback payment fields are invalid")]
+    InvalidPaymentEvent,
+}
+
 pub fn canonical_alipay_parameters(parameters: &BTreeMap<String, String>) -> String {
     parameters
         .iter()
@@ -88,6 +106,92 @@ pub fn canonical_alipay_parameters(parameters: &BTreeMap<String, String>) -> Str
         .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<_>>()
         .join("&")
+}
+
+pub fn verify_alipay_payment_callback(
+    credential: &AlipayCredential,
+    body: &[u8],
+) -> Result<VerifiedAlipayPayment, AlipayCallbackError> {
+    credential
+        .validate()
+        .map_err(|_| AlipayCallbackError::Authentication)?;
+    let encoded = std::str::from_utf8(body).map_err(|_| AlipayCallbackError::InvalidEncoding)?;
+    let mut parameters = BTreeMap::new();
+    for (key, value) in url::form_urlencoded::parse(encoded.as_bytes()) {
+        if key.is_empty()
+            || parameters
+                .insert(key.into_owned(), value.into_owned())
+                .is_some()
+        {
+            return Err(AlipayCallbackError::InvalidEncoding);
+        }
+    }
+    let signature = required_callback_field(&parameters, "sign")?;
+    if required_callback_field(&parameters, "sign_type")? != "RSA2" {
+        return Err(AlipayCallbackError::InvalidPaymentEvent);
+    }
+    let canonical = canonical_alipay_parameters(&parameters);
+    verify_rsa_sha256_base64(
+        &credential.alipay_public_key_pem,
+        canonical.as_bytes(),
+        signature,
+    )
+    .map_err(|_| AlipayCallbackError::Authentication)?;
+    if required_callback_field(&parameters, "app_id")? != credential.app_id
+        || required_callback_field(&parameters, "seller_id")? != credential.seller_id
+        || !matches!(
+            required_callback_field(&parameters, "trade_status")?,
+            "TRADE_SUCCESS" | "TRADE_FINISHED"
+        )
+        || parameters
+            .get("charset")
+            .is_some_and(|value| !value.eq_ignore_ascii_case("utf-8"))
+    {
+        return Err(AlipayCallbackError::InvalidPaymentEvent);
+    }
+    let amount_minor = parse_cny_minor(required_callback_field(&parameters, "total_amount")?)?;
+    Ok(VerifiedAlipayPayment {
+        provider_event_id: required_callback_field(&parameters, "notify_id")?.to_string(),
+        provider_transaction_id: required_callback_field(&parameters, "trade_no")?.to_string(),
+        order_number: required_callback_field(&parameters, "out_trade_no")?.to_string(),
+        amount_minor: amount_minor.to_string(),
+    })
+}
+
+fn required_callback_field<'a>(
+    parameters: &'a BTreeMap<String, String>,
+    name: &str,
+) -> Result<&'a str, AlipayCallbackError> {
+    parameters
+        .get(name)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty() && value.trim() == *value)
+        .ok_or(AlipayCallbackError::InvalidPaymentEvent)
+}
+
+fn parse_cny_minor(value: &str) -> Result<u64, AlipayCallbackError> {
+    let (whole, fraction) = value
+        .split_once('.')
+        .ok_or(AlipayCallbackError::InvalidPaymentEvent)?;
+    if whole.is_empty()
+        || whole.len() > 16
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || fraction.len() != 2
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(AlipayCallbackError::InvalidPaymentEvent);
+    }
+    let whole = whole
+        .parse::<u64>()
+        .map_err(|_| AlipayCallbackError::InvalidPaymentEvent)?;
+    let fraction = fraction
+        .parse::<u64>()
+        .map_err(|_| AlipayCallbackError::InvalidPaymentEvent)?;
+    whole
+        .checked_mul(100)
+        .and_then(|minor| minor.checked_add(fraction))
+        .filter(|minor| *minor > 0)
+        .ok_or(AlipayCallbackError::InvalidPaymentEvent)
 }
 
 pub fn prepare_checkout(

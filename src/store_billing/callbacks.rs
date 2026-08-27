@@ -66,22 +66,6 @@ impl PaymentCallbackStore {
     ) -> Result<CallbackApplyResult, CallbackStoreError> {
         validate_input(&input)?;
         let tx = self.db.begin_write().await.map_err(storage)?;
-        let duplicate = tx
-            .query_one(self.db.stmt(
-                "SELECT projection_state FROM store_provider_events
-                 WHERE credential_version_id = $1 AND provider_event_id = $2",
-                vec![
-                    input.credential_version_id.clone().into(),
-                    input.provider_event_id.clone().into(),
-                ],
-            ))
-            .await
-            .map_err(storage)?;
-        if duplicate.is_some() {
-            tx.commit().await.map_err(storage)?;
-            return Ok(CallbackApplyResult::Duplicate);
-        }
-
         let lock = if self.db.is_postgres() {
             " FOR UPDATE"
         } else {
@@ -109,6 +93,22 @@ impl PaymentCallbackStore {
             .await
             .map_err(storage)?
             .ok_or(CallbackStoreError::NotFound)?;
+
+        let duplicate = tx
+            .query_one(self.db.stmt(
+                "SELECT projection_state FROM store_provider_events
+                 WHERE credential_version_id = $1 AND provider_event_id = $2",
+                vec![
+                    input.credential_version_id.clone().into(),
+                    input.provider_event_id.clone().into(),
+                ],
+            ))
+            .await
+            .map_err(storage)?;
+        if duplicate.is_some() {
+            tx.commit().await.map_err(storage)?;
+            return Ok(CallbackApplyResult::Duplicate);
+        }
 
         let matches_contract = row_string(&row, "credential_version_id")?
             == input.credential_version_id
