@@ -19,6 +19,8 @@ Plan quota admission is an independent acceptance workstream inside Milestone 1.
 
 The logged-in Model Marketplace redesign is a separate subsystem. It is not part of this design.
 
+The payment design uses `QuantumNous/new-api` commit `8f6961c675932f406260ff0c218bc2aa0603e9b2` as an external architecture reference. That repository uses AGPL-3.0 while Monoize uses MIT. Monoize does not copy its source, comments, tests, UI code, or internal identifiers. Direct code reuse requires separate license review or a commercial license.
+
 ## 2. Approved Layout
 
 The user Store follows the approved option A layout.
@@ -256,6 +258,27 @@ The adapter creates a Checkout Session with the Store order number as the idempo
 The Stripe contract supports signed dispute Webhooks, Disputes API query, refunds, refund query, balance transactions, and settlement reconciliation. Provider event ID is the dispute-event idempotency key.
 
 The Store can show card, Apple Pay, Google Pay, and other methods that the Stripe account enables. LynShen does not claim that a method is available until Stripe returns it.
+
+### 5.4 Clean-Room Reference Rules
+
+The implementation independently reproduces only these observable architecture patterns from the external reference:
+
+- Compute effective Channel availability from explicit enablement, current compliance acknowledgement, complete credentials, callback configuration, product configuration, and adapter capability validation.
+- Return only effectively available payment methods to the Store. Each method includes adapter kind, public name, icon, supported currencies, minimum amount, and checkout action kinds.
+- Persist adapter kind, credential version, merchant account identity, and expected payment method on every attempt. A callback from another adapter or merchant account cannot mutate the order.
+- Treat Stripe Checkout completion, asynchronous payment success, asynchronous payment failure, and Session expiration as distinct provider events.
+- Validate custom success and cancel URLs against an exact configured HTTPS origin allow-list. A rejected URL does not create an order or provider Session.
+- Test missing credentials, incomplete Webhook configuration, adapter mismatch, duplicate callback, asynchronous event routing, and amount overflow.
+
+The local order and payment attempt commit before an outbound checkout mutation. If provider checkout creation fails or is ambiguous, the attempt remains queryable and follows the query-before-retry rules. Monoize does not create a provider checkout first and then attempt to persist its order.
+
+Stripe Webhook parsing enforces the configured Stripe API version. It does not ignore an API-version mismatch. Logs contain event ID, event type, order number, verification result, and body digest; they never contain the signature header or raw body.
+
+All amounts remain integer minor units or integer nano USD. The design does not adopt floating-point payment fields, floating-point ratios, or conversion through `float32` or `float64`.
+
+The design does not adopt a manual paid or manual completion endpoint. Admin recovery starts from verified provider evidence, a persisted callback, or a provider query.
+
+An implementation review records the external reference commit, lists the independently adopted behavior, and confirms that no AGPL source or test text appears in the change.
 
 ## 6. Configurable HTTP Adapter
 
@@ -535,6 +558,14 @@ The Payment Channels page shows:
 
 A Channel cannot be enabled until required configuration passes local validation.
 
+Payment compliance acknowledgement is versioned. The acknowledgement states that the operator controls the merchant account, registered callback, offered products, refund process, dispute process, and applicable customer notices. It is an operational confirmation, not a substitute for legal review.
+
+Confirmation requires an Admin dashboard session, reauthentication, explicit `confirmed = true`, and the current terms version. The database stores terms version, Admin ID, time, and source IP. API access tokens cannot confirm it.
+
+A terms-version change invalidates the prior acknowledgement and makes every production Channel effectively unavailable until a current confirmation exists. It does not disable callback verification, provider query, refunds, or reconciliation for historical attempts.
+
+Effective Channel availability is true only when the stored Channel is enabled, current compliance acknowledgement exists, required credential fields exist, callback verification is configured, at least one product and settlement currency are compatible, and adapter capability validation passes. Public Store responses return only effectively available Channels.
+
 A production Channel must provide either an automated settlement-report operation or a documented Admin upload format with signature or digest verification. A Channel without either path cannot pass the production gate.
 
 Saving credentials does not prove that the provider account is active. Alipay sandbox, Stripe test mode, and a controlled WeChat live test are separate release checks.
@@ -660,6 +691,11 @@ The dashboard session cookie remains HttpOnly, Secure, SameSite Strict, and Path
 Backend tests cover:
 
 - Official signature and callback test vectors.
+- Effective Channel availability truth table across enablement, compliance version, credentials, Webhook, product, currency, and capability state.
+- Compliance confirmation session requirement, reauthentication, audit fields, version invalidation, checkout disablement, and continued historical callback processing.
+- Trusted success and cancel URL origins, rejected foreign origins, and no local or provider order after rejection.
+- Stripe completed, asynchronous success, asynchronous failure, and expired event classification without API-version bypass.
+- Callback logs exclude raw body and signature header while retaining event ID and body digest.
 - Reduced rational rate parsing, both exchange directions, checked overflow, nano USD conversion, future and stale timestamps, configurable anomaly quarantine, startup failure, and one final rounding point.
 - Exchange response digest, parser version, consecutive-failure alerts, persisted pause, and restart without a first snapshot.
 - Rate warning and critical response clocks, four-hour decision, 24-hour escalation, dual-Admin compromise recovery, and missed-SLA incident review.
@@ -698,6 +734,7 @@ Backend tests cover:
 - Single Store Primary routing, Replica endpoint absence, persisted redemption cooldown, and invalid multi-process topology.
 - SQLite migration and isolated PostgreSQL migration.
 - Migration preflight rejection for every unknown or inconsistent legacy state.
+- A clean-room review records external commit `8f6961c675932f406260ff0c218bc2aa0603e9b2`, adopted behaviors, license difference, and a no-verbatim-copy check.
 
 Frontend tests cover:
 
@@ -749,6 +786,7 @@ A Channel can accept production purchases only after:
 12. Event-order and payment-hold acceptance tests pass for every enabled official adapter.
 13. Primary and backup Payment Operations owners, a distinct Finance Approver, primary and backup Rate Operations Admin assignments, and alert destinations are configured. Rate roles can reuse Payment Operations identities, but one user cannot propose and approve the same action.
 14. A tabletop drill passes for rate-source outage, suspected source compromise, unmatched payment, manual dispute, missed provider deadline, and owner escalation.
+15. Current payment compliance terms are acknowledged and the clean-room license review is recorded.
 
 Production deployment does not invent or embed merchant credentials. The operator must supply them through Admin or deployment configuration.
 
