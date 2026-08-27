@@ -42,6 +42,8 @@ pub enum StoreBillingError {
     RedemptionCodeExpired,
     #[error("redemption code is used")]
     RedemptionCodeUsed,
+    #[error("payment hold blocks Store mutations")]
+    PaymentHold,
     #[error("Store storage failed: {0}")]
     Storage(String),
     #[error("Store record was not found")]
@@ -675,7 +677,8 @@ impl StoreBillingStore {
             .query_one(self.db.stmt(
                 "SELECT id, user_id, product_id, product_name, starts_at, ends_at,
                         cny_per_usd, group_ids, quota_json, source_kind, source_id
-                 FROM store_plan_entitlements WHERE user_id = $1 AND ends_at > $2",
+                 FROM store_plan_entitlements
+                 WHERE user_id = $1 AND ends_at > $2 AND suspended_at IS NULL",
                 vec![user_id.into(), timestamp(Utc::now()).into()],
             ))
             .await
@@ -891,6 +894,19 @@ impl StoreBillingStore {
         } else {
             ""
         };
+        let hold = tx
+            .query_one(self.db.stmt(
+                &format!(
+                    "SELECT active FROM store_balance_holds
+                     WHERE user_id = $1 AND active = 1{lock}"
+                ),
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        if hold.is_some() {
+            return Err(StoreBillingError::PaymentHold);
+        }
         let row = tx
             .query_one(self.db.stmt(
                 &format!("{} WHERE code_digest = $1{lock}", redemption_select()),

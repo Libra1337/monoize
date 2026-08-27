@@ -62,6 +62,8 @@ const PAYMENT_TABLES: &[&str] = &[
     "store_refunds",
     "store_order_reward_recoveries",
     "store_order_recovery_claims",
+    "store_settlement_reports",
+    "store_settlement_lines",
     "store_balance_holds",
     "store_reconciliation_leases",
     "store_reconciliation_cases",
@@ -116,6 +118,8 @@ fn up_statements(backend: DbBackend) -> Vec<String> {
 fn sqlite_rebuild_statements() -> Vec<String> {
     vec![
         "ALTER TABLE store_products ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0)".to_string(),
+        "ALTER TABLE store_plan_entitlements ADD COLUMN suspended_at TEXT".to_string(),
+        "ALTER TABLE store_plan_entitlements ADD COLUMN suspension_reason TEXT".to_string(),
         "CREATE TABLE store_payment_channels_v2 (
             id TEXT NOT NULL PRIMARY KEY,
             adapter_kind TEXT NOT NULL,
@@ -178,6 +182,8 @@ fn sqlite_rebuild_statements() -> Vec<String> {
 fn postgres_rebuild_statements() -> Vec<String> {
     vec![
         "ALTER TABLE store_products ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0)".to_string(),
+        "ALTER TABLE store_plan_entitlements ADD COLUMN suspended_at TEXT".to_string(),
+        "ALTER TABLE store_plan_entitlements ADD COLUMN suspension_reason TEXT".to_string(),
         "ALTER TABLE store_payment_channels RENAME TO store_payment_channels_legacy".to_string(),
         "CREATE TABLE store_payment_channels (
             id TEXT NOT NULL PRIMARY KEY,
@@ -344,15 +350,31 @@ fn common_table_statements() -> Vec<String> {
             id TEXT NOT NULL PRIMARY KEY, order_id TEXT NOT NULL,
             original_nano_usd TEXT NOT NULL, reserved_nano_usd TEXT NOT NULL DEFAULT '0',
             recovered_nano_usd TEXT NOT NULL DEFAULT '0', debit_ledger_key TEXT,
-            release_ledger_key TEXT, state TEXT NOT NULL,
+            release_ledger_key TEXT,
+            state TEXT NOT NULL CHECK (state IN ('open', 'reserved', 'recovered', 'released')),
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         )",
         "CREATE TABLE store_order_recovery_claims (
             id TEXT NOT NULL PRIMARY KEY, recovery_id TEXT NOT NULL,
             credential_version_id TEXT NOT NULL, provider_claim_id TEXT NOT NULL,
             provider_event_row_id TEXT, kind TEXT NOT NULL CHECK (kind IN ('refund', 'dispute', 'chargeback')),
-            amount_nano_usd TEXT NOT NULL, state TEXT NOT NULL,
+            amount_nano_usd TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('open', 'resolved', 'consumed')),
             created_at TEXT NOT NULL, resolved_at TEXT
+        )",
+        "CREATE TABLE store_settlement_reports (
+            id TEXT NOT NULL PRIMARY KEY, channel_id TEXT NOT NULL,
+            credential_version_id TEXT NOT NULL, provider_report_id TEXT NOT NULL,
+            report_date TEXT NOT NULL, body_digest TEXT NOT NULL, imported_at TEXT NOT NULL
+        )",
+        "CREATE TABLE store_settlement_lines (
+            id TEXT NOT NULL PRIMARY KEY, report_id TEXT NOT NULL,
+            credential_version_id TEXT NOT NULL, provider_line_id TEXT NOT NULL,
+            class TEXT NOT NULL CHECK (class IN ('gross', 'refund', 'dispute', 'fee',
+                                                'tax', 'currency_conversion', 'net')),
+            amount_minor TEXT NOT NULL,
+            currency TEXT NOT NULL CHECK (currency IN ('CNY', 'USD')),
+            provider_transaction_id TEXT, matched_order_id TEXT, created_at TEXT NOT NULL
         )",
         "CREATE TABLE store_balance_holds (
             user_id TEXT NOT NULL PRIMARY KEY, active INTEGER NOT NULL CHECK (active IN (0, 1)),
@@ -438,6 +460,8 @@ fn common_index_statements() -> Vec<String> {
         "CREATE UNIQUE INDEX uq_store_recovery_order ON store_order_reward_recoveries (order_id)",
         "CREATE UNIQUE INDEX uq_store_recovery_claim_provider ON store_order_recovery_claims (credential_version_id, provider_claim_id, kind)",
         "CREATE UNIQUE INDEX uq_store_recovery_claim_event ON store_order_recovery_claims (provider_event_row_id, kind)",
+        "CREATE UNIQUE INDEX uq_store_settlement_report_provider ON store_settlement_reports (credential_version_id, provider_report_id)",
+        "CREATE UNIQUE INDEX uq_store_settlement_line_provider ON store_settlement_lines (credential_version_id, provider_line_id)",
         "CREATE UNIQUE INDEX uq_store_quota_request ON store_quota_reservations (request_id)",
         "CREATE INDEX idx_store_provider_events_projection ON store_provider_events (projection_state, received_at, id)",
         "CREATE INDEX idx_store_refunds_state ON store_refunds (state, updated_at, id)",

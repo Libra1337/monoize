@@ -13,6 +13,8 @@ pub mod payment;
 pub mod poll_limit;
 pub mod reauth;
 pub mod reconciliation;
+pub mod recovery;
+pub mod settlement;
 pub mod state_machine;
 pub mod store;
 pub mod webhooks;

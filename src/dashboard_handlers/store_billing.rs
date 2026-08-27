@@ -194,6 +194,11 @@ fn map_store_error(error: StoreBillingError) -> AppError {
             "redemption_code_used",
             "redemption code is used",
         ),
+        StoreBillingError::PaymentHold => (
+            StatusCode::LOCKED,
+            "payment_hold",
+            "payment hold blocks Store mutations",
+        ),
         StoreBillingError::NotFound => (
             StatusCode::NOT_FOUND,
             "not_found",
@@ -258,6 +263,11 @@ fn map_payment_order_error(error: PaymentOrderError) -> AppError {
             StatusCode::TOO_MANY_REQUESTS,
             "open_order_limit",
             "too many unpaid Store orders exist",
+        ),
+        PaymentOrderError::PaymentHold => (
+            StatusCode::LOCKED,
+            "payment_hold",
+            "payment hold blocks Store purchases",
         ),
         PaymentOrderError::ActiveAttemptExists => (
             StatusCode::CONFLICT,

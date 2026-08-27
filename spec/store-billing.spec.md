@@ -348,15 +348,23 @@ SB-RC-7. A fulfilled balance refund MUST reserve the original credited nano USD 
 
 SB-RC-8. Refund, dispute, and chargeback claims for one order MUST share one economic recovery row.
 
+SB-RC-8A. An economic recovery state MUST be `open`, `reserved`, `recovered`, or `released`. A recovery claim state MUST be `open`, `resolved`, or `consumed`. A refund claim MUST be `open` while its refund is `created` or `pending`, `resolved` after definite rejection, and `consumed` after verified success.
+
+SB-RC-8B. Starting the same refund idempotency key again MUST return the existing refund without another balance mutation. Starting a different refund while the order is not `paid` MUST fail before a Provider request.
+
 SB-RC-9. Database constraints MUST enforce nonnegative values and `reserved + recovered <= original` across concurrent claims.
 
 SB-RC-10. Recovery claim identity and recovery ledger keys MUST be unique. One original reward MUST be debited at most once.
+
+SB-RC-10A. Reuse of `(credential_version_id, provider_claim_id, kind)` MUST return the existing claim only when it belongs to the same order. Reuse for another order MUST fail without state mutation.
 
 SB-RC-11. A definite refund rejection MUST release a reserve once only when no unresolved dispute or chargeback claim remains.
 
 SB-RC-12. An ambiguous refund MUST remain `refund_pending`. The reconciler MUST query it before any retry.
 
 SB-RC-13. A verified dispute open MUST set payment hold, create or reuse the shared recovery claim, block pending fulfillment, and suspend an active plan sourced from that order.
+
+SB-RC-13A. A Store plan entitlement MUST store nullable `suspended_at` and `suspension_reason`. Entitlement reads and plan admission MUST exclude a suspended entitlement. A verified dispute win MAY clear a `payment_dispute` suspension only while the original entitlement end time is in the future and no other claim remains open.
 
 SB-RC-14. A verified dispute win MUST resolve that claim. It MAY clear hold only when all claims are resolved and user balance is nonnegative.
 
@@ -367,6 +375,10 @@ SB-RC-16. Payment hold MUST block Store order creation, redemption before lookup
 SB-RC-17. An already presented payment MUST remain queryable during hold. Verified payment MUST be recorded, but fulfillment MUST remain pending.
 
 SB-RC-18. Each daily settlement line MUST have a provider-unique identity and class `gross`, `refund`, `dispute`, `fee`, `tax`, `currency_conversion`, or `net`.
+
+SB-RC-18A. `store_settlement_reports` MUST store Channel, credential version, Provider report identity, report date, body digest, and import time. `(credential_version_id, provider_report_id)` MUST be unique.
+
+SB-RC-18B. `store_settlement_lines` MUST store report, credential version, Provider line identity, class, signed integer minor amount, currency, optional Provider transaction identity, optional matched order, and creation time. `(credential_version_id, provider_line_id)` MUST be unique.
 
 SB-RC-19. Settlement import MUST be idempotent. Fees, taxes, and settlement FX MUST NOT change user rewards.
 

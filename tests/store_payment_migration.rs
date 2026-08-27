@@ -13,6 +13,8 @@ const PAYMENT_TABLES: &[&str] = &[
     "store_refunds",
     "store_order_reward_recoveries",
     "store_order_recovery_claims",
+    "store_settlement_reports",
+    "store_settlement_lines",
     "store_balance_holds",
     "store_reconciliation_leases",
     "store_reconciliation_cases",
@@ -104,6 +106,14 @@ async fn payment_migration_replaces_legacy_store_shape() {
         );
     }
     assert!(channel_columns.iter().any(|value| value == "adapter_kind"));
+
+    let entitlement_columns = sqlite_columns(&db, "store_plan_entitlements").await;
+    for column in ["suspended_at", "suspension_reason"] {
+        assert!(
+            entitlement_columns.iter().any(|value| value == column),
+            "missing store_plan_entitlements.{column}"
+        );
+    }
 
     let channels = db
         .query_all(Statement::from_string(

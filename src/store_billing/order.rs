@@ -140,6 +140,8 @@ pub enum PaymentOrderError {
     CreationRateLimited,
     #[error("too many open orders")]
     OpenOrderLimit,
+    #[error("payment hold blocks Store purchases")]
+    PaymentHold,
     #[error("an active payment attempt already exists")]
     ActiveAttemptExists,
     #[error("provider state must be queried before another payment attempt")]
@@ -212,6 +214,18 @@ impl PaymentOrderStore {
             .await
             .map_err(storage)?,
         )?;
+        let payment_hold_count = count_value(
+            tx.query_one(self.db.stmt(
+                "SELECT COUNT(*) AS value FROM store_balance_holds
+                 WHERE user_id = $1 AND active = 1",
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(storage)?,
+        )?;
+        if payment_hold_count != 0 {
+            return Err(PaymentOrderError::PaymentHold);
+        }
         if recent_count >= ORDER_CREATION_LIMIT_PER_MINUTE {
             return Err(PaymentOrderError::CreationRateLimited);
         }
