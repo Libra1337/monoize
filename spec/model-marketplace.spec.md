@@ -260,6 +260,10 @@ MM-U2.1. If SWR returns a cached first page before the retained-page state is po
 the page MUST render that SWR page. The empty state MUST render only when the resolved first
 page contains zero items.
 
+MM-U2.2. Browser fetches for the public list and offers APIs MUST use the Fetch API
+`cache: "no-store"` mode. SWR remains the page-level cache. A browser HTTP cache entry from
+an earlier Marketplace generation MUST NOT replace the current SWR response.
+
 MM-U3. Model details MUST open in a modal, not an expanded table row. Click, tap, Enter,
 and Space MUST open it. Focus moves to its heading, remains trapped, and returns to the
 invoker after Escape or close. Background scroll is disabled and `aria-labelledby` is set.
