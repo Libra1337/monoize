@@ -1,4 +1,4 @@
 {
   "title": "ダッシュボード",
-  "pages": ["index", "providers-and-channels", "models", "api-keys"]
+  "pages": ["index", "providers-and-channels", "models", "api-keys", "store"]
 }

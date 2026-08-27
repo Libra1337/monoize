@@ -1,0 +1,42 @@
+---
+title: Store
+description: Recharge balance, buy plans, process orders, and manage redemption codes.
+---
+
+## Open the Store
+
+Open **Store** at `/dashboard/store`. Select **Balance**, **Plans**, or **Redeem code**.
+
+![Store](/images/en/store.webp)
+
+Use the currency control to show CNY or USD. The control updates the balance, current-month usage, prices, bonuses, received amounts, and plan quotas.
+
+Monoize refreshes the USD/CNY rate at most once every 15 minutes. It keeps the last valid rate when a refresh fails.
+
+## Recharge balance
+
+1. Select a recharge product or enter a custom amount.
+2. Review the recharge amount, bonus, and actual received amount.
+3. Select one enabled payment Channel.
+4. Create the order.
+
+Open `/dashboard/orders` to review the order. The balance changes after an administrator completes the order.
+
+## Buy a plan
+
+Select a plan and a payment Channel. Each plan can apply several quota windows at the same time. A window can use 5 hours, 12 hours, a day, a week, a month, or a custom whole-hour duration.
+
+Monoize stores plan quotas in CNY. The Store shows each quota as a rounded whole CNY or USD amount.
+
+## Redeem a code
+
+Enter one unused code in **Redeem code**. A code grants balance or activates a plan. Redemption does not use a payment Channel and does not create an order.
+
+## Manage the Store
+
+Administrators open `/dashboard/store-admin`. Use its four tabs to manage products, payment Channels, orders, and redemption codes.
+
+- Set separate custom recharge limits for CNY and USD.
+- Add Alipay, WeChat Pay, or a custom payment Channel. Use a built-in icon, an HTTPS image URL, or an uploaded image.
+- Complete a pending order to grant its reward. Cancel a pending order to prevent fulfillment.
+- Generate 1 through 20 single-use codes. Copy the plaintext codes when Monoize shows them.

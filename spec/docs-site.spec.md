@@ -60,7 +60,7 @@ DOC-20. The navigation tree MUST contain exactly these top-level entries in this
 1. Introduction (`index.mdx`)
 2. Quick Start (`quick-start.mdx`)
 3. Configuration (`configuration.mdx`)
-4. Dashboard (`dashboard/`: overview, providers and channels, models, API keys)
+4. Dashboard (`dashboard/`: overview, providers and channels, models, API keys, Store)
 5. Request Logs (`request-logs.mdx`)
 6. Routing and Reliability (`routing.mdx`)
 7. API Endpoints (`endpoints.mdx`)
@@ -72,6 +72,11 @@ DOC-21. The Transforms section MUST contain one overview page plus one page per 
 DOC-22. Each transform page MUST state: the transform `type_id`, the phase(s), the supported scopes, every config property with its type and default, at least one JSON config example, and at least one situation in which an operator should enable the transform.
 
 DOC-23. Content MUST describe observable behavior only. Statements about defaults, limits, environment variables, endpoints, and transform behavior MUST agree with the specs under `spec/` and the implementation under `src/`.
+
+DOC-24. The Dashboard Store page MUST document `/dashboard/store`, `/dashboard/orders`,
+and the admin-only `/dashboard/store-admin` route. It MUST describe balance recharge,
+plan purchase, CNY/USD display conversion, payment Channel selection, order processing,
+and redemption codes. It MUST state that redemption codes do not use a payment Channel.
 
 ## 4. Writing style
 
