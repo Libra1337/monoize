@@ -188,6 +188,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
     let base_url = providers
         .iter()
         .map(|provider| provider.channel.base_url.clone())
+        .next()
         .expect("at least one existing channel base url");
 
     let mut models = HashMap::new();

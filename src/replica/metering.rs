@@ -576,6 +576,7 @@ impl ReplicaMetering {
         token: &str,
         ship_batch_max: usize,
     ) -> Result<Self, String> {
+        crate::node_config::ensure_rustls_crypto_provider()?;
         let client = reqwest::Client::builder()
             .user_agent("monoize/0.1")
             // PX4/PX8: cluster traffic bypasses every proxy including env-inherited ones.

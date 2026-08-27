@@ -2028,6 +2028,14 @@ fn build_dashboard_api_router() -> Router<AppState> {
                 .post(crate::dashboard_handlers::create_store_order),
         )
         .route(
+            "/dashboard/store/orders/{id}",
+            get(crate::dashboard_handlers::get_store_order),
+        )
+        .route(
+            "/dashboard/store/orders/{id}/attempts",
+            post(crate::dashboard_handlers::create_store_payment_attempt),
+        )
+        .route(
             "/dashboard/store/redeem",
             post(crate::dashboard_handlers::redeem_store_code),
         )
@@ -2062,14 +2070,6 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/store/admin/orders",
             get(crate::dashboard_handlers::list_all_store_orders_admin),
-        )
-        .route(
-            "/dashboard/store/admin/orders/{id}/complete",
-            post(crate::dashboard_handlers::complete_store_order_admin),
-        )
-        .route(
-            "/dashboard/store/admin/orders/{id}/cancel",
-            post(crate::dashboard_handlers::cancel_store_order_admin),
         )
         .route(
             "/dashboard/store/admin/redemption-codes",

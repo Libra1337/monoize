@@ -1,6 +1,9 @@
 use crate::app::AppState;
 use crate::error::{AppError, AppResult};
 use crate::store_billing::exchange_rate::ExchangeRateError;
+use crate::store_billing::order::{
+    CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
+};
 use crate::store_billing::{
     CreateOrderInput, CreatePaymentChannelInput, CreateProductInput, GenerateRedemptionCodesInput,
     PAYMENT_ICON_MAX_BYTES, StoreBillingError, StoreSettings, UpdatePaymentChannelInput,
@@ -35,6 +38,11 @@ impl StoreListQuery {
 #[derive(Debug, Deserialize)]
 pub struct RedeemRequest {
     pub code: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreatePaymentAttemptRequest {
+    pub expected_payment_method: Option<String>,
 }
 
 fn map_store_error(error: StoreBillingError) -> AppError {
@@ -125,6 +133,96 @@ fn map_store_error(error: StoreBillingError) -> AppError {
         }
     };
     AppError::new(status, code, message)
+}
+
+fn map_payment_order_error(error: PaymentOrderError) -> AppError {
+    let (status, code, message) = match error {
+        PaymentOrderError::InvalidInput => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "invalid payment order input",
+        ),
+        PaymentOrderError::InvalidAmount => (
+            StatusCode::BAD_REQUEST,
+            "invalid_amount",
+            "invalid payment amount",
+        ),
+        PaymentOrderError::InvalidExchangeRate => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "exchange_rate_unavailable",
+            "no valid exchange rate is available",
+        ),
+        PaymentOrderError::ProductUnavailable => (
+            StatusCode::NOT_FOUND,
+            "product_not_available",
+            "product is not available",
+        ),
+        PaymentOrderError::ChannelUnavailable => (
+            StatusCode::CONFLICT,
+            "payment_channel_unavailable",
+            "payment Channel is not available",
+        ),
+        PaymentOrderError::OrderNotFound => (
+            StatusCode::NOT_FOUND,
+            "order_not_found",
+            "order was not found",
+        ),
+        PaymentOrderError::IdempotencyConflict => (
+            StatusCode::CONFLICT,
+            "idempotency_conflict",
+            "idempotency key was used with different input",
+        ),
+        PaymentOrderError::CreationRateLimited => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "order_rate_limited",
+            "too many Store orders were created",
+        ),
+        PaymentOrderError::OpenOrderLimit => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "open_order_limit",
+            "too many unpaid Store orders exist",
+        ),
+        PaymentOrderError::ActiveAttemptExists => (
+            StatusCode::CONFLICT,
+            "active_payment_attempt",
+            "an active payment attempt already exists",
+        ),
+        PaymentOrderError::OrderNotPayable => (
+            StatusCode::CONFLICT,
+            "order_not_payable",
+            "order cannot accept a payment attempt",
+        ),
+        PaymentOrderError::AmountOverflow => (
+            StatusCode::CONFLICT,
+            "amount_overflow",
+            "payment amount overflow",
+        ),
+        PaymentOrderError::Storage(detail) => {
+            return AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "payment order operation failed",
+            )
+            .with_internal_message(detail);
+        }
+    };
+    AppError::new(status, code, message)
+}
+
+fn required_idempotency_key(headers: &HeaderMap) -> AppResult<String> {
+    let value = headers
+        .get("Idempotency-Key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                "missing_idempotency_key",
+                "Idempotency-Key header is required",
+            )
+        })?;
+    Ok(value.to_string())
 }
 
 fn parse_store_json<T>(body: Result<Json<T>, JsonRejection>) -> AppResult<T> {
@@ -228,11 +326,10 @@ pub async fn list_store_orders(
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
     let query = parse_store_query(query)?;
-    let orders = state
-        .store_billing
+    let orders = PaymentOrderStore::new(state.db_pool.clone())
         .list_orders_for_user(&user.id, query.limit())
         .await
-        .map_err(map_store_error)?;
+        .map_err(map_payment_order_error)?;
     Ok(Json(orders))
 }
 
@@ -243,13 +340,69 @@ pub async fn create_store_order(
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
     let input = parse_store_json(body)?;
+    let idempotency_key = required_idempotency_key(&headers)?;
     let rate = current_rate(&state).await?;
-    let order = state
-        .store_billing
-        .create_order(&user.id, input, &rate)
+    let store = PaymentOrderStore::new(state.db_pool.clone());
+    let replayed = store
+        .find_order_by_creation_key(&user.id, &idempotency_key)
         .await
-        .map_err(map_store_error)?;
-    Ok((StatusCode::CREATED, Json(order)))
+        .map_err(map_payment_order_error)?
+        .is_some();
+    let order = store
+        .create_order(
+            &user.id,
+            CreatePaymentOrderInput {
+                idempotency_key,
+                product_id: input.product_id,
+                payment_channel_id: input.payment_channel_id,
+                payment_currency: input.payment_currency,
+                custom_recharge_minor: input.custom_recharge_minor,
+            },
+            &rate,
+        )
+        .await
+        .map_err(map_payment_order_error)?;
+    Ok((
+        if replayed {
+            StatusCode::OK
+        } else {
+            StatusCode::CREATED
+        },
+        Json(order),
+    ))
+}
+
+pub async fn get_store_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let order = PaymentOrderStore::new(state.db_pool.clone())
+        .get_order_for_user(&user.id, &id)
+        .await
+        .map_err(map_payment_order_error)?
+        .ok_or_else(|| map_payment_order_error(PaymentOrderError::OrderNotFound))?;
+    Ok(Json(order))
+}
+
+pub async fn create_store_payment_attempt(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<CreatePaymentAttemptRequest>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let request = parse_store_json(body)?;
+    let input = CreatePaymentAttemptInput {
+        idempotency_key: required_idempotency_key(&headers)?,
+        expected_payment_method: request.expected_payment_method,
+    };
+    let attempt = PaymentOrderStore::new(state.db_pool.clone())
+        .create_attempt(&user.id, &id, input)
+        .await
+        .map_err(map_payment_order_error)?;
+    Ok((StatusCode::CREATED, Json(attempt)))
 }
 
 pub async fn redeem_store_code(
@@ -492,40 +645,11 @@ pub async fn list_all_store_orders_admin(
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
     let query = parse_store_query(query)?;
-    let orders = state
-        .store_billing
+    let orders = PaymentOrderStore::new(state.db_pool.clone())
         .list_orders_admin(query.limit())
         .await
-        .map_err(map_store_error)?;
+        .map_err(map_payment_order_error)?;
     Ok(Json(orders))
-}
-
-pub async fn complete_store_order_admin(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> AppResult<impl IntoResponse> {
-    require_admin(&headers, &state).await?;
-    let order = state
-        .store_billing
-        .complete_order(&id)
-        .await
-        .map_err(map_store_error)?;
-    Ok(Json(order))
-}
-
-pub async fn cancel_store_order_admin(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> AppResult<impl IntoResponse> {
-    require_admin(&headers, &state).await?;
-    let order = state
-        .store_billing
-        .cancel_order(&id)
-        .await
-        .map_err(map_store_error)?;
-    Ok(Json(order))
 }
 
 pub async fn list_store_redemption_codes_admin(

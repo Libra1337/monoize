@@ -65,11 +65,10 @@ pub use settings::{
     get_public_site_settings, get_settings, update_settings,
 };
 pub use store_billing::{
-    cancel_store_order_admin, complete_store_order_admin, create_store_order,
-    create_store_payment_channel_admin, create_store_product_admin,
-    delete_store_payment_channel_admin, delete_store_product_admin,
+    create_store_order, create_store_payment_attempt, create_store_payment_channel_admin,
+    create_store_product_admin, delete_store_payment_channel_admin, delete_store_product_admin,
     generate_store_redemption_codes_admin, get_store_catalog, get_store_entitlement,
-    get_store_exchange_rate, get_store_payment_icon, get_store_settings_admin,
+    get_store_exchange_rate, get_store_order, get_store_payment_icon, get_store_settings_admin,
     list_all_store_orders_admin, list_store_orders, list_store_payment_channels_admin,
     list_store_products_admin, list_store_redemption_codes_admin, redeem_store_code,
     update_store_payment_channel_admin, update_store_product_admin, update_store_settings_admin,

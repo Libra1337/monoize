@@ -44,3 +44,6 @@ mod live_usage;
 
 #[path = "api/store_billing.rs"]
 mod store_billing;
+
+#[path = "api/store_payments.rs"]
+mod store_payments;

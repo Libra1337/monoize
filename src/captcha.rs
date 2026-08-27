@@ -131,6 +131,7 @@ impl CapVerifier {
         let verify_endpoint = api_endpoint
             .join("siteverify")
             .map_err(|error| format!("failed to construct Cap siteverify URL: {error}"))?;
+        crate::node_config::ensure_rustls_crypto_provider()?;
         let http = reqwest::Client::builder()
             .no_proxy()
             .timeout(VERIFY_TIMEOUT)

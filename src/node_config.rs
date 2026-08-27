@@ -245,7 +245,17 @@ pub(crate) fn validate_http_proxy_url(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn ensure_rustls_crypto_provider() -> Result<(), String> {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+    rustls::crypto::CryptoProvider::get_default()
+        .map(|_| ())
+        .ok_or_else(|| "failed to install the Rustls Ring crypto provider".to_string())
+}
+
 fn build_client(proxy_url: Option<&str>) -> Result<reqwest::Client, String> {
+    ensure_rustls_crypto_provider()?;
     let mut builder = reqwest::Client::builder()
         .user_agent("monoize/0.1")
         // PX4: internal callers rely on this builder bypassing environment-inherited proxies;

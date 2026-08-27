@@ -1518,6 +1518,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
     let base_url = providers
         .iter()
         .map(|provider| provider.channel.base_url.clone())
+        .next()
         .expect("base_url");
 
     let mut models = HashMap::new();
@@ -1673,6 +1674,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
     let base_url = providers
         .iter()
         .map(|provider| provider.channel.base_url.clone())
+        .next()
         .expect("base_url");
 
     let mut models = HashMap::new();
@@ -1828,6 +1830,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
     let base_url = providers
         .iter()
         .map(|provider| provider.channel.base_url.clone())
+        .next()
         .expect("base_url");
 
     let mut models = HashMap::new();

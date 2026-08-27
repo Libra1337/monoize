@@ -350,6 +350,45 @@ impl PaymentOrderStore {
             .collect()
     }
 
+    pub async fn get_order_for_user(
+        &self,
+        user_id: &str,
+        order_id: &str,
+    ) -> Result<Option<PaymentOrder>, PaymentOrderError> {
+        query_order_by_id(&self.db, self.db.read(), order_id, Some(user_id)).await
+    }
+
+    pub async fn find_order_by_creation_key(
+        &self,
+        user_id: &str,
+        key: &str,
+    ) -> Result<Option<PaymentOrder>, PaymentOrderError> {
+        Ok(self
+            .order_by_creation_key(user_id, key)
+            .await?
+            .map(|(order, _)| order))
+    }
+
+    pub async fn list_orders_admin(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<PaymentOrder>, PaymentOrderError> {
+        self.db
+            .read()
+            .query_all(self.db.stmt(
+                &format!(
+                    "{} ORDER BY created_at DESC, id DESC LIMIT $1",
+                    order_select()
+                ),
+                vec![(limit.min(100) as i64).into()],
+            ))
+            .await
+            .map_err(storage)?
+            .into_iter()
+            .map(payment_order_from_row)
+            .collect()
+    }
+
     pub async fn create_attempt(
         &self,
         user_id: &str,
