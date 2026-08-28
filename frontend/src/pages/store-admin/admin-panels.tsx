@@ -169,13 +169,36 @@ export function ChannelsPanel({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="font-semibold">{channel.name}</h3>
-                  <Badge variant={channel.enabled ? "default" : "secondary"}>
-                    {t(channel.enabled ? "store.admin.enabled" : "store.admin.disabled")}
-                  </Badge>
                 </div>
                 <p className="truncate text-sm text-muted-foreground">
                   {t(`store.admin.channels.kinds.${channel.adapter_kind}`)}
                 </p>
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                  <span className="flex items-center gap-2 text-muted-foreground">
+                    {t("store.admin.channelAvailability.configuredState")}
+                    <Badge variant={channel.enabled ? "outline" : "secondary"}>
+                      {t(channel.enabled ? "store.admin.enabled" : "store.admin.disabled")}
+                    </Badge>
+                  </span>
+                  <span className="flex items-center gap-2 text-muted-foreground">
+                    {t("store.admin.channelAvailability.effectiveState")}
+                    <Badge variant={channel.effective_available ? "default" : "secondary"}>
+                      {t(channel.effective_available
+                        ? "store.admin.channelAvailability.available"
+                        : "store.admin.channelAvailability.unavailable")}
+                    </Badge>
+                  </span>
+                </div>
+                {!channel.effective_available && channel.unavailable_reasons.length > 0 && (
+                  <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>{t("store.admin.channelAvailability.unavailableReasons")}</span>
+                    {[...channel.unavailable_reasons].sort().map((reason) => (
+                      <code key={reason} className="max-w-full break-all rounded-md bg-muted px-2 py-1">
+                        {reason}
+                      </code>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-1">
                 <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("common.edit")} onClick={() => onEdit(channel)}>

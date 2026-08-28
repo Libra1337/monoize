@@ -38,7 +38,11 @@ import { cn } from "@/lib/utils";
 import { OrderSummary } from "./order-summary";
 import { PaymentMethods } from "./payment-methods";
 import { RedemptionPanel } from "./redemption-panel";
-import { selectStoreProduct, validateCustomAmount } from "./store-selection";
+import {
+  filterCompatiblePaymentChannels,
+  selectStoreProduct,
+  validateCustomAmount,
+} from "./store-selection";
 import { StoreModeContent } from "./store-mode-content";
 import { StoreSkeleton } from "./store-skeleton";
 import { StoreTabs, type StoreTab } from "./store-tabs";
@@ -57,6 +61,7 @@ const EXCHANGE_RATE_KEY = "/api/dashboard/store/exchange-rate";
 const ENTITLEMENT_KEY = "/api/dashboard/store/entitlement";
 const ORDERS_KEY = "/api/dashboard/store/orders";
 const REDEMPTION_STATUS_KEY = "/api/dashboard/store/redemption-status";
+const MOBILE_CHECKOUT_QUERY = "(max-width: 767px)";
 
 interface RedemptionStatus {
   state: "idle" | "redeeming";
@@ -328,6 +333,9 @@ export function StorePage() {
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [customAmount, setCustomAmount] = useState("");
+  const [mobileCheckout, setMobileCheckout] = useState(() => (
+    typeof window !== "undefined" && window.matchMedia(MOBILE_CHECKOUT_QUERY).matches
+  ));
   const [submitting, setSubmitting] = useState(false);
   const [pollingOrderId, setPollingOrderId] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
@@ -360,9 +368,6 @@ export function StorePage() {
     ? null
     : selectStoreProduct(catalog.data?.products ?? [], activeTab, selectedProductId);
   const channels = catalog.data?.payment_channels ?? [];
-  const selectedChannel = channels.find((channel) => channel.id === selectedChannelId)
-    ?? channels.find((channel) => channel.enabled)
-    ?? null;
   const settings = catalog.data?.settings;
   const customValidation = settings && activeTab === "balance"
     ? validateCustomAmount(customAmount, currency, catalog.data?.settings)
@@ -371,6 +376,25 @@ export function StorePage() {
     ? customValidation.minor
     : null;
   const customAmountInvalid = customValidation.invalid;
+  const paymentMinor = selectedProduct && !customAmountInvalid
+    ? customValidation.hasCustomAmount
+      ? customRechargeMinor
+      : convertMinor(
+          selectedProduct.price_minor,
+          selectedProduct.price_currency,
+          currency,
+          rate,
+        )
+    : null;
+  const compatibleChannels = filterCompatiblePaymentChannels(
+    channels,
+    currency,
+    paymentMinor,
+    mobileCheckout ? "mobile" : "desktop",
+  );
+  const selectedChannel = compatibleChannels.find((channel) => channel.id === selectedChannelId)
+    ?? compatibleChannels[0]
+    ?? null;
   const redeeming = redemptionStatus.data?.state === "redeeming";
   const customMinimumMinor = currency === "CNY"
     ? settings?.custom_recharge_cny_min_minor ?? "0"
@@ -385,6 +409,13 @@ export function StorePage() {
     entitlement.mutate(),
     monthlyUsage.mutate(),
   ]);
+
+  useEffect(() => {
+    const media = window.matchMedia(MOBILE_CHECKOUT_QUERY);
+    const handleViewportChange = (event: MediaQueryListEvent) => setMobileCheckout(event.matches);
+    media.addEventListener("change", handleViewportChange);
+    return () => media.removeEventListener("change", handleViewportChange);
+  }, []);
 
   useEffect(() => {
     if (!pollingOrderId) return;
@@ -440,26 +471,28 @@ export function StorePage() {
   };
 
   const handleCreateOrder = async () => {
-    if (!user || !selectedProduct || !selectedChannel || customAmountInvalid) return;
-    const paymentMinor = customValidation.hasCustomAmount
-      ? customRechargeMinor
-      : convertMinor(
-          selectedProduct.price_minor,
-          selectedProduct.price_currency,
-          currency,
-          rate,
-        );
-    if (paymentMinor === null) return;
+    if (!user || !selectedProduct || !selectedChannel || customAmountInvalid || paymentMinor === null) return;
+    const currentViewport = window.matchMedia(MOBILE_CHECKOUT_QUERY).matches ? "mobile" : "desktop";
+    const validatedChannel = filterCompatiblePaymentChannels(
+      channels,
+      currency,
+      paymentMinor,
+      currentViewport,
+    ).find((channel) => channel.id === selectedChannel.id);
+    if (!validatedChannel) {
+      toast.error(t("store.payment.empty"));
+      return;
+    }
     const pending = optimisticOrder(
       selectedProduct,
-      selectedChannel,
+      validatedChannel,
       currency,
       paymentMinor,
       rate,
     );
     const request: CreateStoreOrderInput = {
       product_id: selectedProduct.id,
-      payment_channel_id: selectedChannel.id,
+      payment_channel_id: validatedChannel.id,
       payment_currency: currency,
       custom_recharge_minor: customRechargeMinor,
     };
@@ -489,15 +522,14 @@ export function StorePage() {
       );
       const createdOrder = updatedOrders?.[0];
       if (!createdOrder) throw new Error(t("store.ui.orderFailed"));
-      const mobileCheckout = window.matchMedia("(max-width: 767px)").matches;
-      const expectedPaymentMethod = selectedChannel.adapter_kind === "wechat"
-        ? (mobileCheckout ? "h5" : "native")
-        : selectedChannel.adapter_kind === "alipay"
-          ? (mobileCheckout ? "mobile_web" : "computer_web")
-        : {
+      const expectedPaymentMethod = validatedChannel.adapter_kind === "wechat"
+        ? (currentViewport === "mobile" ? "h5" : "native")
+        : validatedChannel.adapter_kind === "alipay"
+          ? (currentViewport === "mobile" ? "mobile_web" : "computer_web")
+          : {
             stripe: "card",
             http: null,
-          }[selectedChannel.adapter_kind];
+          }[validatedChannel.adapter_kind];
       const checkout = await storeApi.createPaymentAttempt(
         createdOrder.id,
         pendingCheckout.attemptIdempotencyKey,
@@ -667,7 +699,7 @@ export function StorePage() {
                 />
               </div>
               <PaymentMethods
-                channels={channels}
+                channels={compatibleChannels}
                 selectedId={selectedChannel?.id ?? null}
                 onSelect={(channel) => setSelectedChannelId(channel.id)}
               />

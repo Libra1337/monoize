@@ -6,6 +6,7 @@ export type ProductKind = "balance" | "plan";
 export type PaymentAdapterKind = "alipay" | "wechat" | "stripe" | "http";
 export type OfficialPaymentAdapterKind = Exclude<PaymentAdapterKind, "http">;
 export type PaymentChannelIconKind = "builtin" | "url" | "upload";
+export type StoreCheckoutActionKind = "redirect" | "qr" | "form";
 export type PlanWindowKind = "5h" | "12h" | "day" | "week" | "month" | "custom";
 export type StorePaymentState = "unpaid" | "paid" | "refund_pending" | "refunded" | "closed";
 export type StoreFulfillmentState = "pending" | "fulfilled" | "failed";
@@ -73,6 +74,11 @@ export interface PaymentChannelInput {
 
 export type PaymentChannelUpdate = Partial<PaymentChannelInput> & { expected_revision: number };
 
+export interface StoreAmountLimit {
+  min_minor: string;
+  max_minor: string;
+}
+
 export interface StorePaymentChannel {
   id: string;
   adapter_kind: PaymentAdapterKind;
@@ -82,6 +88,11 @@ export interface StorePaymentChannel {
   sort_order: number;
   enabled: boolean;
   revision: number;
+  effective_available: boolean;
+  unavailable_reasons: string[];
+  supported_currencies: StoreCurrency[];
+  amount_limits: Partial<Record<StoreCurrency, StoreAmountLimit>>;
+  checkout_action_kinds: StoreCheckoutActionKind[];
   created_at: string;
   updated_at: string;
 }

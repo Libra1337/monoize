@@ -6,7 +6,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { StoreAdminTabs } from "../src/pages/store-admin/store-admin-tabs";
 import { canCloseAttempt } from "../src/pages/store-admin/order-actions";
-import type { StoreOrder, StorePaymentAttempt } from "../src/lib/store-api";
+import { disabledOptimisticChannel } from "../src/pages/store-admin/channel-state";
+import type { StoreOrder, StorePaymentAttempt, StorePaymentChannel } from "../src/lib/store-api";
 
 const testI18n = createInstance();
 await testI18n.init({
@@ -97,6 +98,30 @@ describe("Store admin page", () => {
     expect(apiSource).toContain('`${STORE_API_BASE}/admin/icons`');
   });
 
+  test("shows configured and effective Channel availability separately", () => {
+    for (const field of [
+      "effective_available",
+      "unavailable_reasons",
+      "supported_currencies",
+      "amount_limits",
+      "checkout_action_kinds",
+    ]) {
+      expect(apiSource).toContain(field);
+    }
+    expect(panelsSource).toContain("effective_available");
+    expect(panelsSource).toContain("unavailable_reasons");
+    expect(panelsSource).toContain(".sort(");
+    expect(panelsSource).toContain("store.admin.channelAvailability.configuredState");
+    expect(panelsSource).toContain("store.admin.channelAvailability.effectiveState");
+    expect(panelsSource).toContain("store.admin.channelAvailability.unavailableReasons");
+    for (const locale of ["en", "zh", "zh-TW", "ja"]) {
+      const source = readSource(`../src/locales/${locale}.json`);
+      expect(source).toContain('"configuredState"');
+      expect(source).toContain('"effectiveState"');
+      expect(source).toContain('"unavailableReasons"');
+    }
+  });
+
   test("replaces official credentials through scoped reauthentication without prefilling secrets", () => {
     expect(apiSource).toContain("createReauthGrant");
     expect(apiSource).toContain("replacePaymentCredential");
@@ -115,6 +140,43 @@ describe("Store admin page", () => {
     expect(pageSource).toContain("saveChannelCredential");
     expect(pageSource).toContain("revalidate: true");
     expect(channelSource).toContain("clearSensitiveFields");
+  });
+
+  test("fails closed in both temporary Channel states after credential replacement", () => {
+    const channel = {
+      id: "channel-1",
+      adapter_kind: "stripe",
+      name: "Stripe",
+      icon_kind: "builtin",
+      icon_value: null,
+      sort_order: 0,
+      enabled: true,
+      revision: 4,
+      effective_available: true,
+      unavailable_reasons: [],
+      supported_currencies: ["CNY", "USD"],
+      amount_limits: {
+        CNY: { min_minor: "1", max_minor: "10000" },
+        USD: { min_minor: "1", max_minor: "10000" },
+      },
+      checkout_action_kinds: ["redirect"],
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    } satisfies StorePaymentChannel;
+
+    const disabled = disabledOptimisticChannel(channel);
+    expect(disabled).toEqual({
+      ...channel,
+      enabled: false,
+      revision: 5,
+      effective_available: false,
+      unavailable_reasons: ["channel_disabled"],
+      supported_currencies: [],
+      amount_limits: {},
+      checkout_action_kinds: [],
+    });
+    expect(channel.effective_available).toBe(true);
+    expect(pageSource.match(/disabledOptimisticChannel\(item\)/g)).toHaveLength(2);
   });
 
   test("removes manual order completion and keeps optimistic rollback", () => {

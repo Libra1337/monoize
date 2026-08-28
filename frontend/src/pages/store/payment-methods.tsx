@@ -33,18 +33,17 @@ function ChannelIcon({ channel }: { channel: StorePaymentChannel }) {
 
 export function PaymentMethods({ channels, selectedId, onSelect }: PaymentMethodsProps) {
   const { t } = useTranslation();
-  const availableChannels = channels.filter((channel) => channel.enabled);
 
   return (
     <section className="w-full border-t pt-6" aria-labelledby="store-payment-title">
       <h2 id="store-payment-title" className="mb-3 text-sm font-semibold">
         {t("store.payment.title")}
       </h2>
-      {availableChannels.length === 0 ? (
+      {channels.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("store.payment.empty")}</p>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {availableChannels.map((channel) => (
+          {channels.map((channel) => (
             <button
               key={channel.id}
               type="button"

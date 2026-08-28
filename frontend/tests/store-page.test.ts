@@ -90,9 +90,20 @@ describe("Store user pages", () => {
     expect(storeSource).toContain("window.location.assign(checkout.action.url)");
     expect(storeSource).toContain('stripe: "card"');
     expect(storeSource).toContain('? "mobile_web" : "computer_web"');
-    expect(storeSource).toContain('selectedChannel.adapter_kind === "wechat"');
+    expect(storeSource).toContain('validatedChannel.adapter_kind === "wechat"');
     expect(storeSource).toContain('(max-width: 767px)');
     expect(storeSource).toContain('? "h5" : "native"');
+  });
+
+  test("reacts to viewport changes and submits only a currently compatible Channel", () => {
+    expect(storeSource).toContain("filterCompatiblePaymentChannels");
+    expect(storeSource).toContain("compatibleChannels");
+    expect(storeSource).toContain('addEventListener("change"');
+    expect(storeSource).toContain('removeEventListener("change"');
+    expect(storeSource).toContain("window.matchMedia(MOBILE_CHECKOUT_QUERY).matches");
+    expect(storeSource).toContain("validatedChannel");
+    expect(storeSource).toContain("channels={compatibleChannels}");
+    expect(paymentSource).not.toContain("channels.filter");
   });
 
   test("polls a pending payment every two seconds and revalidates account data", () => {

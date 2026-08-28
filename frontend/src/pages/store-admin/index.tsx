@@ -40,6 +40,7 @@ import {
   RedemptionsPanel,
 } from "./admin-panels";
 import { ChannelDialog } from "./channel-dialog";
+import { disabledOptimisticChannel } from "./channel-state";
 import { OrderDialog } from "./order-dialog";
 import { ProductDialog } from "./product-dialog";
 import { RedemptionDialog } from "./redemption-dialog";
@@ -74,7 +75,18 @@ function optimisticProduct(input: StoreProductInput, id: string): StoreProduct {
 
 function optimisticChannel(input: PaymentChannelInput, id: string): StorePaymentChannel {
   const now = new Date().toISOString();
-  return { ...input, id, revision: 1, created_at: now, updated_at: now };
+  return {
+    ...input,
+    id,
+    revision: 1,
+    effective_available: false,
+    unavailable_reasons: [],
+    supported_currencies: [],
+    amount_limits: {},
+    checkout_action_kinds: [],
+    created_at: now,
+    updated_at: now,
+  };
 }
 
 function applyOrderOperation(
@@ -202,14 +214,14 @@ export function StoreAdminPage() {
           await storeApi.admin.replacePaymentCredential(channelId, credential, grant.token);
           return current.map((item) =>
             item.id === channelId
-              ? { ...item, enabled: false, revision: item.revision + 1 }
+              ? disabledOptimisticChannel(item)
               : item,
           );
         },
         {
           optimisticData: (current = []) =>
             current.map((item) =>
-              item.id === channelId ? { ...item, enabled: false } : item,
+              item.id === channelId ? disabledOptimisticChannel(item) : item,
             ),
           rollbackOnError: true,
           revalidate: true,
