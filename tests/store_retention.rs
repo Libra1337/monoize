@@ -1,6 +1,12 @@
+use axum::body::Body;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, COOKIE, ORIGIN};
+use axum::http::{Method, Request, StatusCode};
 use chrono::{DateTime, Duration, SecondsFormat, TimeZone, Utc};
+use http_body_util::BodyExt;
+use monoize::app::{RuntimeConfig, build_app, load_state_with_runtime};
 use monoize::db::DbPool;
 use monoize::migration::Migrator;
+use monoize::node_config::NodeSettings;
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
 use monoize::store_billing::money::Currency;
 use monoize::store_billing::order::{
@@ -13,6 +19,9 @@ use monoize::store_billing::retention::{
 };
 use sea_orm::{ConnectionTrait, QueryResult};
 use sea_orm_migration::MigratorTrait;
+use serde_json::{Value, json};
+use tempfile::TempDir;
+use tower::ServiceExt;
 
 fn instant() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 28, 12, 0, 0).unwrap()
@@ -89,6 +98,16 @@ async fn row(db: &DbPool, sql: &str) -> QueryResult {
         .await
         .expect("query")
         .expect("row")
+}
+
+async fn response_json(response: axum::response::Response) -> Value {
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("response body")
+        .to_bytes();
+    serde_json::from_slice(&bytes).expect("JSON response")
 }
 
 fn hold_input(
@@ -425,4 +444,133 @@ async fn retention_reauthentication_scopes_are_distinct() {
         .verify("admin", "session", &legal.token, "legal_hold")
         .await
         .expect("matching legal grant");
+}
+
+#[tokio::test]
+async fn admin_retention_routes_enforce_session_origin_reauthentication_and_exact_json() {
+    let temp = TempDir::new().expect("temporary directory");
+    let mut state = load_state_with_runtime(RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: format!("sqlite://{}", temp.path().join("monoize.db").display()),
+        request_log_spool_dir: None,
+        node: NodeSettings::primary_default(),
+    })
+    .await
+    .expect("primary state");
+    state.payment_public_origin = Some(url::Url::parse("https://store.example").unwrap());
+    let admin = state
+        .user_store
+        .create_user(
+            "retention-admin",
+            "password",
+            monoize::users::UserRole::Admin,
+            None,
+        )
+        .await
+        .expect("admin");
+    let session = state
+        .user_store
+        .create_session(&admin.id, 7)
+        .await
+        .expect("session");
+    let legal_grant = ReauthStore::new(state.db_pool.clone())
+        .issue(&admin.id, &session.token, "legal_hold")
+        .await
+        .expect("legal hold grant");
+    let router = build_app(state.clone());
+
+    let anonymous = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/dashboard/store/admin/retention")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+
+    let hold_body = json!({
+        "data_class": "financial_records",
+        "identifiers": ["order-1"],
+        "reason": "preserve evidence",
+        "requesting_authority": "Privacy Office",
+        "requester_id": "requester",
+        "approver_role": "privacy",
+        "expires_at": timestamp(Utc::now() + Duration::days(1)),
+        "extends_hold_id": null
+    });
+    let wrong_origin = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/dashboard/store/admin/retention/legal-holds")
+                .header(COOKIE, format!("monoize_session={}", session.token))
+                .header(CONTENT_TYPE, "application/json")
+                .header(ORIGIN, "https://attacker.example")
+                .header("X-Store-Reauth-Token", &legal_grant.token)
+                .body(Body::from(hold_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_origin.status(), StatusCode::FORBIDDEN);
+
+    let created = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/dashboard/store/admin/retention/legal-holds")
+                .header(COOKIE, format!("monoize_session={}", session.token))
+                .header(CONTENT_TYPE, "application/json")
+                .header(ORIGIN, "https://store.example")
+                .header("X-Store-Reauth-Token", &legal_grant.token)
+                .body(Body::from(hold_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(response_json(created).await["active"], true);
+
+    let invalid_body = {
+        let mut body = hold_body;
+        body["unknown"] = json!(true);
+        body
+    };
+    let invalid = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/dashboard/store/admin/retention/legal-holds")
+                .header(COOKIE, format!("monoize_session={}", session.token))
+                .header(CONTENT_TYPE, "application/json")
+                .header(ORIGIN, "https://store.example")
+                .header("X-Store-Reauth-Token", &legal_grant.token)
+                .body(Body::from(invalid_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+    let overview = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/dashboard/store/admin/retention")
+                .header(COOKIE, format!("monoize_session={}", session.token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overview.status(), StatusCode::OK);
+    assert_eq!(overview.headers().get(CACHE_CONTROL).unwrap(), "no-store");
+    let overview = response_json(overview).await;
+    assert_eq!(overview["holds"].as_array().unwrap().len(), 1);
 }
