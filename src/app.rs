@@ -2170,6 +2170,14 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
             put(crate::dashboard_handlers::replace_store_payment_credential_admin),
         )
         .route(
+            "/dashboard/store/admin/payment-channels/{id}/compliance",
+            put(crate::dashboard_handlers::confirm_store_payment_compliance_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}/capabilities/{capability}",
+            put(crate::dashboard_handlers::put_store_payment_capability_admin),
+        )
+        .route(
             "/dashboard/store/admin/redemption-codes",
             post(crate::dashboard_handlers::generate_store_redemption_codes_admin),
         )
@@ -2245,6 +2253,18 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/store/admin/payment-channels",
             get(crate::dashboard_handlers::list_store_payment_channels_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}/compliance",
+            get(crate::dashboard_handlers::get_store_payment_compliance_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}/capabilities",
+            get(crate::dashboard_handlers::list_store_payment_capabilities_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}/availability",
+            get(crate::dashboard_handlers::get_store_payment_availability_admin),
         )
         .route(
             "/dashboard/store/admin/orders",

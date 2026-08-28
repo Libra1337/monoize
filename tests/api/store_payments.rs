@@ -152,13 +152,138 @@ async fn configure_payment_fixture(ctx: &mut super::TestContext) {
                  ciphertext_base64, account_identity_digest, status, created_at)
              VALUES
                 ('api-payment-credential', 'store-channel-stripe', 'stripe', 1, 'key-1',
-                 'bm9uY2U=', 'Y2lwaGVydGV4dA==', 'acct-digest', 'active',
+                 'bm9uY2U=', 'Y2lwaGVydGV4dA==',
+                 '3333333333333333333333333333333333333333333333333333333333333333',
+                 'active',
                  '2026-08-27T00:00:00Z')",
         )
         .await
         .unwrap();
     drop(write);
+    seed_payment_governance(
+        ctx,
+        "store-channel-stripe",
+        "3333333333333333333333333333333333333333333333333333333333333333",
+    )
+    .await;
     ctx.router = monoize::app::build_app(ctx.state.clone());
+}
+
+async fn seed_payment_governance(
+    ctx: &super::TestContext,
+    channel_id: &str,
+    merchant_account_digest: &str,
+) {
+    let write = ctx.state.db_pool.write().await;
+    write
+        .execute(ctx.state.db_pool.stmt(
+            "DELETE FROM store_payment_compliance WHERE channel_id = $1",
+            vec![channel_id.into()],
+        ))
+        .await
+        .unwrap();
+    write
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_payment_compliance
+                (id, channel_id, terms_version, admin_user_id, source_ip, confirmed_at)
+             VALUES ($1, $2, '2026-08-28', 'payment-test-admin', '127.0.0.1',
+                     '2026-08-28T00:00:00Z')",
+            vec![format!("{channel_id}-compliance").into(), channel_id.into()],
+        ))
+        .await
+        .unwrap();
+    for capability in [
+        "payment_query",
+        "refund",
+        "refund_query",
+        "settlement_report",
+    ] {
+        write
+            .execute(ctx.state.db_pool.stmt(
+                "INSERT INTO store_merchant_capabilities
+                    (id, channel_id, capability, state, environment, merchant_account_digest,
+                     provider_product, evidence_digest, verifier_admin_id, verified_at, expires_at)
+                 VALUES ($1, $2, $3, 'supported', 'sandbox', $4, 'checkout',
+                         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                         'payment-test-admin', '2026-08-28T00:00:00Z',
+                         '2099-01-01T00:00:00Z')
+                 ON CONFLICT (channel_id, capability) DO UPDATE SET
+                    merchant_account_digest = excluded.merchant_account_digest,
+                    expires_at = excluded.expires_at",
+                vec![
+                    format!("{channel_id}-{capability}").into(),
+                    channel_id.into(),
+                    capability.into(),
+                    merchant_account_digest.into(),
+                ],
+            ))
+            .await
+            .unwrap();
+    }
+    let (currencies, limits, actions) = match channel_id {
+        "store-channel-alipay" => (
+            "[\"CNY\"]",
+            "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
+            "[\"form\"]",
+        ),
+        "store-channel-wechat" => (
+            "[\"CNY\"]",
+            "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
+            "[\"qr\",\"redirect\"]",
+        ),
+        _ => (
+            "[\"CNY\",\"USD\"]",
+            "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"},\"USD\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
+            "[\"redirect\"]",
+        ),
+    };
+    let privacy_id = format!("{channel_id}-privacy");
+    write
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_privacy_records
+                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+             VALUES ($1, 'v1', 'CN', '[]', '{}', 'contract', 'payment-test-admin',
+                     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                     '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z', 1)
+             ON CONFLICT (id) DO UPDATE SET accepted = 1,
+                 next_review_at = excluded.next_review_at",
+            vec![privacy_id.clone().into()],
+        ))
+        .await
+        .unwrap();
+    write
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_channel_readiness_profiles
+                (channel_id, active_credential_digest, privacy_record_id,
+                 callback_verification_passed, supported_currencies_json, amount_limits_json,
+                 checkout_action_kinds_json, license_evidence_digest, runtime_evidence_digest,
+                 availability_evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES ($1, $2, $3, 1, $4, $5, $6,
+                     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                     'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                     'payment-test-admin', '2026-08-28T00:00:00Z',
+                     '2099-01-01T00:00:00Z')
+             ON CONFLICT (channel_id) DO UPDATE SET
+                 active_credential_digest = excluded.active_credential_digest,
+                 privacy_record_id = excluded.privacy_record_id,
+                 callback_verification_passed = excluded.callback_verification_passed,
+                 supported_currencies_json = excluded.supported_currencies_json,
+                 amount_limits_json = excluded.amount_limits_json,
+                 checkout_action_kinds_json = excluded.checkout_action_kinds_json,
+                 expires_at = excluded.expires_at",
+            vec![
+                channel_id.into(),
+                merchant_account_digest.into(),
+                privacy_id.into(),
+                currencies.into(),
+                limits.into(),
+                actions.into(),
+            ],
+        ))
+        .await
+        .unwrap();
 }
 
 async fn configure_checkout_runtime(ctx: &mut super::TestContext, provider: ApiCheckoutProvider) {
@@ -199,11 +324,12 @@ async fn configure_checkout_runtime(ctx: &mut super::TestContext, provider: ApiC
                 encrypted.key_id.into(),
                 encrypted.nonce_base64.into(),
                 encrypted.ciphertext_base64.into(),
-                account_digest.into(),
+                account_digest.clone().into(),
             ],
         ))
         .await
         .unwrap();
+    seed_payment_governance(ctx, "store-channel-stripe", &account_digest).await;
     ctx.state.payment_keys = Some(Arc::new(ring));
     ctx.state.payment_public_origin = Some(url::Url::parse("https://lynshen.org").unwrap());
     ctx.state.checkout_provider = Arc::new(provider);
@@ -255,7 +381,7 @@ async fn configure_alipay_runtime(
                 encrypted.key_id.into(),
                 encrypted.nonce_base64.into(),
                 encrypted.ciphertext_base64.into(),
-                account_digest.into(),
+                account_digest.clone().into(),
             ],
         ))
         .await
@@ -268,6 +394,7 @@ async fn configure_alipay_runtime(
         .await
         .unwrap();
     drop(write);
+    seed_payment_governance(ctx, "store-channel-alipay", &account_digest).await;
     ctx.state.payment_keys = Some(Arc::new(ring));
     ctx.state.payment_public_origin = Some(url::Url::parse("https://lynshen.org").unwrap());
     ctx.state.checkout_provider = Arc::new(provider);
@@ -324,7 +451,7 @@ async fn configure_wechat_runtime(
                 encrypted.key_id.into(),
                 encrypted.nonce_base64.into(),
                 encrypted.ciphertext_base64.into(),
-                account_digest.into(),
+                account_digest.clone().into(),
             ],
         ))
         .await
@@ -337,6 +464,7 @@ async fn configure_wechat_runtime(
         .await
         .unwrap();
     drop(write);
+    seed_payment_governance(ctx, "store-channel-wechat", &account_digest).await;
     ctx.state.payment_keys = Some(Arc::new(ring));
     ctx.state.payment_public_origin = Some(url::Url::parse("https://lynshen.org").unwrap());
     ctx.state.checkout_provider = Arc::new(provider);

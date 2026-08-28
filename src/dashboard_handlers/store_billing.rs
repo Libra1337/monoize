@@ -3,6 +3,7 @@ use crate::error::{AppError, AppResult};
 use crate::store_billing::checkout::{CheckoutError, CheckoutService};
 use crate::store_billing::credentials::{CredentialStore, CredentialStoreError};
 use crate::store_billing::exchange_rate::ExchangeRateError;
+use crate::store_billing::governance::PaymentGovernanceStore;
 use crate::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
 };
@@ -11,8 +12,9 @@ use crate::store_billing::redemption::{
     RedemptionAccessAction, RedemptionAuditContext, RevealRedemptionInput,
 };
 use crate::store_billing::{
-    CreatePaymentChannelInput, CreateProductInput, Currency, GenerateRedemptionCodesInput,
-    PAYMENT_ICON_MAX_BYTES, StoreBillingError, StoreSettings, UpdatePaymentChannelInput,
+    ConfirmStoreComplianceInput, CreatePaymentChannelInput, CreateProductInput, Currency,
+    GenerateRedemptionCodesInput, MerchantCapabilityKind, PAYMENT_ICON_MAX_BYTES,
+    PutStoreMerchantCapabilityInput, StoreBillingError, StoreSettings, UpdatePaymentChannelInput,
 };
 use axum::Json;
 use axum::body::Body;
@@ -736,6 +738,97 @@ pub async fn list_store_payment_channels_admin(
         .await
         .map_err(map_store_error)?;
     Ok(Json(channels))
+}
+
+pub async fn get_store_payment_compliance_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let view = PaymentGovernanceStore::new(state.db_pool.clone())
+        .compliance(&id)
+        .await
+        .map_err(map_store_error)?;
+    Ok((no_store_headers(), Json(view)))
+}
+
+pub async fn confirm_store_payment_compliance_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<ConfirmStoreComplianceInput>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    let input = parse_store_json(body)?;
+    let session_token = extract_session_token(&headers).ok_or_else(|| {
+        AppError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "missing dashboard session",
+        )
+    })?;
+    let grant_token = headers
+        .get("X-Store-Reauth-Token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| map_reauth_error(ReauthError::InvalidGrant))?;
+    ReauthStore::new(state.db_pool.clone())
+        .verify(&admin.id, &session_token, grant_token, "compliance_confirm")
+        .await
+        .map_err(map_reauth_error)?;
+    let source_ip = crate::client_ip::canonical_client_ip_from_headers(&headers)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let compliance = PaymentGovernanceStore::new(state.db_pool.clone())
+        .confirm_compliance(&id, input, &admin.id, &source_ip)
+        .await
+        .map_err(map_store_error)?;
+    Ok((no_store_headers(), Json(compliance)))
+}
+
+pub async fn list_store_payment_capabilities_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let capabilities = PaymentGovernanceStore::new(state.db_pool.clone())
+        .capabilities(&id)
+        .await
+        .map_err(map_store_error)?;
+    Ok((no_store_headers(), Json(capabilities)))
+}
+
+pub async fn put_store_payment_capability_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, capability)): Path<(String, String)>,
+    body: Result<Json<PutStoreMerchantCapabilityInput>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    let capability = MerchantCapabilityKind::from_str(&capability)
+        .ok_or_else(|| map_store_error(StoreBillingError::InvalidInput))?;
+    let input = parse_store_json(body)?;
+    let capability = PaymentGovernanceStore::new(state.db_pool.clone())
+        .put_capability(&id, capability, input, &admin.id)
+        .await
+        .map_err(map_store_error)?;
+    Ok((no_store_headers(), Json(capability)))
+}
+
+pub async fn get_store_payment_availability_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let availability = PaymentGovernanceStore::new(state.db_pool.clone())
+        .availability(&id)
+        .await
+        .map_err(map_store_error)?;
+    Ok((no_store_headers(), Json(availability)))
 }
 
 pub async fn create_store_reauth_grant(

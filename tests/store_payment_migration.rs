@@ -22,6 +22,7 @@ const PAYMENT_TABLES: &[&str] = &[
     "store_reconciliation_cases",
     "store_fulfillment_retries",
     "store_privacy_records",
+    "store_channel_readiness_profiles",
     "store_access_audits",
     "store_retention_runs",
     "store_legal_holds",
@@ -68,6 +69,67 @@ async fn sqlite_columns(db: &DatabaseConnection, table: &str) -> Vec<String> {
     .into_iter()
     .map(|row| String::try_get(&row, "", "name").expect("column name"))
     .collect()
+}
+
+#[tokio::test]
+async fn migration_054_upgrades_reauth_scope_without_losing_existing_grants_or_indexes() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    Migrator::up(&db, Some(48)).await.unwrap();
+    db.execute_unprepared(
+        "INSERT INTO store_reauth_grants
+            (id, user_id, session_token_digest, token_digest, scope, created_at, expires_at)
+         VALUES ('legacy-grant', 'admin', 'legacy-session', 'legacy-token',
+                 'credential_update', '2026-08-28T00:00:00Z', '2026-08-28T00:05:00Z')",
+    )
+    .await
+    .unwrap();
+    assert!(
+        db.execute_unprepared(
+            "INSERT INTO store_reauth_grants
+                (id, user_id, session_token_digest, token_digest, scope, created_at, expires_at)
+             VALUES ('too-early', 'admin', 'session-early', 'token-early',
+                     'compliance_confirm', '2026-08-28T00:00:00Z',
+                     '2026-08-28T00:05:00Z')"
+        )
+        .await
+        .is_err()
+    );
+
+    Migrator::up(&db, None).await.unwrap();
+    db.execute_unprepared(
+        "INSERT INTO store_reauth_grants
+            (id, user_id, session_token_digest, token_digest, scope, created_at, expires_at)
+         VALUES ('compliance-grant', 'admin', 'compliance-session', 'compliance-token',
+                 'compliance_confirm', '2026-08-28T00:00:00Z',
+                 '2026-08-28T00:05:00Z')",
+    )
+    .await
+    .unwrap();
+    assert!(
+        db.execute_unprepared(
+            "INSERT INTO store_reauth_grants
+                (id, user_id, session_token_digest, token_digest, scope, created_at, expires_at)
+             VALUES ('unknown-grant', 'admin', 'unknown-session', 'unknown-token', 'unknown',
+                     '2026-08-28T00:00:00Z', '2026-08-28T00:05:00Z')"
+        )
+        .await
+        .is_err()
+    );
+    let rows = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT id FROM store_reauth_grants ORDER BY id".to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    let indexes = sqlite_names(&db, "index").await;
+    for index in ["uq_store_reauth_token_digest", "idx_store_reauth_expiry"] {
+        assert!(
+            indexes.iter().any(|value| value == index),
+            "missing {index}"
+        );
+    }
 }
 
 #[tokio::test]

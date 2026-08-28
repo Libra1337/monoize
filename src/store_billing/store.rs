@@ -1,6 +1,7 @@
 use super::{
     crypto::{EncryptedSecret, PaymentKeyRing},
     exchange_rate::ExchangeRateSnapshot,
+    governance::{evaluate_channel, evaluate_channels},
     models::*,
     money::{Currency, MoneyError, convert_minor, parse_minor, quoted_received_to_nano_usd},
     quota::{EntitlementGenerationInput, QuotaError, replace_entitlement_tx},
@@ -632,7 +633,19 @@ impl StoreBillingStore {
             ))
             .await
             .map_err(storage)?;
-        row.map(payment_channel_from_row).transpose()
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let mut channel = payment_channel_from_row(row)?;
+        let availability = evaluate_channel(&self.db, self.db.read(), id, Utc::now())
+            .await
+            .map_err(storage)?;
+        channel.effective_available = availability.effective_available;
+        channel.unavailable_reasons = availability.unavailable_reasons;
+        channel.supported_currencies = availability.supported_currencies;
+        channel.amount_limits = availability.amount_limits;
+        channel.checkout_action_kinds = availability.checkout_action_kinds;
+        Ok(Some(channel))
     }
 
     pub async fn catalog(&self) -> Result<StoreCatalog, StoreBillingError> {
@@ -664,7 +677,7 @@ impl StoreBillingStore {
             products.push(self.product_from_row(self.db.read(), row).await?);
         }
 
-        let payment_channels = self
+        let channel_rows = self
             .db
             .read()
             .query_all(self.db.stmt(
@@ -675,10 +688,25 @@ impl StoreBillingStore {
                 vec![],
             ))
             .await
-            .map_err(storage)?
-            .into_iter()
-            .map(payment_channel_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
+            .map_err(storage)?;
+        let availability = evaluate_channels(&self.db, self.db.read(), Utc::now())
+            .await
+            .map_err(storage)?;
+        let mut payment_channels = Vec::new();
+        for row in channel_rows {
+            let mut channel = payment_channel_from_row(row)?;
+            let availability = availability
+                .get(&channel.id)
+                .ok_or_else(|| storage("Channel availability is missing"))?;
+            if availability.effective_available {
+                channel.effective_available = true;
+                channel.unavailable_reasons = availability.unavailable_reasons.clone();
+                channel.supported_currencies = availability.supported_currencies.clone();
+                channel.amount_limits = availability.amount_limits.clone();
+                channel.checkout_action_kinds = availability.checkout_action_kinds.clone();
+                payment_channels.push(channel);
+            }
+        }
         Ok(StoreCatalog {
             products,
             payment_channels,
@@ -709,7 +737,8 @@ impl StoreBillingStore {
     pub async fn list_payment_channels_admin(
         &self,
     ) -> Result<Vec<PaymentChannel>, StoreBillingError> {
-        self.db
+        let rows = self
+            .db
             .read()
             .query_all(self.db.stmt(
                 "SELECT id, adapter_kind, name, icon_kind, icon_value,
@@ -719,10 +748,24 @@ impl StoreBillingStore {
                 vec![],
             ))
             .await
-            .map_err(storage)?
-            .into_iter()
-            .map(payment_channel_from_row)
-            .collect()
+            .map_err(storage)?;
+        let availability = evaluate_channels(&self.db, self.db.read(), Utc::now())
+            .await
+            .map_err(storage)?;
+        let mut channels = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut channel = payment_channel_from_row(row)?;
+            let availability = availability
+                .get(&channel.id)
+                .ok_or_else(|| storage("Channel availability is missing"))?;
+            channel.effective_available = availability.effective_available;
+            channel.unavailable_reasons = availability.unavailable_reasons.clone();
+            channel.supported_currencies = availability.supported_currencies.clone();
+            channel.amount_limits = availability.amount_limits.clone();
+            channel.checkout_action_kinds = availability.checkout_action_kinds.clone();
+            channels.push(channel);
+        }
+        Ok(channels)
     }
 
     pub async fn delete_product(&self, id: &str) -> Result<(), StoreBillingError> {
@@ -1494,6 +1537,11 @@ fn payment_channel_from_row(row: QueryResult) -> Result<PaymentChannel, StoreBil
         sort_order: row.try_get("", "sort_order").map_err(storage)?,
         enabled: row_i32(&row, "enabled")? != 0,
         revision: row.try_get("", "revision").map_err(storage)?,
+        effective_available: false,
+        unavailable_reasons: Vec::new(),
+        supported_currencies: Vec::new(),
+        amount_limits: Default::default(),
+        checkout_action_kinds: Vec::new(),
         created_at: parse_timestamp(&row_string(&row, "created_at")?)?,
         updated_at: parse_timestamp(&row_string(&row, "updated_at")?)?,
     })

@@ -7,6 +7,7 @@ pub mod checkout;
 pub mod credentials;
 pub mod crypto;
 pub mod exchange_rate;
+pub mod governance;
 pub mod models;
 pub mod money;
 pub mod operations;

@@ -5,14 +5,20 @@ use axum::http::{Method, Request, StatusCode};
 use chrono::{TimeZone, Utc};
 use http_body_util::BodyExt;
 use monoize::store_billing::adapters::wechat::WechatCredential;
+use monoize::store_billing::credentials::CredentialStore;
 use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::{
     ExchangeRateFetcher, ExchangeRateService, ExchangeRateSnapshot, ExchangeRateStore,
+};
+use monoize::store_billing::governance::PaymentGovernanceStore;
+use monoize::store_billing::{
+    MerchantCapabilityKind, MerchantCapabilityState, PutStoreMerchantCapabilityInput,
 };
 use monoize::users::UserRole;
 use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use tokio::sync::Barrier;
 use tower::ServiceExt;
 
 use super::setup;
@@ -62,6 +68,67 @@ async fn configure_offline_rate(ctx: &mut super::TestContext) {
     .await
     .unwrap();
     ctx.router = monoize::app::build_app(ctx.state.clone());
+}
+
+async fn seed_governed_stripe(ctx: &super::TestContext) {
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_payment_channels SET enabled = 1
+             WHERE id = 'store-channel-stripe';
+             INSERT INTO store_channel_credentials
+                (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+                 ciphertext_base64, account_identity_digest, status, created_at)
+             VALUES ('api-governance-credential', 'store-channel-stripe', 'stripe', 1,
+                     'key', 'nonce', 'ciphertext',
+                     '2222222222222222222222222222222222222222222222222222222222222222',
+                     'active',
+                     '2026-08-28T00:00:00Z');
+             INSERT INTO store_payment_compliance
+                (id, channel_id, terms_version, admin_user_id, source_ip, confirmed_at)
+             VALUES ('api-governance-compliance', 'store-channel-stripe', '2026-08-28',
+                     'admin', '127.0.0.1', '2026-08-28T00:00:00Z');
+             INSERT INTO store_merchant_capabilities
+                (id, channel_id, capability, state, environment, merchant_account_digest,
+                 provider_product, evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES
+                ('api-cap-payment-query', 'store-channel-stripe', 'payment_query', 'supported',
+                 'sandbox', '2222222222222222222222222222222222222222222222222222222222222222', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin',
+                 '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z'),
+                ('api-cap-refund', 'store-channel-stripe', 'refund', 'supported',
+                 'sandbox', '2222222222222222222222222222222222222222222222222222222222222222', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin',
+                 '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z'),
+                ('api-cap-refund-query', 'store-channel-stripe', 'refund_query', 'supported',
+                 'sandbox', '2222222222222222222222222222222222222222222222222222222222222222', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin',
+                 '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z'),
+                ('api-cap-settlement', 'store-channel-stripe', 'settlement_report', 'supported',
+                 'sandbox', '2222222222222222222222222222222222222222222222222222222222222222', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin',
+                 '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z');
+             INSERT INTO store_privacy_records
+                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+             VALUES ('api-governance-privacy', 'v1', 'CN', '[]', '{}', 'contract', 'admin',
+                     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                     '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z', 1);
+             INSERT INTO store_channel_readiness_profiles
+                (channel_id, active_credential_digest, privacy_record_id,
+                 callback_verification_passed, supported_currencies_json, amount_limits_json,
+                 checkout_action_kinds_json, license_evidence_digest, runtime_evidence_digest,
+                 availability_evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES ('store-channel-stripe',
+                     '2222222222222222222222222222222222222222222222222222222222222222',
+                     'api-governance-privacy', 1, '[\"CNY\",\"USD\"]',
+                     '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"},\"USD\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
+                     '[\"redirect\"]',
+                     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                     'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                     'admin', '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z')",
+        )
+        .await
+        .unwrap();
 }
 
 async fn dashboard_session(ctx: &super::TestContext, username: &str, role: UserRole) -> String {
@@ -363,7 +430,7 @@ async fn credential_replacement_requires_scoped_reauth_and_never_returns_secrets
               provider_product, evidence_digest, verifier_admin_id, verified_at, expires_at)
              VALUES
              ('capability-before-replace', 'store-channel-stripe', 'refund', 'supported',
-              'sandbox', 'old-account', 'checkout', 'evidence', 'credential_admin',
+              'sandbox', 'old-account', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'credential_admin',
               '2026-08-27T00:00:00Z', '2026-11-25T00:00:00Z')",
         )
         .await
@@ -510,6 +577,14 @@ fn store_json_mutations() -> Vec<(Method, &'static str)> {
         (
             Method::PUT,
             "/api/dashboard/store/admin/payment-channels/missing/credential",
+        ),
+        (
+            Method::PUT,
+            "/api/dashboard/store/admin/payment-channels/missing/compliance",
+        ),
+        (
+            Method::PUT,
+            "/api/dashboard/store/admin/payment-channels/missing/capabilities/refund",
         ),
         (Method::POST, "/api/dashboard/store/admin/redemption-codes"),
         (
@@ -997,6 +1072,73 @@ async fn idempotent_json_request(
     (status, response_json(response).await)
 }
 
+async fn stripe_availability(ctx: &super::TestContext, admin: &str) -> Value {
+    let (status, availability, _) = json_request_with_reauth(
+        ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/availability",
+        admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{availability}");
+    availability
+}
+
+async fn assert_governed_order_rejected(
+    ctx: &super::TestContext,
+    user: &str,
+    idempotency_key: &str,
+    product_id: &Value,
+    currency: &str,
+) {
+    let (status, body) = idempotent_json_request(
+        ctx,
+        "/api/dashboard/store/orders",
+        user,
+        idempotency_key,
+        json!({
+            "product_id": product_id,
+            "payment_channel_id":"store-channel-stripe",
+            "payment_currency":currency,
+            "custom_recharge_minor":null
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "payment_channel_unavailable");
+}
+
+async fn assert_corrupted_capability_blocks_channel(
+    ctx: &super::TestContext,
+    admin: &str,
+    user: &str,
+    product_id: &Value,
+    idempotency_key: &str,
+) {
+    let availability = stripe_availability(ctx, admin).await;
+    assert_eq!(availability["effective_available"], false);
+    assert!(
+        availability["unavailable_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "capability_payment_query_invalid")
+    );
+    let (status, catalog) = json_request(
+        ctx,
+        Method::GET,
+        "/api/dashboard/store/catalog",
+        Some(user),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    assert!(catalog["payment_channels"].as_array().unwrap().is_empty());
+    assert_governed_order_rejected(ctx, user, idempotency_key, product_id, "CNY").await;
+}
+
 fn balance_product(name: &str) -> Value {
     json!({
         "kind": "balance",
@@ -1142,6 +1284,981 @@ async fn store_admin_guards_and_product_channel_management() {
 }
 
 #[tokio::test]
+async fn enabled_only_channel_is_not_available_for_catalog_or_orders() {
+    let mut ctx = setup().await;
+    configure_rate(&mut ctx).await;
+    let admin = dashboard_session(&ctx, "governance_enabled_admin", UserRole::Admin).await;
+    let user = dashboard_session(&ctx, "governance_enabled_user", UserRole::User).await;
+    let (status, product) = json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/products",
+        Some(&admin),
+        Some(balance_product("Governed recharge")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{product}");
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_payment_channels SET enabled = 1
+             WHERE id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+
+    let (status, catalog) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/catalog",
+        Some(&user),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    assert!(catalog["payment_channels"].as_array().unwrap().is_empty());
+
+    let (status, body) = idempotent_json_request(
+        &ctx,
+        "/api/dashboard/store/orders",
+        &user,
+        "governance-enabled-only",
+        json!({
+            "product_id": product["id"],
+            "payment_channel_id": "store-channel-stripe",
+            "payment_currency": "CNY",
+            "custom_recharge_minor": null
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "payment_channel_unavailable");
+}
+
+#[tokio::test]
+async fn payment_governance_endpoints_require_admin_reauth_and_no_store() {
+    let ctx = setup().await;
+    let admin = dashboard_session(&ctx, "governance_api_admin", UserRole::Admin).await;
+    let user = dashboard_session(&ctx, "governance_api_user", UserRole::User).await;
+    let compliance_path =
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/compliance";
+
+    let (status, _) = json_request(&ctx, Method::GET, compliance_path, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = json_request(&ctx, Method::GET, compliance_path, Some(&user), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, body, headers) =
+        json_request_with_reauth(&ctx, Method::GET, compliance_path, &admin, None, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_sensitive_headers(&headers);
+    assert_eq!(body["current_terms_version"], "2026-08-28");
+    assert!(body["compliance"].is_null());
+
+    let (status, error, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        compliance_path,
+        &admin,
+        None,
+        json!({"confirmed":true,"terms_version":"2026-08-28"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+
+    let (status, grant, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        &admin,
+        None,
+        json!({"current_password":"test-password","scope":"compliance_confirm"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{grant}");
+    let (status, compliance, headers) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        compliance_path,
+        &admin,
+        grant["token"].as_str(),
+        json!({"confirmed":true,"terms_version":"2026-08-28"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{compliance}");
+    assert_sensitive_headers(&headers);
+    assert!(compliance["admin_user_id"].is_string());
+    assert!(compliance["confirmed_at"].is_string());
+    assert!(compliance.get("credential").is_none());
+
+    for suffix in ["capabilities", "availability"] {
+        let (status, body, headers) = json_request_with_reauth(
+            &ctx,
+            Method::GET,
+            &format!("/api/dashboard/store/admin/payment-channels/store-channel-stripe/{suffix}"),
+            &admin,
+            None,
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_sensitive_headers(&headers);
+    }
+    let (status, body, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/capabilities/unknown",
+        &admin,
+        None,
+        json!({
+            "state":"supported",
+            "environment":"sandbox",
+            "provider_product":"checkout",
+            "evidence_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "controlled_transaction_id":null
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn governed_channel_becomes_available_and_rotation_fails_closed() {
+    let mut ctx = setup().await;
+    ctx.state.payment_keys = Some(Arc::new(
+        PaymentKeyRing::new(
+            PaymentKey::new("governance-key", [59_u8; 32]).unwrap(),
+            vec![],
+        )
+        .unwrap(),
+    ));
+    configure_rate(&mut ctx).await;
+    let admin = dashboard_session(&ctx, "governance_flow_admin", UserRole::Admin).await;
+    let user = dashboard_session(&ctx, "governance_flow_user", UserRole::User).await;
+    let (_, product) = json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/products",
+        Some(&admin),
+        Some(balance_product("Governance flow recharge")),
+    )
+    .await;
+    let stripe_credential = |suffix: &str| {
+        json!({
+            "secret_key":format!("sk_test_{suffix}"),
+            "publishable_key":format!("pk_test_{suffix}"),
+            "webhook_signing_secret":format!("whsec_{suffix}"),
+            "api_version":"2026-08-01",
+            "account_id":format!("acct_{suffix}"),
+            "live_mode":false
+        })
+    };
+    let (status, credential_grant, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        &admin,
+        None,
+        json!({"current_password":"test-password","scope":"credential_update"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{credential_grant}");
+    let (status, saved, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/credential",
+        &admin,
+        credential_grant["token"].as_str(),
+        stripe_credential("governed"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let merchant_digest = saved["account_identity_digest"].as_str().unwrap();
+
+    let (_, channels) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels",
+        Some(&admin),
+        None,
+    )
+    .await;
+    let stripe = channels
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|channel| channel["id"] == "store-channel-stripe")
+        .unwrap();
+    assert_eq!(stripe["effective_available"], false);
+    let (status, _) = json_request(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe",
+        Some(&admin),
+        Some(json!({"expected_revision":stripe["revision"],"enabled":true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, compliance_grant, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        &admin,
+        None,
+        json!({"current_password":"test-password","scope":"compliance_confirm"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{compliance_grant}");
+    let (status, _, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/compliance",
+        &admin,
+        compliance_grant["token"].as_str(),
+        json!({"confirmed":true,"terms_version":"2026-08-28"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    for (capability, state) in [
+        ("payment_query", "supported"),
+        ("refund", "supported"),
+        ("refund_query", "supported"),
+        ("dispute_event", "manual"),
+        ("dispute_query", "manual"),
+        ("bill_download", "supported"),
+        ("settlement_report", "supported"),
+    ] {
+        let (status, saved_capability, headers) = json_request_with_reauth(
+            &ctx,
+            Method::PUT,
+            &format!(
+                "/api/dashboard/store/admin/payment-channels/store-channel-stripe/capabilities/{capability}"
+            ),
+            &admin,
+            None,
+            json!({
+                "state":state,
+                "environment":"sandbox",
+                "provider_product":"checkout",
+                "evidence_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "controlled_transaction_id":format!("controlled-{capability}")
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{saved_capability}");
+        assert_sensitive_headers(&headers);
+        assert_eq!(saved_capability["merchant_account_digest"], merchant_digest);
+    }
+    let (_, all_capabilities, _) = json_request_with_reauth(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/capabilities",
+        &admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        all_capabilities["capabilities"].as_array().unwrap().len(),
+        7
+    );
+
+    let (status, pending, headers) = json_request_with_reauth(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/availability",
+        &admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{pending}");
+    assert_sensitive_headers(&headers);
+    assert_eq!(pending["effective_available"], false);
+    assert!(
+        pending["unavailable_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "readiness_profile_missing")
+    );
+    let (_, catalog) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/catalog",
+        Some(&user),
+        None,
+    )
+    .await;
+    assert!(catalog["payment_channels"].as_array().unwrap().is_empty());
+    let (status, unavailable_order) = idempotent_json_request(
+        &ctx,
+        "/api/dashboard/store/orders",
+        &user,
+        "governed-order",
+        json!({
+            "product_id":product["id"],
+            "payment_channel_id":"store-channel-stripe",
+            "payment_currency":"CNY",
+            "custom_recharge_minor":null
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{unavailable_order}");
+    assert_eq!(
+        unavailable_order["error"]["code"],
+        "payment_channel_unavailable"
+    );
+
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "INSERT INTO store_privacy_records
+                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+             VALUES ('privacy-current', 'v1', 'CN', '[]', '{}', 'contract', 'privacy-admin',
+                     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                     '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z', 1)",
+        )
+        .await
+        .unwrap();
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_channel_readiness_profiles
+                (channel_id, active_credential_digest, privacy_record_id,
+                 callback_verification_passed, supported_currencies_json, amount_limits_json,
+                 checkout_action_kinds_json, license_evidence_digest, runtime_evidence_digest,
+                 availability_evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES ($1, $2, 'privacy-current', 1, '[\"CNY\",\"USD\"]',
+                     '{\"CNY\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"},\"USD\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"}}',
+                     '[\"redirect\"]',
+                     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                     'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                     'readiness-admin', '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z')",
+            vec!["store-channel-stripe".into(), merchant_digest.into()],
+        ))
+        .await
+        .unwrap();
+    let (status, availability, _) = json_request_with_reauth(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/availability",
+        &admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{availability}");
+    assert_eq!(availability["effective_available"], true);
+    assert_eq!(availability["supported_currencies"], json!(["CNY", "USD"]));
+    assert_eq!(availability["checkout_action_kinds"], json!(["redirect"]));
+    let (_, catalog) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/catalog",
+        Some(&user),
+        None,
+    )
+    .await;
+    assert_eq!(catalog["payment_channels"].as_array().unwrap().len(), 1);
+    let (status, order) = idempotent_json_request(
+        &ctx,
+        "/api/dashboard/store/orders",
+        &user,
+        "governed-order-ready",
+        json!({
+            "product_id":product["id"],
+            "payment_channel_id":"store-channel-stripe",
+            "payment_currency":"CNY",
+            "custom_recharge_minor":null
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{order}");
+
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_channel_readiness_profiles
+             SET amount_limits_json = '{\"CNY\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"},\"CNY\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"},\"USD\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"}}'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+    let duplicate_amount_currency = stripe_availability(&ctx, &admin).await;
+    assert_eq!(duplicate_amount_currency["effective_available"], false);
+    assert!(
+        duplicate_amount_currency["unavailable_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "readiness_metadata_invalid")
+    );
+    let (_, catalog) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/catalog",
+        Some(&user),
+        None,
+    )
+    .await;
+    assert!(catalog["payment_channels"].as_array().unwrap().is_empty());
+    assert_governed_order_rejected(
+        &ctx,
+        &user,
+        "governed-duplicate-amount-currency",
+        &product["id"],
+        "CNY",
+    )
+    .await;
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_channel_readiness_profiles
+             SET amount_limits_json = '{\"CNY\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"},\"USD\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"}}'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_channel_readiness_profiles
+             SET expires_at = '2026-01-01T00:00:00Z'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+    let expired_profile = stripe_availability(&ctx, &admin).await;
+    assert!(
+        expired_profile["unavailable_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "readiness_profile_expired")
+    );
+    ctx.state.db_pool.write().await.execute_unprepared(
+        "UPDATE store_channel_readiness_profiles SET expires_at = '2099-01-01T00:00:00Z',
+         active_credential_digest = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+         WHERE channel_id = 'store-channel-stripe'"
+    ).await.unwrap();
+    let mismatched_profile = stripe_availability(&ctx, &admin).await;
+    assert!(
+        mismatched_profile["unavailable_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "readiness_profile_credential_mismatch")
+    );
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute(ctx.state.db_pool.stmt(
+            "UPDATE store_channel_readiness_profiles SET active_credential_digest = $2
+             WHERE channel_id = $1",
+            vec!["store-channel-stripe".into(), merchant_digest.into()],
+        ))
+        .await
+        .unwrap();
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_privacy_records SET accepted = 0 WHERE id = 'privacy-current'",
+        )
+        .await
+        .unwrap();
+    let rejected_privacy = stripe_availability(&ctx, &admin).await;
+    assert!(
+        rejected_privacy["unavailable_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "privacy_gate_pending")
+    );
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_privacy_records SET accepted = 1 WHERE id = 'privacy-current'",
+        )
+        .await
+        .unwrap();
+
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_channel_readiness_profiles
+         SET supported_currencies_json = '[\"USD\"]',
+             amount_limits_json = '{\"USD\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"}}'
+         WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+    assert_governed_order_rejected(
+        &ctx,
+        &user,
+        "governed-currency-rejected",
+        &product["id"],
+        "CNY",
+    )
+    .await;
+    ctx.state.db_pool.write().await.execute_unprepared(
+        "UPDATE store_channel_readiness_profiles
+         SET supported_currencies_json = '[\"CNY\",\"USD\"]',
+             amount_limits_json = '{\"CNY\":{\"min_minor\":\"2000\",\"max_minor\":\"100000\"},\"USD\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"}}'
+         WHERE channel_id = 'store-channel-stripe'"
+    ).await.unwrap();
+    assert_governed_order_rejected(
+        &ctx,
+        &user,
+        "governed-amount-rejected",
+        &product["id"],
+        "CNY",
+    )
+    .await;
+    ctx.state.db_pool.write().await.execute_unprepared(
+        "UPDATE store_channel_readiness_profiles
+         SET amount_limits_json = '{\"CNY\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"},\"USD\":{\"min_minor\":\"100\",\"max_minor\":\"100000\"}}',
+             checkout_action_kinds_json = '[\"qr\"]'
+         WHERE channel_id = 'store-channel-stripe'"
+    ).await.unwrap();
+    let incompatible_action = stripe_availability(&ctx, &admin).await;
+    assert!(
+        incompatible_action["unavailable_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "checkout_action_incompatible")
+    );
+    assert!(
+        incompatible_action["checkout_action_kinds"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_channel_readiness_profiles SET checkout_action_kinds_json = '[\"redirect\"]'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_merchant_capabilities
+             SET verified_at = '2025-01-01T00:00:00Z',
+                 expires_at = '2026-01-01T00:00:00Z'
+         WHERE channel_id = 'store-channel-stripe' AND capability = 'settlement_report'",
+        )
+        .await
+        .unwrap();
+    let (_, expired, _) = json_request_with_reauth(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/availability",
+        &admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(expired["effective_available"], false);
+    assert!(
+        expired["unavailable_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "capability_settlement_report_expired")
+    );
+    ctx.state.db_pool.write().await.execute_unprepared(
+        "UPDATE store_merchant_capabilities SET expires_at = '2099-01-01T00:00:00Z', merchant_account_digest = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+         WHERE channel_id = 'store-channel-stripe' AND capability = 'settlement_report'"
+    ).await.unwrap();
+    let (_, mismatched, _) = json_request_with_reauth(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/availability",
+        &admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(mismatched["effective_available"], false);
+    assert!(
+        mismatched["unavailable_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "capability_settlement_report_credential_mismatch")
+    );
+
+    let (status, _, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/credential",
+        &admin,
+        credential_grant["token"].as_str(),
+        stripe_credential("rotated"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, capabilities, _) = json_request_with_reauth(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/capabilities",
+        &admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert!(capabilities["capabilities"].as_array().unwrap().is_empty());
+    let (_, rotated, _) = json_request_with_reauth(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/availability",
+        &admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(rotated["effective_available"], false);
+}
+
+#[tokio::test]
+async fn malformed_capability_rows_fail_closed_without_breaking_catalog() {
+    let mut ctx = setup().await;
+    configure_rate(&mut ctx).await;
+    seed_governed_stripe(&ctx).await;
+    let admin = dashboard_session(&ctx, "capability_shape_admin", UserRole::Admin).await;
+    let user = dashboard_session(&ctx, "capability_shape_user", UserRole::User).await;
+    let (_, product) = json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/products",
+        Some(&admin),
+        Some(balance_product("Capability shape recharge")),
+    )
+    .await;
+    assert_eq!(
+        stripe_availability(&ctx, &admin).await["effective_available"],
+        true
+    );
+
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_merchant_capabilities SET evidence_digest = 'broken'
+             WHERE channel_id = 'store-channel-stripe' AND capability = 'payment_query'",
+        )
+        .await
+        .unwrap();
+    assert_corrupted_capability_blocks_channel(
+        &ctx,
+        &admin,
+        &user,
+        &product["id"],
+        "capability-invalid-digest",
+    )
+    .await;
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_merchant_capabilities
+             SET evidence_digest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                 verified_at = 'not-a-timestamp'
+             WHERE channel_id = 'store-channel-stripe' AND capability = 'payment_query'",
+        )
+        .await
+        .unwrap();
+    assert_corrupted_capability_blocks_channel(
+        &ctx,
+        &admin,
+        &user,
+        &product["id"],
+        "capability-invalid-timestamp",
+    )
+    .await;
+
+    let write = ctx.state.db_pool.write().await;
+    write
+        .execute_unprepared("PRAGMA ignore_check_constraints = ON")
+        .await
+        .unwrap();
+    write
+        .execute_unprepared(
+            "UPDATE store_merchant_capabilities
+             SET verified_at = '2026-08-28T00:00:00Z', state = 'unknown'
+             WHERE channel_id = 'store-channel-stripe' AND capability = 'payment_query'",
+        )
+        .await
+        .unwrap();
+    write
+        .execute_unprepared("PRAGMA ignore_check_constraints = OFF")
+        .await
+        .unwrap();
+    drop(write);
+    assert_corrupted_capability_blocks_channel(
+        &ctx,
+        &admin,
+        &user,
+        &product["id"],
+        "capability-invalid-state",
+    )
+    .await;
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_merchant_capabilities
+             SET state = 'supported', capability = 'PAYMENT_QUERY'
+             WHERE channel_id = 'store-channel-stripe' AND capability = 'payment_query'",
+        )
+        .await
+        .unwrap();
+    assert_corrupted_capability_blocks_channel(
+        &ctx,
+        &admin,
+        &user,
+        &product["id"],
+        "capability-invalid-name",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn credential_rotation_and_capability_put_never_leave_an_old_merchant_digest() {
+    let ctx = setup().await;
+    let ring = Arc::new(
+        PaymentKeyRing::new(
+            PaymentKey::new("governance-race-key", [61_u8; 32]).unwrap(),
+            vec![],
+        )
+        .unwrap(),
+    );
+    let credentials = CredentialStore::new(ctx.state.db_pool.clone(), ring);
+    let old = credentials
+        .replace(
+            "store-channel-stripe",
+            json!({
+                "secret_key":"sk_test_race_old",
+                "publishable_key":"pk_test_race_old",
+                "webhook_signing_secret":"whsec_race_old",
+                "api_version":"2026-08-01",
+                "account_id":"acct_race_old",
+                "live_mode":false
+            }),
+        )
+        .await
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(3));
+    let rotate_barrier = barrier.clone();
+    let rotate_store = credentials.clone();
+    let rotate = tokio::spawn(async move {
+        rotate_barrier.wait().await;
+        rotate_store
+            .replace(
+                "store-channel-stripe",
+                json!({
+                    "secret_key":"sk_test_race_new",
+                    "publishable_key":"pk_test_race_new",
+                    "webhook_signing_secret":"whsec_race_new",
+                    "api_version":"2026-08-01",
+                    "account_id":"acct_race_new",
+                    "live_mode":false
+                }),
+            )
+            .await
+    });
+    let capability_barrier = barrier.clone();
+    let governance = PaymentGovernanceStore::new(ctx.state.db_pool.clone());
+    let capability = tokio::spawn(async move {
+        capability_barrier.wait().await;
+        governance
+            .put_capability(
+                "store-channel-stripe",
+                MerchantCapabilityKind::Refund,
+                PutStoreMerchantCapabilityInput {
+                    state: MerchantCapabilityState::Supported,
+                    environment: "sandbox".to_string(),
+                    provider_product: "checkout".to_string(),
+                    evidence_digest:
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                    controlled_transaction_id: Some("race-refund".to_string()),
+                },
+                "race-admin",
+            )
+            .await
+    });
+    barrier.wait().await;
+    let rotated = rotate.await.unwrap().unwrap();
+    capability.await.unwrap().unwrap();
+
+    let persisted = PaymentGovernanceStore::new(ctx.state.db_pool.clone())
+        .capabilities("store-channel-stripe")
+        .await
+        .unwrap();
+    assert!(
+        persisted.capabilities.is_empty()
+            || persisted
+                .capabilities
+                .iter()
+                .all(|record| record.merchant_account_digest == rotated.account_identity_digest)
+    );
+    assert!(
+        persisted
+            .capabilities
+            .iter()
+            .all(|record| record.merchant_account_digest != old.account_identity_digest)
+    );
+}
+
+#[test]
+fn postgres_governance_writers_lock_the_same_channel_row() {
+    let credential_source = include_str!("../../src/store_billing/credentials.rs");
+    let governance_source = include_str!("../../src/store_billing/governance.rs");
+    assert!(credential_source.contains("lock_channel(&self.db, &*tx, channel_id)"));
+    assert!(
+        governance_source
+            .contains("SELECT id FROM store_payment_channels WHERE id = $1 FOR UPDATE")
+    );
+}
+
+#[test]
+fn catalog_and_admin_channel_lists_use_the_fixed_query_batch_evaluator() {
+    let store_source = include_str!("../../src/store_billing/store.rs").replace("\r\n", "\n");
+    for (start, end) in [
+        ("pub async fn catalog(", "pub async fn list_products_admin("),
+        (
+            "pub async fn list_payment_channels_admin(",
+            "pub async fn delete_product(",
+        ),
+    ] {
+        let start = store_source.find(start).expect("list function must exist");
+        let end = store_source[start..]
+            .find(end)
+            .map(|offset| start + offset)
+            .expect("list function must have a bounded body");
+        let body = &store_source[start..end];
+        assert!(body.contains("evaluate_channels("));
+        assert!(!body.contains("evaluate_channel("));
+    }
+
+    let governance = include_str!("../../src/store_billing/governance.rs").replace("\r\n", "\n");
+    let start = governance
+        .find("async fn load_governance_snapshot")
+        .expect("batch loader must exist");
+    let end = governance[start..]
+        .find("fn evaluate_snapshot_channel(")
+        .map(|offset| start + offset)
+        .expect("batch loader must have a bounded body");
+    assert_eq!(governance[start..end].matches(".query_all(").count(), 6);
+
+    let evaluate_start = governance
+        .find("pub async fn evaluate_channel<")
+        .expect("single Channel evaluator must exist");
+    let evaluate_end = governance[evaluate_start..]
+        .find("pub async fn evaluate_channels<")
+        .map(|offset| evaluate_start + offset)
+        .expect("single Channel evaluator must have a bounded body");
+    assert!(
+        governance[evaluate_start..evaluate_end]
+            .contains("load_scoped_governance_snapshot")
+    );
+    let scoped_start = governance
+        .find("async fn load_scoped_governance_snapshot")
+        .expect("scoped loader must exist");
+    let scoped_end = governance[scoped_start..]
+        .find("async fn load_governance_snapshot")
+        .map(|offset| scoped_start + offset)
+        .expect("scoped loader must have a bounded body");
+    let scoped = &governance[scoped_start..scoped_end];
+    assert_eq!(scoped.matches(".query_all(").count(), 6);
+    assert_eq!(scoped.matches("vec![channel_id.into()]").count(), 6);
+    assert!(scoped.contains(
+        "SELECT privacy_record_id FROM store_channel_readiness_profiles WHERE channel_id = $1"
+    ));
+}
+
+#[tokio::test]
+async fn batch_and_single_channel_availability_match_for_two_channels() {
+    let ctx = setup().await;
+    seed_governed_stripe(&ctx).await;
+    let admin = dashboard_session(&ctx, "batch_availability_admin", UserRole::Admin).await;
+    let (status, channels) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels",
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{channels}");
+    for channel_id in ["store-channel-stripe", "store-channel-alipay"] {
+        let listed = channels
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|channel| channel["id"] == channel_id)
+            .unwrap();
+        let (status, single, _) = json_request_with_reauth(
+            &ctx,
+            Method::GET,
+            &format!(
+                "/api/dashboard/store/admin/payment-channels/{channel_id}/availability"
+            ),
+            &admin,
+            None,
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{single}");
+        for field in [
+            "effective_available",
+            "unavailable_reasons",
+            "supported_currencies",
+            "amount_limits",
+            "checkout_action_kinds",
+        ] {
+            assert_eq!(listed[field], single[field], "{channel_id}.{field}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn redemption_does_not_require_a_payment_channel() {
     let mut ctx = setup().await;
     configure_offline_rate(&mut ctx).await;
@@ -1238,16 +2355,7 @@ async fn store_json_errors_distinguish_currency_and_amount_overflow() {
         Some(balance_product("Error mapping recharge")),
     )
     .await;
-    ctx.state
-        .db_pool
-        .write()
-        .await
-        .execute_unprepared(
-            "UPDATE store_payment_channels SET enabled = 1
-             WHERE id = 'store-channel-stripe'",
-        )
-        .await
-        .unwrap();
+    seed_governed_stripe(&ctx).await;
     let request = |currency: &str, custom_recharge_minor: Option<String>| {
         json!({
             "product_id": product["id"],

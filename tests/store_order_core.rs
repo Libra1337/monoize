@@ -4,7 +4,8 @@ use monoize::migration::Migrator;
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
 use monoize::store_billing::money::Currency;
 use monoize::store_billing::order::{
-    CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
+    CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentAttemptFailureKind,
+    PaymentOrderError, PaymentOrderStore,
 };
 use monoize::store_billing::payment::CheckoutAction;
 use sea_orm::ConnectionTrait;
@@ -51,11 +52,60 @@ async fn setup() -> (DbPool, PaymentOrderStore) {
                      ciphertext_base64, account_identity_digest, status, created_at)
                  VALUES
                     ('credential-1', 'store-channel-stripe', 'stripe', 1, 'key-1',
-                     'bm9uY2U=', 'Y2lwaGVydGV4dA==', 'acct-digest', 'active',
+                     'bm9uY2U=', 'Y2lwaGVydGV4dA==',
+                     '1111111111111111111111111111111111111111111111111111111111111111',
+                     'active',
                      '2026-08-27T00:00:00Z')",
             )
             .await
             .expect("insert credential version");
+        write
+            .execute_unprepared(
+                "INSERT INTO store_payment_compliance
+                    (id, channel_id, terms_version, admin_user_id, source_ip, confirmed_at)
+                 VALUES
+                    ('compliance-1', 'store-channel-stripe', '2026-08-28', 'admin-1',
+                     '127.0.0.1', '2026-08-27T00:00:00Z');
+                 INSERT INTO store_merchant_capabilities
+                    (id, channel_id, capability, state, environment, merchant_account_digest,
+                     provider_product, evidence_digest, verifier_admin_id, verified_at, expires_at)
+                 VALUES
+                    ('cap-payment-query', 'store-channel-stripe', 'payment_query', 'supported',
+                     'sandbox', '1111111111111111111111111111111111111111111111111111111111111111', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin-1',
+                     '2026-08-27T00:00:00Z', '2099-01-01T00:00:00Z'),
+                    ('cap-refund', 'store-channel-stripe', 'refund', 'supported',
+                     'sandbox', '1111111111111111111111111111111111111111111111111111111111111111', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin-1',
+                     '2026-08-27T00:00:00Z', '2099-01-01T00:00:00Z'),
+                    ('cap-refund-query', 'store-channel-stripe', 'refund_query', 'supported',
+                     'sandbox', '1111111111111111111111111111111111111111111111111111111111111111', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin-1',
+                     '2026-08-27T00:00:00Z', '2099-01-01T00:00:00Z'),
+                    ('cap-settlement', 'store-channel-stripe', 'settlement_report', 'supported',
+                     'sandbox', '1111111111111111111111111111111111111111111111111111111111111111', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin-1',
+                     '2026-08-27T00:00:00Z', '2099-01-01T00:00:00Z');
+                 INSERT INTO store_privacy_records
+                    (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                     legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+                 VALUES ('order-privacy', 'v1', 'CN', '[]', '{}', 'contract', 'admin-1',
+                         'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                         '2026-08-27T00:00:00Z', '2099-01-01T00:00:00Z', 1);
+                 INSERT INTO store_channel_readiness_profiles
+                    (channel_id, active_credential_digest, privacy_record_id,
+                     callback_verification_passed, supported_currencies_json, amount_limits_json,
+                     checkout_action_kinds_json, license_evidence_digest, runtime_evidence_digest,
+                     availability_evidence_digest, verifier_admin_id, verified_at, expires_at)
+                 VALUES ('store-channel-stripe',
+                         '1111111111111111111111111111111111111111111111111111111111111111',
+                         'order-privacy', 1,
+                         '[\"CNY\",\"USD\"]',
+                         '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"},\"USD\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
+                         '[\"redirect\"]',
+                         'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                         'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                         'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                         'admin-1', '2026-08-27T00:00:00Z', '2099-01-01T00:00:00Z')",
+            )
+            .await
+            .expect("insert payment governance fixtures");
     }
     let store = PaymentOrderStore::new(db.clone());
     (db, store)
@@ -129,6 +179,62 @@ fn postgres_order_creation_locks_user_before_limit_counts() {
     assert!(source.contains(
         "const POSTGRES_ORDER_CREATION_USER_LOCK_SQL: &str = \"SELECT id FROM users WHERE id = $1 FOR UPDATE\";"
     ));
+}
+
+#[test]
+fn order_and_attempt_lock_the_channel_before_governance_reads() {
+    let source = include_str!("../src/store_billing/order.rs").replace("\r\n", "\n");
+    let create_order_start = source
+        .find("pub async fn create_order(")
+        .expect("create_order must exist");
+    let create_order_end = source[create_order_start..]
+        .find("pub async fn list_orders_for_user(")
+        .map(|offset| create_order_start + offset)
+        .expect("create_order must have a bounded body");
+    let create_order = &source[create_order_start..create_order_end];
+    let user_lock = create_order
+        .find("lock_order_creation_user(&self.db, &*tx, user_id).await?")
+        .expect("create_order must lock the user");
+    let channel_lock = create_order
+        .find("lock_channel(&self.db, &*tx, &input.payment_channel_id)")
+        .expect("create_order must lock the Channel");
+    let evaluation = create_order
+        .find("evaluate_channel_for_payment(")
+        .expect("create_order must evaluate the Channel");
+    assert!(user_lock < channel_lock);
+    assert!(channel_lock < evaluation);
+
+    let create_attempt_start = source
+        .find("pub async fn create_attempt_with_outcome(")
+        .expect("create_attempt_with_outcome must exist");
+    let create_attempt_end = source[create_attempt_start..]
+        .find("pub async fn present_attempt(")
+        .map(|offset| create_attempt_start + offset)
+        .expect("create_attempt_with_outcome must have a bounded body");
+    let create_attempt = &source[create_attempt_start..create_attempt_end];
+    let order_lock = create_attempt
+        .find("query_order_by_id_for_update(")
+        .expect("create_attempt must lock the order");
+    let channel_lock = create_attempt
+        .find("lock_channel(&self.db, &*tx, &order.payment_channel_id)")
+        .expect("create_attempt must lock the Channel");
+    let evaluation = create_attempt
+        .find("evaluate_channel_for_payment(")
+        .expect("create_attempt must re-evaluate governance");
+    let credential_read = create_attempt
+        .find("FROM store_channel_credentials")
+        .expect("create_attempt must read the active credential");
+    assert!(order_lock < channel_lock);
+    assert!(channel_lock < evaluation);
+    assert!(channel_lock < credential_read);
+
+    let governance = include_str!("../src/store_billing/governance.rs").replace("\r\n", "\n");
+    assert!(governance.contains("SELECT id FROM store_payment_channels WHERE id = $1 FOR UPDATE"));
+    assert!(
+        governance.contains("UPDATE store_payment_channels SET revision = revision WHERE id = $1")
+    );
+    let credentials = include_str!("../src/store_billing/credentials.rs");
+    assert!(credentials.contains("lock_channel(&self.db, &*tx, channel_id)"));
 }
 
 #[tokio::test]
@@ -449,8 +555,104 @@ async fn one_order_has_at_most_one_active_payment_attempt() {
 }
 
 #[tokio::test]
+async fn attempt_creation_fails_closed_when_governance_expires_after_order_creation() {
+    let (db, store) = setup().await;
+    let order = store
+        .create_order("user-1", order_input("governance-expiry-order"), &rate())
+        .await
+        .unwrap();
+    db.write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_channel_readiness_profiles
+             SET expires_at = '2026-01-01T00:00:00Z'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .create_attempt(
+                "user-1",
+                &order.id,
+                CreatePaymentAttemptInput {
+                    idempotency_key: "governance-expiry-attempt".to_string(),
+                    expected_payment_method: Some("card".to_string()),
+                },
+            )
+            .await
+            .unwrap_err(),
+        PaymentOrderError::ChannelUnavailable
+    );
+    let attempts = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM store_payment_attempts WHERE order_id = $1",
+            vec![order.id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "value")
+        .unwrap();
+    assert_eq!(attempts, 0);
+}
+
+#[tokio::test]
+async fn wechat_qr_only_readiness_rejects_h5_before_attempt_insert() {
+    let (db, store) = setup().await;
+    db.write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_payment_channels
+             SET adapter_kind = 'wechat' WHERE id = 'store-channel-stripe';
+             UPDATE store_channel_credentials
+             SET adapter_kind = 'wechat' WHERE id = 'credential-1';
+             UPDATE store_channel_readiness_profiles
+             SET supported_currencies_json = '[\"CNY\"]',
+                 amount_limits_json = '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
+                 checkout_action_kinds_json = '[\"qr\"]'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+    let order = store
+        .create_order("user-1", order_input("wechat-qr-order"), &rate())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .create_attempt(
+                "user-1",
+                &order.id,
+                CreatePaymentAttemptInput {
+                    idempotency_key: "wechat-h5-attempt".to_string(),
+                    expected_payment_method: Some("h5".to_string()),
+                },
+            )
+            .await
+            .unwrap_err(),
+        PaymentOrderError::ChannelUnavailable
+    );
+    let native = store
+        .create_attempt(
+            "user-1",
+            &order.id,
+            CreatePaymentAttemptInput {
+                idempotency_key: "wechat-native-attempt".to_string(),
+                expected_payment_method: Some("native".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(native.expected_payment_method.as_deref(), Some("native"));
+}
+
+#[tokio::test]
 async fn presented_checkout_action_is_persisted_and_replayed() {
-    let (_db, store) = setup().await;
+    let (db, store) = setup().await;
     let order = store
         .create_order("user-1", order_input("checkout-present"), &rate())
         .await
@@ -478,6 +680,15 @@ async fn presented_checkout_action_is_persisted_and_replayed() {
     assert_eq!(presented.state.as_str(), "presented");
     assert_eq!(presented.provider_object_id.as_deref(), Some("cs_test_1"));
     assert_eq!(presented.action.as_ref(), Some(&action));
+    db.write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_channel_readiness_profiles
+             SET expires_at = '2026-01-01T00:00:00Z'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
 
     let replay = store
         .create_attempt(
@@ -505,6 +716,166 @@ async fn presented_checkout_action_is_persisted_and_replayed() {
             .unwrap_err(),
         PaymentOrderError::OrderNotFound
     );
+}
+
+#[tokio::test]
+async fn failed_attempt_replays_persisted_failure_after_governance_expires() {
+    let (db, store) = setup().await;
+    let order = store
+        .create_order("user-1", order_input("checkout-failed-replay"), &rate())
+        .await
+        .unwrap();
+    let attempt = store
+        .create_attempt(
+            "user-1",
+            &order.id,
+            CreatePaymentAttemptInput {
+                idempotency_key: "attempt-failed-replay".to_string(),
+                expected_payment_method: Some("card".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    let failed = store
+        .fail_attempt(
+            "user-1",
+            &attempt.id,
+            PaymentAttemptFailureKind::ProviderRejected,
+        )
+        .await
+        .unwrap();
+    db.write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_channel_readiness_profiles
+             SET expires_at = '2026-01-01T00:00:00Z'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+
+    let replay = store
+        .create_attempt(
+            "user-1",
+            &order.id,
+            CreatePaymentAttemptInput {
+                idempotency_key: "attempt-failed-replay".to_string(),
+                expected_payment_method: Some("card".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay, failed);
+    assert_eq!(
+        replay.failure_kind,
+        Some(PaymentAttemptFailureKind::ProviderRejected)
+    );
+}
+
+#[tokio::test]
+async fn created_attempt_replay_rejects_a_different_active_merchant() {
+    let (db, store) = setup().await;
+    let order = store
+        .create_order("user-1", order_input("merchant-rotation-order"), &rate())
+        .await
+        .unwrap();
+    let attempt = store
+        .create_attempt(
+            "user-1",
+            &order.id,
+            CreatePaymentAttemptInput {
+                idempotency_key: "merchant-rotation-attempt".to_string(),
+                expected_payment_method: Some("card".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(attempt.state.as_str(), "created");
+    db.write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_channel_credentials SET status = 'retired', retired_at = '2026-08-28T00:00:00Z'
+             WHERE id = 'credential-1';
+             INSERT INTO store_channel_credentials
+                (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+                 ciphertext_base64, account_identity_digest, status, created_at)
+             VALUES ('credential-2', 'store-channel-stripe', 'stripe', 1, 'key-2',
+                     'bm9uY2U=', 'Y2lwaGVydGV4dA==',
+                     '2222222222222222222222222222222222222222222222222222222222222222',
+                     'active', '2026-08-28T00:00:00Z');
+             UPDATE store_merchant_capabilities
+             SET merchant_account_digest = '2222222222222222222222222222222222222222222222222222222222222222'
+             WHERE channel_id = 'store-channel-stripe';
+             UPDATE store_channel_readiness_profiles
+             SET active_credential_digest = '2222222222222222222222222222222222222222222222222222222222222222'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .create_attempt(
+                "user-1",
+                &order.id,
+                CreatePaymentAttemptInput {
+                    idempotency_key: "merchant-rotation-attempt".to_string(),
+                    expected_payment_method: Some("card".to_string()),
+                },
+            )
+            .await
+            .unwrap_err(),
+        PaymentOrderError::ChannelUnavailable
+    );
+}
+
+#[tokio::test]
+async fn created_attempt_replay_uses_persisted_none_payment_method_default() {
+    let (db, store) = setup().await;
+    db.write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_payment_channels
+             SET adapter_kind = 'wechat' WHERE id = 'store-channel-stripe';
+             UPDATE store_channel_credentials
+             SET adapter_kind = 'wechat' WHERE id = 'credential-1';
+             UPDATE store_channel_readiness_profiles
+             SET supported_currencies_json = '[\"CNY\"]',
+                 amount_limits_json = '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
+                 checkout_action_kinds_json = '[\"qr\"]'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+    let order = store
+        .create_order("user-1", order_input("persisted-default-order"), &rate())
+        .await
+        .unwrap();
+    let created = store
+        .create_attempt(
+            "user-1",
+            &order.id,
+            CreatePaymentAttemptInput {
+                idempotency_key: "persisted-default-attempt".to_string(),
+                expected_payment_method: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let replay = store
+        .create_attempt(
+            "user-1",
+            &order.id,
+            CreatePaymentAttemptInput {
+                idempotency_key: "persisted-default-attempt".to_string(),
+                expected_payment_method: Some("unknown".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay, created);
+    assert_eq!(replay.expected_payment_method, None);
 }
 
 #[tokio::test]

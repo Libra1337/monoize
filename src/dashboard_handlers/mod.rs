@@ -66,16 +66,19 @@ pub use settings::{
 };
 pub(crate) use store_billing::store_mutation_guard;
 pub use store_billing::{
-    create_store_order, create_store_payment_attempt, create_store_payment_channel_admin,
-    create_store_product_admin, create_store_reauth_grant, delete_store_payment_channel_admin,
-    delete_store_product_admin, export_store_redemption_codes_admin,
-    generate_store_redemption_codes_admin, get_store_catalog, get_store_entitlement,
-    get_store_exchange_rate, get_store_order, get_store_payment_icon, get_store_settings_admin,
-    list_all_store_orders_admin, list_store_orders, list_store_payment_channels_admin,
-    list_store_products_admin, list_store_redemption_codes_admin, redeem_store_code,
-    replace_store_payment_credential_admin, reveal_store_redemption_codes_admin,
-    revoke_store_redemption_code_admin, update_store_payment_channel_admin,
-    update_store_product_admin, update_store_settings_admin, upload_store_payment_icon_admin,
+    confirm_store_payment_compliance_admin, create_store_order, create_store_payment_attempt,
+    create_store_payment_channel_admin, create_store_product_admin, create_store_reauth_grant,
+    delete_store_payment_channel_admin, delete_store_product_admin,
+    export_store_redemption_codes_admin, generate_store_redemption_codes_admin, get_store_catalog,
+    get_store_entitlement, get_store_exchange_rate, get_store_order,
+    get_store_payment_availability_admin, get_store_payment_compliance_admin,
+    get_store_payment_icon, get_store_settings_admin, list_all_store_orders_admin,
+    list_store_orders, list_store_payment_capabilities_admin, list_store_payment_channels_admin,
+    list_store_products_admin, list_store_redemption_codes_admin,
+    put_store_payment_capability_admin, redeem_store_code, replace_store_payment_credential_admin,
+    reveal_store_redemption_codes_admin, revoke_store_redemption_code_admin,
+    update_store_payment_channel_admin, update_store_product_admin, update_store_settings_admin,
+    upload_store_payment_icon_admin,
 };
 pub use users::{
     CreateUserRequest, UpdateUserRequest, create_user, delete_user, get_user, list_users,

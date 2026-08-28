@@ -134,7 +134,10 @@ impl ReauthStore {
 }
 
 fn validate_scope(scope: &str) -> Result<(), ReauthError> {
-    if matches!(scope, "credential_update" | "redemption_access") {
+    if matches!(
+        scope,
+        "credential_update" | "redemption_access" | "compliance_confirm"
+    ) {
         Ok(())
     } else {
         Err(ReauthError::InvalidScope)

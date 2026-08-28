@@ -5,7 +5,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::exchange_rate::ExchangeRateSnapshot;
-use super::models::StoreSettings;
+use super::governance::{evaluate_channel_for_payment, lock_channel};
+use super::models::{CheckoutActionKind, StoreSettings};
 use super::money::{Currency, ExchangeRateRational, convert_minor_rational, parse_minor};
 use super::payment::CheckoutAction;
 use super::quota_gate::QuotaGateStore;
@@ -211,6 +212,12 @@ impl PaymentOrderStore {
             }
             return Err(PaymentOrderError::IdempotencyConflict);
         }
+        if !lock_channel(&self.db, &*tx, &input.payment_channel_id)
+            .await
+            .map_err(storage)?
+        {
+            return Err(PaymentOrderError::ChannelUnavailable);
+        }
 
         let recent_count = count_value(
             tx.query_one(self.db.stmt(
@@ -248,7 +255,6 @@ impl PaymentOrderStore {
         if open_count >= OPEN_ORDER_LIMIT {
             return Err(PaymentOrderError::OpenOrderLimit);
         }
-
         let product = tx
             .query_one(self.db.stmt(
                 "SELECT p.id, p.kind, p.name, p.description, p.price_currency,
@@ -331,6 +337,19 @@ impl PaymentOrderStore {
         };
         if payment_minor == "0" {
             return Err(PaymentOrderError::InvalidAmount);
+        }
+        let availability = evaluate_channel_for_payment(
+            &self.db,
+            &*tx,
+            &input.payment_channel_id,
+            now,
+            input.payment_currency,
+            &payment_minor,
+        )
+        .await
+        .map_err(storage)?;
+        if !availability.effective_available {
+            return Err(PaymentOrderError::ChannelUnavailable);
         }
 
         let quote = serde_json::json!({
@@ -505,23 +524,92 @@ impl PaymentOrderStore {
     ) -> Result<CreatePaymentAttemptOutcome, PaymentOrderError> {
         validate_idempotency_key(&input.idempotency_key)?;
         let tx = self.db.begin_write().await.map_err(storage)?;
-        if let Some(existing) = query_attempt_by_key(&self.db, &*tx, &input.idempotency_key).await?
+        let existing = query_attempt_by_key(&self.db, &*tx, &input.idempotency_key).await?;
+        if existing
+            .as_ref()
+            .is_some_and(|attempt| attempt.order_id != order_id)
         {
-            if existing.order_id == order_id {
-                query_order_by_id_for_update(&self.db, &*tx, order_id, Some(user_id))
-                    .await?
-                    .ok_or(PaymentOrderError::OrderNotFound)?;
-                tx.commit().await.map_err(storage)?;
-                return Ok(CreatePaymentAttemptOutcome {
-                    attempt: existing,
-                    replayed: true,
-                });
-            }
             return Err(PaymentOrderError::IdempotencyConflict);
         }
         let order = query_order_by_id_for_update(&self.db, &*tx, order_id, Some(user_id))
             .await?
             .ok_or(PaymentOrderError::OrderNotFound)?;
+        if existing.as_ref().is_some_and(|attempt| {
+            matches!(
+                attempt.state,
+                PaymentAttemptState::Presented
+                    | PaymentAttemptState::Paid
+                    | PaymentAttemptState::Failed
+                    | PaymentAttemptState::Expired
+            )
+        }) {
+            tx.commit().await.map_err(storage)?;
+            return Ok(CreatePaymentAttemptOutcome {
+                attempt: existing.expect("terminal replay attempt exists"),
+                replayed: true,
+            });
+        }
+        if !lock_channel(&self.db, &*tx, &order.payment_channel_id)
+            .await
+            .map_err(storage)?
+        {
+            return Err(PaymentOrderError::ChannelUnavailable);
+        }
+        let channel = tx
+            .query_one(self.db.stmt(
+                "SELECT adapter_kind FROM store_payment_channels
+                 WHERE id = $1 AND enabled = 1",
+                vec![order.payment_channel_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or(PaymentOrderError::ChannelUnavailable)?;
+        let adapter_kind = row_string(&channel, "adapter_kind")?;
+        let expected_payment_method = match existing.as_ref() {
+            Some(attempt) => attempt.expected_payment_method.as_deref(),
+            None => input.expected_payment_method.as_deref(),
+        };
+        let required_action = required_checkout_action(&adapter_kind, expected_payment_method)
+            .ok_or(PaymentOrderError::ChannelUnavailable)?;
+        let availability = evaluate_channel_for_payment(
+            &self.db,
+            &*tx,
+            &order.payment_channel_id,
+            Utc::now(),
+            order.payment_currency,
+            &order.payment_minor,
+        )
+        .await
+        .map_err(storage)?;
+        if !availability.effective_available
+            || !availability
+                .checkout_action_kinds
+                .contains(&required_action)
+        {
+            return Err(PaymentOrderError::ChannelUnavailable);
+        }
+        let credential = tx
+            .query_one(self.db.stmt(
+                "SELECT id, account_identity_digest FROM store_channel_credentials
+                 WHERE channel_id = $1 AND status = 'active'
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
+                vec![order.payment_channel_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or(PaymentOrderError::ChannelUnavailable)?;
+        if let Some(existing) = existing {
+            if existing.merchant_account_identity
+                != row_string(&credential, "account_identity_digest")?
+            {
+                return Err(PaymentOrderError::ChannelUnavailable);
+            }
+            tx.commit().await.map_err(storage)?;
+            return Ok(CreatePaymentAttemptOutcome {
+                attempt: existing,
+                replayed: true,
+            });
+        }
         if order.payment_state != PaymentState::Unpaid || order.expires_at <= Utc::now() {
             return Err(PaymentOrderError::OrderNotPayable);
         }
@@ -550,26 +638,6 @@ impl PaymentOrderStore {
         if active_count != 0 {
             return Err(PaymentOrderError::ActiveAttemptExists);
         }
-        let credential = tx
-            .query_one(self.db.stmt(
-                "SELECT id, account_identity_digest FROM store_channel_credentials
-                 WHERE channel_id = $1 AND status = 'active'
-                 ORDER BY created_at DESC, id DESC LIMIT 1",
-                vec![order.payment_channel_id.clone().into()],
-            ))
-            .await
-            .map_err(storage)?
-            .ok_or(PaymentOrderError::ChannelUnavailable)?;
-        let channel = tx
-            .query_one(self.db.stmt(
-                "SELECT adapter_kind FROM store_payment_channels
-                 WHERE id = $1 AND enabled = 1",
-                vec![order.payment_channel_id.clone().into()],
-            ))
-            .await
-            .map_err(storage)?
-            .ok_or(PaymentOrderError::ChannelUnavailable)?;
-
         let id = Uuid::new_v4().to_string();
         let now = timestamp(Utc::now());
         tx.execute(self.db.stmt(
@@ -582,7 +650,7 @@ impl PaymentOrderStore {
                 id.clone().into(),
                 order_id.into(),
                 order.payment_channel_id.into(),
-                row_string(&channel, "adapter_kind")?.into(),
+                adapter_kind.into(),
                 row_string(&credential, "id")?.into(),
                 row_string(&credential, "account_identity_digest")?.into(),
                 input.expected_payment_method.into(),
@@ -1099,6 +1167,21 @@ fn currency_string(value: Currency) -> &'static str {
     match value {
         Currency::CNY => "CNY",
         Currency::USD => "USD",
+    }
+}
+
+fn required_checkout_action(
+    adapter_kind: &str,
+    expected_payment_method: Option<&str>,
+) -> Option<CheckoutActionKind> {
+    match (adapter_kind, expected_payment_method) {
+        ("stripe", None | Some("card")) => Some(CheckoutActionKind::Redirect),
+        ("alipay", None | Some("computer_web") | Some("mobile_web")) => {
+            Some(CheckoutActionKind::Form)
+        }
+        ("wechat", None | Some("native")) => Some(CheckoutActionKind::Qr),
+        ("wechat", Some("h5")) => Some(CheckoutActionKind::Redirect),
+        _ => None,
     }
 }
 

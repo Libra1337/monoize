@@ -222,12 +222,13 @@ async fn checkout_fixture() -> (DbPool, PaymentKeyRing, String) {
                 encrypted.key_id.into(),
                 encrypted.nonce_base64.into(),
                 encrypted.ciphertext_base64.into(),
-                account_digest.into(),
+                account_digest.clone().into(),
                 "2026-08-27T00:00:00Z".into(),
             ],
         ))
         .await
         .unwrap();
+    seed_checkout_governance(&db, &account_digest).await;
     let order = PaymentOrderStore::new(db.clone())
         .create_order(
             "checkout-user",
@@ -249,6 +250,67 @@ async fn checkout_fixture() -> (DbPool, PaymentKeyRing, String) {
         .await
         .unwrap();
     (db, key_ring, order.id)
+}
+
+async fn seed_checkout_governance(db: &DbPool, account_digest: &str) {
+    let write = db.write().await;
+    write
+        .execute_unprepared(
+            "INSERT INTO store_payment_compliance
+                (id, channel_id, terms_version, admin_user_id, source_ip, confirmed_at)
+             VALUES ('checkout-compliance', 'store-channel-stripe', '2026-08-28',
+                     'checkout-admin', '127.0.0.1', '2026-08-27T00:00:00Z');
+             INSERT INTO store_privacy_records
+                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+             VALUES ('checkout-privacy', 'v1', 'CN', '[]', '{}', 'contract', 'checkout-admin',
+                     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                     '2026-08-27T00:00:00Z', '2099-01-01T00:00:00Z', 1)",
+        )
+        .await
+        .unwrap();
+    for capability in [
+        "payment_query",
+        "refund",
+        "refund_query",
+        "settlement_report",
+    ] {
+        write
+            .execute(db.stmt(
+                "INSERT INTO store_merchant_capabilities
+                    (id, channel_id, capability, state, environment, merchant_account_digest,
+                     provider_product, evidence_digest, verifier_admin_id, verified_at, expires_at)
+                 VALUES ($1, 'store-channel-stripe', $2, 'supported', 'sandbox', $3,
+                         'checkout',
+                         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                         'checkout-admin', '2026-08-27T00:00:00Z', '2099-01-01T00:00:00Z')",
+                vec![
+                    format!("checkout-cap-{capability}").into(),
+                    capability.into(),
+                    account_digest.into(),
+                ],
+            ))
+            .await
+            .unwrap();
+    }
+    write
+        .execute(db.stmt(
+            "INSERT INTO store_channel_readiness_profiles
+                (channel_id, active_credential_digest, privacy_record_id,
+                 callback_verification_passed, supported_currencies_json, amount_limits_json,
+                 checkout_action_kinds_json, license_evidence_digest, runtime_evidence_digest,
+                 availability_evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES ('store-channel-stripe', $1, 'checkout-privacy', 1, '[\"CNY\",\"USD\"]',
+                     '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"},\"USD\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
+                     '[\"redirect\"]',
+                     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                     'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                     'checkout-admin', '2026-08-27T00:00:00Z', '2099-01-01T00:00:00Z')",
+            vec![account_digest.into()],
+        ))
+        .await
+        .unwrap();
 }
 
 async fn replace_checkout_adapter(
@@ -296,7 +358,48 @@ async fn replace_checkout_adapter(
                 encrypted.key_id.into(),
                 encrypted.nonce_base64.into(),
                 encrypted.ciphertext_base64.into(),
+                digest.clone().into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    let (currencies, limits, actions) = match adapter_kind {
+        "alipay" => (
+            "[\"CNY\"]",
+            "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
+            "[\"form\"]",
+        ),
+        "wechat" => (
+            "[\"CNY\"]",
+            "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
+            "[\"qr\",\"redirect\"]",
+        ),
+        _ => (
+            "[\"CNY\",\"USD\"]",
+            "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"},\"USD\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
+            "[\"redirect\"]",
+        ),
+    };
+    write
+        .execute(db.stmt(
+            "UPDATE store_merchant_capabilities SET merchant_account_digest = $2
+             WHERE channel_id = $1",
+            vec!["store-channel-stripe".into(), digest.clone().into()],
+        ))
+        .await
+        .unwrap();
+    write
+        .execute(db.stmt(
+            "UPDATE store_channel_readiness_profiles
+             SET active_credential_digest = $2, supported_currencies_json = $3,
+                 amount_limits_json = $4, checkout_action_kinds_json = $5
+             WHERE channel_id = $1",
+            vec![
+                "store-channel-stripe".into(),
                 digest.into(),
+                currencies.into(),
+                limits.into(),
+                actions.into(),
             ],
         ))
         .await

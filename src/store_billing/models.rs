@@ -1,6 +1,7 @@
 use super::money::Currency;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub const PAYMENT_ICON_MAX_BYTES: usize = 2 * 1024 * 1024;
 
@@ -37,6 +38,25 @@ string_enum!(PaymentAdapterKind {
     Wechat => "wechat",
     Stripe => "stripe",
     Http => "http",
+});
+string_enum!(MerchantCapabilityKind {
+    PaymentQuery => "payment_query",
+    Refund => "refund",
+    RefundQuery => "refund_query",
+    DisputeEvent => "dispute_event",
+    DisputeQuery => "dispute_query",
+    BillDownload => "bill_download",
+    SettlementReport => "settlement_report",
+});
+string_enum!(MerchantCapabilityState {
+    Supported => "supported",
+    Unsupported => "unsupported",
+    Manual => "manual",
+});
+string_enum!(CheckoutActionKind {
+    Redirect => "redirect",
+    Qr => "qr",
+    Form => "form",
 });
 string_enum!(IconKind {
     Builtin => "builtin",
@@ -151,8 +171,85 @@ pub struct PaymentChannel {
     pub sort_order: i32,
     pub enabled: bool,
     pub revision: i64,
+    pub effective_available: bool,
+    pub unavailable_reasons: Vec<String>,
+    pub supported_currencies: Vec<Currency>,
+    pub amount_limits: BTreeMap<String, StoreAmountLimit>,
+    pub checkout_action_kinds: Vec<CheckoutActionKind>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreChannelAvailability {
+    pub channel_id: String,
+    pub effective_available: bool,
+    pub unavailable_reasons: Vec<String>,
+    pub supported_currencies: Vec<Currency>,
+    pub amount_limits: BTreeMap<String, StoreAmountLimit>,
+    pub checkout_action_kinds: Vec<CheckoutActionKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreAmountLimit {
+    pub min_minor: String,
+    pub max_minor: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorePaymentCompliance {
+    pub id: String,
+    pub channel_id: String,
+    pub terms_version: String,
+    pub admin_user_id: String,
+    pub source_ip: String,
+    pub confirmed_at: DateTime<Utc>,
+    pub invalidated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreComplianceView {
+    pub current_terms_version: String,
+    pub compliance: Option<StorePaymentCompliance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmStoreComplianceInput {
+    pub confirmed: bool,
+    pub terms_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreMerchantCapability {
+    pub id: String,
+    pub channel_id: String,
+    pub capability: MerchantCapabilityKind,
+    pub state: MerchantCapabilityState,
+    pub environment: String,
+    pub merchant_account_digest: String,
+    pub provider_product: String,
+    pub evidence_digest: String,
+    pub controlled_transaction_id: Option<String>,
+    pub verifier_admin_id: String,
+    pub verified_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreMerchantCapabilitiesView {
+    pub capabilities: Vec<StoreMerchantCapability>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PutStoreMerchantCapabilityInput {
+    pub state: MerchantCapabilityState,
+    pub environment: String,
+    pub provider_product: String,
+    pub evidence_digest: String,
+    pub controlled_transaction_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -12,6 +12,7 @@ use super::adapters::stripe::StripeCredential;
 use super::adapters::wechat::WechatCredential;
 use super::crypto::EncryptedSecret;
 use super::crypto::PaymentKeyRing;
+use super::governance::lock_channel;
 use crate::db::DbPool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,28 +80,15 @@ impl CredentialStore {
         credential: Value,
     ) -> Result<SavedCredentialView, CredentialStoreError> {
         let tx = self.db.begin_write().await.map_err(storage)?;
-        if self.db.is_sqlite() {
-            let locked = tx
-                .execute(self.db.stmt(
-                    "UPDATE store_payment_channels SET revision = revision WHERE id = $1",
-                    vec![channel_id.into()],
-                ))
-                .await
-                .map_err(storage)?;
-            if locked.rows_affected() != 1 {
-                return Err(CredentialStoreError::ChannelNotFound);
-            }
+        if !lock_channel(&self.db, &*tx, channel_id)
+            .await
+            .map_err(storage)?
+        {
+            return Err(CredentialStoreError::ChannelNotFound);
         }
-        let lock_clause = if self.db.is_postgres() {
-            " FOR UPDATE"
-        } else {
-            ""
-        };
         let channel = tx
             .query_one(self.db.stmt(
-                &format!(
-                    "SELECT adapter_kind FROM store_payment_channels WHERE id = $1{lock_clause}"
-                ),
+                "SELECT adapter_kind FROM store_payment_channels WHERE id = $1",
                 vec![channel_id.into()],
             ))
             .await
