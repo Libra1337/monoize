@@ -390,7 +390,7 @@ export function StoreAdminPage() {
     <PrivacyRecordsDialog open={privacyRecordsOpen} onOpenChange={setPrivacyRecordsOpen} />
     <ChannelComplianceDialog channel={complianceChannel} open={complianceChannel !== null} onOpenChange={(open) => { if (!open) setComplianceChannel(null); }} onSaved={() => channels.mutate()} />
     <ChannelCapabilitiesDialog channel={capabilitiesChannel} open={capabilitiesChannel !== null} onOpenChange={(open) => { if (!open) setCapabilitiesChannel(null); }} onSaved={() => channels.mutate()} />
-    <ChannelReadinessDialog channel={readinessChannel} open={readinessChannel !== null} onOpenChange={(open) => { if (!open) setReadinessChannel(null); }} onSaved={() => channels.mutate()} />
+    <ChannelReadinessDialog channel={readinessChannel} open={readinessChannel !== null} onOpenChange={(open) => { if (!open) setReadinessChannel(null); }} onSaved={() => channels.mutate()} onOpenPrivacyRecords={() => setPrivacyRecordsOpen(true)} />
     <RedemptionDialog open={redemptionDialogOpen} plans={(products.data ?? []).filter((product) => product.kind === "plan" && product.enabled)} generating={saving} onOpenChange={setRedemptionDialogOpen} onGenerate={generateCodes} />
     <OrderDialog
       open={selectedOrderId !== null}

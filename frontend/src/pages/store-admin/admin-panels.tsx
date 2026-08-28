@@ -1,9 +1,15 @@
 import { useState } from "react";
 import { SiAlipay, SiStripe, SiWechat } from "@icons-pack/react-simple-icons";
-import { CreditCard, ClipboardCheck, Eye, FileCheck2, Layers3, Package, Pencil, Plus, ReceiptText, ShieldCheck, TicketCheck, Trash2 } from "lucide-react";
+import { CreditCard, ClipboardCheck, ChevronDown, Eye, FileCheck2, Layers3, Package, Pencil, Plus, ReceiptText, ShieldCheck, TicketCheck, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import type {
   RedemptionCodeRecord,
@@ -216,17 +222,28 @@ export function ChannelsPanel({
               </div>
               <div className="flex items-center gap-1">
                 {channel.adapter_kind !== "http" && (
-                  <>
-                    <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("store.admin.governance.compliance.action")} onClick={() => onCompliance(channel)}>
-                      <ClipboardCheck className="size-4" />
-                    </Button>
-                    <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("store.admin.governance.capabilities.action")} onClick={() => onCapabilities(channel)}>
-                      <Layers3 className="size-4" />
-                    </Button>
-                    <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("store.admin.governance.readiness.action")} onClick={() => onReadiness(channel)}>
-                      <ShieldCheck className="size-4" />
-                    </Button>
-                  </>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="outline" className="min-h-11 rounded-xl gap-1">
+                        {t("store.admin.governance.menu")}
+                        <ChevronDown className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="rounded-xl">
+                      <DropdownMenuItem className="min-h-11 gap-2 rounded-lg" onClick={() => onCompliance(channel)}>
+                        <ClipboardCheck className="size-4" />
+                        {t("store.admin.governance.compliance.action")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="min-h-11 gap-2 rounded-lg" onClick={() => onCapabilities(channel)}>
+                        <Layers3 className="size-4" />
+                        {t("store.admin.governance.capabilities.action")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="min-h-11 gap-2 rounded-lg" onClick={() => onReadiness(channel)}>
+                        <ShieldCheck className="size-4" />
+                        {t("store.admin.governance.readiness.action")}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
                 <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("common.edit")} onClick={() => onEdit(channel)}>
                   <Pencil className="size-4" />
