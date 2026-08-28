@@ -450,6 +450,32 @@ SB-RC-19. Settlement import MUST be idempotent. Fees, taxes, and settlement FX M
 
 SB-RC-20. An unmatched payment, refund, dispute, or unknown settlement difference MUST create a critical manual case.
 
+SB-RC-21. `POST /api/dashboard/store/admin/orders/{id}/refunds` MUST require an Admin session, the SB-S-2 Origin check, a Store Primary, header `X-Store-Reauth-Token` with scope `refund`, and header `Idempotency-Key`. Its exact JSON body MUST be `{}`. The response MUST return `RefundRecord` and use `Cache-Control: no-store`.
+
+SB-RC-22. `GET /api/dashboard/store/admin/orders/{id}/refunds/{refund_id}` MUST require an Admin session. The refund MUST belong to the path order. The response MUST return `RefundRecord` and use `Cache-Control: no-store`.
+
+SB-RC-23. `POST /api/dashboard/store/admin/orders/{id}/refunds/{refund_id}/query` MUST require an Admin session, the SB-S-2 Origin check, a Store Primary, and header `X-Store-Reauth-Token` with scope `refund`. Its exact JSON body MUST be `{}`. The refund MUST belong to the path order. The response MUST return `RefundRecord` and use `Cache-Control: no-store`.
+
+SB-RC-24. Migration `055` MUST expand the released `store_reauth_grants.scope` constraint to accept `refund`. It MUST preserve every existing grant and recreate `uq_store_reauth_token_digest` and `idx_store_reauth_expiry`. Migrations `052` and `054` MUST remain unchanged.
+
+SB-RC-25. Refund creation MUST call `RecoveryStore.begin_refund` and commit the reserve and `paid -> refund_pending` transition before any Provider request. A fulfilled plan order MUST return `order_not_refundable`. A fulfilled balance order MUST have enough available balance to reserve its complete original reward. A refund MUST use the immutable paid attempt, full order `payment_minor`, and full order `payment_currency`. Amount values passed to or returned from a Provider MUST be base-10 integer strings.
+
+SB-RC-26. Refund creation and query MUST load the immutable paid attempt's adapter kind, Channel ID, credential version ID, merchant-account identity, Provider transaction ID, order number, payment contract version, amount, and currency. They MUST decrypt the historical credential version with record-bound AAD. A missing, undecryptable, malformed, unsupported, or identity-mismatched historical credential MUST return `payment_configuration_unavailable` without another Provider mutation.
+
+SB-RC-27. The local refund ID MUST be the stable Provider idempotency key. Stripe MUST send it as the `Idempotency-Key` header. Alipay MUST send it as `out_request_no`. WeChat Pay MUST send it as `out_refund_no`. Repeating the Admin `Idempotency-Key` for the same order MUST return the existing refund without another reserve or duplicate Provider create request. Reusing it for another order MUST return `idempotency_conflict`. Starting a different key while the order is not `paid` MUST fail before a Provider request.
+
+SB-RC-28. A Provider refund state MUST be `not_found`, `pending`, `succeeded`, `failed`, or `ambiguous`. It MAY contain a nonempty Provider refund ID. `succeeded` MUST call `RecoveryStore.complete_refund`. Definite `failed` or channel-defined definite `not_found` MUST call `RecoveryStore.reject_refund`. `pending` or `ambiguous` MUST retain order state `refund_pending`, MUST persist the Provider refund ID when present, and MUST NOT release the reserve.
+
+SB-RC-29. A refund create transport error, HTTP 5xx response, oversized response, or unrecognized response MUST be treated as ambiguous. Before retrying create, the adapter MUST query by the stable Provider idempotency key. It MAY retry create once only after a verified `not_found` result. An existing local refund MUST NOT be sent as a new create mutation. A replay of a local `created` refund less than 300 seconds old MUST return that record without a Provider query. A replay MAY query a local `created` refund after this recovery interval. A local `pending` refund MUST be queried.
+
+SB-RC-30. Stripe refund creation MUST call `POST /v1/refunds` with the immutable charge or payment transaction ID, full integer minor amount, and Provider idempotency key. Stripe refund query MUST call `GET /v1/refunds/{provider_refund_id}` or use the stable metadata key when the Provider refund ID is unknown. The adapter MUST bind the configured Stripe account and API version.
+
+SB-RC-31. Alipay refund creation MUST call `alipay.trade.refund`. Alipay refund query MUST call `alipay.trade.fastpay.refund.query`. Both operations MUST use RSA2, the immutable order number, full decimal CNY amount derived from integer fen, and stable `out_request_no`. The adapter MUST verify the signed response and merchant identity before accepting a terminal state.
+
+SB-RC-32. WeChat Pay refund creation MUST call `POST /v3/refund/domestic/refunds`. Refund query MUST call `GET /v3/refund/domestic/refunds/{out_refund_no}`. Both operations MUST use the immutable transaction ID or order number, full integer CNY fen amount, stable `out_refund_no`, WeChat merchant-request signing, bounded response bodies, platform-certificate response verification, and merchant identity validation.
+
+SB-RC-33. `RefundOperations` MUST accept an injected `RefundProvider`. The production provider MUST use the shared bounded `reqwest::Client`. The `http` adapter kind MUST return `payment_configuration_unavailable`; Milestone 1 MUST NOT send a custom HTTP adapter refund.
+
 ## 8. Redemption Codes And Reauthentication
 
 SB-R-1. New codes MUST use Crockford Base32 alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ` and 16 random characters grouped as `XXXX-XXXX-XXXX-XXXX`.

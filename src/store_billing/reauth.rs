@@ -136,7 +136,7 @@ impl ReauthStore {
 fn validate_scope(scope: &str) -> Result<(), ReauthError> {
     if matches!(
         scope,
-        "credential_update" | "redemption_access" | "compliance_confirm"
+        "credential_update" | "redemption_access" | "compliance_confirm" | "refund"
     ) {
         Ok(())
     } else {
@@ -169,6 +169,19 @@ mod tests {
     async fn store() -> ReauthStore {
         let db = DbPool::connect("sqlite::memory:").await.unwrap();
         Migrator::up(&*db.write().await, None).await.unwrap();
+        db.write()
+            .await
+            .execute_unprepared(
+                "INSERT INTO users
+                    (id, username, password_hash, role, created_at, updated_at, enabled,
+                     balance_nano_usd, balance_unlimited, group_id)
+                 SELECT ids.id, ids.id, 'test', 'admin', '2026-08-28T00:00:00Z',
+                        '2026-08-28T00:00:00Z', 1, '0', 0, groups.id
+                 FROM (SELECT 'admin-a' AS id UNION ALL SELECT 'admin-b') ids
+                 CROSS JOIN (SELECT id FROM monoize_groups WHERE is_default = 1 LIMIT 1) groups",
+            )
+            .await
+            .unwrap();
         ReauthStore::new(db)
     }
 
@@ -198,7 +211,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .verify("admin-a", "session-a", &grant.token, "refund")
+                .verify("admin-a", "session-a", &grant.token, "unknown")
                 .await,
             Err(ReauthError::InvalidScope)
         );
@@ -259,5 +272,22 @@ mod tests {
             Err(ReauthError::InvalidGrant)
         );
         assert!(grant.expires_at <= Utc::now() + Duration::minutes(5));
+    }
+
+    #[tokio::test]
+    async fn refund_is_a_distinct_five_minute_scope() {
+        let store = store().await;
+        let grant = store.issue("admin-a", "session-a", "refund").await.unwrap();
+
+        store
+            .verify("admin-a", "session-a", &grant.token, "refund")
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .verify("admin-a", "session-a", &grant.token, "credential_update")
+                .await,
+            Err(ReauthError::InvalidGrant)
+        );
     }
 }

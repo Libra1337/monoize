@@ -10,7 +10,7 @@ use crate::store_billing::crypto::{sign_rsa_sha256_base64, verify_rsa_sha256_bas
 use crate::store_billing::money::Currency;
 use crate::store_billing::payment::{
     AdapterError, CheckoutAction, CheckoutRequest, PaymentQuery, ProviderPaymentState,
-    validate_payment_query,
+    ProviderRefundState, RefundRequest, validate_payment_query,
 };
 
 const ALIPAY_PRODUCTION_GATEWAY: &str = "https://openapi.alipay.com/gateway.do";
@@ -86,6 +86,255 @@ pub struct AlipayCheckoutResult {
 pub struct PreparedAlipayPaymentQuery {
     pub endpoint: String,
     pub fields: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlipayRefundResult {
+    pub state: ProviderRefundState,
+    pub provider_refund_id: Option<String>,
+    pub not_found_is_definitive: bool,
+}
+
+pub fn prepare_refund_create(
+    credential: &AlipayCredential,
+    request: &RefundRequest,
+    now: DateTime<Utc>,
+) -> Result<PreparedAlipayPaymentQuery, AdapterError> {
+    let amount = validate_refund_request(request)?;
+    prepare_refund_request(
+        credential,
+        "alipay.trade.refund",
+        serde_json::json!({
+            "out_trade_no": request.merchant_order_number,
+            "trade_no": request.provider_transaction_id,
+            "refund_amount": format_minor_cny(amount),
+            "out_request_no": request.idempotency_key,
+        }),
+        now,
+    )
+}
+
+pub fn prepare_refund_query(
+    credential: &AlipayCredential,
+    request: &RefundRequest,
+    now: DateTime<Utc>,
+) -> Result<PreparedAlipayPaymentQuery, AdapterError> {
+    validate_refund_request(request)?;
+    prepare_refund_request(
+        credential,
+        "alipay.trade.fastpay.refund.query",
+        serde_json::json!({
+            "out_trade_no": request.merchant_order_number,
+            "trade_no": request.provider_transaction_id,
+            "out_request_no": request.idempotency_key,
+        }),
+        now,
+    )
+}
+
+fn prepare_refund_request(
+    credential: &AlipayCredential,
+    method: &str,
+    biz_content: serde_json::Value,
+    now: DateTime<Utc>,
+) -> Result<PreparedAlipayPaymentQuery, AdapterError> {
+    credential.validate()?;
+    let china = FixedOffset::east_opt(8 * 60 * 60).ok_or(AdapterError::InvalidConfiguration)?;
+    let mut fields = BTreeMap::from([
+        ("app_id".to_string(), credential.app_id.clone()),
+        ("biz_content".to_string(), biz_content.to_string()),
+        ("charset".to_string(), "utf-8".to_string()),
+        ("format".to_string(), "JSON".to_string()),
+        ("method".to_string(), method.to_string()),
+        ("sign_type".to_string(), "RSA2".to_string()),
+        (
+            "timestamp".to_string(),
+            now.with_timezone(&china)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+        ),
+        ("version".to_string(), "1.0".to_string()),
+    ]);
+    let canonical = canonical_alipay_request_parameters(&fields);
+    let signature =
+        sign_rsa_sha256_base64(&credential.merchant_private_key_pem, canonical.as_bytes())
+            .map_err(|_| AdapterError::InvalidConfiguration)?;
+    fields.insert("sign".to_string(), signature);
+    let endpoint = match credential.environment.as_str() {
+        "production" => ALIPAY_PRODUCTION_GATEWAY,
+        "sandbox" => ALIPAY_SANDBOX_GATEWAY,
+        _ => return Err(AdapterError::InvalidConfiguration),
+    };
+    Ok(PreparedAlipayPaymentQuery {
+        endpoint: endpoint.to_string(),
+        fields,
+    })
+}
+
+pub fn parse_refund_create_response(
+    status: reqwest::StatusCode,
+    body: &[u8],
+    credential: &AlipayCredential,
+    request: &RefundRequest,
+) -> Result<AlipayRefundResult, AdapterError> {
+    parse_refund_response(status, body, credential, request, false)
+}
+
+pub fn parse_refund_query_response(
+    status: reqwest::StatusCode,
+    body: &[u8],
+    credential: &AlipayCredential,
+    request: &RefundRequest,
+) -> Result<AlipayRefundResult, AdapterError> {
+    parse_refund_response(status, body, credential, request, true)
+}
+
+fn parse_refund_response(
+    status: reqwest::StatusCode,
+    body: &[u8],
+    credential: &AlipayCredential,
+    request: &RefundRequest,
+    query: bool,
+) -> Result<AlipayRefundResult, AdapterError> {
+    use serde_json::value::RawValue;
+    #[derive(Deserialize)]
+    struct CreateEnvelope<'a> {
+        #[serde(borrow)]
+        alipay_trade_refund_response: &'a RawValue,
+        sign: String,
+    }
+    #[derive(Deserialize)]
+    struct QueryEnvelope<'a> {
+        #[serde(borrow)]
+        alipay_trade_fastpay_refund_query_response: &'a RawValue,
+        sign: String,
+    }
+    #[derive(Deserialize)]
+    struct Response {
+        code: String,
+        sub_code: Option<String>,
+        out_trade_no: Option<String>,
+        trade_no: Option<String>,
+        out_request_no: Option<String>,
+        refund_fee: Option<String>,
+        refund_amount: Option<String>,
+        refund_status: Option<String>,
+    }
+    credential.validate()?;
+    let expected_amount = validate_refund_request(request)?;
+    if !status.is_success() {
+        return Err(AdapterError::Ambiguous);
+    }
+    let (raw, signature) = if query {
+        let envelope: QueryEnvelope =
+            serde_json::from_slice(body).map_err(|_| AdapterError::Verification)?;
+        (
+            envelope.alipay_trade_fastpay_refund_query_response,
+            envelope.sign,
+        )
+    } else {
+        let envelope: CreateEnvelope =
+            serde_json::from_slice(body).map_err(|_| AdapterError::Verification)?;
+        (envelope.alipay_trade_refund_response, envelope.sign)
+    };
+    verify_rsa_sha256_base64(
+        &credential.alipay_public_key_pem,
+        raw.get().as_bytes(),
+        &signature,
+    )
+    .map_err(|_| AdapterError::Verification)?;
+    let response: Response =
+        serde_json::from_str(raw.get()).map_err(|_| AdapterError::Verification)?;
+    if response.code != "10000" {
+        let _ = response.sub_code;
+        return Err(AdapterError::Ambiguous);
+    }
+    let amount = response
+        .refund_fee
+        .as_deref()
+        .or(response.refund_amount.as_deref())
+        .and_then(|value| parse_cny_minor(value).ok())
+        .ok_or(AdapterError::Verification)?;
+    if response.out_trade_no.as_deref() != Some(request.merchant_order_number.as_str())
+        || response.trade_no.as_deref() != Some(request.provider_transaction_id.as_str())
+        || response.out_request_no.as_deref() != Some(request.idempotency_key.as_str())
+        || amount != expected_amount
+    {
+        return Err(AdapterError::Verification);
+    }
+    let state = if query {
+        match response.refund_status.as_deref() {
+            Some("REFUND_SUCCESS") => ProviderRefundState::Succeeded,
+            Some("REFUND_PROCESSING") => ProviderRefundState::Pending,
+            Some("REFUND_FAIL") => ProviderRefundState::Failed,
+            _ => ProviderRefundState::Ambiguous,
+        }
+    } else {
+        ProviderRefundState::Succeeded
+    };
+    Ok(AlipayRefundResult {
+        state,
+        provider_refund_id: Some(request.idempotency_key.clone()),
+        not_found_is_definitive: false,
+    })
+}
+
+fn validate_refund_request(request: &RefundRequest) -> Result<u64, AdapterError> {
+    if request.currency != Currency::CNY
+        || !valid_refund_value(&request.provider_transaction_id)
+        || !valid_refund_value(&request.merchant_order_number)
+        || !valid_refund_value(&request.idempotency_key)
+    {
+        return Err(AdapterError::InvalidRequest);
+    }
+    request
+        .amount_minor
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or(AdapterError::InvalidRequest)
+}
+
+fn valid_refund_value(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && value.trim() == value
+}
+
+pub async fn create_refund(
+    client: &reqwest::Client,
+    credential: &AlipayCredential,
+    request: &RefundRequest,
+) -> Result<AlipayRefundResult, AdapterError> {
+    let prepared = prepare_refund_create(credential, request, Utc::now())?;
+    let response = client
+        .post(&prepared.endpoint)
+        .form(&prepared.fields)
+        .send()
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    let status = response.status();
+    let body = crate::bounded_response::read_response_body_with_limit(response, 65_536)
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    parse_refund_create_response(status, &body, credential, request)
+}
+
+pub async fn query_refund(
+    client: &reqwest::Client,
+    credential: &AlipayCredential,
+    request: &RefundRequest,
+) -> Result<AlipayRefundResult, AdapterError> {
+    let prepared = prepare_refund_query(credential, request, Utc::now())?;
+    let response = client
+        .post(&prepared.endpoint)
+        .form(&prepared.fields)
+        .send()
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    let status = response.status();
+    let body = crate::bounded_response::read_response_body_with_limit(response, 65_536)
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    parse_refund_query_response(status, &body, credential, request)
 }
 
 pub fn prepare_payment_query(

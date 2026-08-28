@@ -9,9 +9,11 @@ use crate::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
 };
 use crate::store_billing::reauth::{ReauthError, ReauthStore};
+use crate::store_billing::recovery::{RecoveryError, RecoveryStore};
 use crate::store_billing::redemption::{
     RedemptionAccessAction, RedemptionAuditContext, RevealRedemptionInput,
 };
+use crate::store_billing::refund_operations::{RefundOperations, RefundOperationsError};
 use crate::store_billing::{
     ConfirmStoreComplianceInput, CreatePaymentChannelInput, CreateProductInput, Currency,
     GenerateRedemptionCodesInput, MerchantCapabilityKind, PAYMENT_ICON_MAX_BYTES,
@@ -113,15 +115,44 @@ fn no_store_response<T: IntoResponse>(result: AppResult<T>) -> Response {
 }
 
 fn is_admin_order_operation_path(path: &str) -> bool {
-    let segments = path
-        .trim_matches('/')
-        .split('/')
-        .collect::<Vec<_>>();
-    segments.len() >= 6
+    let segments = path.trim_matches('/').split('/').collect::<Vec<_>>();
+    let direct_order_operation = segments.len() >= 6
         && segments[segments.len() - 6..segments.len() - 2]
             == ["dashboard", "store", "admin", "orders"]
         && !segments[segments.len() - 2].is_empty()
-        && matches!(segments[segments.len() - 1], "query" | "close")
+        && matches!(segments[segments.len() - 1], "query" | "close" | "refunds");
+    let refund_query = segments.len() >= 8
+        && segments[segments.len() - 8..segments.len() - 4]
+            == ["dashboard", "store", "admin", "orders"]
+        && !segments[segments.len() - 4].is_empty()
+        && segments[segments.len() - 3] == "refunds"
+        && !segments[segments.len() - 2].is_empty()
+        && segments[segments.len() - 1] == "query";
+    direct_order_operation || refund_query
+}
+
+async fn require_refund_access(
+    headers: &HeaderMap,
+    state: &AppState,
+    admin_id: &str,
+) -> AppResult<()> {
+    let session_token = extract_session_token(headers).ok_or_else(|| {
+        AppError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "missing dashboard session",
+        )
+    })?;
+    let grant_token = headers
+        .get("X-Store-Reauth-Token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| map_reauth_error(ReauthError::InvalidGrant))?;
+    ReauthStore::new(state.db_pool.clone())
+        .verify(admin_id, &session_token, grant_token, "refund")
+        .await
+        .map_err(map_reauth_error)
 }
 
 async fn require_redemption_access(
@@ -458,8 +489,7 @@ fn map_admin_order_operation_error(error: AdminOrderOperationError) -> AppError 
             "order_not_found",
             "order was not found",
         ),
-        AdminOrderOperationError::LegacyClosed
-        | AdminOrderOperationError::OrderNotPayable => (
+        AdminOrderOperationError::LegacyClosed | AdminOrderOperationError::OrderNotPayable => (
             StatusCode::CONFLICT,
             "order_not_payable",
             "order does not allow this operation",
@@ -494,6 +524,63 @@ fn map_admin_order_operation_error(error: AdminOrderOperationError) -> AppError 
         }
     };
     AppError::new(status, code, message)
+}
+
+fn map_refund_operations_error(error: RefundOperationsError) -> AppError {
+    let (status, code, message) = match error {
+        RefundOperationsError::InvalidInput => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "refund operation input is invalid",
+        ),
+        RefundOperationsError::NotFound => (
+            StatusCode::NOT_FOUND,
+            "refund_not_found",
+            "refund was not found",
+        ),
+        RefundOperationsError::OrderNotRefundable => (
+            StatusCode::CONFLICT,
+            "order_not_refundable",
+            "order is not refundable",
+        ),
+        RefundOperationsError::IdempotencyConflict => (
+            StatusCode::CONFLICT,
+            "idempotency_conflict",
+            "idempotency key was used with another order",
+        ),
+        RefundOperationsError::InsufficientBalance => (
+            StatusCode::CONFLICT,
+            "refund_reserve_unavailable",
+            "refund reserve is unavailable",
+        ),
+        RefundOperationsError::ConfigurationUnavailable => (
+            StatusCode::CONFLICT,
+            "payment_configuration_unavailable",
+            "historical payment configuration is unavailable",
+        ),
+        RefundOperationsError::Storage(detail) => {
+            return AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "refund operation failed",
+            )
+            .with_internal_message(detail);
+        }
+    };
+    AppError::new(status, code, message)
+}
+
+fn map_refund_read_error(error: RecoveryError) -> AppError {
+    match error {
+        RecoveryError::InvalidInput => {
+            map_refund_operations_error(RefundOperationsError::InvalidInput)
+        }
+        RecoveryError::NotFound => map_refund_operations_error(RefundOperationsError::NotFound),
+        RecoveryError::Storage(detail) => {
+            map_refund_operations_error(RefundOperationsError::Storage(detail))
+        }
+        other => map_refund_operations_error(RefundOperationsError::Storage(other.to_string())),
+    }
 }
 
 fn map_checkout_error(error: CheckoutError) -> AppError {
@@ -1219,6 +1306,83 @@ pub async fn close_store_order_admin(
             .await
             .map_err(map_admin_order_operation_error)?;
             Ok(Json(result))
+        }
+        .await,
+    )
+}
+
+pub async fn create_store_refund_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<EmptyStoreMutation>, JsonRejection>,
+) -> Response {
+    no_store_response(
+        async {
+            let admin = require_admin(&headers, &state).await?;
+            let _ = parse_store_json(body)?;
+            require_refund_access(&headers, &state, &admin.id).await?;
+            let idempotency_key = required_idempotency_key(&headers)?;
+            let key_ring = state.payment_keys.clone().ok_or_else(|| {
+                map_refund_operations_error(RefundOperationsError::ConfigurationUnavailable)
+            })?;
+            let refund = RefundOperations::new(
+                state.db_pool.clone(),
+                key_ring,
+                state.refund_provider.clone(),
+            )
+            .begin(&id, &admin.id, &idempotency_key)
+            .await
+            .map_err(map_refund_operations_error)?;
+            Ok(Json(refund))
+        }
+        .await,
+    )
+}
+
+pub async fn get_store_refund_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, refund_id)): Path<(String, String)>,
+) -> Response {
+    no_store_response(
+        async {
+            require_admin(&headers, &state).await?;
+            let refund = RecoveryStore::new(state.db_pool.clone())
+                .get_refund(&refund_id)
+                .await
+                .map_err(map_refund_read_error)?
+                .filter(|refund| refund.order_id == id)
+                .ok_or_else(|| map_refund_operations_error(RefundOperationsError::NotFound))?;
+            Ok(Json(refund))
+        }
+        .await,
+    )
+}
+
+pub async fn query_store_refund_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, refund_id)): Path<(String, String)>,
+    body: Result<Json<EmptyStoreMutation>, JsonRejection>,
+) -> Response {
+    no_store_response(
+        async {
+            let admin = require_admin(&headers, &state).await?;
+            let _ = parse_store_json(body)?;
+            require_refund_access(&headers, &state, &admin.id).await?;
+            let key_ring = state.payment_keys.clone().ok_or_else(|| {
+                map_refund_operations_error(RefundOperationsError::ConfigurationUnavailable)
+            })?;
+            let refund = RefundOperations::new(
+                state.db_pool.clone(),
+                key_ring,
+                state.refund_provider.clone(),
+            )
+            .query(&id, &refund_id)
+            .await
+            .map_err(map_refund_operations_error)?;
+            Ok(Json(refund))
         }
         .await,
     )

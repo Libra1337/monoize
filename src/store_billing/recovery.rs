@@ -53,6 +53,12 @@ pub struct RefundRecord {
     pub original_nano_usd: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BeginRefundOutcome {
+    pub refund: RefundRecord,
+    pub created: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecoveryClaim {
     pub id: String,
@@ -121,6 +127,13 @@ impl RecoveryStore {
         &self,
         input: BeginRefundInput,
     ) -> Result<RefundRecord, RecoveryError> {
+        Ok(self.begin_refund_with_outcome(input).await?.refund)
+    }
+
+    pub async fn begin_refund_with_outcome(
+        &self,
+        input: BeginRefundInput,
+    ) -> Result<BeginRefundOutcome, RecoveryError> {
         validate_refund_input(&input)?;
         let tx = self.db.begin_write().await.map_err(storage)?;
         if let Some(existing) = load_refund_by_key(&self.db, &*tx, &input.idempotency_key).await? {
@@ -128,7 +141,10 @@ impl RecoveryStore {
                 return Err(RecoveryError::Conflict);
             }
             tx.commit().await.map_err(storage)?;
-            return Ok(existing);
+            return Ok(BeginRefundOutcome {
+                refund: existing,
+                created: false,
+            });
         }
 
         let lock = lock_clause(&self.db);
@@ -150,6 +166,18 @@ impl RecoveryStore {
             .await
             .map_err(storage)?
             .ok_or(RecoveryError::OrderNotRecoverable)?;
+        // PostgreSQL READ COMMITTED refreshes this read after an order-lock wait. This lets
+        // concurrent requests with the same key replay the winner instead of reporting conflict.
+        if let Some(existing) = load_refund_by_key(&self.db, &*tx, &input.idempotency_key).await? {
+            if existing.order_id != input.order_id {
+                return Err(RecoveryError::Conflict);
+            }
+            tx.commit().await.map_err(storage)?;
+            return Ok(BeginRefundOutcome {
+                refund: existing,
+                created: false,
+            });
+        }
         if row_string(&order, "payment_state")? != "paid"
             || (row_string(&order, "product_kind")? == "plan"
                 && row_string(&order, "fulfillment_state")? == "fulfilled")
@@ -272,7 +300,14 @@ impl RecoveryStore {
                     "inserted refund is missing".to_string(),
                 ))?;
         tx.commit().await.map_err(storage)?;
-        Ok(result)
+        Ok(BeginRefundOutcome {
+            refund: result,
+            created: true,
+        })
+    }
+
+    pub async fn get_refund(&self, refund_id: &str) -> Result<Option<RefundRecord>, RecoveryError> {
+        load_refund_by_id(&self.db, self.db.read(), refund_id).await
     }
 
     pub async fn mark_refund_pending(
@@ -280,7 +315,16 @@ impl RecoveryStore {
         refund_id: &str,
         provider_refund_id: &str,
     ) -> Result<RefundRecord, RecoveryError> {
-        if refund_id.is_empty() || provider_refund_id.trim().is_empty() {
+        self.mark_refund_pending_outcome(refund_id, Some(provider_refund_id))
+            .await
+    }
+
+    pub async fn mark_refund_pending_outcome(
+        &self,
+        refund_id: &str,
+        provider_refund_id: Option<&str>,
+    ) -> Result<RefundRecord, RecoveryError> {
+        if refund_id.is_empty() || provider_refund_id.is_some_and(|value| value.trim().is_empty()) {
             return Err(RecoveryError::InvalidInput);
         }
         let tx = self.db.begin_write().await.map_err(storage)?;
@@ -288,8 +332,32 @@ impl RecoveryStore {
             .await?
             .ok_or(RecoveryError::NotFound)?;
         if existing.state == "pending" {
-            if existing.provider_refund_id.as_deref() != Some(provider_refund_id) {
-                return Err(RecoveryError::Conflict);
+            match (existing.provider_refund_id.as_deref(), provider_refund_id) {
+                (Some(stored), Some(received)) if stored != received => {
+                    return Err(RecoveryError::Conflict);
+                }
+                (None, Some(received)) => {
+                    let changed = tx
+                        .execute(self.db.stmt(
+                            "UPDATE store_refunds
+                             SET provider_refund_id = $2, updated_at = $3
+                             WHERE id = $1 AND state = 'pending' AND provider_refund_id IS NULL",
+                            vec![refund_id.into(), received.into(), timestamp().into()],
+                        ))
+                        .await
+                        .map_err(storage)?;
+                    let result = load_refund_by_id(&self.db, &*tx, refund_id)
+                        .await?
+                        .ok_or(RecoveryError::NotFound)?;
+                    if changed.rows_affected() != 1
+                        && result.provider_refund_id.as_deref() != Some(received)
+                    {
+                        return Err(RecoveryError::Conflict);
+                    }
+                    tx.commit().await.map_err(storage)?;
+                    return Ok(result);
+                }
+                _ => {}
             }
             tx.commit().await.map_err(storage)?;
             return Ok(existing);
@@ -297,21 +365,28 @@ impl RecoveryStore {
         if existing.state != "created" {
             return Err(RecoveryError::Conflict);
         }
-        tx.execute(self.db.stmt(
-            "UPDATE store_refunds
-             SET state = 'pending', provider_refund_id = $2, updated_at = $3
-             WHERE id = $1 AND state = 'created'",
-            vec![
-                refund_id.into(),
-                provider_refund_id.into(),
-                timestamp().into(),
-            ],
-        ))
-        .await
-        .map_err(storage)?;
+        let changed = tx
+            .execute(self.db.stmt(
+                "UPDATE store_refunds
+                 SET state = 'pending', provider_refund_id = $2, updated_at = $3
+                 WHERE id = $1 AND state = 'created'",
+                vec![
+                    refund_id.into(),
+                    provider_refund_id.map(str::to_string).into(),
+                    timestamp().into(),
+                ],
+            ))
+            .await
+            .map_err(storage)?;
         let result = load_refund_by_id(&self.db, &*tx, refund_id)
             .await?
             .ok_or(RecoveryError::NotFound)?;
+        if changed.rows_affected() != 1
+            && provider_refund_id.is_some()
+            && result.provider_refund_id.as_deref() != provider_refund_id
+        {
+            return Err(RecoveryError::Conflict);
+        }
         tx.commit().await.map_err(storage)?;
         Ok(result)
     }

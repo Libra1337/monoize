@@ -14,7 +14,8 @@ use crate::store_billing::crypto::{
 use crate::store_billing::money::Currency;
 use crate::store_billing::payment::CheckoutAction;
 use crate::store_billing::payment::{
-    AdapterError, CheckoutRequest, PaymentQuery, ProviderPaymentState, validate_payment_query,
+    AdapterError, CheckoutRequest, PaymentQuery, ProviderPaymentState, ProviderRefundState,
+    RefundRequest, validate_payment_query,
 };
 
 const WECHAT_API_ORIGIN: &str = "https://api.mch.weixin.qq.com";
@@ -199,6 +200,138 @@ impl fmt::Debug for PreparedWechatPaymentQuery {
             .field("authorization", &"[REDACTED]")
             .finish()
     }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PreparedWechatRefund {
+    pub endpoint: String,
+    pub canonical_url: String,
+    pub authorization: Zeroizing<String>,
+    pub body: Value,
+    pub body_text: String,
+}
+
+impl fmt::Debug for PreparedWechatRefund {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedWechatRefund")
+            .field("endpoint", &self.endpoint)
+            .field("canonical_url", &self.canonical_url)
+            .field("authorization", &"[REDACTED]")
+            .field("body", &self.body)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WechatRefundResult {
+    pub state: ProviderRefundState,
+    pub provider_refund_id: Option<String>,
+    pub not_found_is_definitive: bool,
+}
+
+pub fn prepare_refund_create(
+    credential: &WechatCredential,
+    request: &RefundRequest,
+    timestamp: i64,
+    nonce: &str,
+) -> Result<PreparedWechatRefund, AdapterError> {
+    credential.validate()?;
+    let amount = validate_refund_request(request)?;
+    if timestamp <= 0 || !valid_required(nonce) {
+        return Err(AdapterError::InvalidRequest);
+    }
+    let canonical_url = "/v3/refund/domestic/refunds".to_string();
+    let endpoint = format!("{WECHAT_API_ORIGIN}{canonical_url}");
+    let body = serde_json::json!({
+        "transaction_id": request.provider_transaction_id,
+        "out_refund_no": request.idempotency_key,
+        "reason": format!("LynShen Store {}", request.merchant_order_number),
+        "amount": {"refund": amount, "total": amount, "currency": "CNY"},
+    });
+    prepare_refund_signed(credential, endpoint, canonical_url, body, timestamp, nonce)
+}
+
+pub fn prepare_refund_query(
+    credential: &WechatCredential,
+    request: &RefundRequest,
+    timestamp: i64,
+    nonce: &str,
+) -> Result<PreparedWechatRefund, AdapterError> {
+    credential.validate()?;
+    validate_refund_request(request)?;
+    if timestamp <= 0 || !valid_required(nonce) {
+        return Err(AdapterError::InvalidRequest);
+    }
+    let mut endpoint =
+        Url::parse(WECHAT_API_ORIGIN).map_err(|_| AdapterError::InvalidConfiguration)?;
+    endpoint
+        .path_segments_mut()
+        .map_err(|_| AdapterError::InvalidConfiguration)?
+        .extend(["v3", "refund", "domestic", "refunds"])
+        .push(&request.idempotency_key);
+    let canonical_url = endpoint.path().to_string();
+    prepare_refund_signed(
+        credential,
+        endpoint.to_string(),
+        canonical_url,
+        Value::Null,
+        timestamp,
+        nonce,
+    )
+}
+
+fn prepare_refund_signed(
+    credential: &WechatCredential,
+    endpoint: String,
+    canonical_url: String,
+    body: Value,
+    timestamp: i64,
+    nonce: &str,
+) -> Result<PreparedWechatRefund, AdapterError> {
+    let body_text = if body.is_null() {
+        String::new()
+    } else {
+        serde_json::to_string(&body).map_err(|_| AdapterError::InvalidRequest)?
+    };
+    let method = if body.is_null() { "GET" } else { "POST" };
+    let timestamp_text = timestamp.to_string();
+    let message =
+        wechat_signature_message(method, &canonical_url, &timestamp_text, nonce, &body_text);
+    let signature =
+        sign_rsa_sha256_base64(&credential.merchant_private_key_pem, message.as_bytes())
+            .map_err(|_| AdapterError::InvalidConfiguration)?;
+    let authorization = Zeroizing::new(format!(
+        "WECHATPAY2-SHA256-RSA2048 mchid=\"{}\",nonce_str=\"{}\",timestamp=\"{}\",serial_no=\"{}\",signature=\"{}\"",
+        credential.merchant_id,
+        nonce,
+        timestamp_text,
+        credential.merchant_certificate_serial,
+        signature,
+    ));
+    Ok(PreparedWechatRefund {
+        endpoint,
+        canonical_url,
+        authorization,
+        body,
+        body_text,
+    })
+}
+
+fn validate_refund_request(request: &RefundRequest) -> Result<u64, AdapterError> {
+    if request.currency != Currency::CNY
+        || !valid_required(&request.provider_transaction_id)
+        || !valid_required(&request.merchant_order_number)
+        || !valid_required(&request.idempotency_key)
+    {
+        return Err(AdapterError::InvalidRequest);
+    }
+    request
+        .amount_minor
+        .parse::<u64>()
+        .ok()
+        .filter(|amount| *amount > 0)
+        .ok_or(AdapterError::InvalidRequest)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -618,6 +751,201 @@ pub async fn query_payment_with_verifiers(
         credential,
         verifier,
         query,
+        Utc::now().timestamp(),
+        300,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn parse_refund_response_with_verifier(
+    status: reqwest::StatusCode,
+    timestamp: &str,
+    nonce: &str,
+    certificate_serial: &str,
+    signature: &str,
+    body: &[u8],
+    credential: &WechatCredential,
+    verifier: &WechatPlatformVerifier,
+    request: &RefundRequest,
+    now_timestamp: i64,
+    tolerance_seconds: i64,
+) -> Result<WechatRefundResult, AdapterError> {
+    #[derive(Deserialize)]
+    struct ErrorResponse {
+        code: String,
+        message: String,
+    }
+    #[derive(Deserialize)]
+    struct Response {
+        refund_id: String,
+        out_refund_no: String,
+        transaction_id: String,
+        out_trade_no: String,
+        status: String,
+        amount: RefundAmount,
+    }
+    #[derive(Deserialize)]
+    struct RefundAmount {
+        refund: u64,
+        total: u64,
+        currency: String,
+    }
+
+    credential.validate()?;
+    let expected_amount = validate_refund_request(request)?;
+    if !valid_required(timestamp)
+        || timestamp.len() > 20
+        || !timestamp.bytes().all(|byte| byte.is_ascii_digit())
+        || !valid_required(nonce)
+        || nonce.len() > 256
+        || certificate_serial != verifier.certificate_serial
+        || signature.is_empty()
+        || tolerance_seconds < 0
+    {
+        return Err(AdapterError::Verification);
+    }
+    let response_timestamp = timestamp
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or(AdapterError::Verification)?;
+    if now_timestamp.abs_diff(response_timestamp) > tolerance_seconds as u64 {
+        return Err(AdapterError::Verification);
+    }
+    verify_rsa_sha256_base64(
+        &verifier.public_key_pem,
+        &wechat_callback_signature_message(timestamp, nonce, body),
+        signature,
+    )
+    .map_err(|_| AdapterError::Verification)?;
+    if !status.is_success() {
+        let error: ErrorResponse =
+            serde_json::from_slice(body).map_err(|_| AdapterError::Verification)?;
+        if status == reqwest::StatusCode::NOT_FOUND
+            && error.code == "RESOURCE_NOT_EXISTS"
+            && valid_required(&error.message)
+        {
+            return Ok(WechatRefundResult {
+                state: ProviderRefundState::NotFound,
+                provider_refund_id: None,
+                not_found_is_definitive: true,
+            });
+        }
+        return Err(AdapterError::Ambiguous);
+    }
+    let response: Response =
+        serde_json::from_slice(body).map_err(|_| AdapterError::Verification)?;
+    if !valid_required(&response.refund_id)
+        || response.out_refund_no != request.idempotency_key
+        || response.transaction_id != request.provider_transaction_id
+        || response.out_trade_no != request.merchant_order_number
+        || response.amount.refund != expected_amount
+        || response.amount.total != expected_amount
+        || response.amount.currency != "CNY"
+    {
+        return Err(AdapterError::Verification);
+    }
+    let state = match response.status.as_str() {
+        "SUCCESS" => ProviderRefundState::Succeeded,
+        "PROCESSING" => ProviderRefundState::Pending,
+        "ABNORMAL" | "CLOSED" => ProviderRefundState::Failed,
+        _ => ProviderRefundState::Ambiguous,
+    };
+    Ok(WechatRefundResult {
+        state,
+        provider_refund_id: Some(response.refund_id),
+        not_found_is_definitive: false,
+    })
+}
+
+pub async fn create_refund(
+    client: &reqwest::Client,
+    credential: &WechatCredential,
+    verifiers: &[WechatPlatformVerifier],
+    request: &RefundRequest,
+) -> Result<WechatRefundResult, AdapterError> {
+    send_refund_request(client, credential, verifiers, request, false).await
+}
+
+pub async fn query_refund(
+    client: &reqwest::Client,
+    credential: &WechatCredential,
+    verifiers: &[WechatPlatformVerifier],
+    request: &RefundRequest,
+) -> Result<WechatRefundResult, AdapterError> {
+    send_refund_request(client, credential, verifiers, request, true).await
+}
+
+async fn send_refund_request(
+    client: &reqwest::Client,
+    credential: &WechatCredential,
+    verifiers: &[WechatPlatformVerifier],
+    request: &RefundRequest,
+    query: bool,
+) -> Result<WechatRefundResult, AdapterError> {
+    if verifiers.is_empty() {
+        return Err(AdapterError::InvalidConfiguration);
+    }
+    let timestamp = Utc::now().timestamp();
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let prepared = if query {
+        prepare_refund_query(credential, request, timestamp, &nonce)?
+    } else {
+        prepare_refund_create(credential, request, timestamp, &nonce)?
+    };
+    let builder = if query {
+        client.get(&prepared.endpoint)
+    } else {
+        client
+            .post(&prepared.endpoint)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(prepared.body_text.clone())
+    };
+    let response = builder
+        .header(
+            reqwest::header::AUTHORIZATION,
+            prepared.authorization.as_str(),
+        )
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    let status = response.status();
+    if status.is_server_error() {
+        crate::bounded_response::read_response_body_with_limit(response, 65_536)
+            .await
+            .map_err(|_| AdapterError::Ambiguous)?;
+        return Err(AdapterError::Ambiguous);
+    }
+    let header = |name: &'static str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+            .ok_or(AdapterError::Verification)
+    };
+    let response_timestamp = header("Wechatpay-Timestamp")?;
+    let response_nonce = header("Wechatpay-Nonce")?;
+    let response_serial = header("Wechatpay-Serial")?;
+    let response_signature = header("Wechatpay-Signature")?;
+    let verifier = verifiers
+        .iter()
+        .find(|item| item.certificate_serial == response_serial)
+        .ok_or(AdapterError::Verification)?;
+    let body = crate::bounded_response::read_response_body_with_limit(response, 65_536)
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    parse_refund_response_with_verifier(
+        status,
+        &response_timestamp,
+        &response_nonce,
+        &response_serial,
+        &response_signature,
+        &body,
+        credential,
+        verifier,
+        request,
         Utc::now().timestamp(),
         300,
     )

@@ -73,6 +73,82 @@ async fn setup_paid_balance_order(current_balance: i128) -> PaidOrderFixture {
             .unwrap();
         write
             .execute_unprepared(
+                "INSERT INTO store_payment_compliance
+                    (id, channel_id, terms_version, admin_user_id, source_ip, confirmed_at)
+                 VALUES ('recovery-compliance', 'store-channel-stripe', '2026-08-28',
+                         'recovery-admin', '127.0.0.1', '2026-08-28T00:00:00Z')",
+            )
+            .await
+            .unwrap();
+        write
+            .execute_unprepared(
+                "INSERT INTO store_merchant_capabilities
+                    (id, channel_id, capability, state, environment,
+                     merchant_account_digest, provider_product, evidence_digest,
+                     verifier_admin_id, verified_at, expires_at)
+                 VALUES
+                    ('recovery-cap-payment-query', 'store-channel-stripe', 'payment_query',
+                     'supported', 'sandbox',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'checkout',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'recovery-admin', '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z'),
+                    ('recovery-cap-refund', 'store-channel-stripe', 'refund',
+                     'supported', 'sandbox',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'checkout',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'recovery-admin', '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z'),
+                    ('recovery-cap-refund-query', 'store-channel-stripe', 'refund_query',
+                     'supported', 'sandbox',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'checkout',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'recovery-admin', '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z'),
+                    ('recovery-cap-settlement', 'store-channel-stripe', 'settlement_report',
+                     'supported', 'sandbox',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'checkout',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'recovery-admin', '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z')",
+            )
+            .await
+            .unwrap();
+        write
+            .execute_unprepared(
+                "INSERT INTO store_privacy_records
+                    (id, policy_version, jurisdiction, allowed_regions_json,
+                     retention_json, legal_basis, reviewer_id, evidence_digest,
+                     approved_at, next_review_at, accepted)
+                 VALUES ('recovery-privacy', 'v1', 'CN', '[]', '{}', 'contract',
+                         'recovery-admin',
+                         'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                         '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z', 1)",
+            )
+            .await
+            .unwrap();
+        write
+            .execute_unprepared(
+                "INSERT INTO store_channel_readiness_profiles
+                    (channel_id, active_credential_digest, privacy_record_id,
+                     callback_verification_passed, supported_currencies_json,
+                     amount_limits_json, checkout_action_kinds_json,
+                     license_evidence_digest, runtime_evidence_digest,
+                     availability_evidence_digest, verifier_admin_id, verified_at, expires_at)
+                 VALUES ('store-channel-stripe',
+                         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                         'recovery-privacy', 1, '[\"CNY\"]',
+                         '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
+                         '[\"redirect\"]',
+                         'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                         'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                         'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                         'recovery-admin', '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z')",
+            )
+            .await
+            .unwrap();
+        write
+            .execute_unprepared(
                 "INSERT INTO store_channel_credentials
                     (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
                      ciphertext_base64, account_identity_digest, status, created_at)
@@ -181,59 +257,47 @@ async fn setup_paid_fulfilled_plan_order() -> PaidOrderFixture {
         )
         .await
         .unwrap();
-    let orders = PaymentOrderStore::new(fixture.db.clone());
-    let order = orders
-        .create_order(
-            USER_ID,
-            CreatePaymentOrderInput {
-                idempotency_key: "recovery-plan-order".to_string(),
-                product_id: "recovery-plan".to_string(),
-                payment_channel_id: "store-channel-stripe".to_string(),
-                payment_currency: Currency::CNY,
-                custom_recharge_minor: None,
-            },
-            &rate(),
-        )
-        .await
-        .unwrap();
-    let attempt = orders
-        .create_attempt(
-            USER_ID,
-            &order.id,
-            CreatePaymentAttemptInput {
-                idempotency_key: "recovery-plan-attempt".to_string(),
-                expected_payment_method: Some("card".to_string()),
-            },
-        )
-        .await
-        .unwrap();
     let now = Utc::now().to_rfc3339();
     let write = fixture.db.write().await;
     write
         .execute(fixture.db.stmt(
-            "UPDATE store_orders
-             SET payment_state = 'paid', fulfillment_state = 'fulfilled',
-                 paid_at = $2, fulfilled_at = $2, updated_at = $2,
-                 state_revision = state_revision + 1
-             WHERE id = $1",
-            vec![order.id.clone().into(), now.clone().into()],
+            "INSERT INTO store_orders
+                (id, order_number, user_id, product_id, product_kind, payment_state,
+                 fulfillment_state, dispute_state, payment_hold, payment_channel_id,
+                 payment_currency, payment_minor, cny_per_usd, rate_numerator,
+                 rate_denominator, rate_source_updated_at, quote_json, contract_version,
+                 state_revision, creation_idempotency_key, creation_request_digest,
+                 expires_at, created_at, updated_at, paid_at, fulfilled_at)
+             VALUES ('recovery-plan-order-id', 'LS-RECOVERY-PLAN', $1,
+                     'recovery-plan', 'plan', 'paid', 'fulfilled', 'none', 0,
+                     'store-channel-stripe', 'CNY', '5900', '6.0000', '6', '1',
+                     '2026-08-27T00:00:00Z', '{}', 2, 1,
+                     'recovery-plan-order', 'recovery-plan-digest',
+                     '2026-08-27T01:00:00Z', $2, $2, $2, $2)",
+            vec![USER_ID.into(), now.clone().into()],
         ))
         .await
         .unwrap();
     write
         .execute(fixture.db.stmt(
-            "UPDATE store_payment_attempts
-             SET state = 'paid', provider_object_id = 'cs-plan-recovery',
-                 provider_transaction_id = 'pi-plan-recovery', paid_at = $2, updated_at = $2
-             WHERE id = $1",
-            vec![attempt.id.into(), now.into()],
+            "INSERT INTO store_payment_attempts
+                (id, order_id, channel_id, adapter_kind, credential_version_id,
+                 merchant_account_identity, expected_payment_method,
+                 payment_contract_version, state, provider_transaction_id,
+                 provider_object_id, idempotency_key, paid_at, created_at, updated_at)
+             VALUES ('recovery-plan-attempt-id', 'recovery-plan-order-id',
+                     'store-channel-stripe', 'stripe', $1,
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'card', 2, 'paid', 'pi-plan-recovery', 'cs-plan-recovery',
+                     'recovery-plan-attempt', $2, $2, $2)",
+            vec![CREDENTIAL_ID.into(), now.into()],
         ))
         .await
         .unwrap();
     drop(write);
     PaidOrderFixture {
         db: fixture.db,
-        order_id: order.id,
+        order_id: "recovery-plan-order-id".to_string(),
     }
 }
 

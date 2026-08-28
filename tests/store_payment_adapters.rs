@@ -17,7 +17,8 @@ use monoize::store_billing::adapters::wechat::{
 use monoize::store_billing::crypto::sign_rsa_sha256_base64;
 use monoize::store_billing::money::Currency;
 use monoize::store_billing::payment::{
-    AdapterError, CheckoutAction, PaymentQuery, ProviderPaymentState, validate_return_url,
+    AdapterError, CheckoutAction, PaymentQuery, ProviderPaymentState, ProviderRefundState,
+    RefundRequest, validate_return_url,
 };
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::rand_core::OsRng;
@@ -619,6 +620,310 @@ fn wechat_payment_query_accepts_a_rotated_platform_verifier() {
             provider_transaction_id: "4200000001202608270099".to_string()
         }
     );
+}
+
+fn refund_request(currency: Currency) -> RefundRequest {
+    RefundRequest {
+        provider_transaction_id: "provider-transaction-1".to_string(),
+        merchant_order_number: "LS-REFUND-1".to_string(),
+        amount_minor: "1234".to_string(),
+        currency,
+        idempotency_key: "refund-local-1".to_string(),
+    }
+}
+
+#[test]
+fn stripe_refund_create_and_query_bind_the_stable_contract() {
+    let credential = monoize::store_billing::adapters::stripe::StripeCredential::from_json(
+        br#"{
+            "secret_key":"sk_test_refund","publishable_key":"pk_test_refund",
+            "webhook_signing_secret":"whsec_refund","api_version":"2026-08-01",
+            "account_id":"acct_refund","live_mode":false
+        }"#,
+    )
+    .unwrap();
+    let request = refund_request(Currency::USD);
+    let create =
+        monoize::store_billing::adapters::stripe::prepare_refund_create(&credential, &request)
+            .unwrap();
+    assert_eq!(create.idempotency_key, "refund-local-1");
+    assert_eq!(create.account_id, "acct_refund");
+    assert_eq!(create.form["payment_intent"], "provider-transaction-1");
+    assert_eq!(create.form["amount"], "1234");
+    assert_eq!(create.form["metadata[store_refund_id]"], "refund-local-1");
+
+    let created = br#"{
+        "id":"re_1","object":"refund","amount":1234,"currency":"usd",
+        "payment_intent":"provider-transaction-1","status":"succeeded",
+        "metadata":{"store_refund_id":"refund-local-1","store_order_number":"LS-REFUND-1"}
+    }"#;
+    let parsed = monoize::store_billing::adapters::stripe::parse_refund_create_response(
+        reqwest::StatusCode::OK,
+        created,
+        &request,
+    )
+    .unwrap();
+    assert_eq!(parsed.state, ProviderRefundState::Succeeded);
+    assert_eq!(parsed.provider_refund_id.as_deref(), Some("re_1"));
+
+    let query =
+        monoize::store_billing::adapters::stripe::prepare_refund_query(&credential, &request, None)
+            .unwrap();
+    assert!(
+        query
+            .endpoint
+            .contains("payment_intent=provider-transaction-1")
+    );
+    assert!(!query.endpoint.contains("metadata%5B"));
+    let matched = monoize::store_billing::adapters::stripe::parse_refund_query_response(
+        reqwest::StatusCode::OK,
+        br#"{
+            "object":"list",
+            "data":[
+                {
+                    "id":"re_other","object":"refund","amount":1234,"currency":"usd",
+                    "payment_intent":"provider-transaction-1","status":"succeeded",
+                    "metadata":{"store_refund_id":"another-refund","store_order_number":"LS-REFUND-1"}
+                },
+                {
+                    "id":"re_1","object":"refund","amount":1234,"currency":"usd",
+                    "payment_intent":"provider-transaction-1","status":"succeeded",
+                    "metadata":{"store_refund_id":"refund-local-1","store_order_number":"LS-REFUND-1"}
+                }
+            ]
+        }"#,
+        &request,
+        None,
+    )
+    .unwrap();
+    assert_eq!(matched.provider_refund_id.as_deref(), Some("re_1"));
+    let missing = monoize::store_billing::adapters::stripe::parse_refund_query_response(
+        reqwest::StatusCode::OK,
+        br#"{"object":"list","data":[]}"#,
+        &request,
+        None,
+    )
+    .unwrap();
+    assert_eq!(missing.state, ProviderRefundState::NotFound);
+    assert!(missing.not_found_is_definitive);
+    for (status, body) in [
+        (
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            b"upstream".as_slice(),
+        ),
+        (reqwest::StatusCode::BAD_REQUEST, b"not-json".as_slice()),
+    ] {
+        assert_eq!(
+            monoize::store_billing::adapters::stripe::parse_refund_create_response(
+                status, body, &request,
+            )
+            .unwrap_err(),
+            AdapterError::Ambiguous
+        );
+    }
+
+    assert_eq!(
+        monoize::store_billing::adapters::stripe::parse_refund_create_response(
+            reqwest::StatusCode::OK,
+            std::str::from_utf8(created)
+                .unwrap()
+                .replace("1234", "1235")
+                .as_bytes(),
+            &request,
+        )
+        .unwrap_err(),
+        AdapterError::Verification
+    );
+}
+
+#[test]
+fn alipay_refund_create_and_query_use_rsa2_and_verified_cny_contract() {
+    let private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let public = RsaPublicKey::from(&private);
+    let private_pem = private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let public_pem = public.to_public_key_pem(LineEnding::LF).unwrap();
+    let credential = monoize::store_billing::adapters::alipay::AlipayCredential::from_json(
+        serde_json::json!({
+            "app_id":"2026000000000001","seller_id":"2088000000000001",
+            "merchant_private_key_pem":private_pem.as_str(),
+            "alipay_public_key_pem":public_pem,"environment":"sandbox"
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let request = refund_request(Currency::CNY);
+    let prepared = monoize::store_billing::adapters::alipay::prepare_refund_create(
+        &credential,
+        &request,
+        Utc.with_ymd_and_hms(2026, 8, 28, 12, 0, 0).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(prepared.fields["method"], "alipay.trade.refund");
+    assert_eq!(prepared.fields["sign_type"], "RSA2");
+    assert!(prepared.fields["biz_content"].contains("\"refund_amount\":\"12.34\""));
+    assert!(prepared.fields["biz_content"].contains("\"out_request_no\":\"refund-local-1\""));
+
+    let node = r#"{"code":"10000","msg":"Success","out_trade_no":"LS-REFUND-1","trade_no":"provider-transaction-1","out_request_no":"refund-local-1","refund_fee":"12.34"}"#;
+    let signature = sign_rsa_sha256_base64(private_pem.as_str(), node.as_bytes()).unwrap();
+    let response = format!(r#"{{"alipay_trade_refund_response":{node},"sign":"{signature}"}}"#);
+    let parsed = monoize::store_billing::adapters::alipay::parse_refund_create_response(
+        reqwest::StatusCode::OK,
+        response.as_bytes(),
+        &credential,
+        &request,
+    )
+    .unwrap();
+    assert_eq!(parsed.state, ProviderRefundState::Succeeded);
+
+    let query = monoize::store_billing::adapters::alipay::prepare_refund_query(
+        &credential,
+        &request,
+        Utc.with_ymd_and_hms(2026, 8, 28, 12, 1, 0).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(query.fields["method"], "alipay.trade.fastpay.refund.query");
+    let missing_node =
+        r#"{"code":"40004","msg":"Business Failed","sub_code":"ACQ.REFUND_NOT_EXIST"}"#;
+    let missing_signature =
+        sign_rsa_sha256_base64(private_pem.as_str(), missing_node.as_bytes()).unwrap();
+    let missing_response = format!(
+        r#"{{"alipay_trade_fastpay_refund_query_response":{missing_node},"sign":"{missing_signature}"}}"#
+    );
+    assert_eq!(
+        monoize::store_billing::adapters::alipay::parse_refund_query_response(
+            reqwest::StatusCode::OK,
+            missing_response.as_bytes(),
+            &credential,
+            &request,
+        )
+        .unwrap_err(),
+        AdapterError::Ambiguous
+    );
+    assert_eq!(
+        monoize::store_billing::adapters::alipay::prepare_refund_create(
+            &credential,
+            &refund_request(Currency::USD),
+            Utc::now(),
+        )
+        .unwrap_err(),
+        AdapterError::InvalidRequest
+    );
+}
+
+#[test]
+fn wechat_refund_create_and_query_sign_and_verify_the_merchant_contract() {
+    let private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+    let public = RsaPublicKey::from(&private);
+    let private_pem = private.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let public_pem = public.to_public_key_pem(LineEnding::LF).unwrap();
+    let credential = WechatCredential::from_json(
+        serde_json::json!({
+            "merchant_id":"1900000109","app_id":"wx1234567890",
+            "api_v3_key":"0123456789abcdef0123456789abcdef",
+            "merchant_certificate_serial":"MERCHANT-REFUND",
+            "merchant_private_key_pem":private_pem.as_str(),
+            "platform_certificate_serial":"PLATFORM-REFUND",
+            "platform_public_key_pem":public_pem
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let request = refund_request(Currency::CNY);
+    let prepared = monoize::store_billing::adapters::wechat::prepare_refund_create(
+        &credential,
+        &request,
+        1_777_000_000,
+        "refund-nonce",
+    )
+    .unwrap();
+    assert_eq!(prepared.canonical_url, "/v3/refund/domestic/refunds");
+    assert_eq!(prepared.body["out_refund_no"], "refund-local-1");
+    assert_eq!(prepared.body["amount"]["refund"], 1234);
+    assert_eq!(prepared.body["amount"]["total"], 1234);
+
+    let query = monoize::store_billing::adapters::wechat::prepare_refund_query(
+        &credential,
+        &request,
+        1_777_000_001,
+        "query-refund-nonce",
+    )
+    .unwrap();
+    assert_eq!(
+        query.canonical_url,
+        "/v3/refund/domestic/refunds/refund-local-1"
+    );
+    assert_eq!(
+        monoize::store_billing::adapters::wechat::prepare_refund_create(
+            &credential,
+            &refund_request(Currency::USD),
+            1_777_000_000,
+            "refund-nonce",
+        )
+        .unwrap_err(),
+        AdapterError::InvalidRequest
+    );
+
+    let body = serde_json::to_vec(&serde_json::json!({
+        "refund_id":"5030000000202608280001",
+        "out_refund_no":"refund-local-1",
+        "transaction_id":"provider-transaction-1",
+        "out_trade_no":"LS-REFUND-1",
+        "status":"SUCCESS",
+        "amount":{"refund":1234,"total":1234,"currency":"CNY"}
+    }))
+    .unwrap();
+    let response_timestamp = "1777000010";
+    let response_nonce = "refund-response-nonce";
+    let signature = sign_rsa_sha256_base64(
+        private_pem.as_str(),
+        &wechat_callback_signature_message(response_timestamp, response_nonce, &body),
+    )
+    .unwrap();
+    let verifier = credential.platform_verifier().unwrap();
+    let parsed = monoize::store_billing::adapters::wechat::parse_refund_response_with_verifier(
+        reqwest::StatusCode::OK,
+        response_timestamp,
+        response_nonce,
+        "PLATFORM-REFUND",
+        &signature,
+        &body,
+        &credential,
+        &verifier,
+        &request,
+        1_777_000_020,
+        300,
+    )
+    .unwrap();
+    assert_eq!(parsed.state, ProviderRefundState::Succeeded);
+    assert_eq!(
+        parsed.provider_refund_id.as_deref(),
+        Some("5030000000202608280001")
+    );
+
+    let missing_body = br#"{"code":"RESOURCE_NOT_EXISTS","message":"refund does not exist"}"#;
+    let missing_signature = sign_rsa_sha256_base64(
+        private_pem.as_str(),
+        &wechat_callback_signature_message(response_timestamp, response_nonce, missing_body),
+    )
+    .unwrap();
+    let missing = monoize::store_billing::adapters::wechat::parse_refund_response_with_verifier(
+        reqwest::StatusCode::NOT_FOUND,
+        response_timestamp,
+        response_nonce,
+        "PLATFORM-REFUND",
+        &missing_signature,
+        missing_body,
+        &credential,
+        &verifier,
+        &request,
+        1_777_000_020,
+        300,
+    )
+    .unwrap();
+    assert_eq!(missing.state, ProviderRefundState::NotFound);
+    assert!(missing.not_found_is_definitive);
 }
 
 #[test]

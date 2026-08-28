@@ -19,6 +19,7 @@ pub mod quota_gate;
 pub mod reauth;
 pub mod reconciliation;
 pub mod recovery;
+pub mod refund_operations;
 pub mod redemption;
 pub mod settlement;
 pub mod state_machine;

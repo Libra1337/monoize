@@ -24,6 +24,10 @@ use monoize::store_billing::exchange_rate::{
 use monoize::store_billing::operations::PaymentQueryProvider;
 use monoize::store_billing::payment::{
     AdapterError, CheckoutAction, CheckoutRequest, PaymentQuery, ProviderPaymentState,
+    ProviderRefundState,
+};
+use monoize::store_billing::refund_operations::{
+    RefundProvider, RefundProviderContract, RefundProviderOutcome,
 };
 use monoize::users::UserRole;
 use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey, LineEnding};
@@ -51,6 +55,52 @@ struct ApiCheckoutProvider {
 struct ApiPaymentQueryProvider {
     calls: Arc<AtomicUsize>,
     outcome: Result<ProviderPaymentState, AdapterError>,
+}
+
+#[derive(Clone)]
+struct ApiRefundProvider {
+    create_calls: Arc<AtomicUsize>,
+    query_calls: Arc<AtomicUsize>,
+    create_state: ProviderRefundState,
+    query_state: ProviderRefundState,
+}
+
+impl ApiRefundProvider {
+    fn new(create_state: ProviderRefundState, query_state: ProviderRefundState) -> Self {
+        Self {
+            create_calls: Arc::new(AtomicUsize::new(0)),
+            query_calls: Arc::new(AtomicUsize::new(0)),
+            create_state,
+            query_state,
+        }
+    }
+
+    fn outcome(state: ProviderRefundState) -> RefundProviderOutcome {
+        RefundProviderOutcome {
+            provider_refund_id: Some("re_api_refund".to_string()),
+            not_found_is_definitive: false,
+            state,
+        }
+    }
+}
+
+#[async_trait]
+impl RefundProvider for ApiRefundProvider {
+    async fn create_refund(
+        &self,
+        _contract: &RefundProviderContract,
+    ) -> Result<RefundProviderOutcome, AdapterError> {
+        self.create_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Self::outcome(self.create_state.clone()))
+    }
+
+    async fn query_refund(
+        &self,
+        _contract: &RefundProviderContract,
+    ) -> Result<RefundProviderOutcome, AdapterError> {
+        self.query_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Self::outcome(self.query_state.clone()))
+    }
 }
 
 impl ApiPaymentQueryProvider {
@@ -825,11 +875,69 @@ async fn raw_json_request(
         .unwrap()
 }
 
+async fn refund_request(
+    router: &axum::Router,
+    method: Method,
+    path: &str,
+    authorization: Option<&str>,
+    reauth_token: Option<&str>,
+    idempotency_key: Option<&str>,
+    origin: Option<&str>,
+    cookie: Option<&str>,
+    body: &str,
+) -> axum::response::Response {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(CONTENT_TYPE, "application/json");
+    if let Some(authorization) = authorization {
+        builder = builder.header(AUTHORIZATION, authorization);
+    }
+    if let Some(reauth_token) = reauth_token {
+        builder = builder.header("X-Store-Reauth-Token", reauth_token);
+    }
+    if let Some(idempotency_key) = idempotency_key {
+        builder = builder.header("Idempotency-Key", idempotency_key);
+    }
+    if let Some(origin) = origin {
+        builder = builder.header("Origin", origin);
+    }
+    if let Some(cookie) = cookie {
+        builder = builder.header("cookie", cookie);
+    }
+    router
+        .clone()
+        .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn response_json(response: axum::response::Response) -> (StatusCode, Value) {
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
+    (status, value)
+}
+
+async fn issue_refund_reauth(ctx: &super::TestContext, admin: &str) -> String {
+    let (status, grant) = json_request(
+        ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        admin,
+        None,
+        Some(json!({
+            "current_password": "test-password",
+            "scope": "refund"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{grant}");
+    grant["token"].as_str().unwrap().to_string()
+}
+
 fn assert_no_store(response: &axum::response::Response) {
-    assert_eq!(
-        response.headers().get(CACHE_CONTROL).unwrap(),
-        "no-store"
-    );
+    assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-store");
 }
 
 fn stripe_signature(secret: &[u8], timestamp: i64, body: &[u8]) -> String {
@@ -2191,10 +2299,7 @@ async fn admin_order_detail_is_no_store_and_confirmed_unpaid_close_is_visible() 
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get("Cache-Control").unwrap(),
-        "no-store"
-    );
+    assert_eq!(response.headers().get("Cache-Control").unwrap(), "no-store");
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let detail: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(detail["order"]["id"], order_id);
@@ -2356,10 +2461,7 @@ async fn admin_ambiguous_close_and_invalid_json_leave_order_unchanged() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{ambiguous}");
-    assert_eq!(
-        ambiguous["error"]["code"],
-        "payment_provider_ambiguous"
-    );
+    assert_eq!(ambiguous["error"]["code"], "payment_provider_ambiguous");
     let (status, detail) = json_request(
         &ctx,
         Method::GET,
@@ -2426,9 +2528,7 @@ async fn admin_order_operation_errors_are_no_store() {
     let response = raw_json_request(
         &configuration_ctx,
         Method::POST,
-        &format!(
-            "/api/dashboard/store/admin/orders/{configuration_order_id}/query"
-        ),
+        &format!("/api/dashboard/store/admin/orders/{configuration_order_id}/query"),
         Some(&configuration_admin),
         Some(&json!({ "attempt_id": configuration_attempt_id }).to_string()),
     )
@@ -2451,8 +2551,7 @@ async fn admin_order_operation_errors_are_no_store() {
         let mut operation_ctx = setup().await;
         let (_, order_id, attempt_id) =
             create_admin_operation_fixture(&mut operation_ctx, provider, suffix).await;
-        let operation_admin =
-            admin_session(&operation_ctx, &format!("{suffix}-admin")).await;
+        let operation_admin = admin_session(&operation_ctx, &format!("{suffix}-admin")).await;
         let response = raw_json_request(
             &operation_ctx,
             Method::POST,
@@ -2462,6 +2561,214 @@ async fn admin_order_operation_errors_are_no_store() {
         )
         .await;
         assert_eq!(response.status(), expected_status);
+        assert_no_store(&response);
+    }
+}
+
+#[tokio::test]
+async fn admin_refund_create_detail_and_query_enforce_the_frozen_contract() {
+    let mut ctx = setup().await;
+    let payment_provider = ApiPaymentQueryProvider::returning(ProviderPaymentState::Paid {
+        provider_transaction_id: "pi_admin_refund".to_string(),
+    });
+    let (_, order_id, attempt_id) =
+        create_admin_operation_fixture(&mut ctx, payment_provider, "refund").await;
+    let admin = admin_session(&ctx, "admin_refund_admin").await;
+    let (status, paid) = json_request(
+        &ctx,
+        Method::POST,
+        &format!("/api/dashboard/store/admin/orders/{order_id}/query"),
+        &admin,
+        None,
+        Some(json!({"attempt_id": attempt_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{paid}");
+    assert_eq!(paid["order"]["payment_state"], "paid");
+
+    let refund_provider =
+        ApiRefundProvider::new(ProviderRefundState::Pending, ProviderRefundState::Succeeded);
+    ctx.state.refund_provider = Arc::new(refund_provider.clone());
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+    let grant = issue_refund_reauth(&ctx, &admin).await;
+    let create_path = format!("/api/dashboard/store/admin/orders/{order_id}/refunds");
+
+    let response = refund_request(
+        &ctx.router,
+        Method::POST,
+        &create_path,
+        Some(&admin),
+        Some(&grant),
+        Some("admin-refund-create"),
+        None,
+        None,
+        r#"{"unexpected":true}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_no_store(&response);
+    assert_eq!(refund_provider.create_calls.load(Ordering::SeqCst), 0);
+
+    let response = refund_request(
+        &ctx.router,
+        Method::POST,
+        &create_path,
+        Some(&admin),
+        Some(&grant),
+        None,
+        None,
+        None,
+        "{}",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_no_store(&response);
+    assert_eq!(refund_provider.create_calls.load(Ordering::SeqCst), 0);
+
+    let response = refund_request(
+        &ctx.router,
+        Method::POST,
+        &create_path,
+        Some(&admin),
+        None,
+        Some("admin-refund-create"),
+        None,
+        None,
+        "{}",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_no_store(&response);
+    assert_eq!(refund_provider.create_calls.load(Ordering::SeqCst), 0);
+
+    let response = refund_request(
+        &ctx.router,
+        Method::POST,
+        &create_path,
+        Some(&admin),
+        Some(&grant),
+        Some("admin-refund-create"),
+        None,
+        None,
+        "{}",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_no_store(&response);
+    let (status, refund) = response_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{refund}");
+    assert_eq!(refund["order_id"], order_id);
+    assert_eq!(refund["state"], "pending");
+    let refund_id = refund["id"].as_str().unwrap().to_string();
+    assert_eq!(refund_provider.create_calls.load(Ordering::SeqCst), 1);
+
+    let detail_path = format!("/api/dashboard/store/admin/orders/{order_id}/refunds/{refund_id}");
+    let response = raw_json_request(&ctx, Method::GET, &detail_path, Some(&admin), None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_no_store(&response);
+    let (_, detail) = response_json(response).await;
+    assert_eq!(detail["id"], refund_id);
+    assert_eq!(detail["order_id"], order_id);
+
+    let wrong_detail = raw_json_request(
+        &ctx,
+        Method::GET,
+        &format!("/api/dashboard/store/admin/orders/other-order/refunds/{refund_id}"),
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(wrong_detail.status(), StatusCode::NOT_FOUND);
+    assert_no_store(&wrong_detail);
+
+    let wrong_query = refund_request(
+        &ctx.router,
+        Method::POST,
+        &format!("/api/dashboard/store/admin/orders/other-order/refunds/{refund_id}/query"),
+        Some(&admin),
+        Some(&grant),
+        None,
+        None,
+        None,
+        "{}",
+    )
+    .await;
+    assert_eq!(wrong_query.status(), StatusCode::NOT_FOUND);
+    assert_no_store(&wrong_query);
+    assert_eq!(refund_provider.query_calls.load(Ordering::SeqCst), 0);
+
+    let query_path =
+        format!("/api/dashboard/store/admin/orders/{order_id}/refunds/{refund_id}/query");
+    let response = refund_request(
+        &ctx.router,
+        Method::POST,
+        &query_path,
+        Some(&admin),
+        Some(&grant),
+        None,
+        None,
+        None,
+        "{}",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_no_store(&response);
+    let (_, queried) = response_json(response).await;
+    assert_eq!(queried["id"], refund_id);
+    assert_eq!(queried["state"], "succeeded");
+    assert_eq!(refund_provider.query_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn admin_refund_mutation_guard_errors_are_no_store() {
+    let mut ctx = setup().await;
+    let admin = admin_session(&ctx, "admin_refund_guard_admin").await;
+    ctx.state.payment_public_origin = Some(url::Url::parse("https://lynshen.org").unwrap());
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+    let session_token = admin.strip_prefix("Bearer ").unwrap();
+
+    for path in [
+        "/api/dashboard/store/admin/orders/missing/refunds",
+        "/api/dashboard/store/admin/orders/missing/refunds/refund-id/query",
+    ] {
+        let response = refund_request(
+            &ctx.router,
+            Method::POST,
+            path,
+            None,
+            Some("not-used"),
+            Some("guard-key"),
+            Some("https://attacker.example"),
+            Some(&format!("monoize_session={session_token}")),
+            "{}",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+        assert_no_store(&response);
+    }
+
+    let replica = monoize::app::build_app(
+        ctx.state
+            .clone()
+            .with_node_role(monoize::node_config::NodeRole::Replica),
+    );
+    for path in [
+        "/api/dashboard/store/admin/orders/missing/refunds",
+        "/api/dashboard/store/admin/orders/missing/refunds/refund-id/query",
+    ] {
+        let response = refund_request(
+            &replica,
+            Method::POST,
+            path,
+            Some(&admin),
+            Some("not-used"),
+            Some("guard-key"),
+            None,
+            None,
+            "{}",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
         assert_no_store(&response);
     }
 }

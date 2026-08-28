@@ -8,10 +8,12 @@ use crate::store_billing::crypto::{CryptoError, verify_hmac_sha256_hex};
 use crate::store_billing::money::Currency;
 use crate::store_billing::payment::CheckoutAction;
 use crate::store_billing::payment::{
-    AdapterError, CheckoutRequest, PaymentQuery, ProviderPaymentState, validate_payment_query,
+    AdapterError, CheckoutRequest, PaymentQuery, ProviderPaymentState, ProviderRefundState,
+    RefundRequest, validate_payment_query,
 };
 
 pub const STRIPE_CHECKOUT_SESSIONS_URL: &str = "https://api.stripe.com/v1/checkout/sessions";
+pub const STRIPE_REFUNDS_URL: &str = "https://api.stripe.com/v1/refunds";
 
 #[derive(Clone, Deserialize, Zeroize)]
 #[serde(deny_unknown_fields)]
@@ -112,6 +114,338 @@ pub struct PreparedStripePaymentQuery {
     pub endpoint: String,
     pub authorization: Zeroizing<String>,
     pub api_version: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PreparedStripeRefund {
+    pub endpoint: String,
+    pub authorization: Zeroizing<String>,
+    pub account_id: String,
+    pub api_version: String,
+    pub idempotency_key: String,
+    pub form: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for PreparedStripeRefund {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedStripeRefund")
+            .field("endpoint", &self.endpoint)
+            .field("authorization", &"[REDACTED]")
+            .field("account_id", &self.account_id)
+            .field("api_version", &self.api_version)
+            .field("idempotency_key", &self.idempotency_key)
+            .field("form", &self.form)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StripeRefundResult {
+    pub state: ProviderRefundState,
+    pub provider_refund_id: Option<String>,
+    pub not_found_is_definitive: bool,
+}
+
+pub fn prepare_refund_create(
+    credential: &StripeCredential,
+    request: &RefundRequest,
+) -> Result<PreparedStripeRefund, AdapterError> {
+    credential.validate()?;
+    let amount = validate_refund_request(request, false)?;
+    Ok(PreparedStripeRefund {
+        endpoint: STRIPE_REFUNDS_URL.to_string(),
+        authorization: Zeroizing::new(format!("Bearer {}", credential.secret_key)),
+        account_id: credential.account_id.clone(),
+        api_version: credential.api_version.clone(),
+        idempotency_key: request.idempotency_key.clone(),
+        form: BTreeMap::from([
+            (
+                "payment_intent".to_string(),
+                request.provider_transaction_id.clone(),
+            ),
+            ("amount".to_string(), amount.to_string()),
+            (
+                "metadata[store_refund_id]".to_string(),
+                request.idempotency_key.clone(),
+            ),
+            (
+                "metadata[store_order_number]".to_string(),
+                request.merchant_order_number.clone(),
+            ),
+        ]),
+    })
+}
+
+pub fn prepare_refund_query(
+    credential: &StripeCredential,
+    request: &RefundRequest,
+    provider_refund_id: Option<&str>,
+) -> Result<PreparedStripeRefund, AdapterError> {
+    credential.validate()?;
+    validate_refund_request(request, false)?;
+    let mut endpoint =
+        url::Url::parse(STRIPE_REFUNDS_URL).map_err(|_| AdapterError::InvalidConfiguration)?;
+    if let Some(provider_refund_id) = provider_refund_id {
+        if !valid_refund_value(provider_refund_id) {
+            return Err(AdapterError::InvalidRequest);
+        }
+        endpoint
+            .path_segments_mut()
+            .map_err(|_| AdapterError::InvalidConfiguration)?
+            .push(provider_refund_id);
+    } else {
+        endpoint
+            .query_pairs_mut()
+            .append_pair("limit", "100")
+            .append_pair("payment_intent", &request.provider_transaction_id);
+    }
+    Ok(PreparedStripeRefund {
+        endpoint: endpoint.to_string(),
+        authorization: Zeroizing::new(format!("Bearer {}", credential.secret_key)),
+        account_id: credential.account_id.clone(),
+        api_version: credential.api_version.clone(),
+        idempotency_key: request.idempotency_key.clone(),
+        form: BTreeMap::new(),
+    })
+}
+
+pub fn parse_refund_create_response(
+    status: reqwest::StatusCode,
+    body: &[u8],
+    request: &RefundRequest,
+) -> Result<StripeRefundResult, AdapterError> {
+    validate_refund_request(request, false)?;
+    if !status.is_success() {
+        return Err(classify_refund_error_response(status, body));
+    }
+    parse_refund_object(body, request)
+}
+
+pub fn parse_refund_query_response(
+    status: reqwest::StatusCode,
+    body: &[u8],
+    request: &RefundRequest,
+    provider_refund_id: Option<&str>,
+) -> Result<StripeRefundResult, AdapterError> {
+    validate_refund_request(request, false)?;
+    if status == reqwest::StatusCode::NOT_FOUND && provider_refund_id.is_some() {
+        if stripe_resource_missing(body) {
+            return Ok(StripeRefundResult {
+                state: ProviderRefundState::NotFound,
+                provider_refund_id: None,
+                not_found_is_definitive: true,
+            });
+        }
+        return Err(AdapterError::Ambiguous);
+    }
+    if !status.is_success() {
+        return Err(classify_refund_error_response(status, body));
+    }
+    if provider_refund_id.is_some() {
+        let result = parse_refund_object(body, request)?;
+        if result.provider_refund_id.as_deref() != provider_refund_id {
+            return Err(AdapterError::Verification);
+        }
+        return Ok(result);
+    }
+    #[derive(Deserialize)]
+    struct RefundList {
+        object: String,
+        data: Vec<serde_json::Value>,
+        #[serde(default)]
+        has_more: bool,
+    }
+    let list: RefundList = serde_json::from_slice(body).map_err(|_| AdapterError::Verification)?;
+    if list.object != "list" || list.data.len() > 100 {
+        return Err(AdapterError::Verification);
+    }
+    let matches = list
+        .data
+        .into_iter()
+        .filter(|value| {
+            value
+                .get("metadata")
+                .and_then(|metadata| metadata.get("store_refund_id"))
+                .and_then(serde_json::Value::as_str)
+                == Some(request.idempotency_key.as_str())
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [value] => parse_refund_object(
+            serde_json::to_vec(&value)
+                .map_err(|_| AdapterError::Verification)?
+                .as_slice(),
+            request,
+        ),
+        [] if list.has_more => Err(AdapterError::Ambiguous),
+        [] => Ok(StripeRefundResult {
+            state: ProviderRefundState::NotFound,
+            provider_refund_id: None,
+            not_found_is_definitive: true,
+        }),
+        _ => Err(AdapterError::Verification),
+    }
+}
+
+fn parse_refund_object(
+    body: &[u8],
+    request: &RefundRequest,
+) -> Result<StripeRefundResult, AdapterError> {
+    #[derive(Deserialize)]
+    struct Refund {
+        id: String,
+        object: String,
+        amount: u64,
+        currency: String,
+        payment_intent: String,
+        status: String,
+        metadata: RefundMetadata,
+    }
+    #[derive(Deserialize)]
+    struct RefundMetadata {
+        store_refund_id: String,
+        store_order_number: String,
+    }
+    let refund: Refund = serde_json::from_slice(body).map_err(|_| AdapterError::Verification)?;
+    let amount = validate_refund_request(request, false)?;
+    let currency = match request.currency {
+        Currency::CNY => "cny",
+        Currency::USD => "usd",
+    };
+    if !valid_refund_value(&refund.id)
+        || refund.object != "refund"
+        || refund.amount != amount
+        || refund.currency != currency
+        || refund.payment_intent != request.provider_transaction_id
+        || refund.metadata.store_refund_id != request.idempotency_key
+        || refund.metadata.store_order_number != request.merchant_order_number
+    {
+        return Err(AdapterError::Verification);
+    }
+    let state = match refund.status.as_str() {
+        "succeeded" => ProviderRefundState::Succeeded,
+        "pending" | "requires_action" => ProviderRefundState::Pending,
+        "failed" | "canceled" => ProviderRefundState::Failed,
+        _ => ProviderRefundState::Ambiguous,
+    };
+    Ok(StripeRefundResult {
+        state,
+        provider_refund_id: Some(refund.id),
+        not_found_is_definitive: false,
+    })
+}
+
+fn validate_refund_request(request: &RefundRequest, cny_only: bool) -> Result<u64, AdapterError> {
+    if !valid_refund_value(&request.provider_transaction_id)
+        || !valid_refund_value(&request.merchant_order_number)
+        || !valid_refund_value(&request.idempotency_key)
+        || (cny_only && request.currency != Currency::CNY)
+    {
+        return Err(AdapterError::InvalidRequest);
+    }
+    request
+        .amount_minor
+        .parse::<u64>()
+        .ok()
+        .filter(|amount| *amount > 0)
+        .ok_or(AdapterError::InvalidRequest)
+}
+
+fn valid_refund_value(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 255 && value.trim() == value
+}
+
+fn stripe_resource_missing(body: &[u8]) -> bool {
+    #[derive(Deserialize)]
+    struct Envelope {
+        error: Error,
+    }
+    #[derive(Deserialize)]
+    struct Error {
+        #[serde(rename = "type")]
+        kind: String,
+        code: String,
+    }
+    serde_json::from_slice::<Envelope>(body)
+        .ok()
+        .is_some_and(|value| {
+            value.error.kind == "invalid_request_error" && value.error.code == "resource_missing"
+        })
+}
+
+fn classify_refund_error_response(status: reqwest::StatusCode, body: &[u8]) -> AdapterError {
+    #[derive(Deserialize)]
+    struct Envelope {
+        error: Error,
+    }
+    #[derive(Deserialize)]
+    struct Error {
+        #[serde(rename = "type")]
+        kind: String,
+        message: String,
+    }
+    let recognized = serde_json::from_slice::<Envelope>(body)
+        .ok()
+        .is_some_and(|value| {
+            !value.error.kind.trim().is_empty() && !value.error.message.trim().is_empty()
+        });
+    if status.is_client_error() && recognized {
+        AdapterError::Rejected
+    } else {
+        AdapterError::Ambiguous
+    }
+}
+
+pub async fn create_refund(
+    client: &reqwest::Client,
+    credential: &StripeCredential,
+    request: &RefundRequest,
+) -> Result<StripeRefundResult, AdapterError> {
+    let prepared = prepare_refund_create(credential, request)?;
+    let response = client
+        .post(&prepared.endpoint)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            prepared.authorization.as_str(),
+        )
+        .header("Stripe-Version", prepared.api_version)
+        .header("Stripe-Account", prepared.account_id)
+        .header("Idempotency-Key", prepared.idempotency_key)
+        .form(&prepared.form)
+        .send()
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    let status = response.status();
+    let body = crate::bounded_response::read_response_body_with_limit(response, 65_536)
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    parse_refund_create_response(status, &body, request)
+}
+
+pub async fn query_refund(
+    client: &reqwest::Client,
+    credential: &StripeCredential,
+    request: &RefundRequest,
+    provider_refund_id: Option<&str>,
+) -> Result<StripeRefundResult, AdapterError> {
+    let prepared = prepare_refund_query(credential, request, provider_refund_id)?;
+    let response = client
+        .get(&prepared.endpoint)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            prepared.authorization.as_str(),
+        )
+        .header("Stripe-Version", prepared.api_version)
+        .header("Stripe-Account", prepared.account_id)
+        .send()
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    let status = response.status();
+    let body = crate::bounded_response::read_response_body_with_limit(response, 65_536)
+        .await
+        .map_err(|_| AdapterError::Ambiguous)?;
+    parse_refund_query_response(status, &body, request, provider_refund_id)
 }
 
 impl fmt::Debug for PreparedStripePaymentQuery {
