@@ -1,10 +1,9 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, SecondsFormat, Timelike, Utc};
-use sea_orm::{ConnectionTrait, DbErr, QueryResult, TransactionTrait, Value};
+use sea_orm::{ConnectionTrait, DbErr, QueryResult, Value};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -1227,11 +1226,16 @@ async fn delete_financial_records<C: ConnectionTrait>(
                )
              ORDER BY r.{timestamp_column} ASC, r.id ASC LIMIT $3"
         );
-        let ids = candidate_ids(db, connection, &sql, vec![
-            timestamp(cutoff).into(),
-            timestamp(now).into(),
-            remaining.into(),
-        ])
+        let ids = candidate_ids(
+            db,
+            connection,
+            &sql,
+            vec![
+                timestamp(cutoff).into(),
+                timestamp(now).into(),
+                remaining.into(),
+            ],
+        )
         .await?;
         for id in ids {
             let changed = delete_financial_root(db, connection, table, &id, now).await?;
@@ -1300,9 +1304,10 @@ async fn delete_financial_root<C: ConnectionTrait>(
         _ => {}
     }
     let result = connection
-        .execute(db.stmt(&format!("DELETE FROM {table} WHERE id = $1"), vec![
-            id.into(),
-        ]))
+        .execute(db.stmt(
+            &format!("DELETE FROM {table} WHERE id = $1"),
+            vec![id.into()],
+        ))
         .await?;
     Ok(result.rows_affected() == 1)
 }
@@ -1464,11 +1469,10 @@ async fn legal_hold_by_id<C: ConnectionTrait>(
     now: DateTime<Utc>,
 ) -> Result<Option<StoreLegalHold>, StoreRetentionError> {
     connection
-        .query_one(
-            db.stmt(&format!("{} WHERE h.id = $1", legal_hold_select()), vec![
-                id.into(),
-            ]),
-        )
+        .query_one(db.stmt(
+            &format!("{} WHERE h.id = $1", legal_hold_select()),
+            vec![id.into()],
+        ))
         .await?
         .map(|row| legal_hold_from_row(row, now))
         .transpose()

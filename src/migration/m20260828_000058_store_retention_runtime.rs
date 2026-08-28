@@ -22,7 +22,7 @@ async fn migrate(manager: &SchemaManager<'_>, up: bool) -> Result<(), DbErr> {
     }
     let tx = manager.get_connection().begin().await?;
     if up {
-        migrate_reauth_scopes(&*tx, backend, true).await?;
+        migrate_reauth_scopes(&tx, backend, true).await?;
         tx.execute(Statement::from_string(
             backend,
             "ALTER TABLE store_retention_runs
@@ -34,7 +34,7 @@ async fn migrate(manager: &SchemaManager<'_>, up: bool) -> Result<(), DbErr> {
             tx.execute(Statement::from_string(backend, sql)).await?;
         }
     } else {
-        migrate_reauth_scopes(&*tx, backend, false).await?;
+        migrate_reauth_scopes(&tx, backend, false).await?;
         for table in [
             "store_legal_hold_items",
             "store_legal_hold_approvals",
