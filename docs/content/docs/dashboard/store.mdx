@@ -114,6 +114,8 @@ Append a record when you approve a policy update. Enter these values, then selec
 | **Expired grant retention (hours)** | 1 through 24 |
 | **Review after (days)** | 1 through 365 |
 
+The form opens with `CN` as the jurisdiction and the allowed region, 2557 financial record days (seven years), 24 expired grant hours, and 90 review days. Replace each value with the value your policy approves.
+
 Monoize sets the reviewer, the approval time, and the next review date. Monoize also fixes three retention periods that the form does not expose: callback bodies 30 days, network metadata 90 days, and redemption audits 730 days.
 
 ## Bind Channel readiness
@@ -143,7 +145,7 @@ These retention periods apply to every record:
 - Network metadata (source IP and User-Agent): 90 days.
 - Redemption reveal, copy, and export audits: 730 days.
 - Expired reauthentication grant hashes: the **Expired grant retention (hours)** value after expiry.
-- Financial records: the **Financial record retention (days)** value. Use 2555 days for the seven-year default.
+- Financial records: the **Financial record retention (days)** value.
 
 One run inspects and mutates at most 500 unheld root records in each of the five data classes: `raw_callback_bodies`, `network_metadata`, `financial_records`, `redemption_audits`, and `expired_reauth_grants`. Deleting one financial root record also deletes its payment attempts, event applications, refunds, refund-query retries, reward-recovery rows, and recovery-claim rows. The run keeps active entitlements and their generation records.
 
