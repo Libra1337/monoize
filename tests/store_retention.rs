@@ -1,0 +1,977 @@
+use chrono::{Duration, TimeZone, Utc};
+use monoize::db::DbPool;
+use monoize::migration::Migrator;
+use monoize::store_billing::models::StorePrivacyRetention;
+use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
+use monoize::store_billing::money::Currency;
+use monoize::store_billing::order::{CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore};
+use monoize::store_billing::retention::{
+    CreateStoreLegalHoldInput, CreateStoreRetentionContainmentInput, RetentionRunActor,
+    StoreRetention, StoreRetentionDataClass, StoreRetentionError, StoreRetentionRunState,
+    RETENTION_BATCH_SIZE, retention_checkout_paused,
+};
+use sea_orm::ConnectionTrait;
+use sea_orm_migration::MigratorTrait;
+use serde_json::json;
+
+const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+fn instant() -> chrono::DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 8, 28, 12, 0, 0).unwrap()
+}
+
+fn retention_policy(financial_days: i64, grant_hours: i64) -> StorePrivacyRetention {
+    StorePrivacyRetention {
+        raw_callback_days: 30,
+        network_metadata_days: 90,
+        financial_records_days: financial_days,
+        redemption_audit_days: 730,
+        expired_reauth_grant_hours: grant_hours,
+    }
+}
+
+fn retention_json(financial_days: i64, grant_hours: i64) -> String {
+    serde_json::to_string(&retention_policy(financial_days, grant_hours)).unwrap()
+}
+
+async fn setup() -> DbPool {
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("connect SQLite");
+    Migrator::up(&*db.write().await, None)
+        .await
+        .expect("run migrations");
+    let write = db.write().await;
+    write
+        .execute_unprepared(
+            "INSERT INTO users
+                (id, username, password_hash, role, created_at, updated_at, enabled,
+                 balance_nano_usd, balance_unlimited, group_id)
+             SELECT 'retention-user', 'retention-user', 'test', 'user',
+                    '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, '0', 0, id
+             FROM monoize_groups WHERE is_default = 1 LIMIT 1;
+             INSERT INTO users
+                (id, username, password_hash, role, created_at, updated_at, enabled,
+                 balance_nano_usd, balance_unlimited, group_id)
+             SELECT 'retention-admin', 'retention-admin', 'test', 'admin',
+                    '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, '0', 0, id
+             FROM monoize_groups WHERE is_default = 1 LIMIT 1;
+             INSERT INTO users
+                (id, username, password_hash, role, created_at, updated_at, enabled,
+                 balance_nano_usd, balance_unlimited, group_id)
+             SELECT 'retention-requester', 'retention-requester', 'test', 'admin',
+                    '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, '0', 0, id
+             FROM monoize_groups WHERE is_default = 1 LIMIT 1;
+             INSERT INTO store_products
+                (id, kind, name, description, price_currency, price_minor,
+                 duration_seconds, group_ids, sort_order, enabled, created_at, updated_at)
+             VALUES
+                ('retention-product', 'balance', 'Retention', '', 'CNY', '1000',
+                 NULL, '[]', 0, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO store_balance_products (product_id, recharge_minor, bonus_minor)
+             VALUES ('retention-product', '1000', '0');",
+        )
+        .await
+        .expect("seed users and product");
+    drop(write);
+    db
+}
+
+async fn insert_privacy(db: &DbPool, version: &str, retention_json: &str) {
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_privacy_records
+                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+             VALUES ($1, $2, 'CN', '[\"CN\"]', $3, 'contract', 'retention-admin', $4,
+                     '2026-01-01T00:00:00.000000Z', '2099-01-01T00:00:00.000000Z', 1)",
+            vec![
+                format!("privacy-{version}").into(),
+                version.into(),
+                retention_json.into(),
+                DIGEST.into(),
+            ],
+        ))
+        .await
+        .expect("insert privacy record");
+}
+
+async fn insert_provider_event(
+    db: &DbPool,
+    id: &str,
+    received_at: &str,
+    with_raw: bool,
+    with_network: bool,
+) {
+    let digest = format!("{id:0<64}").chars().take(64).collect::<String>();
+    let raw_version: Option<i32> = with_raw.then_some(1);
+    let raw_key: Option<&str> = with_raw.then_some("key-1");
+    let raw_nonce: Option<&str> = with_raw.then_some("bm9uY2U=");
+    let raw_cipher: Option<&str> = with_raw.then_some("Y2lwaGVy");
+    let source_ip: Option<&str> = with_network.then_some("203.0.113.10");
+    let user_agent: Option<&str> = with_network.then_some("retention-agent");
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_provider_events
+                (id, credential_version_id, provider_event_id, event_kind, body_digest,
+                 parsed_json, verification_result, raw_format_version, raw_key_id,
+                 raw_nonce_base64, raw_ciphertext_base64, source_ip, user_agent,
+                 projection_state, state_revision, received_at)
+             VALUES ($1, 'cred-1', $2, 'payment.succeeded', $3, '{}', 'verified',
+                     $4, $5, $6, $7, $8, $9, 'applied', 0, $10)",
+            vec![
+                id.into(),
+                format!("provider-{id}").into(),
+                digest.into(),
+                raw_version.into(),
+                raw_key.into(),
+                raw_nonce.into(),
+                raw_cipher.into(),
+                source_ip.into(),
+                user_agent.into(),
+                received_at.into(),
+            ],
+        ))
+        .await
+        .expect("insert provider event");
+}
+
+async fn insert_closed_order(db: &DbPool, id: &str, created_at: &str) {
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_orders
+                (id, order_number, user_id, product_id, product_kind, payment_state,
+                 fulfillment_state, dispute_state, payment_hold, payment_channel_id,
+                 payment_currency, payment_minor, cny_per_usd, rate_numerator,
+                 rate_denominator, rate_source_updated_at, quote_json, contract_version,
+                 state_revision, expires_at, created_at, updated_at)
+             VALUES ($1, $2, 'retention-user', 'retention-product', 'balance', 'closed',
+                     'pending', 'none', 0, 'store-channel-stripe', 'CNY', '1000', '6.0000',
+                     '6', '1', '2026-01-01T00:00:00Z', '{}', 2, 0,
+                     '2026-01-01T01:00:00Z', $3, $3)",
+            vec![
+                id.into(),
+                format!("ORD-{id}").into(),
+                created_at.into(),
+            ],
+        ))
+        .await
+        .expect("insert closed order");
+}
+
+async fn insert_reauth_grant(db: &DbPool, id: &str, expires_at: &str) {
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_reauth_grants
+                (id, user_id, session_token_digest, token_digest, scope, created_at, expires_at)
+             VALUES ($1, 'retention-admin', $2, $3, 'credential_update',
+                     '2026-01-01T00:00:00.000000Z', $4)",
+            vec![
+                id.into(),
+                format!("{:0<64}", format!("session-{id}")).chars().take(64).collect::<String>().into(),
+                format!("{:0<64}", format!("token-{id}")).chars().take(64).collect::<String>().into(),
+                expires_at.into(),
+            ],
+        ))
+        .await
+        .expect("insert reauth grant");
+}
+
+async fn insert_access_audit(db: &DbPool, id: &str, action: &str, created_at: &str) {
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_access_audits
+                (id, actor_id, actor_role, action, scope_json, reason, result, created_at)
+             VALUES ($1, 'retention-admin', 'admin', $2, '{}', 'fixture', 'succeeded', $3)",
+            vec![id.into(), action.into(), created_at.into()],
+        ))
+        .await
+        .expect("insert access audit");
+}
+
+fn actor(reason: &str) -> RetentionRunActor {
+    RetentionRunActor {
+        actor_id: "retention-admin".to_string(),
+        actor_role: "admin".to_string(),
+        reason: reason.to_string(),
+    }
+}
+
+async fn event_raw_present(db: &DbPool, id: &str) -> bool {
+    let row = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT raw_key_id, source_ip FROM store_provider_events WHERE id = $1",
+            vec![id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    row.try_get::<Option<String>>("", "raw_key_id")
+        .unwrap()
+        .is_some()
+}
+
+async fn event_network_present(db: &DbPool, id: &str) -> bool {
+    let row = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT source_ip FROM store_provider_events WHERE id = $1",
+            vec![id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    row.try_get::<Option<String>>("", "source_ip")
+        .unwrap()
+        .is_some()
+}
+
+async fn count_where(db: &DbPool, sql: &str, id: &str) -> i64 {
+    db.read()
+        .query_one(db.stmt(sql, vec![id.into()]))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "value")
+        .unwrap()
+}
+
+#[tokio::test]
+async fn missing_privacy_policy_fails_and_records_audit() {
+    let db = setup().await;
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+
+    let run = retention
+        .run_at(instant(), RetentionRunActor::scheduled())
+        .await
+        .expect("run");
+
+    assert_eq!(run.state, StoreRetentionRunState::Failed);
+    assert_eq!(run.policy_version, "unavailable");
+    assert_eq!(
+        run.error_category.as_deref(),
+        Some("privacy_policy_unavailable")
+    );
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_access_audits
+             WHERE action = 'retention_run' AND result = 'failed' AND actor_id = $1",
+            "_monoize_retention_job",
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn run_clears_expired_callback_and_network_fields_idempotently() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(2557, 24)).await;
+    insert_provider_event(&db, "evt-raw", "2026-07-01T00:00:00.000000Z", true, true).await;
+    insert_provider_event(
+        &db,
+        "evt-network",
+        "2026-05-01T00:00:00.000000Z",
+        true,
+        true,
+    )
+    .await;
+    insert_provider_event(&db, "evt-fresh", "2026-08-20T00:00:00.000000Z", true, true).await;
+
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+    let run = retention
+        .run_at(instant(), actor("manual-retention"))
+        .await
+        .expect("run");
+
+    assert_eq!(run.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(run.counts.raw_callback_bodies, 2);
+    assert_eq!(run.counts.network_metadata, 1);
+    assert!(!event_raw_present(&db, "evt-raw").await);
+    assert!(event_network_present(&db, "evt-raw").await);
+    assert!(!event_raw_present(&db, "evt-network").await);
+    assert!(!event_network_present(&db, "evt-network").await);
+    assert!(event_raw_present(&db, "evt-fresh").await);
+    assert!(event_network_present(&db, "evt-fresh").await);
+
+    let second = retention
+        .run_at(instant() + Duration::seconds(1), actor("manual-retention-2"))
+        .await
+        .expect("second run");
+    assert_eq!(second.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(second.counts.raw_callback_bodies, 0);
+    assert_eq!(second.counts.network_metadata, 0);
+}
+
+#[tokio::test]
+async fn legal_hold_skips_held_records_and_writes_create_audit() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(1, 1)).await;
+    insert_provider_event(&db, "evt-held", "2026-01-01T00:00:00.000000Z", true, true).await;
+    insert_provider_event(&db, "evt-free", "2026-01-01T00:00:00.000000Z", true, true).await;
+    insert_closed_order(&db, "order-held", "2026-01-01T00:00:00.000000Z").await;
+    insert_closed_order(&db, "order-free", "2026-01-01T00:00:00.000000Z").await;
+    insert_reauth_grant(&db, "grant-held", "2026-08-28T10:00:00.000000Z").await;
+    insert_reauth_grant(&db, "grant-free", "2026-08-28T10:00:00.000000Z").await;
+
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+    retention
+        .create_legal_hold(
+            CreateStoreLegalHoldInput {
+                data_class: StoreRetentionDataClass::RawCallbackBodies,
+                identifiers: vec!["evt-held".to_string()],
+                reason: "litigation hold".to_string(),
+                requesting_authority: "court".to_string(),
+                requester_id: "retention-requester".to_string(),
+                approver_role: "privacy".to_string(),
+                expires_at: instant() + Duration::days(30),
+                extends_hold_id: None,
+            },
+            "retention-admin",
+            instant(),
+        )
+        .await
+        .expect("raw hold");
+    retention
+        .create_legal_hold(
+            CreateStoreLegalHoldInput {
+                data_class: StoreRetentionDataClass::FinancialRecords,
+                identifiers: vec!["order-held".to_string()],
+                reason: "financial hold".to_string(),
+                requesting_authority: "legal".to_string(),
+                requester_id: "retention-requester".to_string(),
+                approver_role: "legal".to_string(),
+                expires_at: instant() + Duration::days(30),
+                extends_hold_id: None,
+            },
+            "retention-admin",
+            instant() + Duration::seconds(1),
+        )
+        .await
+        .expect("financial hold");
+    retention
+        .create_legal_hold(
+            CreateStoreLegalHoldInput {
+                data_class: StoreRetentionDataClass::ExpiredReauthGrants,
+                identifiers: vec!["grant-held".to_string()],
+                reason: "grant hold".to_string(),
+                requesting_authority: "security".to_string(),
+                requester_id: "retention-requester".to_string(),
+                approver_role: "privacy".to_string(),
+                expires_at: instant() + Duration::days(30),
+                extends_hold_id: None,
+            },
+            "retention-admin",
+            instant() + Duration::seconds(2),
+        )
+        .await
+        .expect("grant hold");
+
+    let run = retention
+        .run_at(instant() + Duration::seconds(3), actor("held-run"))
+        .await
+        .expect("run");
+    assert_eq!(run.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(run.counts.raw_callback_bodies, 1);
+    assert_eq!(run.counts.financial_records, 1);
+    assert_eq!(run.counts.expired_reauth_grants, 1);
+    assert!(event_raw_present(&db, "evt-held").await);
+    assert!(!event_raw_present(&db, "evt-free").await);
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_orders WHERE id = $1",
+            "order-held",
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_orders WHERE id = $1",
+            "order-free",
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_reauth_grants WHERE id = $1",
+            "grant-held",
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_reauth_grants WHERE id = $1",
+            "grant-free",
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_access_audits
+             WHERE action = 'legal_hold_create' AND actor_id = $1",
+            "retention-admin",
+        )
+        .await,
+        3
+    );
+}
+
+#[tokio::test]
+async fn deletes_expired_grants_and_old_redemption_audits() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(2557, 2)).await;
+    insert_reauth_grant(&db, "grant-old", "2026-08-28T09:00:00.000000Z").await;
+    insert_reauth_grant(&db, "grant-new", "2026-08-28T11:00:00.000000Z").await;
+    insert_access_audit(
+        &db,
+        "audit-old",
+        "redemption_reveal",
+        "2024-01-01T00:00:00.000000Z",
+    )
+    .await;
+    insert_access_audit(
+        &db,
+        "audit-new",
+        "redemption_export",
+        "2026-08-01T00:00:00.000000Z",
+    )
+    .await;
+
+    let run = StoreRetention::new(db.clone(), "owner-a")
+        .run_at(instant(), actor("cleanup"))
+        .await
+        .expect("run");
+
+    assert_eq!(run.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(run.counts.expired_reauth_grants, 1);
+    assert_eq!(run.counts.redemption_audits, 1);
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_reauth_grants WHERE id = $1",
+            "grant-old",
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_reauth_grants WHERE id = $1",
+            "grant-new",
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_access_audits WHERE id = $1",
+            "audit-old",
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_access_audits WHERE id = $1",
+            "audit-new",
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn three_failures_pause_checkout_and_containment_clears_pause_only() {
+    let db = setup().await;
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+
+    for index in 0..3 {
+        let run = retention
+            .run_at(
+                instant() + Duration::seconds(index),
+                RetentionRunActor::scheduled(),
+            )
+            .await
+            .expect("failed run");
+        assert_eq!(run.state, StoreRetentionRunState::Failed);
+    }
+
+    let status = retention.status().await.expect("status");
+    assert!(status.checkout_paused);
+    assert_eq!(status.consecutive_failures, 3);
+    assert!(status.active_alert.is_some());
+    assert!(
+        retention_checkout_paused(&db, &*db.read())
+            .await
+            .expect("pause read")
+    );
+
+    insert_privacy(&db, "v-success", &retention_json(2557, 24)).await;
+    let success = retention
+        .run_at(instant() + Duration::seconds(10), actor("after-pause"))
+        .await
+        .expect("success while paused");
+    assert_eq!(success.state, StoreRetentionRunState::Succeeded);
+    let status_after_success = retention.status().await.expect("status");
+    assert!(status_after_success.checkout_paused);
+    assert_eq!(status_after_success.consecutive_failures, 0);
+    assert!(status_after_success.active_alert.is_some());
+
+    let containment = retention
+        .contain(
+            CreateStoreRetentionContainmentInput {
+                reason: "reviewed deletion backlog".to_string(),
+                evidence_digest: DIGEST.to_string(),
+            },
+            "retention-admin",
+            instant() + Duration::seconds(20),
+        )
+        .await
+        .expect("contain");
+    let status_after = retention.status().await.expect("status");
+    assert!(!status_after.checkout_paused);
+    assert_eq!(status_after.consecutive_failures, 0);
+    assert!(status_after.active_alert.is_none());
+    assert_eq!(
+        status_after.latest_containment_id.as_deref(),
+        Some(containment.id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn paused_checkout_rejects_new_orders_before_insert() {
+    let db = setup().await;
+    db.write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_retention_state
+             SET checkout_paused = 1, consecutive_failures = 3,
+                 updated_at = '2026-08-28T12:00:00.000000Z'
+             WHERE singleton_id = 1;
+             UPDATE store_payment_channels SET enabled = 1
+             WHERE id = 'store-channel-stripe';
+             INSERT INTO store_channel_credentials
+                (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+                 ciphertext_base64, account_identity_digest, status, created_at)
+             VALUES
+                ('retention-credential', 'store-channel-stripe', 'stripe', 1, 'key-1',
+                 'bm9uY2U=', 'Y2lwaGVydGV4dA==',
+                 '1111111111111111111111111111111111111111111111111111111111111111',
+                 'active', '2026-01-01T00:00:00Z');
+             INSERT INTO store_payment_compliance
+                (id, channel_id, terms_version, admin_user_id, source_ip, confirmed_at)
+             VALUES ('retention-compliance', 'store-channel-stripe', '2026-08-28',
+                     'retention-admin', '127.0.0.1', '2026-01-01T00:00:00Z');
+             INSERT INTO store_merchant_capabilities
+                (id, channel_id, capability, state, environment, merchant_account_digest,
+                 provider_product, evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES
+                ('ret-cap-query', 'store-channel-stripe', 'payment_query', 'supported',
+                 'sandbox', '1111111111111111111111111111111111111111111111111111111111111111',
+                 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                 'retention-admin', '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z'),
+                ('ret-cap-refund', 'store-channel-stripe', 'refund', 'supported',
+                 'sandbox', '1111111111111111111111111111111111111111111111111111111111111111',
+                 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                 'retention-admin', '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z'),
+                ('ret-cap-refund-query', 'store-channel-stripe', 'refund_query', 'supported',
+                 'sandbox', '1111111111111111111111111111111111111111111111111111111111111111',
+                 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                 'retention-admin', '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z'),
+                ('ret-cap-settlement', 'store-channel-stripe', 'settlement_report', 'supported',
+                 'sandbox', '1111111111111111111111111111111111111111111111111111111111111111',
+                 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                 'retention-admin', '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z');
+             INSERT INTO store_privacy_records
+                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+             VALUES ('retention-order-privacy', 'v1', 'CN', '["CN"]', '{}', 'contract',
+                     'retention-admin',
+                     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                     '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z', 1);
+             INSERT INTO store_channel_readiness_profiles
+                (channel_id, active_credential_digest, privacy_record_id,
+                 callback_verification_passed, supported_currencies_json, amount_limits_json,
+                 checkout_action_kinds_json, license_evidence_digest, runtime_evidence_digest,
+                 availability_evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES ('store-channel-stripe',
+                     '1111111111111111111111111111111111111111111111111111111111111111',
+                     'retention-order-privacy', 1, '["CNY","USD"]',
+                     '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"},\"USD\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
+                     '["redirect"]',
+                     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                     'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                     'retention-admin', '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z');",
+        )
+        .await
+        .expect("seed paused checkout fixtures");
+
+    let rate = ExchangeRateSnapshot {
+        base: "USD".to_string(),
+        quote: "CNY".to_string(),
+        cny_per_usd: "6.0000".to_string(),
+        source_updated_at: instant(),
+        refreshed_at: instant(),
+    };
+    let error = PaymentOrderStore::new(db.clone())
+        .create_order(
+            "retention-user",
+            CreatePaymentOrderInput {
+                idempotency_key: "retention-paused-order".to_string(),
+                product_id: "retention-product".to_string(),
+                payment_channel_id: "store-channel-stripe".to_string(),
+                payment_currency: Currency::CNY,
+                custom_recharge_minor: None,
+            },
+            &rate,
+        )
+        .await
+        .expect_err("paused checkout");
+    assert!(matches!(error, PaymentOrderError::RetentionPaused));
+}
+
+#[tokio::test]
+async fn self_approval_and_extension_rules_are_enforced() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(2557, 24)).await;
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+
+    let self_approval = retention
+        .create_legal_hold(
+            CreateStoreLegalHoldInput {
+                data_class: StoreRetentionDataClass::NetworkMetadata,
+                identifiers: vec!["evt-1".to_string()],
+                reason: "self approval".to_string(),
+                requesting_authority: "court".to_string(),
+                requester_id: "retention-admin".to_string(),
+                approver_role: "privacy".to_string(),
+                expires_at: instant() + Duration::days(7),
+                extends_hold_id: None,
+            },
+            "retention-admin",
+            instant(),
+        )
+        .await
+        .expect_err("self approval");
+    assert_eq!(self_approval, StoreRetentionError::InvalidInput);
+
+    let hold = retention
+        .create_legal_hold(
+            CreateStoreLegalHoldInput {
+                data_class: StoreRetentionDataClass::NetworkMetadata,
+                identifiers: vec!["evt-1".to_string()],
+                reason: "initial hold".to_string(),
+                requesting_authority: "court".to_string(),
+                requester_id: "retention-requester".to_string(),
+                approver_role: "privacy".to_string(),
+                expires_at: instant() + Duration::days(7),
+                extends_hold_id: None,
+            },
+            "retention-admin",
+            instant(),
+        )
+        .await
+        .expect("create hold");
+
+    let earlier = retention
+        .create_legal_hold(
+            CreateStoreLegalHoldInput {
+                data_class: StoreRetentionDataClass::NetworkMetadata,
+                identifiers: vec!["evt-1".to_string()],
+                reason: "earlier extension".to_string(),
+                requesting_authority: "court".to_string(),
+                requester_id: "retention-requester".to_string(),
+                approver_role: "privacy".to_string(),
+                expires_at: instant() + Duration::days(3),
+                extends_hold_id: Some(hold.id.clone()),
+            },
+            "retention-admin",
+            instant() + Duration::seconds(1),
+        )
+        .await
+        .expect_err("earlier expiry");
+    assert_eq!(earlier, StoreRetentionError::InvalidInput);
+
+    let extension = retention
+        .create_legal_hold(
+            CreateStoreLegalHoldInput {
+                data_class: StoreRetentionDataClass::NetworkMetadata,
+                identifiers: vec!["evt-1".to_string()],
+                reason: "extend hold".to_string(),
+                requesting_authority: "court".to_string(),
+                requester_id: "retention-requester".to_string(),
+                approver_role: "legal".to_string(),
+                expires_at: instant() + Duration::days(14),
+                extends_hold_id: Some(hold.id.clone()),
+            },
+            "retention-admin",
+            instant() + Duration::seconds(2),
+        )
+        .await
+        .expect("extension");
+    assert_eq!(extension.extends_hold_id.as_deref(), Some(hold.id.as_str()));
+    assert!(extension.active);
+}
+
+#[tokio::test]
+async fn competing_owner_interrupts_active_claim() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(2557, 24)).await;
+    db.write()
+        .await
+        .execute_unprepared(
+            "INSERT INTO store_retention_runs
+                (id, policy_version, counts_json, oldest_remaining_at, state,
+                 error_category, started_at, completed_at, worker_owner_id)
+             VALUES
+                ('run-stale', 'v1',
+                 '{\"raw_callback_bodies\":0,\"network_metadata\":0,\"financial_records\":0,\"redemption_audits\":0,\"expired_reauth_grants\":0}',
+                 NULL, 'running', NULL, '2026-08-28T11:00:00.000000Z', NULL, 'owner-old');
+             UPDATE store_retention_state
+             SET run_in_progress = 1, current_run_id = 'run-stale',
+                 current_worker_owner_id = 'owner-old',
+                 updated_at = '2026-08-28T11:00:00.000000Z'
+             WHERE singleton_id = 1;",
+        )
+        .await
+        .expect("seed active claim");
+
+    let run = StoreRetention::new(db.clone(), "owner-new")
+        .run_at(instant(), actor("takeover"))
+        .await
+        .expect("takeover run");
+    assert_eq!(run.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(run.worker_owner_id, "owner-new");
+
+    let interrupted = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT state, error_category FROM store_retention_runs WHERE id = $1",
+            vec!["run-stale".into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        interrupted.try_get::<String>("", "state").unwrap(),
+        "failed"
+    );
+    assert_eq!(
+        interrupted
+            .try_get::<String>("", "error_category")
+            .unwrap(),
+        "interrupted"
+    );
+}
+
+#[tokio::test]
+async fn overview_lists_runs_holds_and_containments() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(2557, 24)).await;
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+    retention
+        .run_at(instant(), actor("overview-run"))
+        .await
+        .expect("run");
+    retention
+        .create_legal_hold(
+            CreateStoreLegalHoldInput {
+                data_class: StoreRetentionDataClass::RedemptionAudits,
+                identifiers: vec!["audit-1".to_string()],
+                reason: "overview hold".to_string(),
+                requesting_authority: "privacy".to_string(),
+                requester_id: "retention-requester".to_string(),
+                approver_role: "privacy".to_string(),
+                expires_at: instant() + Duration::days(1),
+                extends_hold_id: None,
+            },
+            "retention-admin",
+            instant() + Duration::seconds(1),
+        )
+        .await
+        .expect("hold");
+
+    let overview = retention.overview().await.expect("overview");
+    assert!(!overview.runs.is_empty());
+    assert_eq!(overview.holds.len(), 1);
+    assert!(overview.holds[0].active);
+    assert_eq!(overview.status.consecutive_failures, 0);
+}
+
+#[tokio::test]
+async fn invalid_privacy_retention_document_fails_run() {
+    let db = setup().await;
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_privacy_records
+                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+             VALUES ('privacy-bad', 'bad', 'CN', '[\"CN\"]', $1, 'contract',
+                     'retention-admin', $2, '2026-01-01T00:00:00.000000Z',
+                     '2099-01-01T00:00:00.000000Z', 1)",
+            vec![
+                json!({
+                    "raw_callback_days": 10,
+                    "network_metadata_days": 90,
+                    "financial_records_days": 2557,
+                    "redemption_audit_days": 730,
+                    "expired_reauth_grant_hours": 24
+                })
+                .to_string()
+                .into(),
+                DIGEST.into(),
+            ],
+        ))
+        .await
+        .expect("insert invalid privacy");
+
+    let run = StoreRetention::new(db.clone(), "owner-a")
+        .run_at(instant(), actor("invalid-policy"))
+        .await
+        .expect("run");
+    assert_eq!(run.state, StoreRetentionRunState::Failed);
+    assert_eq!(run.error_category.as_deref(), Some("privacy_policy_invalid"));
+}
+
+#[tokio::test]
+async fn bounded_deletion_caps_each_class_at_batch_size() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(2557, 1)).await;
+    let total = (RETENTION_BATCH_SIZE as usize) + 1;
+    for index in 0..total {
+        insert_reauth_grant(
+            &db,
+            &format!("grant-batch-{index:04}"),
+            "2026-08-28T10:00:00.000000Z",
+        )
+        .await;
+    }
+
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+    let first = retention
+        .run_at(instant(), actor("bounded-1"))
+        .await
+        .expect("first bounded run");
+    assert_eq!(first.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(
+        first.counts.expired_reauth_grants,
+        RETENTION_BATCH_SIZE as u64
+    );
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_reauth_grants WHERE id LIKE $1",
+            "grant-batch-%",
+        )
+        .await,
+        1
+    );
+
+    let second = retention
+        .run_at(instant() + Duration::seconds(1), actor("bounded-2"))
+        .await
+        .expect("second bounded run");
+    assert_eq!(second.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(second.counts.expired_reauth_grants, 1);
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_reauth_grants WHERE id LIKE $1",
+            "grant-batch-%",
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn legal_hold_expiry_allows_deletion_and_does_not_restore() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(2557, 1)).await;
+    insert_provider_event(&db, "evt-hold", "2026-01-01T00:00:00.000000Z", true, true).await;
+    insert_provider_event(&db, "evt-gone", "2026-01-01T00:00:00.000000Z", true, true).await;
+
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+    retention
+        .create_legal_hold(
+            CreateStoreLegalHoldInput {
+                data_class: StoreRetentionDataClass::RawCallbackBodies,
+                identifiers: vec!["evt-hold".to_string()],
+                reason: "temporary hold".to_string(),
+                requesting_authority: "court".to_string(),
+                requester_id: "retention-requester".to_string(),
+                approver_role: "privacy".to_string(),
+                expires_at: instant() + Duration::hours(1),
+                extends_hold_id: None,
+            },
+            "retention-admin",
+            instant(),
+        )
+        .await
+        .expect("create hold");
+
+    let during_hold = retention
+        .run_at(instant() + Duration::minutes(30), actor("during-hold"))
+        .await
+        .expect("during hold");
+    assert_eq!(during_hold.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(during_hold.counts.raw_callback_bodies, 1);
+    assert!(event_raw_present(&db, "evt-hold").await);
+    assert!(!event_raw_present(&db, "evt-gone").await);
+
+    let after_expiry = retention
+        .run_at(instant() + Duration::hours(2), actor("after-expiry"))
+        .await
+        .expect("after expiry");
+    assert_eq!(after_expiry.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(after_expiry.counts.raw_callback_bodies, 1);
+    assert!(!event_raw_present(&db, "evt-hold").await);
+
+    retention
+        .create_legal_hold(
+            CreateStoreLegalHoldInput {
+                data_class: StoreRetentionDataClass::RawCallbackBodies,
+                identifiers: vec!["evt-gone".to_string()],
+                reason: "hold after deletion".to_string(),
+                requesting_authority: "court".to_string(),
+                requester_id: "retention-requester".to_string(),
+                approver_role: "legal".to_string(),
+                expires_at: instant() + Duration::days(30),
+                extends_hold_id: None,
+            },
+            "retention-admin",
+            instant() + Duration::hours(3),
+        )
+        .await
+        .expect("hold deleted id");
+
+    let restore_probe = retention
+        .run_at(instant() + Duration::hours(4), actor("no-restore"))
+        .await
+        .expect("no restore run");
+    assert_eq!(restore_probe.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(restore_probe.counts.raw_callback_bodies, 0);
+    assert!(!event_raw_present(&db, "evt-gone").await);
+    assert!(!event_raw_present(&db, "evt-hold").await);
+}
