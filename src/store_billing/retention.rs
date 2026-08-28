@@ -12,6 +12,7 @@ use super::models::StorePrivacyRetention;
 use crate::db::DbPool;
 
 pub const RETENTION_BATCH_SIZE: i64 = 500;
+const NETWORK_METADATA_RETENTION_DAYS: i64 = 90;
 const RETENTION_SYSTEM_ACTOR: &str = "_monoize_retention_job";
 const RETENTION_SCHEDULER_HOUR_UTC: u32 = 3;
 
@@ -618,54 +619,59 @@ impl StoreRetention {
         actor: &RetentionRunActor,
     ) -> Result<(), StoreRetentionError> {
         let tx = self.db.begin_write().await?;
-        let counts = apply_retention(&self.db, &*tx, now, policy).await?;
-        let oldest_remaining_at = oldest_remaining(&self.db, &*tx).await?;
-        let counts_json = serde_json::to_string(&counts).map_err(storage)?;
-        let changed = tx
-            .execute(self.db.stmt(
-                "UPDATE store_retention_runs
-                 SET counts_json = $3, oldest_remaining_at = $4, state = 'succeeded',
-                     error_category = NULL, completed_at = $5
-                 WHERE id = $1 AND worker_owner_id = $2 AND state = 'running'",
+        let run_id = run_id.to_string();
+        let worker_owner_id = self.worker_owner_id.to_string();
+        let outcome = async {
+            let counts = apply_retention(&self.db, &*tx, now, policy).await?;
+            let oldest_remaining_at = oldest_remaining(&self.db, &*tx).await?;
+            let counts_json = serde_json::to_string(&counts).map_err(storage)?;
+            let changed = tx
+                .execute(self.db.stmt(
+                    "UPDATE store_retention_runs
+                     SET counts_json = $3, oldest_remaining_at = $4, state = 'succeeded',
+                         error_category = NULL, completed_at = $5
+                     WHERE id = $1 AND worker_owner_id = $2 AND state = 'running'",
+                    vec![
+                        run_id.clone().into(),
+                        worker_owner_id.clone().into(),
+                        counts_json.into(),
+                        oldest_remaining_at.map(timestamp).into(),
+                        timestamp(now).into(),
+                    ],
+                ))
+                .await?;
+            if changed.rows_affected() != 1 {
+                return Err(storage("retention worker claim was lost"));
+            }
+            tx.execute(self.db.stmt(
+                "UPDATE store_retention_state
+                 SET run_in_progress = 0, current_run_id = NULL, current_worker_owner_id = NULL,
+                     last_run_id = $1, consecutive_failures = 0, updated_at = $2
+                 WHERE singleton_id = 1 AND current_run_id = $1
+                   AND current_worker_owner_id = $3",
                 vec![
-                    run_id.into(),
-                    self.worker_owner_id.to_string().into(),
-                    counts_json.into(),
-                    oldest_remaining_at.map(timestamp).into(),
+                    run_id.clone().into(),
                     timestamp(now).into(),
+                    worker_owner_id.clone().into(),
                 ],
             ))
             .await?;
-        if changed.rows_affected() != 1 {
-            return Err(storage("retention worker claim was lost"));
+            insert_access_audit(
+                &self.db,
+                &*tx,
+                &actor.actor_id,
+                &actor.actor_role,
+                "retention_run",
+                serde_json::json!({"run_id": run_id, "counts": counts}),
+                &actor.reason,
+                "succeeded",
+                now,
+            )
+            .await?;
+            Ok(())
         }
-        tx.execute(self.db.stmt(
-            "UPDATE store_retention_state
-             SET run_in_progress = 0, current_run_id = NULL, current_worker_owner_id = NULL,
-                 last_run_id = $1, consecutive_failures = 0, updated_at = $2
-             WHERE singleton_id = 1 AND current_run_id = $1
-               AND current_worker_owner_id = $3",
-            vec![
-                run_id.into(),
-                timestamp(now).into(),
-                self.worker_owner_id.to_string().into(),
-            ],
-        ))
-        .await?;
-        insert_access_audit(
-            &self.db,
-            &*tx,
-            &actor.actor_id,
-            &actor.actor_role,
-            "retention_run",
-            serde_json::json!({"run_id": run_id, "counts": counts}),
-            &actor.reason,
-            "succeeded",
-            now,
-        )
-        .await?;
-        tx.commit().await?;
-        Ok(())
+        .await;
+        finish_transaction(tx, outcome).await
     }
 
     async fn finalize_failure(
@@ -676,49 +682,56 @@ impl StoreRetention {
         actor: &RetentionRunActor,
     ) -> Result<(), StoreRetentionError> {
         let tx = self.db.begin_write().await?;
-        let changed = tx
-            .execute(self.db.stmt(
-                "UPDATE store_retention_runs
-                 SET state = 'failed', error_category = $3, completed_at = $4
-                 WHERE id = $1 AND worker_owner_id = $2 AND state = 'running'",
+        let run_id = run_id.to_string();
+        let worker_owner_id = self.worker_owner_id.to_string();
+        let category = category.to_string();
+        let outcome = async {
+            let changed = tx
+                .execute(self.db.stmt(
+                    "UPDATE store_retention_runs
+                     SET state = 'failed', error_category = $3, completed_at = $4
+                     WHERE id = $1 AND worker_owner_id = $2 AND state = 'running'",
+                    vec![
+                        run_id.clone().into(),
+                        worker_owner_id.clone().into(),
+                        category.clone().into(),
+                        timestamp(now).into(),
+                    ],
+                ))
+                .await?;
+            if changed.rows_affected() != 1 {
+                return Err(storage("retention worker claim was lost"));
+            }
+            increment_failure_locked(&self.db, &*tx, &run_id, now).await?;
+            tx.execute(self.db.stmt(
+                "UPDATE store_retention_state
+                 SET run_in_progress = 0, current_run_id = NULL, current_worker_owner_id = NULL,
+                     last_run_id = $1, updated_at = $2
+                 WHERE singleton_id = 1 AND current_run_id = $1
+                   AND current_worker_owner_id = $3",
                 vec![
-                    run_id.into(),
-                    self.worker_owner_id.to_string().into(),
-                    category.into(),
+                    run_id.clone().into(),
                     timestamp(now).into(),
+                    worker_owner_id.clone().into(),
                 ],
             ))
             .await?;
-        if changed.rows_affected() != 1 {
-            return Err(storage("retention worker claim was lost"));
+            insert_access_audit(
+                &self.db,
+                &*tx,
+                &actor.actor_id,
+                &actor.actor_role,
+                "retention_run",
+                serde_json::json!({"run_id": run_id, "counts": StoreRetentionCounts::default(), "error_category": category}),
+                &actor.reason,
+                "failed",
+                now,
+            )
+            .await?;
+            Ok(())
         }
-        increment_failure_locked(&self.db, &*tx, run_id, now).await?;
-        tx.execute(self.db.stmt(
-            "UPDATE store_retention_state
-             SET run_in_progress = 0, current_run_id = NULL, current_worker_owner_id = NULL,
-                 last_run_id = $1, updated_at = $2
-             WHERE singleton_id = 1 AND current_run_id = $1
-               AND current_worker_owner_id = $3",
-            vec![
-                run_id.into(),
-                timestamp(now).into(),
-                self.worker_owner_id.to_string().into(),
-            ],
-        ))
-        .await?;
-        insert_access_audit(
-            &self.db,
-            &*tx,
-            &actor.actor_id,
-            &actor.actor_role,
-            "retention_run",
-            serde_json::json!({"run_id": run_id, "counts": StoreRetentionCounts::default(), "error_category": category}),
-            &actor.reason,
-            "failed",
-            now,
-        )
-        .await?;
-        tx.commit().await?;
+        .await;
+        finish_transaction(tx, outcome).await?;
         if self.status().await?.checkout_paused {
             tracing::error!(
                 run_id,
@@ -1181,75 +1194,75 @@ async fn delete_financial_records<C: ConnectionTrait>(
     now: DateTime<Utc>,
     days: i64,
 ) -> Result<u64, StoreRetentionError> {
-    let cutoff = checked_sub(now, Duration::days(days))?;
-    let mut remaining = RETENTION_BATCH_SIZE;
+    let financial_cutoff = checked_sub(now, Duration::days(days))?;
+    let provider_event_cutoff = checked_sub(
+        now,
+        Duration::days(days.max(NETWORK_METADATA_RETENTION_DAYS)),
+    )?;
+    const HOLD_EXCLUSION: &str = "NOT EXISTS (
+             SELECT 1 FROM store_legal_hold_items i
+             JOIN store_legal_holds h ON h.id = i.hold_id
+             WHERE i.data_class = 'financial_records' AND i.identifier = r.id
+               AND h.starts_at <= $3 AND h.expires_at > $3
+           )";
+    let sql = format!(
+        "SELECT id, source_table FROM (
+             SELECT r.id, r.created_at AS retention_at, 'store_orders' AS source_table
+             FROM store_orders r
+             WHERE r.created_at <= $1
+               AND r.payment_state IN ('closed', 'refunded')
+               AND {HOLD_EXCLUSION}
+             UNION ALL
+             SELECT r.id, r.received_at, 'store_provider_events'
+             FROM store_provider_events r
+             WHERE r.received_at <= $2
+               AND {HOLD_EXCLUSION}
+             UNION ALL
+             SELECT r.id, r.created_at, 'billing_ledger'
+             FROM billing_ledger r
+             WHERE r.created_at <= $1
+               AND {HOLD_EXCLUSION}
+             UNION ALL
+             SELECT r.id, r.created_at, 'store_refunds'
+             FROM store_refunds r
+             WHERE r.created_at <= $1
+               AND {HOLD_EXCLUSION}
+             UNION ALL
+             SELECT r.id, r.created_at, 'store_order_recovery_claims'
+             FROM store_order_recovery_claims r
+             WHERE r.created_at <= $1
+               AND {HOLD_EXCLUSION}
+             UNION ALL
+             SELECT r.id, r.imported_at, 'store_settlement_reports'
+             FROM store_settlement_reports r
+             WHERE r.imported_at <= $1
+               AND {HOLD_EXCLUSION}
+             UNION ALL
+             SELECT r.id, r.created_at, 'store_access_audits'
+             FROM store_access_audits r
+             WHERE r.created_at <= $1
+               AND r.action NOT IN ('redemption_reveal', 'redemption_copy', 'redemption_export')
+               AND {HOLD_EXCLUSION}
+         ) candidates
+         ORDER BY retention_at ASC, id ASC
+         LIMIT $4"
+    );
+    let candidates = financial_candidate_rows(
+        db,
+        connection,
+        &sql,
+        vec![
+            timestamp(financial_cutoff).into(),
+            timestamp(provider_event_cutoff).into(),
+            timestamp(now).into(),
+            RETENTION_BATCH_SIZE.into(),
+        ],
+    )
+    .await?;
     let mut deleted = 0_u64;
-
-    for (select, table, timestamp_column, condition) in [
-        (
-            "store_orders",
-            "store_orders",
-            "created_at",
-            "payment_state IN ('closed', 'refunded')",
-        ),
-        (
-            "store_provider_events",
-            "store_provider_events",
-            "received_at",
-            "1 = 1",
-        ),
-        ("billing_ledger", "billing_ledger", "created_at", "1 = 1"),
-        ("store_refunds", "store_refunds", "created_at", "1 = 1"),
-        (
-            "store_order_recovery_claims",
-            "store_order_recovery_claims",
-            "created_at",
-            "1 = 1",
-        ),
-        (
-            "store_settlement_reports",
-            "store_settlement_reports",
-            "imported_at",
-            "1 = 1",
-        ),
-        (
-            "store_access_audits",
-            "store_access_audits",
-            "created_at",
-            "action NOT IN ('redemption_reveal', 'redemption_copy', 'redemption_export')",
-        ),
-    ] {
-        if remaining == 0 {
-            break;
-        }
-        let sql = format!(
-            "SELECT r.id FROM {select} r
-             WHERE r.{timestamp_column} <= $1 AND {condition}
-               AND NOT EXISTS (
-                 SELECT 1 FROM store_legal_hold_items i
-                 JOIN store_legal_holds h ON h.id = i.hold_id
-                 WHERE i.data_class = 'financial_records' AND i.identifier = r.id
-                   AND h.starts_at <= $2 AND h.expires_at > $2
-               )
-             ORDER BY r.{timestamp_column} ASC, r.id ASC LIMIT $3"
-        );
-        let ids = candidate_ids(
-            db,
-            connection,
-            &sql,
-            vec![
-                timestamp(cutoff).into(),
-                timestamp(now).into(),
-                remaining.into(),
-            ],
-        )
-        .await?;
-        for id in ids {
-            let changed = delete_financial_root(db, connection, table, &id, now).await?;
-            remaining -= 1;
-            if changed {
-                deleted += 1;
-            }
+    for (id, table) in candidates {
+        if delete_financial_root(db, connection, &table, &id, now).await? {
+            deleted += 1;
         }
     }
     Ok(deleted)
@@ -1432,6 +1445,20 @@ async fn candidate_ids<C: ConnectionTrait>(
         .await?
         .into_iter()
         .map(|row| string(&row, "id"))
+        .collect()
+}
+
+async fn financial_candidate_rows<C: ConnectionTrait>(
+    db: &DbPool,
+    connection: &C,
+    sql: &str,
+    values: Vec<Value>,
+) -> Result<Vec<(String, String)>, StoreRetentionError> {
+    connection
+        .query_all(db.stmt(sql, values))
+        .await?
+        .into_iter()
+        .map(|row| Ok((string(&row, "id")?, string(&row, "source_table")?)))
         .collect()
 }
 

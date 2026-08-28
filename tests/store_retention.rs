@@ -928,3 +928,85 @@ async fn legal_hold_expiry_allows_deletion_and_does_not_restore() {
     assert!(!event_raw_present(&db, "evt-gone").await);
     assert!(!event_raw_present(&db, "evt-hold").await);
 }
+
+#[tokio::test]
+async fn financial_deletion_orders_by_global_timestamp_across_tables() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(2557, 1)).await;
+    insert_provider_event(
+        &db,
+        "evt-oldest",
+        "2019-01-01T00:00:00.000000Z",
+        true,
+        true,
+    )
+    .await;
+    let total = RETENTION_BATCH_SIZE as usize;
+    for index in 0..total {
+        insert_closed_order(
+            &db,
+            &format!("order-batch-{index:04}"),
+            "2019-06-01T00:00:00.000000Z",
+        )
+        .await;
+    }
+
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+    let run = retention
+        .run_at(instant(), actor("financial-ordering"))
+        .await
+        .expect("run");
+
+    assert_eq!(run.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(run.counts.financial_records, RETENTION_BATCH_SIZE as u64);
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_provider_events WHERE id = $1",
+            "evt-oldest",
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_orders WHERE id LIKE $1",
+            "order-batch-%",
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn provider_event_not_deleted_before_network_metadata_floor() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(30, 1)).await;
+    insert_provider_event(
+        &db,
+        "evt-young",
+        "2026-07-15T00:00:00.000000Z",
+        true,
+        true,
+    )
+    .await;
+
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+    let run = retention
+        .run_at(instant(), actor("network-floor"))
+        .await
+        .expect("run");
+
+    assert_eq!(run.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_provider_events WHERE id = $1",
+            "evt-young",
+        )
+        .await,
+        1
+    );
+    assert!(event_network_present(&db, "evt-young").await);
+}
