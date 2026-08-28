@@ -97,6 +97,8 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 
 `/dashboard/store-admin` で**商店管理**を開きます。**支払いチャネル**タブを選択します。**プライバシー記録**を選択します。
 
+![Store privacy records](/images/en/store-privacy-records.webp)
+
 一覧の各記録は、ポリシーバージョン、管轄区域、許可地域、承認状態、次回の再審査日を表示します。保存した記録は編集できません。
 
 ポリシー更新を承認したら記録を追加します。次の値を入力し、**記録を追加**を選択します。
@@ -117,6 +119,8 @@ Monoize は審査者、承認時刻、次回の再審査日を設定します。
 ## チャネル準備状況を関連付ける
 
 準備プロファイルが現行の承認済みプライバシー記録を参照するまで、Channel は利用不可のままです。
+
+![Store payment Channels](/images/en/store-governance.webp)
 
 Alipay、WeChat Pay、または Stripe の Channel 行で盾のボタンを選択します。**プライバシー記録**を選択します。署名付きコールバック試験に合格した後だけ**コールバック検証済み**を有効にします。対応通貨、チェックアウト動作、通貨ごとの金額範囲、ライセンス、実行、可用性の各証跡ダイジェスト、そして 1 から 90 日の有効期間を設定します。**保存**を選択します。
 
@@ -150,6 +154,8 @@ Monoize は Store Primary で毎日 03:00 UTC に上限付きの保持ジョブ�
 ## 保持を手動で実行する
 
 **商店管理**を開きます。**支払いチャネル**タブを選択します。**保持**を選択します。
+
+![Store retention](/images/en/store-retention.webp)
 
 ダイアログは連続失敗、チェックアウト状態（**開放**または**停止中**）、実行の件数、法的保持の件数を表示します。
 
