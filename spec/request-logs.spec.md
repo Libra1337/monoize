@@ -471,11 +471,12 @@ FL8a. The merged `created_at/request_id` cell MUST use exactly two non-wrapping 
 
 FL8b. Every request-log body row MUST have a fixed height of 44 pixels. The merged leading cells, the admin-visible merged User/Token cell, and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
 
-FL9. The merged `model/[channel]` cell MUST use exactly two non-wrapping layout lines in one column:
+FL9. The merged `model/[channel]` cell MUST use a non-wrapping column layout inside the fixed-height row:
 
-- The first line MUST render the ModelBadge defined by FL3.
+- For an admin viewer, the first line MUST render the ModelBadge defined by FL3.
 - For an admin viewer, the second line MUST render the first non-empty value among `channel_name`, `channel_id`, and `-`.
-- For a non-admin viewer, the second line MUST remain visually empty and MUST NOT expose Provider or Channel information.
+- For a non-admin viewer, the cell MUST render only the ModelBadge defined by FL3. The ModelBadge MUST be vertically centered in the cell. The cell MUST NOT reserve an empty Channel line and MUST NOT expose Provider or Channel information.
+- The ModelBadge tooltip MAY show model, upstream model, multiplier, and reasoning details to every viewer. It MUST show a Provider name or ID only to an admin viewer. It MUST NOT show a Provider or Channel name or ID to a non-admin viewer.
 - When `affinity_hit` is true for an admin viewer, the second line MUST include a localized sticky-session badge immediately after the Channel display value. The badge MUST NOT appear when `affinity_hit` is false or null.
 - Retry-chain hops MUST NOT create a third visible line. Their full path remains available through FL9b and their count remains visible through FL4.
 - On hover, focus, or activate, the tooltip MUST show the content defined by FL9b. Activation MUST work on touch devices; activating outside the tooltip or pressing Escape MUST close it.
@@ -486,9 +487,11 @@ FL9a. Compact retry-chain hops:
 2. If the row has a terminal Provider or Channel id, form terminal identity `(provider.id ?? "", channel.id ?? "")`. If that identity is not already in the hop list, append one hop for the terminal Provider/Channel.
 3. A hop label MUST be the first non-empty value among hop `channel_name`, hop `provider_name`, hop `channel_id`, hop `provider_id`. For the terminal hop those fields are `channel.name`, `provider.name`, `channel.id`, `provider.id`.
 4. Empty-label hops MUST be omitted.
-5. A hop list of length less than 2 is not a retry chain. The visible merged `model/[channel]` cell remains the fixed two-line layout from FL9 regardless of hop count.
+5. A hop list of length less than 2 is not a retry chain. The visible merged `model/[channel]` cell MUST retain the layout that FL9 defines for the current viewer regardless of hop count.
 
 FL9b. Channel tooltip:
+
+The Channel tooltip is available only to an admin viewer. A non-admin viewer MUST NOT render its trigger or content.
 
 - If `tried_providers` is non-empty, the tooltip MUST first render a localized retry-chain heading, then one row per stored `tried_providers` entry in chronological order. Each row MUST show the hop label from FL9a.3, `duration_ms` when present, `upstream_status` when present, and `error`.
 - After those failed-attempt rows, if a terminal hop identity exists and either (a) it differs from the last `tried_providers` identity, or (b) row `status` is `success` or `client_gone` and the last `tried_providers` identity equals the terminal identity, the tooltip MUST append one terminal row with the terminal hop label and a localized served marker. When `status` is `error` and the last `tried_providers` identity already equals the terminal identity, the tooltip MUST NOT append a duplicate terminal row.

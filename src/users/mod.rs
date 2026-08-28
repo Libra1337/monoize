@@ -225,12 +225,14 @@ impl RequestCaptureMode {
         self,
         upstream_usage: Option<&crate::urp::Usage>,
         upstream_error_seen: bool,
+        multiple_upstream_attempts: bool,
     ) -> bool {
         match self {
             Self::Off => false,
             Self::CaptureAll => true,
             Self::CaptureOnlyAbnormal => {
                 upstream_error_seen
+                    || multiple_upstream_attempts
                     || upstream_usage.is_none()
                     || upstream_usage.is_some_and(|usage| usage.total_tokens() == 0)
             }

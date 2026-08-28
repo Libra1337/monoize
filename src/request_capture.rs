@@ -624,17 +624,24 @@ impl RequestCaptureSession {
         upstream_usage: Option<&crate::urp::Usage>,
         upstream_error_seen: bool,
     ) {
-        let mut attempts = self.attempts.lock().await.clone();
-        if attempts.is_empty() {
+        let attempts_guard = self.attempts.lock().await;
+        if attempts_guard.is_empty() {
             return;
         }
-        if !self
-            .mode
-            .should_persist(upstream_usage, upstream_error_seen)
-        {
+        let truncation_guard = self.truncation.lock().await;
+        let mut attempts = attempts_guard.clone();
+        let mut truncation = truncation_guard.clone();
+        drop(truncation_guard);
+        drop(attempts_guard);
+        let multiple_upstream_attempts =
+            attempts.len().saturating_add(truncation.omitted_attempts) > 1;
+        if !self.mode.should_persist(
+            upstream_usage,
+            upstream_error_seen,
+            multiple_upstream_attempts,
+        ) {
             return;
         }
-        let mut truncation = self.truncation.lock().await.clone();
         let encoded = loop {
             let payload = json!({
                 "version": 2,
@@ -1085,6 +1092,125 @@ mod tests {
                 .await
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn abnormal_mode_persists_a_successful_multi_attempt_chain() {
+        use crate::migration::Migrator;
+        use sea_orm_migration::MigratorTrait;
+
+        let temp = TempDir::new().expect("temporary directory");
+        let db = crate::db::DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let store = RequestCaptureStore {
+            dump_dir: Arc::new(temp.path().join("dumps")),
+            limits: RequestCaptureLimits::from_env(),
+            db: Some(db),
+        };
+        let runtime = RwLock::new(MonoizeRuntimeConfig {
+            request_capture_enabled: true,
+            ..MonoizeRuntimeConfig::default()
+        });
+        let session = store
+            .maybe_start_session(
+                &runtime,
+                &test_auth(RequestCaptureMode::CaptureOnlyAbnormal),
+                Some("req_retry_success".to_string()),
+                DownstreamProtocol::Responses,
+                false,
+            )
+            .await
+            .expect("capture starts");
+        session
+            .push_attempt(json!({
+                "attempt_number": 1,
+                "provider_id": "provider-a",
+                "error": {"message": "retry"}
+            }))
+            .await;
+        session
+            .push_attempt(json!({
+                "attempt_number": 2,
+                "provider_id": "provider-b",
+                "error": null
+            }))
+            .await;
+        let usage = crate::urp::Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            ..crate::urp::Usage::default()
+        };
+
+        session.persist_with_result(Some(&usage), false).await;
+
+        let records = store
+            .list_capture_records("req_retry_success", None)
+            .await
+            .expect("records query succeeds");
+        assert_eq!(records.len(), 1);
+        let bytes = store
+            .read_dump_file(&records[0].file_name)
+            .await
+            .expect("dump read succeeds")
+            .expect("dump exists");
+        let payload: Value = serde_json::from_slice(&bytes).expect("dump is JSON");
+        assert_eq!(payload["attempts"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[tokio::test]
+    async fn persistence_holds_the_attempt_lock_until_the_truncation_snapshot_is_cloned() {
+        let store = RequestCaptureStore::new("sqlite://./data/monoize.db");
+        let runtime = RwLock::new(MonoizeRuntimeConfig {
+            request_capture_enabled: true,
+            ..MonoizeRuntimeConfig::default()
+        });
+        let session = store
+            .maybe_start_session(
+                &runtime,
+                &test_auth(RequestCaptureMode::CaptureOnlyAbnormal),
+                Some("req_atomic_snapshot".to_string()),
+                DownstreamProtocol::Responses,
+                false,
+            )
+            .await
+            .expect("capture starts");
+        session
+            .push_attempt(json!({"attempt_number": 1, "error": null}))
+            .await;
+        let attempts_guard = session.attempts.lock().await;
+        let truncation_guard = session.truncation.lock().await;
+        let persisting = {
+            let session = session.clone();
+            tokio::spawn(async move {
+                let usage = crate::urp::Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    ..crate::urp::Usage::default()
+                };
+                session.persist_with_result(Some(&usage), false).await;
+            })
+        };
+        tokio::task::yield_now().await;
+        drop(attempts_guard);
+        tokio::task::yield_now().await;
+
+        let competing_lock = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            session.attempts.lock(),
+        )
+        .await;
+        assert!(
+            competing_lock.is_err(),
+            "persistence released attempts before cloning truncation"
+        );
+
+        drop(truncation_guard);
+        persisting.await.expect("persistence task joins");
     }
 
     #[test]

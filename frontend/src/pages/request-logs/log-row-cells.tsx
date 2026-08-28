@@ -44,6 +44,51 @@ interface LogRowCellsProps {
 	onTooltipOpenChange: (tooltipId: string, open: boolean) => void
 }
 
+interface RequestLogModelTooltipDetailsProps {
+	log: RequestLog
+	isAdmin: boolean
+	t: LogRowCellsProps['t']
+}
+
+export function RequestLogModelTooltipDetails({
+	log,
+	isAdmin,
+	t
+}: RequestLogModelTooltipDetailsProps) {
+	return (
+		<div className='min-w-[180px] space-y-0.5 text-xs'>
+			<div className='flex items-center justify-between gap-3'>
+				<span>{t('requestLogs.model')}</span>
+				<span className='font-mono'>{log.model}</span>
+			</div>
+			{log.upstream_model && log.upstream_model !== log.model && (
+				<div className='flex items-center justify-between gap-3'>
+					<span>{t('requestLogs.upstreamModel')}</span>
+					<span className='font-mono'>{log.upstream_model}</span>
+				</div>
+			)}
+			{isAdmin && log.provider.id && (
+				<div className='flex items-center justify-between gap-3'>
+					<span>{t('requestLogs.modelProvider')}</span>
+					<span className='font-mono'>{log.provider.id}</span>
+				</div>
+			)}
+			{log.provider.multiplier != null && log.provider.multiplier !== '1' && (
+				<div className='flex items-center justify-between gap-3'>
+					<span>{t('requestLogs.multiplier')}</span>
+					<span className='font-mono'>{log.provider.multiplier}x</span>
+				</div>
+			)}
+			{log.reasoning_effort && (
+				<div className='flex items-center justify-between gap-3'>
+					<span>{t('requestLogs.reasoningEffort')}</span>
+					<span className='font-mono'>{log.reasoning_effort}</span>
+				</div>
+			)}
+		</div>
+	)
+}
+
 export function LogRowCells({
 	affinityTargetNames,
 	log,
@@ -522,7 +567,7 @@ export function LogRowCells({
 			</td>
 
 			<td className='px-2 py-1 align-middle whitespace-nowrap'>
-				<span className='inline-flex flex-col items-start leading-4'>
+				<span className='inline-flex h-9 flex-col items-start justify-center leading-4'>
 					<TooltipProvider delayDuration={200}>
 						<Tooltip onOpenChange={modelTooltipOpenChange}>
 							<TooltipTrigger asChild>
@@ -537,39 +582,7 @@ export function LogRowCells({
 								</span>
 							</TooltipTrigger>
 							<TooltipContent>
-								<div className='min-w-[180px] space-y-0.5 text-xs'>
-									<div className='flex items-center justify-between gap-3'>
-										<span>{t('requestLogs.model')}</span>
-										<span className='font-mono'>{log.model}</span>
-									</div>
-									{log.upstream_model && log.upstream_model !== log.model && (
-										<div className='flex items-center justify-between gap-3'>
-											<span>{t('requestLogs.upstreamModel')}</span>
-											<span className='font-mono'>{log.upstream_model}</span>
-										</div>
-									)}
-									{log.provider.id && (
-										<div className='flex items-center justify-between gap-3'>
-											<span>{t('requestLogs.modelProvider')}</span>
-											<span className='font-mono'>{log.provider.id}</span>
-										</div>
-									)}
-									{log.provider.multiplier != null &&
-									log.provider.multiplier !== '1' && (
-											<div className='flex items-center justify-between gap-3'>
-												<span>{t('requestLogs.multiplier')}</span>
-												<span className='font-mono'>
-													{log.provider.multiplier}x
-												</span>
-											</div>
-										)}
-									{log.reasoning_effort && (
-										<div className='flex items-center justify-between gap-3'>
-											<span>{t('requestLogs.reasoningEffort')}</span>
-											<span className='font-mono'>{log.reasoning_effort}</span>
-										</div>
-									)}
-								</div>
+								<RequestLogModelTooltipDetails log={log} isAdmin={isAdmin} t={t} />
 							</TooltipContent>
 						</Tooltip>
 					</TooltipProvider>
@@ -633,7 +646,7 @@ export function LogRowCells({
 								</TooltipContent>
 							</Tooltip>
 						</TooltipProvider>
-					: <span aria-hidden='true' className='h-4' />}
+					: null}
 				</span>
 			</td>
 

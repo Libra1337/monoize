@@ -29,7 +29,7 @@ description: ログ一覧の見方、リクエストキャプチャの有効化�
 2. **キー単位のモード。** 各 API キーが `request_capture_mode` を設定します。
    - `off`: キャプチャしない。
    - `capture-all`: 上流に到達したすべてのリクエストをキャプチャする。
-   - `capture-only-abnormal`: 失敗または異常なリクエストのみキャプチャする。
+   - `capture-only-abnormal`: 失敗、使用量の欠落、使用量ゼロ、または複数回のアップストリーム試行があるリクエストをキャプチャする。
 
 キャプチャファイルには保持期間があります。デフォルトは 1 日です。**設定**の `monoize_request_capture_retention_days` で変更できます。
 

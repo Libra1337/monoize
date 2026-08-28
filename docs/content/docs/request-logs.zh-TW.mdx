@@ -29,7 +29,7 @@ description: 閱讀日誌列表，開啟請求擷取，在擷取檢視器中檢�
 2. **金鑰級模式。** 每個 API 金鑰設定 `request_capture_mode`：
    - `off`：從不擷取。
    - `capture-all`：擷取每個到達上游的請求。
-   - `capture-only-abnormal`：只擷取失敗或異常的請求。
+   - `capture-only-abnormal`：擷取失敗、缺少用量、用量為零或發生多次上游嘗試的請求。
 
 擷取檔案有保留期。預設為 1 天。在**設定**中修改 `monoize_request_capture_retention_days` 可以調整。
 
