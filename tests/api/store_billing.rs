@@ -147,6 +147,42 @@ async fn dashboard_session(ctx: &super::TestContext, username: &str, role: UserR
     format!("Bearer {}", session.token)
 }
 
+fn valid_privacy_record_input(policy_version: &str) -> Value {
+    json!({
+        "policy_version": policy_version,
+        "jurisdiction": "CN",
+        "allowed_regions": ["cn-north-1", "cn-east-1"],
+        "retention": {
+            "raw_callback_days": 30,
+            "network_metadata_days": 90,
+            "financial_records_days": 2555,
+            "redemption_audit_days": 730,
+            "expired_reauth_grant_hours": 24
+        },
+        "legal_basis": "Customer payment contract",
+        "evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "accepted": true,
+        "review_after_days": 30
+    })
+}
+
+fn valid_readiness_input(privacy_record_id: &str) -> Value {
+    json!({
+        "privacy_record_id": privacy_record_id,
+        "callback_verification_passed": true,
+        "supported_currencies": ["CNY", "USD"],
+        "amount_limits": {
+            "CNY": {"min_minor": "1", "max_minor": "100000000"},
+            "USD": {"min_minor": "1", "max_minor": "100000000"}
+        },
+        "checkout_action_kinds": ["redirect"],
+        "license_evidence_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "runtime_evidence_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "availability_evidence_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "valid_for_days": 30
+    })
+}
+
 async fn json_request(
     ctx: &super::TestContext,
     method: Method,
@@ -585,6 +621,11 @@ fn store_json_mutations() -> Vec<(Method, &'static str)> {
         (
             Method::PUT,
             "/api/dashboard/store/admin/payment-channels/missing/capabilities/refund",
+        ),
+        (Method::POST, "/api/dashboard/store/admin/privacy-records"),
+        (
+            Method::PUT,
+            "/api/dashboard/store/admin/payment-channels/missing/readiness",
         ),
         (Method::POST, "/api/dashboard/store/admin/redemption-codes"),
         (
@@ -1424,6 +1465,327 @@ async fn payment_governance_endpoints_require_admin_reauth_and_no_store() {
 }
 
 #[tokio::test]
+async fn privacy_records_are_admin_only_validated_append_only_and_server_bound() {
+    let ctx = setup().await;
+    let admin = dashboard_session(&ctx, "privacy_writer_admin", UserRole::Admin).await;
+    let user = dashboard_session(&ctx, "privacy_writer_user", UserRole::User).await;
+    let path = "/api/dashboard/store/admin/privacy-records";
+
+    let (status, _) = json_request(&ctx, Method::GET, path, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = json_request(&ctx, Method::GET, path, Some(&user), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, initial, headers) =
+        json_request_with_reauth(&ctx, Method::GET, path, &admin, None, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{initial}");
+    assert_sensitive_headers(&headers);
+    assert!(initial["records"].as_array().is_some());
+
+    let mut unknown = valid_privacy_record_input("privacy-v1");
+    unknown["reviewer_id"] = json!("attacker");
+    let (status, error, _) =
+        json_request_with_reauth(&ctx, Method::POST, path, &admin, None, unknown).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+
+    for invalid in [
+        {
+            let mut value = valid_privacy_record_input("privacy-v1");
+            value["accepted"] = json!(false);
+            value
+        },
+        {
+            let mut value = valid_privacy_record_input("privacy-v1");
+            value["allowed_regions"] = json!(["cn-east-1", "cn-east-1"]);
+            value
+        },
+        {
+            let mut value = valid_privacy_record_input("privacy-v1");
+            value["retention"]["raw_callback_days"] = json!(29);
+            value
+        },
+    ] {
+        let (status, error, _) =
+            json_request_with_reauth(&ctx, Method::POST, path, &admin, None, invalid).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    }
+
+    let (status, created, headers) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        path,
+        &admin,
+        None,
+        valid_privacy_record_input("privacy-v1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_sensitive_headers(&headers);
+    assert_eq!(created["policy_version"], "privacy-v1");
+    assert_eq!(created["accepted"], true);
+    assert!(
+        created["id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(
+        created["reviewer_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty() && value != "attacker")
+    );
+    let approved_at =
+        chrono::DateTime::parse_from_rfc3339(created["approved_at"].as_str().unwrap()).unwrap();
+    let next_review_at =
+        chrono::DateTime::parse_from_rfc3339(created["next_review_at"].as_str().unwrap()).unwrap();
+    assert_eq!(next_review_at - approved_at, chrono::Duration::days(30));
+
+    let stored = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT allowed_regions_json, retention_json, reviewer_id
+             FROM store_privacy_records WHERE id = $1",
+            vec![created["id"].as_str().unwrap().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored
+            .try_get::<String>("", "allowed_regions_json")
+            .unwrap(),
+        "[\"cn-east-1\",\"cn-north-1\"]"
+    );
+    assert_eq!(
+        stored.try_get::<String>("", "retention_json").unwrap(),
+        "{\"raw_callback_days\":30,\"network_metadata_days\":90,\"financial_records_days\":2555,\"redemption_audit_days\":730,\"expired_reauth_grant_hours\":24}"
+    );
+    assert_eq!(
+        stored.try_get::<String>("", "reviewer_id").unwrap(),
+        created["reviewer_id"]
+    );
+
+    let (status, listed, headers) =
+        json_request_with_reauth(&ctx, Method::GET, path, &admin, None, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_sensitive_headers(&headers);
+    assert_eq!(listed["records"][0]["id"], created["id"]);
+}
+
+#[tokio::test]
+async fn readiness_requires_current_dependencies_and_upserts_server_bound_profile() {
+    let ctx = setup().await;
+    let admin = dashboard_session(&ctx, "readiness_writer_admin", UserRole::Admin).await;
+    let user = dashboard_session(&ctx, "readiness_writer_user", UserRole::User).await;
+    let path = "/api/dashboard/store/admin/payment-channels/store-channel-stripe/readiness";
+
+    let (status, _) = json_request(&ctx, Method::GET, path, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = json_request(&ctx, Method::GET, path, Some(&user), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, empty, headers) =
+        json_request_with_reauth(&ctx, Method::GET, path, &admin, None, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_sensitive_headers(&headers);
+    assert!(empty["readiness"].is_null());
+    let (status, unknown, _) = json_request_with_reauth(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/payment-channels/unknown/readiness",
+        &admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{unknown}");
+
+    let (status, forbidden, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        path,
+        &user,
+        None,
+        valid_readiness_input("missing-privacy"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
+    let (status, missing_credential, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        path,
+        &admin,
+        None,
+        valid_readiness_input("missing-privacy"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{missing_credential}");
+
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute_unprepared(
+            "INSERT INTO store_channel_credentials
+            (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+             ciphertext_base64, account_identity_digest, status, created_at)
+         VALUES ('readiness-api-credential', 'store-channel-stripe', 'stripe', 1,
+                 'key', 'nonce', 'ciphertext',
+                 '2222222222222222222222222222222222222222222222222222222222222222',
+                 'active', '2026-08-28T00:00:00Z')",
+        )
+        .await
+        .unwrap();
+    let (status, missing_privacy, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        path,
+        &admin,
+        None,
+        valid_readiness_input("missing-privacy"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{missing_privacy}");
+
+    let (status, privacy, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/privacy-records",
+        &admin,
+        None,
+        valid_privacy_record_input("readiness-policy"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{privacy}");
+    let privacy_id = privacy["id"].as_str().unwrap();
+
+    let mut unknown_field = valid_readiness_input(privacy_id);
+    unknown_field["active_credential_digest"] = json!("attacker");
+    let (status, error, _) =
+        json_request_with_reauth(&ctx, Method::PUT, path, &admin, None, unknown_field).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    let mut invalid_metadata = valid_readiness_input(privacy_id);
+    invalid_metadata["checkout_action_kinds"] = json!(["form"]);
+    let (status, error, _) =
+        json_request_with_reauth(&ctx, Method::PUT, path, &admin, None, invalid_metadata).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+
+    let duplicate_amount_limits = format!(
+        r#"{{"privacy_record_id":"{privacy_id}","callback_verification_passed":true,"supported_currencies":["CNY"],"amount_limits":{{"CNY":{{"min_minor":"1","max_minor":"100"}},"CNY":{{"min_minor":"1","max_minor":"200"}}}},"checkout_action_kinds":["redirect"],"license_evidence_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","runtime_evidence_digest":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","availability_evidence_digest":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","valid_for_days":30}}"#
+    );
+    let response = ctx
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(path)
+                .header(AUTHORIZATION, &admin)
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(duplicate_amount_limits))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let (status, created, headers) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        path,
+        &admin,
+        None,
+        valid_readiness_input(privacy_id),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_sensitive_headers(&headers);
+    assert_eq!(created["channel_id"], "store-channel-stripe");
+    assert_eq!(
+        created["active_credential_digest"],
+        "2222222222222222222222222222222222222222222222222222222222222222"
+    );
+    assert!(
+        created["verifier_admin_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    let verified_at =
+        chrono::DateTime::parse_from_rfc3339(created["verified_at"].as_str().unwrap()).unwrap();
+    let expires_at =
+        chrono::DateTime::parse_from_rfc3339(created["expires_at"].as_str().unwrap()).unwrap();
+    assert_eq!(expires_at - verified_at, chrono::Duration::days(30));
+
+    let mut replacement = valid_readiness_input(privacy_id);
+    replacement["callback_verification_passed"] = json!(false);
+    replacement["valid_for_days"] = json!(2);
+    let (status, replaced, _) =
+        json_request_with_reauth(&ctx, Method::PUT, path, &admin, None, replacement).await;
+    assert_eq!(status, StatusCode::OK, "{replaced}");
+    assert_eq!(replaced["callback_verification_passed"], false);
+    let state = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT c.enabled, COUNT(r.channel_id) AS profile_count
+         FROM store_payment_channels c
+         LEFT JOIN store_channel_readiness_profiles r ON r.channel_id = c.id
+         WHERE c.id = $1 GROUP BY c.enabled",
+            vec!["store-channel-stripe".into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.try_get::<i64>("", "enabled").unwrap(), 0);
+    assert_eq!(state.try_get::<i64>("", "profile_count").unwrap(), 1);
+
+    let (status, view, headers) =
+        json_request_with_reauth(&ctx, Method::GET, path, &admin, None, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_sensitive_headers(&headers);
+    assert_eq!(view["readiness"]["callback_verification_passed"], false);
+}
+
+#[tokio::test]
+async fn readiness_write_makes_channel_available_only_after_existing_gates_pass() {
+    let ctx = setup().await;
+    seed_governed_stripe(&ctx).await;
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute(ctx.state.db_pool.stmt(
+            "DELETE FROM store_channel_readiness_profiles WHERE channel_id = $1",
+            vec!["store-channel-stripe".into()],
+        ))
+        .await
+        .unwrap();
+    let admin = dashboard_session(&ctx, "readiness_transition_admin", UserRole::Admin).await;
+    let before = stripe_availability(&ctx, &admin).await;
+    assert_eq!(before["effective_available"], false);
+    assert!(
+        before["unavailable_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "readiness_profile_missing")
+    );
+
+    let (status, profile, _) = json_request_with_reauth(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/store/admin/payment-channels/store-channel-stripe/readiness",
+        &admin,
+        None,
+        valid_readiness_input("api-governance-privacy"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{profile}");
+    let after = stripe_availability(&ctx, &admin).await;
+    assert_eq!(after["effective_available"], true, "{after}");
+}
+
+#[tokio::test]
 async fn governed_channel_becomes_available_and_rotation_fails_closed() {
     let mut ctx = setup().await;
     ctx.state.payment_keys = Some(Arc::new(
@@ -2155,6 +2517,26 @@ fn postgres_governance_writers_lock_the_same_channel_row() {
         governance_source
             .contains("SELECT id FROM store_payment_channels WHERE id = $1 FOR UPDATE")
     );
+}
+
+#[test]
+fn governance_admin_reads_use_cross_database_flags_and_one_readiness_snapshot() {
+    let governance = include_str!("../../src/store_billing/governance.rs");
+    assert!(!governance.contains("try_get::<i64>(\"\", \"accepted\")"));
+    assert!(!governance.contains(
+        "try_get::<i64>(\"\", \"callback_verification_passed\")"
+    ));
+
+    let readiness_start = governance
+        .find("pub async fn readiness(")
+        .expect("readiness reader must exist");
+    let readiness_end = governance[readiness_start..]
+        .find("pub async fn put_readiness(")
+        .map(|offset| readiness_start + offset)
+        .expect("readiness reader must have a bounded body");
+    let readiness = &governance[readiness_start..readiness_end];
+    assert!(readiness.contains("LEFT JOIN store_channel_readiness_profiles"));
+    assert!(!readiness.contains("require_channel"));
 }
 
 #[test]

@@ -1,7 +1,9 @@
 use super::money::Currency;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::de::{self, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 
 pub const PAYMENT_ICON_MAX_BYTES: usize = 2 * 1024 * 1024;
 
@@ -250,6 +252,120 @@ pub struct PutStoreMerchantCapabilityInput {
     pub provider_product: String,
     pub evidence_digest: String,
     pub controlled_transaction_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorePrivacyRetention {
+    pub raw_callback_days: i64,
+    pub network_metadata_days: i64,
+    pub financial_records_days: i64,
+    pub redemption_audit_days: i64,
+    pub expired_reauth_grant_hours: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateStorePrivacyRecordInput {
+    pub policy_version: String,
+    pub jurisdiction: String,
+    pub allowed_regions: Vec<String>,
+    pub retention: StorePrivacyRetention,
+    pub legal_basis: String,
+    pub evidence_digest: String,
+    pub accepted: bool,
+    pub review_after_days: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorePrivacyRecord {
+    pub id: String,
+    pub policy_version: String,
+    pub jurisdiction: String,
+    pub allowed_regions: Vec<String>,
+    pub retention: StorePrivacyRetention,
+    pub legal_basis: String,
+    pub reviewer_id: String,
+    pub evidence_digest: String,
+    pub approved_at: DateTime<Utc>,
+    pub next_review_at: DateTime<Utc>,
+    pub accepted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorePrivacyRecordsView {
+    pub records: Vec<StorePrivacyRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PutStoreChannelReadinessInput {
+    pub privacy_record_id: String,
+    pub callback_verification_passed: bool,
+    pub supported_currencies: Vec<Currency>,
+    #[serde(deserialize_with = "deserialize_unique_amount_limits")]
+    pub amount_limits: BTreeMap<String, StoreAmountLimit>,
+    pub checkout_action_kinds: Vec<CheckoutActionKind>,
+    pub license_evidence_digest: String,
+    pub runtime_evidence_digest: String,
+    pub availability_evidence_digest: String,
+    pub valid_for_days: i64,
+}
+
+fn deserialize_unique_amount_limits<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, StoreAmountLimit>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct UniqueAmountLimitsVisitor;
+
+    impl<'de> Visitor<'de> for UniqueAmountLimitsVisitor {
+        type Value = BTreeMap<String, StoreAmountLimit>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("an amount limit object with unique currency keys")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut limits = BTreeMap::new();
+            while let Some((currency, limit)) = map.next_entry::<String, StoreAmountLimit>()? {
+                if limits.insert(currency.clone(), limit).is_some() {
+                    return Err(de::Error::custom(format!(
+                        "duplicate amount limit currency `{currency}`"
+                    )));
+                }
+            }
+            Ok(limits)
+        }
+    }
+
+    deserializer.deserialize_map(UniqueAmountLimitsVisitor)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreChannelReadinessProfile {
+    pub channel_id: String,
+    pub active_credential_digest: String,
+    pub privacy_record_id: String,
+    pub callback_verification_passed: bool,
+    pub supported_currencies: Vec<Currency>,
+    pub amount_limits: BTreeMap<String, StoreAmountLimit>,
+    pub checkout_action_kinds: Vec<CheckoutActionKind>,
+    pub license_evidence_digest: String,
+    pub runtime_evidence_digest: String,
+    pub availability_evidence_digest: String,
+    pub verifier_admin_id: String,
+    pub verified_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreChannelReadinessView {
+    pub readiness: Option<StoreChannelReadinessProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

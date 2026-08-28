@@ -16,9 +16,10 @@ use crate::store_billing::redemption::{
 };
 use crate::store_billing::refund_operations::{RefundOperations, RefundOperationsError};
 use crate::store_billing::{
-    ConfirmStoreComplianceInput, CreatePaymentChannelInput, CreateProductInput, Currency,
-    GenerateRedemptionCodesInput, MerchantCapabilityKind, PAYMENT_ICON_MAX_BYTES,
-    PutStoreMerchantCapabilityInput, StoreBillingError, StoreSettings, UpdatePaymentChannelInput,
+    ConfirmStoreComplianceInput, CreatePaymentChannelInput, CreateProductInput,
+    CreateStorePrivacyRecordInput, Currency, GenerateRedemptionCodesInput, MerchantCapabilityKind,
+    PAYMENT_ICON_MAX_BYTES, PutStoreChannelReadinessInput, PutStoreMerchantCapabilityInput,
+    StoreBillingError, StoreSettings, UpdatePaymentChannelInput,
 };
 use axum::Json;
 use axum::body::Body;
@@ -1080,6 +1081,60 @@ pub async fn get_store_payment_availability_admin(
         .await
         .map_err(map_store_error)?;
     Ok((no_store_headers(), Json(availability)))
+}
+
+pub async fn list_store_privacy_records_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let records = PaymentGovernanceStore::new(state.db_pool.clone())
+        .privacy_records()
+        .await
+        .map_err(map_store_error)?;
+    Ok((no_store_headers(), Json(records)))
+}
+
+pub async fn create_store_privacy_record_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<CreateStorePrivacyRecordInput>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    let input = parse_store_json(body)?;
+    let record = PaymentGovernanceStore::new(state.db_pool.clone())
+        .create_privacy_record(input, &admin.id)
+        .await
+        .map_err(map_store_error)?;
+    Ok((StatusCode::CREATED, no_store_headers(), Json(record)))
+}
+
+pub async fn get_store_channel_readiness_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let readiness = PaymentGovernanceStore::new(state.db_pool.clone())
+        .readiness(&id)
+        .await
+        .map_err(map_store_error)?;
+    Ok((no_store_headers(), Json(readiness)))
+}
+
+pub async fn put_store_channel_readiness_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<PutStoreChannelReadinessInput>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    let input = parse_store_json(body)?;
+    let readiness = PaymentGovernanceStore::new(state.db_pool.clone())
+        .put_readiness(&id, input, &admin.id)
+        .await
+        .map_err(map_store_error)?;
+    Ok((no_store_headers(), Json(readiness)))
 }
 
 pub async fn create_store_reauth_grant(

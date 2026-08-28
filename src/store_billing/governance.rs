@@ -7,10 +7,11 @@ use std::fmt;
 use uuid::Uuid;
 
 use super::models::{
-    CheckoutActionKind, ConfirmStoreComplianceInput, MerchantCapabilityKind,
-    PutStoreMerchantCapabilityInput, StoreAmountLimit, StoreChannelAvailability,
-    StoreComplianceView, StoreMerchantCapabilitiesView, StoreMerchantCapability,
-    StorePaymentCompliance,
+    CheckoutActionKind, ConfirmStoreComplianceInput, CreateStorePrivacyRecordInput,
+    MerchantCapabilityKind, PutStoreChannelReadinessInput, PutStoreMerchantCapabilityInput,
+    StoreAmountLimit, StoreChannelAvailability, StoreChannelReadinessProfile,
+    StoreChannelReadinessView, StoreComplianceView, StoreMerchantCapabilitiesView,
+    StoreMerchantCapability, StorePaymentCompliance, StorePrivacyRecord, StorePrivacyRecordsView,
 };
 use super::money::{Currency, parse_minor};
 use super::store::StoreBillingError;
@@ -207,6 +208,254 @@ impl PaymentGovernanceStore {
                 record.provider_product.clone().into(),
                 record.evidence_digest.clone().into(),
                 record.controlled_transaction_id.clone().into(),
+                record.verifier_admin_id.clone().into(),
+                timestamp(record.verified_at).into(),
+                timestamp(record.expires_at).into(),
+            ],
+        ))
+        .await
+        .map_err(storage)?;
+        tx.commit().await.map_err(storage)?;
+        Ok(record)
+    }
+
+    pub async fn privacy_records(&self) -> Result<StorePrivacyRecordsView, StoreBillingError> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT id, policy_version, jurisdiction, allowed_regions_json,
+                        retention_json, legal_basis, reviewer_id, evidence_digest,
+                        approved_at, next_review_at, accepted
+                 FROM store_privacy_records
+                 ORDER BY approved_at DESC, id DESC",
+                vec![],
+            ))
+            .await
+            .map_err(storage)?;
+        Ok(StorePrivacyRecordsView {
+            records: rows
+                .into_iter()
+                .map(privacy_record_from_row)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+
+    pub async fn create_privacy_record(
+        &self,
+        mut input: CreateStorePrivacyRecordInput,
+        reviewer_id: &str,
+    ) -> Result<StorePrivacyRecord, StoreBillingError> {
+        validate_privacy_record_input(&input)?;
+        input.allowed_regions.sort();
+        let allowed_regions_json =
+            serde_json::to_string(&input.allowed_regions).map_err(storage)?;
+        let retention_json = serde_json::to_string(&input.retention).map_err(storage)?;
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let approved_at = Utc::now();
+        let next_review_at = approved_at
+            .checked_add_signed(Duration::days(input.review_after_days))
+            .ok_or(StoreBillingError::InvalidInput)?;
+        let record = StorePrivacyRecord {
+            id: Uuid::new_v4().to_string(),
+            policy_version: input.policy_version,
+            jurisdiction: input.jurisdiction,
+            allowed_regions: input.allowed_regions,
+            retention: input.retention,
+            legal_basis: input.legal_basis,
+            reviewer_id: reviewer_id.to_string(),
+            evidence_digest: input.evidence_digest,
+            approved_at,
+            next_review_at,
+            accepted: true,
+        };
+        tx.execute(self.db.stmt(
+            "INSERT INTO store_privacy_records
+                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1)",
+            vec![
+                record.id.clone().into(),
+                record.policy_version.clone().into(),
+                record.jurisdiction.clone().into(),
+                allowed_regions_json.into(),
+                retention_json.into(),
+                record.legal_basis.clone().into(),
+                record.reviewer_id.clone().into(),
+                record.evidence_digest.clone().into(),
+                timestamp(record.approved_at).into(),
+                timestamp(record.next_review_at).into(),
+            ],
+        ))
+        .await
+        .map_err(storage)?;
+        tx.commit().await.map_err(storage)?;
+        Ok(record)
+    }
+
+    pub async fn readiness(
+        &self,
+        channel_id: &str,
+    ) -> Result<StoreChannelReadinessView, StoreBillingError> {
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                "SELECT r.channel_id AS channel_id, r.active_credential_digest,
+                        r.privacy_record_id, r.callback_verification_passed,
+                        r.supported_currencies_json, r.amount_limits_json,
+                        r.checkout_action_kinds_json, r.license_evidence_digest,
+                        r.runtime_evidence_digest, r.availability_evidence_digest,
+                        r.verifier_admin_id, r.verified_at, r.expires_at
+                 FROM store_payment_channels c
+                 LEFT JOIN store_channel_readiness_profiles r ON r.channel_id = c.id
+                 WHERE c.id = $1",
+                vec![channel_id.into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or(StoreBillingError::NotFound)?;
+        let has_readiness = row
+            .try_get::<Option<String>>("", "channel_id")
+            .map_err(storage)?
+            .is_some();
+        Ok(StoreChannelReadinessView {
+            readiness: has_readiness.then(|| readiness_profile_from_row(row)).transpose()?,
+        })
+    }
+
+    pub async fn put_readiness(
+        &self,
+        channel_id: &str,
+        mut input: PutStoreChannelReadinessInput,
+        verifier_admin_id: &str,
+    ) -> Result<StoreChannelReadinessProfile, StoreBillingError> {
+        validate_readiness_input(&input)?;
+        input
+            .supported_currencies
+            .sort_by_key(|currency| currency_string(*currency));
+        input
+            .checkout_action_kinds
+            .sort_by_key(|action| action.as_str());
+        let supported_currencies_json =
+            serde_json::to_string(&input.supported_currencies).map_err(storage)?;
+        let amount_limits_json = serde_json::to_string(&input.amount_limits).map_err(storage)?;
+        let checkout_action_kinds_json =
+            serde_json::to_string(&input.checkout_action_kinds).map_err(storage)?;
+
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        if !lock_channel(&self.db, &*tx, channel_id)
+            .await
+            .map_err(storage)?
+        {
+            return Err(StoreBillingError::NotFound);
+        }
+        let channel = tx
+            .query_one(self.db.stmt(
+                "SELECT adapter_kind FROM store_payment_channels WHERE id = $1",
+                vec![channel_id.into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or(StoreBillingError::NotFound)?;
+        let adapter_kind = channel
+            .try_get::<String>("", "adapter_kind")
+            .map_err(storage)?;
+        parse_readiness_metadata(
+            &adapter_kind,
+            &supported_currencies_json,
+            &amount_limits_json,
+            &checkout_action_kinds_json,
+        )
+        .map_err(|_| StoreBillingError::InvalidInput)?;
+
+        let credential = tx
+            .query_one(self.db.stmt(
+                "SELECT account_identity_digest FROM store_channel_credentials
+                 WHERE channel_id = $1 AND status = 'active'
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
+                vec![channel_id.into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or(StoreBillingError::Conflict)?;
+        let active_credential_digest = credential
+            .try_get::<String>("", "account_identity_digest")
+            .map_err(storage)?;
+        let verified_at = Utc::now();
+        let privacy = tx
+            .query_one(self.db.stmt(
+                "SELECT evidence_digest, approved_at, next_review_at, accepted
+                 FROM store_privacy_records WHERE id = $1",
+                vec![input.privacy_record_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or(StoreBillingError::Conflict)?;
+        let privacy_approved_at =
+            parse_timestamp(privacy.try_get("", "approved_at").map_err(storage)?)?;
+        let privacy_next_review_at =
+            parse_timestamp(privacy.try_get("", "next_review_at").map_err(storage)?)?;
+        let privacy_accepted = privacy.try_get::<i32>("", "accepted").map_err(storage)? == 1;
+        let privacy_digest = privacy
+            .try_get::<String>("", "evidence_digest")
+            .map_err(storage)?;
+        if !privacy_accepted
+            || privacy_approved_at > verified_at
+            || verified_at >= privacy_next_review_at
+            || !valid_digest(&privacy_digest)
+        {
+            return Err(StoreBillingError::Conflict);
+        }
+        let expires_at = verified_at
+            .checked_add_signed(Duration::days(input.valid_for_days))
+            .ok_or(StoreBillingError::InvalidInput)?;
+        let record = StoreChannelReadinessProfile {
+            channel_id: channel_id.to_string(),
+            active_credential_digest,
+            privacy_record_id: input.privacy_record_id,
+            callback_verification_passed: input.callback_verification_passed,
+            supported_currencies: input.supported_currencies,
+            amount_limits: input.amount_limits,
+            checkout_action_kinds: input.checkout_action_kinds,
+            license_evidence_digest: input.license_evidence_digest,
+            runtime_evidence_digest: input.runtime_evidence_digest,
+            availability_evidence_digest: input.availability_evidence_digest,
+            verifier_admin_id: verifier_admin_id.to_string(),
+            verified_at,
+            expires_at,
+        };
+        tx.execute(self.db.stmt(
+            "INSERT INTO store_channel_readiness_profiles
+                (channel_id, active_credential_digest, privacy_record_id,
+                 callback_verification_passed, supported_currencies_json,
+                 amount_limits_json, checkout_action_kinds_json, license_evidence_digest,
+                 runtime_evidence_digest, availability_evidence_digest, verifier_admin_id,
+                 verified_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             ON CONFLICT (channel_id) DO UPDATE SET
+                active_credential_digest = excluded.active_credential_digest,
+                privacy_record_id = excluded.privacy_record_id,
+                callback_verification_passed = excluded.callback_verification_passed,
+                supported_currencies_json = excluded.supported_currencies_json,
+                amount_limits_json = excluded.amount_limits_json,
+                checkout_action_kinds_json = excluded.checkout_action_kinds_json,
+                license_evidence_digest = excluded.license_evidence_digest,
+                runtime_evidence_digest = excluded.runtime_evidence_digest,
+                availability_evidence_digest = excluded.availability_evidence_digest,
+                verifier_admin_id = excluded.verifier_admin_id,
+                verified_at = excluded.verified_at, expires_at = excluded.expires_at",
+            vec![
+                record.channel_id.clone().into(),
+                record.active_credential_digest.clone().into(),
+                record.privacy_record_id.clone().into(),
+                i64::from(record.callback_verification_passed).into(),
+                supported_currencies_json.into(),
+                amount_limits_json.into(),
+                checkout_action_kinds_json.into(),
+                record.license_evidence_digest.clone().into(),
+                record.runtime_evidence_digest.clone().into(),
+                record.availability_evidence_digest.clone().into(),
                 record.verifier_admin_id.clone().into(),
                 timestamp(record.verified_at).into(),
                 timestamp(record.expires_at).into(),
@@ -1040,6 +1289,56 @@ fn validate_capability_input(
     Ok(())
 }
 
+fn validate_privacy_record_input(
+    input: &CreateStorePrivacyRecordInput,
+) -> Result<(), StoreBillingError> {
+    if !valid_exact_trimmed(&input.policy_version, 64)
+        || !valid_exact_trimmed(&input.jurisdiction, 128)
+        || !valid_exact_trimmed(&input.legal_basis, 512)
+        || !valid_digest(&input.evidence_digest)
+        || !input.accepted
+        || !(1..=365).contains(&input.review_after_days)
+        || !(1..=32).contains(&input.allowed_regions.len())
+        || input.retention.raw_callback_days != 30
+        || input.retention.network_metadata_days != 90
+        || !(1..=36_500).contains(&input.retention.financial_records_days)
+        || input.retention.redemption_audit_days != 730
+        || !(1..=24).contains(&input.retention.expired_reauth_grant_hours)
+    {
+        return Err(StoreBillingError::InvalidInput);
+    }
+    let mut regions = BTreeSet::new();
+    for region in &input.allowed_regions {
+        if !valid_exact_trimmed(region, 64)
+            || !region
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            || !regions.insert(region)
+        {
+            return Err(StoreBillingError::InvalidInput);
+        }
+    }
+    Ok(())
+}
+
+fn validate_readiness_input(
+    input: &PutStoreChannelReadinessInput,
+) -> Result<(), StoreBillingError> {
+    if !valid_exact_trimmed(&input.privacy_record_id, 255)
+        || !valid_digest(&input.license_evidence_digest)
+        || !valid_digest(&input.runtime_evidence_digest)
+        || !valid_digest(&input.availability_evidence_digest)
+        || !(1..=90).contains(&input.valid_for_days)
+    {
+        return Err(StoreBillingError::InvalidInput);
+    }
+    Ok(())
+}
+
+fn valid_exact_trimmed(value: &str, max: usize) -> bool {
+    !value.is_empty() && value.len() <= max && value.trim() == value
+}
+
 fn valid_trimmed(value: &str, max: usize) -> bool {
     let value = value.trim();
     !value.is_empty() && value.len() <= max
@@ -1079,6 +1378,84 @@ fn capability_from_row(row: QueryResult) -> Result<StoreMerchantCapability, Stor
         evidence_digest: row.try_get("", "evidence_digest").map_err(storage)?,
         controlled_transaction_id: row
             .try_get("", "controlled_transaction_id")
+            .map_err(storage)?,
+        verifier_admin_id: row.try_get("", "verifier_admin_id").map_err(storage)?,
+        verified_at: parse_timestamp(row.try_get("", "verified_at").map_err(storage)?)?,
+        expires_at: parse_timestamp(row.try_get("", "expires_at").map_err(storage)?)?,
+    })
+}
+
+fn privacy_record_from_row(row: QueryResult) -> Result<StorePrivacyRecord, StoreBillingError> {
+    let accepted = row.try_get::<i32>("", "accepted").map_err(storage)?;
+    if !matches!(accepted, 0 | 1) {
+        return Err(StoreBillingError::Storage(
+            "privacy accepted value is invalid".to_string(),
+        ));
+    }
+    Ok(StorePrivacyRecord {
+        id: row.try_get("", "id").map_err(storage)?,
+        policy_version: row.try_get("", "policy_version").map_err(storage)?,
+        jurisdiction: row.try_get("", "jurisdiction").map_err(storage)?,
+        allowed_regions: serde_json::from_str(
+            &row.try_get::<String>("", "allowed_regions_json")
+                .map_err(storage)?,
+        )
+        .map_err(storage)?,
+        retention: serde_json::from_str(
+            &row.try_get::<String>("", "retention_json")
+                .map_err(storage)?,
+        )
+        .map_err(storage)?,
+        legal_basis: row.try_get("", "legal_basis").map_err(storage)?,
+        reviewer_id: row.try_get("", "reviewer_id").map_err(storage)?,
+        evidence_digest: row.try_get("", "evidence_digest").map_err(storage)?,
+        approved_at: parse_timestamp(row.try_get("", "approved_at").map_err(storage)?)?,
+        next_review_at: parse_timestamp(row.try_get("", "next_review_at").map_err(storage)?)?,
+        accepted: accepted == 1,
+    })
+}
+
+fn readiness_profile_from_row(
+    row: QueryResult,
+) -> Result<StoreChannelReadinessProfile, StoreBillingError> {
+    let callback = row
+        .try_get::<i32>("", "callback_verification_passed")
+        .map_err(storage)?;
+    if !matches!(callback, 0 | 1) {
+        return Err(StoreBillingError::Storage(
+            "readiness callback value is invalid".to_string(),
+        ));
+    }
+    Ok(StoreChannelReadinessProfile {
+        channel_id: row.try_get("", "channel_id").map_err(storage)?,
+        active_credential_digest: row
+            .try_get("", "active_credential_digest")
+            .map_err(storage)?,
+        privacy_record_id: row.try_get("", "privacy_record_id").map_err(storage)?,
+        callback_verification_passed: callback == 1,
+        supported_currencies: serde_json::from_str(
+            &row.try_get::<String>("", "supported_currencies_json")
+                .map_err(storage)?,
+        )
+        .map_err(storage)?,
+        amount_limits: serde_json::from_str(
+            &row.try_get::<String>("", "amount_limits_json")
+                .map_err(storage)?,
+        )
+        .map_err(storage)?,
+        checkout_action_kinds: serde_json::from_str(
+            &row.try_get::<String>("", "checkout_action_kinds_json")
+                .map_err(storage)?,
+        )
+        .map_err(storage)?,
+        license_evidence_digest: row
+            .try_get("", "license_evidence_digest")
+            .map_err(storage)?,
+        runtime_evidence_digest: row
+            .try_get("", "runtime_evidence_digest")
+            .map_err(storage)?,
+        availability_evidence_digest: row
+            .try_get("", "availability_evidence_digest")
             .map_err(storage)?,
         verifier_admin_id: row.try_get("", "verifier_admin_id").map_err(storage)?,
         verified_at: parse_timestamp(row.try_get("", "verified_at").map_err(storage)?)?,

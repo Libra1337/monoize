@@ -2186,6 +2186,14 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
             put(crate::dashboard_handlers::put_store_payment_capability_admin),
         )
         .route(
+            "/dashboard/store/admin/privacy-records",
+            post(crate::dashboard_handlers::create_store_privacy_record_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}/readiness",
+            put(crate::dashboard_handlers::put_store_channel_readiness_admin),
+        )
+        .route(
             "/dashboard/store/admin/orders/{id}/query",
             post(crate::dashboard_handlers::query_store_order_admin),
         )
@@ -2293,6 +2301,14 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/store/admin/payment-channels/{id}/availability",
             get(crate::dashboard_handlers::get_store_payment_availability_admin),
+        )
+        .route(
+            "/dashboard/store/admin/privacy-records",
+            get(crate::dashboard_handlers::list_store_privacy_records_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}/readiness",
+            get(crate::dashboard_handlers::get_store_channel_readiness_admin),
         )
         .route(
             "/dashboard/store/admin/orders",
