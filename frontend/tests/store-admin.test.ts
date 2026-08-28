@@ -293,7 +293,8 @@ describe("Store admin page", () => {
   });
 
   test("supports scoped redemption reveal export and revocation", () => {
-    expect(apiSource).toContain('scope: "credential_update" | "redemption_access" | "refund"');
+    expect(apiSource).toContain('scope: StoreReauthGrant["scope"]');
+    expect(apiSource).toContain('"retention_operation"');
     expect(apiSource).toContain("revealRedemptionCodes");
     expect(apiSource).toContain("exportRedemptionCodes");
     expect(apiSource).toContain("revokeRedemptionCode");
