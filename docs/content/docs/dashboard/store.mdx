@@ -147,9 +147,13 @@ These retention periods apply to every record:
 - Expired reauthentication grant hashes: the **Expired grant retention (hours)** value after expiry.
 - Financial records: the **Financial record retention (days)** value.
 
-One run inspects and mutates at most 500 unheld root records in each of the five data classes: `raw_callback_bodies`, `network_metadata`, `financial_records`, `redemption_audits`, and `expired_reauth_grants`. Deleting one financial root record also deletes its payment attempts, event applications, refunds, refund-query retries, reward-recovery rows, and recovery-claim rows. The run keeps active entitlements and their generation records.
+One run inspects and mutates at most 500 unheld root records in each of the five data classes: `raw_callback_bodies`, `network_metadata`, `financial_records`, `redemption_audits`, and `expired_reauth_grants`.
 
-Each run runs in one transaction. A failure rolls back every deletion in that run. Repeating a run against unchanged data changes no already cleared field and does not fail because an earlier run deleted a candidate.
+The first two classes clear fields instead of deleting rows. The run clears the encrypted body from an expired provider event, and clears source IP and User-Agent from an event older than 90 days. The event row, the body digest, the parsed event, the verification result, and the projection state remain.
+
+Deleting one financial root record also deletes its payment attempts, event applications, refunds, refund-query retries, reward-recovery rows, and recovery-claim rows. The run keeps active entitlements and their generation records.
+
+Each run executes in one transaction. A failure rolls back every deletion in that run. Repeating a run against unchanged data changes no already cleared field and does not fail because an earlier run deleted a candidate.
 
 Payment data, callback evidence, backups, logs, and encryption keys stay inside the allowed regions of the privacy record. Every evidence read, export, retention override, and legal-hold operation writes an immutable access audit that records actor, role, scope, reason, time, and result.
 
