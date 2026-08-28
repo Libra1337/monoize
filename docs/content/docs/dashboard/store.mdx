@@ -88,3 +88,109 @@ Administrators open `/dashboard/store-admin`. Use its four tabs to manage produc
 - Keep an HTTP Channel disabled in Milestone 1.
 - Review payment state and fulfillment state separately. Do not use a manual completion action.
 - Generate 1 through 20 single-use codes. Copy the plaintext codes when Monoize shows them.
+- Open **Privacy records** and **Data retention** from the **Payment Channels** tab header.
+- Open **Governance** on an Alipay, WeChat Pay, or Stripe Channel row. Choose **Payment compliance**, **Merchant capabilities**, or **Channel readiness**. An HTTP Channel row does not show that control.
+
+## Review privacy records
+
+Production checkout and callbacks require a current accepted Store privacy record. The review interval must not exceed 365 days.
+
+Open **Store Management** at `/dashboard/store-admin`. Select the **Payment Channels** tab. Select **Privacy records**.
+
+![Store privacy records](/images/en/store-privacy-records.webp)
+
+Each listed record shows policy version, jurisdiction, allowed regions, acceptance state, and next review date. A saved record cannot be edited.
+
+Append a record when you approve a policy update. Enter these values, then select **Add privacy record**:
+
+| Field | Accepted value |
+| --- | --- |
+| **Policy version** | 1 through 64 bytes |
+| **Jurisdiction** | 1 through 128 bytes |
+| **Allowed regions (comma-separated)** | 1 through 32 unique values |
+| **Legal basis** | 1 through 512 bytes |
+| **Evidence SHA-256 digest** | exactly 64 lowercase hexadecimal characters |
+| **Financial record retention (days)** | 1 through 36500 |
+| **Expired grant retention (hours)** | 1 through 24 |
+| **Review after (days)** | 1 through 365 |
+
+The form opens with `CN` as the jurisdiction and the allowed region, 2557 financial record days (seven years), 24 expired grant hours, and 90 review days. Replace each value with the value your policy approves.
+
+Monoize sets the reviewer, the approval time, and the next review date. Monoize also fixes three retention periods that the form does not expose: callback bodies 30 days, network metadata 90 days, and redemption audits 730 days.
+
+## Bind Channel governance
+
+A Channel stays unavailable until compliance, merchant capabilities, and readiness are complete. Readiness must reference a current accepted privacy record.
+
+![Store payment Channels](/images/en/store-governance.webp)
+
+Open **Governance** on an Alipay, WeChat Pay, or Stripe Channel row.
+
+1. Select **Payment compliance**. Review the current Store payment terms. Confirm the terms with your Admin password. Monoize obtains a five-minute reauthentication grant with scope `compliance_confirm`.
+2. Select **Merchant capabilities**. Record each required merchant capability with its state, environment, provider product, evidence digest, and expiry.
+3. Select **Channel readiness**. Select a **Privacy record**. Set **Callback verification passed** only after the signed callback test passes. Set the supported currencies, the checkout actions, the amount range for each currency, the license, runtime, and availability evidence digests, and a validity period of 1 through 90 days. Select **Save**.
+
+The readiness save action stays disabled while no privacy record exists. Add a record in **Privacy records** first.
+
+Each Channel row shows a configured state and an effective state. An unavailable Channel lists a localized reason label and the raw reason code, such as privacy record pending, readiness profile missing or expired, callback verification pending, payment terms not confirmed, and capability verification gaps.
+
+## Understand data retention
+
+Monoize runs one bounded retention job on the Store Primary at 03:00 UTC each day. A Replica does not run the job. Each run uses the accepted privacy record that is current when the run starts.
+
+These retention periods apply to every record:
+
+- Raw callback bodies: 30 days.
+- Network metadata (source IP and User-Agent): 90 days.
+- Redemption reveal, copy, and export audits: 730 days.
+- Expired reauthentication grant hashes: the **Expired grant retention (hours)** value after expiry.
+- Financial records: the **Financial record retention (days)** value.
+
+One run inspects and mutates at most 500 unheld root records in each of the five data classes: `raw_callback_bodies`, `network_metadata`, `financial_records`, `redemption_audits`, and `expired_reauth_grants`.
+
+The first two classes clear fields instead of deleting rows. The run clears the encrypted body from an expired provider event, and clears source IP and User-Agent from an event older than 90 days. The event row, the body digest, the parsed event, the verification result, and the projection state remain.
+
+Deleting one financial root record also deletes its payment attempts, event applications, refunds, refund-query retries, reward-recovery rows, and recovery-claim rows. The run keeps active entitlements and their generation records.
+
+Each run executes in one transaction. A failure rolls back every deletion in that run. Repeating a run against unchanged data changes no already cleared field and does not fail because an earlier run deleted a candidate.
+
+Payment data, callback evidence, backups, logs, and encryption keys stay inside the allowed regions of the privacy record. Every evidence read, export, retention override, and legal-hold operation writes an immutable access audit that records actor, role, scope, reason, time, and result.
+
+## Run retention manually
+
+Open **Store Management**. Select the **Payment Channels** tab. Select **Data retention**.
+
+![Store retention](/images/en/store-retention.webp)
+
+The dialog shows the consecutive failure count, the checkout status (**Accepting orders** or **Paused**), the retention run count, and the legal hold count. It also states that a retention run permanently deletes records past their retention period.
+
+Enter your **Current password** and a **Reason**. The run action stays disabled while either field is empty. Select **Run retention**. Monoize obtains a five-minute reauthentication grant with scope `retention_operation` and starts one bounded run.
+
+A run that is already active returns HTTP `409` with code `retention_run_active`. A succeeded run sets the consecutive failure count to zero. A failed or interrupted run increments that count.
+
+## Apply legal holds
+
+A legal hold suspends deletion for listed identifiers in one data class. The **Data retention** dialog shows the hold count. It does not create holds.
+
+Create a hold with `POST /api/dashboard/store/admin/retention/legal-holds`. The request requires an Admin session, a Store Primary, and a five-minute reauthentication grant with scope `legal_hold`. The JSON body must contain `data_class`, `identifiers`, `reason`, `requesting_authority`, `requester_id`, `approver_role`, `expires_at`, and `extends_hold_id`.
+
+- `data_class` must be one of the five retention data classes.
+- `identifiers` must contain 1 through 100 distinct values. Each value holds at most 255 bytes.
+- `approver_role` must be `privacy` or `legal`.
+- `requester_id` must differ from the authenticated Admin. That Admin is the approver.
+- `expires_at` must be a future RFC3339 instant.
+- `extends_hold_id` must be `null` for an initial approval. An extension must reference a hold with the same data class and identifiers, and must use a later expiry.
+
+A hold applies while its start time is at or before the evaluation time and the evaluation time is before its expiry. Expiry stops the hold and needs no operation. A hold never restores deleted data. No operation updates, deletes, reactivates, or extends a stored hold row. An extension inserts a new hold and a new approval audit.
+
+## Clear a checkout pause
+
+When a failed run makes the consecutive failure count reach three, and checkout is not already paused, Monoize creates one critical retention alert and pauses checkout.
+
+While checkout is paused, a new order or a new payment attempt returns HTTP `503` with code `store_retention_paused`. An idempotent replay of an existing order or a terminal payment attempt can still return its earlier result. Callback ingestion, reconciliation, refunds, and retention operations stay available.
+
+An application restart preserves the counter, the alert, and the pause. A succeeded run alone does not clear the pause.
+
+Open **Data retention** to clear the pause. The dialog shows the **Evidence SHA-256 digest** field only while checkout is paused. It also states that resolving the alert clears it and resumes checkout immediately. Enter your **Current password**, a **Reason**, and the digest. The resolve action stays disabled until the password and reason are nonempty and the digest has exactly 64 characters. Select **Resolve alert**.
+
+Monoize records the resolution, marks the alert contained, and resumes checkout. Resolving the alert does not change the consecutive failure count. A later failed run can pause checkout again. A resolve request with no active uncontained alert returns HTTP `409` with code `retention_containment_unavailable`.

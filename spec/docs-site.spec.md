@@ -80,6 +80,43 @@ and the admin-only `/dashboard/store-admin` route. It MUST describe balance rech
 plan purchase, CNY/USD display conversion, payment Channel selection, order processing,
 and redemption codes. It MUST state that redemption codes do not use a payment Channel.
 
+DOC-25. The Dashboard Store page MUST document the Store governance surfaces that
+`spec/store-billing.spec.md` defines. It MUST describe:
+
+1. the Privacy records dialog opened from the Payment Channels tab header, its immutable
+   record list, and the accepted value range of every field in its append form (SB-C-34,
+   SB-PR-1, SB-PR-2, SB-UI-16);
+2. the labeled Governance control on each Alipay, WeChat Pay, or Stripe Channel row with
+   visible actions for Payment compliance, Merchant capabilities, and Channel readiness,
+   and the absence of that control on an HTTP Channel row (SB-UI-17, SB-UI-18, SB-UI-19);
+3. the Compliance and Capabilities dialogs reachable from that Governance control
+   (SB-UI-18, SB-UI-19);
+4. the daily 03:00 UTC Store Primary retention job, the five data classes, the 500 unheld
+   root records per class per run, the fixed 30-day, 90-day, and 730-day periods, the
+   privacy-record periods for financial records and expired grants, and single-transaction
+   rollback (SB-PR-3 through SB-PR-11G);
+5. the Data retention dialog, its status readout, disabled run and resolve actions when
+   required fields are empty, the consequence statements, the manual run with a
+   `retention_operation` reauthentication grant, and the `retention_run_active` conflict
+   (SB-PR-14B, SB-UI-20);
+6. legal holds through `POST /api/dashboard/store/admin/retention/legal-holds`, the
+   `legal_hold` grant scope, every request field with its accepted value range, and hold
+   immutability (SB-PR-13, SB-PR-13A, SB-PR-14, SB-PR-14D);
+7. the checkout pause after three consecutive failed runs, the HTTP `503`
+   `store_retention_paused` response, alert resolution through the Data retention dialog,
+   and the `retention_containment_unavailable` conflict (SB-PR-12, SB-PR-12A, SB-PR-12B,
+   SB-PR-14C, SB-UI-20);
+8. localized primary labels for fixed and capability unavailable reasons with the raw
+   code as secondary text (SB-UI-21).
+
+The page MUST NOT document a Store Management child page, menu, or dialog that
+`frontend/src/pages/store-admin/` does not render.
+
+DOC-26. The Dashboard Store page MUST embed three Store Management screenshots:
+`store-governance.webp` (the Payment Channels tab), `store-privacy-records.webp` (the
+Privacy records dialog), and `store-retention.webp` (the Retention dialog). Each file MUST
+exist in both screenshot sets named by DOC-61 and MUST be referenced under DOC-62.
+
 ## 4. Writing style
 
 DOC-30. All prose MUST follow Simplified Technical English conventions:
