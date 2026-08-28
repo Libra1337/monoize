@@ -95,7 +95,7 @@ async fn migration_054_upgrades_reauth_scope_without_losing_existing_grants_or_i
         .is_err()
     );
 
-    Migrator::up(&db, None).await.unwrap();
+    Migrator::up(&db, Some(2)).await.unwrap();
     db.execute_unprepared(
         "INSERT INTO store_reauth_grants
             (id, user_id, session_token_digest, token_digest, scope, created_at, expires_at)
