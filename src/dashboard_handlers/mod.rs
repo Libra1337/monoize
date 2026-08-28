@@ -64,6 +64,7 @@ pub use settings::{
     UpdateSettingsRequest, get_config_overview, get_dashboard_stats, get_public_settings,
     get_public_site_settings, get_settings, update_settings,
 };
+pub(crate) use store_billing::store_mutation_guard;
 pub use store_billing::{
     create_store_order, create_store_payment_attempt, create_store_payment_channel_admin,
     create_store_product_admin, create_store_reauth_grant, delete_store_payment_channel_admin,

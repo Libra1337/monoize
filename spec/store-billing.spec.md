@@ -652,7 +652,9 @@ SB-PR-14. A legal hold MUST NOT restore already deleted data. An extension MUST 
 
 SB-S-1. Callback rate limiting MUST allow at most 600 requests per minute per Channel and source IP. Signature verification remains mandatory.
 
-SB-S-2. Every cookie-authenticated Store mutation MUST require JSON or the documented multipart icon type and an `Origin` equal to the configured public origin.
+SB-S-2. Every cookie-authenticated Store mutation MUST require JSON or the documented multipart icon type and an `Origin` equal to the configured public origin. One mutation-only Router middleware MUST enforce Origin and the SB-S-9 repository write guard before Axum runs any JSON, multipart, or other body extractor. A missing, malformed, or nonmatching `Origin` MUST return HTTP `403` with code `store_origin_invalid` before body parsing or repository mutation. An `Authorization: Bearer` authenticated mutation MUST NOT require `Origin`, including when a Cookie header is also present.
+
+SB-S-2A. `DELETE /api/dashboard/store/admin/products/{id}`, `DELETE /api/dashboard/store/admin/payment-channels/{id}`, and `POST /api/dashboard/store/admin/redemption-codes/{id}/revoke` MUST require `Content-Type: application/json` and an exact empty JSON object `{}`. Each body type MUST use `deny_unknown_fields`. A missing body, non-JSON content type, malformed JSON, JSON `null`, array, scalar, or object with any field MUST return HTTP `400` with code `invalid_request`. The SB-S-2 middleware MUST run before this validation.
 
 SB-S-3. Reveal, export, refund, reprocess, exchange-rate recovery, key rotation, credential update, hold clearance, and financial case closure MUST require a five-minute scoped reauthentication grant.
 
@@ -676,7 +678,7 @@ SB-S-7. Admin endpoints MUST include product, settings, Channel, credential, com
 
 SB-S-8. `POST /api/dashboard/store/admin/orders/{id}/complete` MUST NOT exist.
 
-SB-S-9. User and Admin mutations MUST enforce the repository Primary write policy. Replica Store routes MUST return the repository write rejection.
+SB-S-9. User and Admin mutations MUST call the Store repository Primary write guard before mutation. A read-only Store repository MUST return `StoreBillingError::WriteRejected`. Every Store mutation route on a Replica MUST map this result to HTTP `503` with code `store_write_rejected` and MUST commit no business-table mutation. A Replica MUST mount only these Store mutation routes under `/api/dashboard/store`; Store reads and every other dashboard route remain disabled by `primary-replica-deployment.spec.md` D1.
 
 ## 14. Frontend
 

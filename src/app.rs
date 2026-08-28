@@ -230,6 +230,7 @@ impl AppState {
         let is_replica = role == NodeRole::Replica;
         Self {
             node: Arc::new(node),
+            store_billing: self.store_billing.with_read_only(is_replica),
             metering_token_digest: if is_replica {
                 None
             } else {
@@ -465,7 +466,11 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             err,
         )
     })?;
-    let store_billing = StoreBillingStore::new(db.clone());
+    let store_billing = if is_replica {
+        StoreBillingStore::new_read_only(db.clone())
+    } else {
+        StoreBillingStore::new(db.clone())
+    };
     let exchange_rate_service = if is_replica {
         ExchangeRateService::new_read_only(db.clone()).await
     } else {
@@ -1970,7 +1975,7 @@ pub fn build_app(state: AppState) -> Router {
     let http_body_max_bytes = http_body_max_bytes();
     let is_replica = state.node.is_replica();
     let root_api_router = build_root_api_router(&metrics_path);
-    let dashboard_api_router = build_dashboard_api_router();
+    let dashboard_api_router = build_dashboard_api_router(state.clone());
     let csp = ContentSecurityPolicy::new(state.cap_verifier.api_origin());
 
     let mut app = Router::<AppState>::new()
@@ -1978,7 +1983,9 @@ pub fn build_app(state: AppState) -> Router {
         .merge(build_balance_compatibility_router());
     if is_replica {
         // D1/D2: API-only surface; /v1/** and /metrics stay local.
-        app = app.fallback(replica_disabled_fallback);
+        app = app
+            .nest("/api", build_store_mutation_router(state.clone()))
+            .fallback(replica_disabled_fallback);
     } else {
         let api_router = root_api_router
             .clone()
@@ -2118,7 +2125,77 @@ fn build_store_callback_router() -> Router<AppState> {
     )
 }
 
-fn build_dashboard_api_router() -> Router<AppState> {
+fn build_store_mutation_router(state: AppState) -> Router<AppState> {
+    Router::new()
+        .route(
+            "/dashboard/store/orders",
+            post(crate::dashboard_handlers::create_store_order),
+        )
+        .route(
+            "/dashboard/store/orders/{id}/attempts",
+            post(crate::dashboard_handlers::create_store_payment_attempt),
+        )
+        .route(
+            "/dashboard/store/redeem",
+            post(crate::dashboard_handlers::redeem_store_code),
+        )
+        .route(
+            "/dashboard/store/admin/products",
+            post(crate::dashboard_handlers::create_store_product_admin),
+        )
+        .route(
+            "/dashboard/store/admin/products/{id}",
+            put(crate::dashboard_handlers::update_store_product_admin)
+                .delete(crate::dashboard_handlers::delete_store_product_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels",
+            post(crate::dashboard_handlers::create_store_payment_channel_admin),
+        )
+        .route(
+            "/dashboard/store/admin/icons",
+            post(crate::dashboard_handlers::upload_store_payment_icon_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}",
+            put(crate::dashboard_handlers::update_store_payment_channel_admin)
+                .delete(crate::dashboard_handlers::delete_store_payment_channel_admin),
+        )
+        .route(
+            "/dashboard/store/admin/reauth",
+            post(crate::dashboard_handlers::create_store_reauth_grant),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}/credential",
+            put(crate::dashboard_handlers::replace_store_payment_credential_admin),
+        )
+        .route(
+            "/dashboard/store/admin/redemption-codes",
+            post(crate::dashboard_handlers::generate_store_redemption_codes_admin),
+        )
+        .route(
+            "/dashboard/store/admin/redemption-codes/reveal",
+            post(crate::dashboard_handlers::reveal_store_redemption_codes_admin),
+        )
+        .route(
+            "/dashboard/store/admin/redemption-codes/export",
+            post(crate::dashboard_handlers::export_store_redemption_codes_admin),
+        )
+        .route(
+            "/dashboard/store/admin/redemption-codes/{id}/revoke",
+            post(crate::dashboard_handlers::revoke_store_redemption_code_admin),
+        )
+        .route(
+            "/dashboard/store/admin/settings",
+            put(crate::dashboard_handlers::update_store_settings_admin),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::dashboard_handlers::store_mutation_guard,
+        ))
+}
+
+fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
     Router::new()
         .route(
             "/public/site",
@@ -2151,20 +2228,11 @@ fn build_dashboard_api_router() -> Router<AppState> {
         )
         .route(
             "/dashboard/store/orders",
-            get(crate::dashboard_handlers::list_store_orders)
-                .post(crate::dashboard_handlers::create_store_order),
+            get(crate::dashboard_handlers::list_store_orders),
         )
         .route(
             "/dashboard/store/orders/{id}",
             get(crate::dashboard_handlers::get_store_order),
-        )
-        .route(
-            "/dashboard/store/orders/{id}/attempts",
-            post(crate::dashboard_handlers::create_store_payment_attempt),
-        )
-        .route(
-            "/dashboard/store/redeem",
-            post(crate::dashboard_handlers::redeem_store_code),
         )
         .route(
             "/dashboard/store/icons/{id}",
@@ -2172,35 +2240,11 @@ fn build_dashboard_api_router() -> Router<AppState> {
         )
         .route(
             "/dashboard/store/admin/products",
-            get(crate::dashboard_handlers::list_store_products_admin)
-                .post(crate::dashboard_handlers::create_store_product_admin),
-        )
-        .route(
-            "/dashboard/store/admin/products/{id}",
-            put(crate::dashboard_handlers::update_store_product_admin)
-                .delete(crate::dashboard_handlers::delete_store_product_admin),
+            get(crate::dashboard_handlers::list_store_products_admin),
         )
         .route(
             "/dashboard/store/admin/payment-channels",
-            get(crate::dashboard_handlers::list_store_payment_channels_admin)
-                .post(crate::dashboard_handlers::create_store_payment_channel_admin),
-        )
-        .route(
-            "/dashboard/store/admin/icons",
-            post(crate::dashboard_handlers::upload_store_payment_icon_admin),
-        )
-        .route(
-            "/dashboard/store/admin/payment-channels/{id}",
-            put(crate::dashboard_handlers::update_store_payment_channel_admin)
-                .delete(crate::dashboard_handlers::delete_store_payment_channel_admin),
-        )
-        .route(
-            "/dashboard/store/admin/reauth",
-            post(crate::dashboard_handlers::create_store_reauth_grant),
-        )
-        .route(
-            "/dashboard/store/admin/payment-channels/{id}/credential",
-            put(crate::dashboard_handlers::replace_store_payment_credential_admin),
+            get(crate::dashboard_handlers::list_store_payment_channels_admin),
         )
         .route(
             "/dashboard/store/admin/orders",
@@ -2208,25 +2252,11 @@ fn build_dashboard_api_router() -> Router<AppState> {
         )
         .route(
             "/dashboard/store/admin/redemption-codes",
-            get(crate::dashboard_handlers::list_store_redemption_codes_admin)
-                .post(crate::dashboard_handlers::generate_store_redemption_codes_admin),
-        )
-        .route(
-            "/dashboard/store/admin/redemption-codes/reveal",
-            post(crate::dashboard_handlers::reveal_store_redemption_codes_admin),
-        )
-        .route(
-            "/dashboard/store/admin/redemption-codes/export",
-            post(crate::dashboard_handlers::export_store_redemption_codes_admin),
-        )
-        .route(
-            "/dashboard/store/admin/redemption-codes/{id}/revoke",
-            post(crate::dashboard_handlers::revoke_store_redemption_code_admin),
+            get(crate::dashboard_handlers::list_store_redemption_codes_admin),
         )
         .route(
             "/dashboard/store/admin/settings",
-            get(crate::dashboard_handlers::get_store_settings_admin)
-                .put(crate::dashboard_handlers::update_store_settings_admin),
+            get(crate::dashboard_handlers::get_store_settings_admin),
         )
         .route(
             "/dashboard/auth/login",
@@ -2472,4 +2502,5 @@ fn build_dashboard_api_router() -> Router<AppState> {
             "/dashboard/admin/overview",
             get(crate::dashboard_handlers::get_admin_overview),
         )
+        .merge(build_store_mutation_router(state))
 }

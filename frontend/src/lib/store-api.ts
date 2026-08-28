@@ -380,6 +380,8 @@ export const storeApi = {
     deleteProduct: (id: string) =>
       storeRequest<DeleteStoreRecordResponse>(`/admin/products/${encodeURIComponent(id)}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
       }),
     listPaymentChannels: () =>
       storeRequest<StorePaymentChannel[]>("/admin/payment-channels"),
@@ -394,7 +396,11 @@ export const storeApi = {
     deletePaymentChannel: (id: string) =>
       storeRequest<DeleteStoreRecordResponse>(
         `/admin/payment-channels/${encodeURIComponent(id)}`,
-        { method: "DELETE" },
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        },
       ),
     createReauthGrant: (
       currentPassword: string,

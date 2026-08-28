@@ -75,6 +75,10 @@ pub struct RedemptionCodeIdsRequest {
     pub code_ids: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyStoreMutation {}
+
 fn no_store_headers() -> [(axum::http::HeaderName, HeaderValue); 4] {
     [
         (CACHE_CONTROL, HeaderValue::from_static("no-store")),
@@ -126,28 +130,48 @@ fn redemption_audit_context(headers: &HeaderMap, admin_id: &str) -> RedemptionAu
     }
 }
 
-fn require_store_mutation_origin(headers: &HeaderMap, state: &AppState) -> AppResult<()> {
+fn require_store_mutation(headers: &HeaderMap, state: &AppState) -> AppResult<()> {
     let uses_bearer = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("Bearer "));
-    if uses_bearer {
-        return Ok(());
+    let uses_cookie = headers
+        .get("cookie")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|cookies| {
+            cookies.split(';').map(str::trim).any(|cookie| {
+                cookie
+                    .strip_prefix("monoize_session=")
+                    .is_some_and(|value| !value.is_empty())
+            })
+        });
+    if uses_cookie && !uses_bearer {
+        let expected = state
+            .payment_public_origin
+            .as_ref()
+            .map(|origin| origin.origin().ascii_serialization());
+        let actual = headers.get(ORIGIN).and_then(|value| value.to_str().ok());
+        if !matches!((expected.as_deref(), actual), (Some(expected), Some(actual)) if expected == actual)
+        {
+            return Err(AppError::new(
+                StatusCode::FORBIDDEN,
+                "store_origin_invalid",
+                "Store mutation origin is invalid",
+            ));
+        }
     }
-    let expected = state
-        .payment_public_origin
-        .as_ref()
-        .map(|origin| origin.origin().ascii_serialization());
-    let actual = headers.get(ORIGIN).and_then(|value| value.to_str().ok());
-    if !matches!((expected.as_deref(), actual), (Some(expected), Some(actual)) if expected == actual)
-    {
-        return Err(AppError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_store_origin",
-            "Store mutation origin is invalid",
-        ));
+    state.store_billing.require_write().map_err(map_store_error)
+}
+
+pub(crate) async fn store_mutation_guard(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if let Err(error) = require_store_mutation(request.headers(), &state) {
+        return error.into_response();
     }
-    Ok(())
+    next.run(request).await
 }
 
 fn map_reauth_error(error: ReauthError) -> AppError {
@@ -280,6 +304,11 @@ fn map_store_error(error: StoreBillingError) -> AppError {
             "Store record was not found",
         ),
         StoreBillingError::Conflict => (StatusCode::CONFLICT, "conflict", "Store record is in use"),
+        StoreBillingError::WriteRejected => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_write_rejected",
+            "Store writes require the Primary node",
+        ),
         StoreBillingError::Storage(detail) => {
             return AppError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -684,8 +713,10 @@ pub async fn delete_store_product_admin(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    body: Result<Json<EmptyStoreMutation>, JsonRejection>,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
+    let _ = parse_store_json(body)?;
     state
         .store_billing
         .delete_product(&id)
@@ -713,7 +744,6 @@ pub async fn create_store_reauth_grant(
     body: Result<Json<StoreReauthRequest>, JsonRejection>,
 ) -> AppResult<impl IntoResponse> {
     let admin = require_admin(&headers, &state).await?;
-    require_store_mutation_origin(&headers, &state)?;
     let request = parse_store_json(body)?;
     let password_is_valid =
         UserStore::verify_password_async(&request.current_password, &admin.password_hash)
@@ -754,7 +784,6 @@ pub async fn replace_store_payment_credential_admin(
     body: Result<Json<Value>, JsonRejection>,
 ) -> AppResult<impl IntoResponse> {
     let admin = require_admin(&headers, &state).await?;
-    require_store_mutation_origin(&headers, &state)?;
     let credential = parse_store_json(body)?;
     let session_token = extract_session_token(&headers).ok_or_else(|| {
         AppError::new(
@@ -916,8 +945,10 @@ pub async fn delete_store_payment_channel_admin(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    body: Result<Json<EmptyStoreMutation>, JsonRejection>,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
+    let _ = parse_store_json(body)?;
     state
         .store_billing
         .delete_payment_channel(&id)
@@ -961,7 +992,6 @@ pub async fn generate_store_redemption_codes_admin(
     body: Result<Json<GenerateRedemptionCodesInput>, JsonRejection>,
 ) -> AppResult<impl IntoResponse> {
     let admin = require_admin(&headers, &state).await?;
-    require_store_mutation_origin(&headers, &state)?;
     let input = parse_store_json(body)?;
     let key_ring = state
         .payment_keys
@@ -981,7 +1011,6 @@ pub async fn reveal_store_redemption_codes_admin(
     body: Result<Json<RevealRedemptionInput>, JsonRejection>,
 ) -> AppResult<impl IntoResponse> {
     let admin = require_admin(&headers, &state).await?;
-    require_store_mutation_origin(&headers, &state)?;
     require_redemption_access(&headers, &state, &admin.id).await?;
     let input = parse_store_json(body)?;
     if input.action == RedemptionAccessAction::Export {
@@ -1006,7 +1035,6 @@ pub async fn export_store_redemption_codes_admin(
     body: Result<Json<RedemptionCodeIdsRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let admin = require_admin(&headers, &state).await?;
-    require_store_mutation_origin(&headers, &state)?;
     require_redemption_access(&headers, &state, &admin.id).await?;
     let request = parse_store_json(body)?;
     let key_ring = state
@@ -1052,9 +1080,10 @@ pub async fn revoke_store_redemption_code_admin(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    body: Result<Json<EmptyStoreMutation>, JsonRejection>,
 ) -> AppResult<impl IntoResponse> {
     let admin = require_admin(&headers, &state).await?;
-    require_store_mutation_origin(&headers, &state)?;
+    let _ = parse_store_json(body)?;
     let record = state
         .store_billing
         .revoke_redemption_code(&id, &admin.id)

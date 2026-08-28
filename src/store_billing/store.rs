@@ -65,6 +65,8 @@ pub enum StoreBillingError {
     NotFound,
     #[error("Store record is in use")]
     Conflict,
+    #[error("Store writes require the Primary repository")]
+    WriteRejected,
 }
 
 impl From<MoneyError> for StoreBillingError {
@@ -91,11 +93,35 @@ impl From<QuotaError> for StoreBillingError {
 #[derive(Debug, Clone)]
 pub struct StoreBillingStore {
     db: DbPool,
+    read_only: bool,
 }
 
 impl StoreBillingStore {
     pub fn new(db: DbPool) -> Self {
-        Self { db }
+        Self {
+            db,
+            read_only: false,
+        }
+    }
+
+    pub fn new_read_only(db: DbPool) -> Self {
+        Self {
+            db,
+            read_only: true,
+        }
+    }
+
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    pub fn require_write(&self) -> Result<(), StoreBillingError> {
+        if self.read_only {
+            Err(StoreBillingError::WriteRejected)
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn get_settings(&self) -> Result<StoreSettings, StoreBillingError> {
@@ -137,6 +163,7 @@ impl StoreBillingStore {
         &self,
         settings: StoreSettings,
     ) -> Result<StoreSettings, StoreBillingError> {
+        self.require_write()?;
         validate_settings(&settings)?;
         let now = timestamp(Utc::now());
         let tx = self.db.begin_write().await.map_err(storage)?;
@@ -175,6 +202,7 @@ impl StoreBillingStore {
         &self,
         input: CreateProductInput,
     ) -> Result<StoreProduct, StoreBillingError> {
+        self.require_write()?;
         let mut input = input;
         input.group_ids = canonical_group_ids(&input.group_ids)?;
         validate_product(&input)?;
@@ -225,6 +253,7 @@ impl StoreBillingStore {
         id: &str,
         input: CreateProductInput,
     ) -> Result<StoreProduct, StoreBillingError> {
+        self.require_write()?;
         let mut input = input;
         input.group_ids = canonical_group_ids(&input.group_ids)?;
         validate_product(&input)?;
@@ -444,6 +473,7 @@ impl StoreBillingStore {
         &self,
         input: CreatePaymentChannelInput,
     ) -> Result<PaymentChannel, StoreBillingError> {
+        self.require_write()?;
         validate_payment_channel(&input.name, input.icon_kind, input.icon_value.as_deref())?;
         let id = Uuid::new_v4().to_string();
         let now = timestamp(Utc::now());
@@ -477,6 +507,7 @@ impl StoreBillingStore {
         &self,
         content: Vec<u8>,
     ) -> Result<StorePaymentIcon, StoreBillingError> {
+        self.require_write()?;
         let content_type = validate_payment_icon(&content)?.to_string();
         let icon = StorePaymentIcon {
             id: Uuid::new_v4().to_string(),
@@ -534,6 +565,7 @@ impl StoreBillingStore {
         id: &str,
         input: UpdatePaymentChannelInput,
     ) -> Result<PaymentChannel, StoreBillingError> {
+        self.require_write()?;
         let current = self
             .payment_channel_by_id(id, false)
             .await?
@@ -694,6 +726,7 @@ impl StoreBillingStore {
     }
 
     pub async fn delete_product(&self, id: &str) -> Result<(), StoreBillingError> {
+        self.require_write()?;
         let write = self.db.write().await;
         let result = write
             .execute(
@@ -709,6 +742,7 @@ impl StoreBillingStore {
     }
 
     pub async fn delete_payment_channel(&self, id: &str) -> Result<(), StoreBillingError> {
+        self.require_write()?;
         let write = self.db.write().await;
         let result = write
             .execute(self.db.stmt(
@@ -858,6 +892,7 @@ impl StoreBillingStore {
         created_by_user_id: &str,
         input: GenerateRedemptionCodesInput,
     ) -> Result<Vec<GeneratedRedemptionCode>, StoreBillingError> {
+        self.require_write()?;
         if !(1..=20).contains(&input.count) || !(1..=365).contains(&input.validity_days) {
             return Err(StoreBillingError::InvalidInput);
         }
@@ -961,6 +996,7 @@ impl StoreBillingStore {
         input: RevealRedemptionInput,
         context: &RedemptionAuditContext,
     ) -> Result<Vec<RevealedRedemptionCode>, StoreBillingError> {
+        self.require_write()?;
         if !validate_reveal_input(&input) || !validate_audit_context(context) {
             return Err(StoreBillingError::InvalidInput);
         }
@@ -1023,6 +1059,7 @@ impl StoreBillingStore {
         code_id: &str,
         admin_user_id: &str,
     ) -> Result<RedemptionCodeRecord, StoreBillingError> {
+        self.require_write()?;
         if code_id.is_empty() || admin_user_id.trim().is_empty() {
             return Err(StoreBillingError::InvalidInput);
         }
@@ -1078,6 +1115,7 @@ impl StoreBillingStore {
         &self,
         now: DateTime<Utc>,
     ) -> Result<u64, StoreBillingError> {
+        self.require_write()?;
         let cutoff = now
             .checked_sub_signed(Duration::hours(24))
             .ok_or(StoreBillingError::InvalidInput)?;
@@ -1105,6 +1143,7 @@ impl StoreBillingStore {
         rate: Option<&ExchangeRateSnapshot>,
         source_ip: &str,
     ) -> Result<RedemptionCodeRecord, StoreBillingError> {
+        self.require_write()?;
         let source_ip_digest =
             source_ip_digest(source_ip).ok_or(StoreBillingError::InvalidInput)?;
         let tx = self.db.begin_write().await.map_err(storage)?;

@@ -434,7 +434,7 @@ async fn cookie_store_secret_mutations_require_the_configured_origin() {
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-        assert_eq!(body["error"]["code"], "invalid_store_origin");
+        assert_eq!(body["error"]["code"], "store_origin_invalid");
     }
 
     let (status, grant) = cookie_json_request(
@@ -467,7 +467,380 @@ async fn cookie_store_secret_mutations_require_the_configured_origin() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], "invalid_store_origin");
+    assert_eq!(body["error"]["code"], "store_origin_invalid");
+
+    let response = raw_store_mutation(
+        &ctx.router,
+        Method::POST,
+        "/api/dashboard/store/admin/icons",
+        Some(session_token),
+        None,
+        Some("https://attacker.example"),
+        Some("text/plain"),
+        Body::from("not-multipart"),
+    )
+    .await;
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "store_origin_invalid");
+}
+
+fn store_json_mutations() -> Vec<(Method, &'static str)> {
+    vec![
+        (Method::POST, "/api/dashboard/store/orders"),
+        (Method::POST, "/api/dashboard/store/orders/missing/attempts"),
+        (Method::POST, "/api/dashboard/store/redeem"),
+        (Method::POST, "/api/dashboard/store/admin/products"),
+        (Method::PUT, "/api/dashboard/store/admin/products/missing"),
+        (
+            Method::DELETE,
+            "/api/dashboard/store/admin/products/missing",
+        ),
+        (Method::POST, "/api/dashboard/store/admin/payment-channels"),
+        (
+            Method::PUT,
+            "/api/dashboard/store/admin/payment-channels/missing",
+        ),
+        (
+            Method::DELETE,
+            "/api/dashboard/store/admin/payment-channels/missing",
+        ),
+        (Method::POST, "/api/dashboard/store/admin/reauth"),
+        (
+            Method::PUT,
+            "/api/dashboard/store/admin/payment-channels/missing/credential",
+        ),
+        (Method::POST, "/api/dashboard/store/admin/redemption-codes"),
+        (
+            Method::POST,
+            "/api/dashboard/store/admin/redemption-codes/reveal",
+        ),
+        (
+            Method::POST,
+            "/api/dashboard/store/admin/redemption-codes/export",
+        ),
+        (
+            Method::POST,
+            "/api/dashboard/store/admin/redemption-codes/missing/revoke",
+        ),
+        (Method::PUT, "/api/dashboard/store/admin/settings"),
+    ]
+}
+
+async fn store_icon_mutation(
+    router: &axum::Router,
+    cookie: Option<&str>,
+    bearer: Option<&str>,
+    origin: Option<&str>,
+) -> axum::response::Response {
+    let boundary = "store-origin-icon";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"icon.png\"\r\nContent-Type: image/png\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(b"\x89PNG\r\n\x1a\norigin");
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/dashboard/store/admin/icons")
+        .header(
+            CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        );
+    if let Some(cookie) = cookie {
+        request = request.header(COOKIE, format!("monoize_session={cookie}"));
+    }
+    if let Some(bearer) = bearer {
+        request = request.header(AUTHORIZATION, bearer);
+    }
+    if let Some(origin) = origin {
+        request = request.header(ORIGIN, origin);
+    }
+    router
+        .clone()
+        .oneshot(request.body(Body::from(body)).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn raw_store_mutation(
+    router: &axum::Router,
+    method: Method,
+    path: &str,
+    cookie: Option<&str>,
+    bearer: Option<&str>,
+    origin: Option<&str>,
+    content_type: Option<&str>,
+    body: impl Into<Body>,
+) -> axum::response::Response {
+    let mut request = Request::builder().method(method).uri(path);
+    if let Some(cookie) = cookie {
+        request = request.header(COOKIE, format!("monoize_session={cookie}"));
+    }
+    if let Some(bearer) = bearer {
+        request = request.header(AUTHORIZATION, bearer);
+    }
+    if let Some(origin) = origin {
+        request = request.header(ORIGIN, origin);
+    }
+    if let Some(content_type) = content_type {
+        request = request.header(CONTENT_TYPE, content_type);
+    }
+    router
+        .clone()
+        .oneshot(request.body(body.into()).unwrap())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn store_mutation_guard_precedes_body_extraction_and_delete_bodies_are_strict_json() {
+    let mut ctx = setup().await;
+    let admin = dashboard_session(&ctx, "store_prebody_guard_admin", UserRole::Admin).await;
+    let session_token = admin.strip_prefix("Bearer ").unwrap();
+    ctx.state.payment_public_origin = Some(url::Url::parse("https://lynshen.org").unwrap());
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+
+    let response = raw_store_mutation(
+        &ctx.router,
+        Method::POST,
+        "/api/dashboard/store/admin/icons",
+        Some(session_token),
+        None,
+        Some("https://attacker.example"),
+        Some("multipart/form-data; boundary=broken"),
+        Body::from("not-a-multipart-body"),
+    )
+    .await;
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "store_origin_invalid");
+
+    let strict_json_routes = [
+        (
+            Method::DELETE,
+            "/api/dashboard/store/admin/products/missing",
+        ),
+        (
+            Method::DELETE,
+            "/api/dashboard/store/admin/payment-channels/missing",
+        ),
+        (
+            Method::POST,
+            "/api/dashboard/store/admin/redemption-codes/missing/revoke",
+        ),
+    ];
+    for (method, path) in strict_json_routes {
+        for (content_type, raw_body) in [
+            (None, ""),
+            (Some("text/plain"), "{}"),
+            (Some("application/json"), "{\"unexpected\":true}"),
+        ] {
+            let response = raw_store_mutation(
+                &ctx.router,
+                method.clone(),
+                path,
+                Some(session_token),
+                None,
+                Some("https://lynshen.org"),
+                content_type,
+                Body::from(raw_body),
+            )
+            .await;
+            let status = response.status();
+            let body = response_json(response).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {path}: {body}");
+            assert_eq!(body["error"]["code"], "invalid_request", "{body}");
+        }
+
+        let response = raw_store_mutation(
+            &ctx.router,
+            method.clone(),
+            path,
+            Some(session_token),
+            None,
+            Some("https://lynshen.org"),
+            Some("application/json"),
+            Body::from("{}"),
+        )
+        .await;
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_ne!(status, StatusCode::BAD_REQUEST, "{method} {path}: {body}");
+        assert_ne!(body["error"]["code"], "invalid_request", "{body}");
+    }
+
+    let response = raw_store_mutation(
+        &ctx.router,
+        Method::POST,
+        "/api/dashboard/store/orders",
+        Some(session_token),
+        Some(&admin),
+        None,
+        Some("application/json"),
+        Body::from("{}"),
+    )
+    .await;
+    let body = response_json(response).await;
+    assert_ne!(body["error"]["code"], "store_origin_invalid", "{body}");
+}
+
+#[tokio::test]
+async fn every_cookie_store_mutation_requires_exact_origin_and_bearer_bypasses_origin() {
+    let mut ctx = setup().await;
+    let admin = dashboard_session(&ctx, "store_origin_matrix_admin", UserRole::Admin).await;
+    let session_token = admin.strip_prefix("Bearer ").unwrap();
+    ctx.state.payment_public_origin = Some(url::Url::parse("https://lynshen.org").unwrap());
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+
+    for (method, path) in store_json_mutations() {
+        for origin in [None, Some("https://attacker.example")] {
+            let (status, body) = cookie_json_request(
+                &ctx,
+                method.clone(),
+                path,
+                session_token,
+                origin,
+                None,
+                json!({}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {body}");
+            assert_eq!(
+                body["error"]["code"], "store_origin_invalid",
+                "{method} {path}: {body}"
+            );
+        }
+
+        let (_, legal_origin) = cookie_json_request(
+            &ctx,
+            method.clone(),
+            path,
+            session_token,
+            Some("https://lynshen.org"),
+            None,
+            json!({}),
+        )
+        .await;
+        assert_ne!(
+            legal_origin["error"]["code"], "store_origin_invalid",
+            "legal Origin did not reach handler for {method} {path}"
+        );
+
+        let (_, bearer) =
+            json_request(&ctx, method.clone(), path, Some(&admin), Some(json!({}))).await;
+        assert_ne!(
+            bearer["error"]["code"], "store_origin_invalid",
+            "Bearer unexpectedly required Origin for {method} {path}"
+        );
+    }
+
+    for origin in [None, Some("https://attacker.example")] {
+        let response = store_icon_mutation(&ctx.router, Some(session_token), None, origin).await;
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "icon: {body}");
+        assert_eq!(body["error"]["code"], "store_origin_invalid", "{body}");
+    }
+    assert_eq!(
+        store_icon_mutation(
+            &ctx.router,
+            Some(session_token),
+            None,
+            Some("https://lynshen.org"),
+        )
+        .await
+        .status(),
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        store_icon_mutation(&ctx.router, None, Some(&admin), None)
+            .await
+            .status(),
+        StatusCode::CREATED
+    );
+}
+
+#[tokio::test]
+async fn manual_complete_is_absent_and_replica_store_mutations_use_repository_rejection() {
+    let ctx = setup().await;
+    let admin = dashboard_session(&ctx, "store_replica_matrix_admin", UserRole::Admin).await;
+    let before_icons: i64 = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(
+            ctx.state
+                .db_pool
+                .stmt("SELECT COUNT(*) AS value FROM store_payment_icons", vec![]),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "value")
+        .unwrap();
+
+    let (status, _) = json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/orders/missing/complete",
+        Some(&admin),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let replica = monoize::app::build_app(
+        ctx.state
+            .clone()
+            .with_node_role(monoize::node_config::NodeRole::Replica),
+    );
+    for (method, path) in store_json_mutations() {
+        let response = replica
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method.clone())
+                    .uri(path)
+                    .header(AUTHORIZATION, &admin)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{method} {path}: {body}"
+        );
+        assert_eq!(body["error"]["code"], "store_write_rejected", "{body}");
+    }
+    let response = store_icon_mutation(&replica, None, Some(&admin), None).await;
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"]["code"], "store_write_rejected");
+
+    let after_icons: i64 = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(
+            ctx.state
+                .db_pool
+                .stmt("SELECT COUNT(*) AS value FROM store_payment_icons", vec![]),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "value")
+        .unwrap();
+    assert_eq!(after_icons, before_icons);
 }
 
 #[tokio::test]

@@ -103,7 +103,7 @@ E5. Provider/channel routing rows are not part of the epoch contract: replicas r
 
 ## 5. Replica request surface
 
-D1. A replica is an API-only node. It MUST NOT mount any `/api/dashboard/**` route and MUST NOT serve frontend static assets. Any request to `/api/dashboard/**` or to a non-API UI path MUST return HTTP 404 with JSON body code `replica_dashboard_disabled`.
+D1. A replica is an API-only node. It MUST NOT serve frontend static assets or mount dashboard read routes. It MUST mount only the Store mutation routes required by `store-billing.spec.md` SB-S-9 under `/api/dashboard/store`; those routes MUST return the repository write rejection without mutation. Any other request to `/api/dashboard/**` or to a non-API UI path MUST return HTTP 404 with JSON body code `replica_dashboard_disabled`.
 
 D2. Forwarding endpoints (`/v1/**`), the metrics endpoint, and health paths MUST be served locally by the replica against the shared database's read path.
 
@@ -414,7 +414,7 @@ T4a. Request-log shipment discovers on-disk `.json` spool files even when the in
 
 T5. Epoch: primary mutation increments epoch within its transaction; replica poll observes change and swaps snapshot; failed poll keeps prior snapshot.
 
-T6. Replica surface: `/api/dashboard/**` and `/` return 404 `replica_dashboard_disabled` on a replica; `/v1/**` and `/metrics` are served locally; no dashboard route exists in the router. `/metrics` MUST enforce `security-access-control.spec.md` SAC-1 through SAC-5 instead of returning `replica_dashboard_disabled`.
+T6. Replica surface: `/api/dashboard/**` and `/` return 404 `replica_dashboard_disabled` on a replica except the SB-S-9 Store mutation routes; `/v1/**` and `/metrics` are served locally. Each Store mutation route returns the repository write rejection and changes no business table. `/metrics` MUST enforce `security-access-control.spec.md` SAC-1 through SAC-5 instead of returning `replica_dashboard_disabled`.
 
 T7. Promotion drain: a data directory with leftover delta spool entries started as primary applies them before serving and then serves with empty spool.
 
