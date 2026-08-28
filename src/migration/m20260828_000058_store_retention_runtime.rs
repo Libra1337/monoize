@@ -101,20 +101,23 @@ async fn migrate_reauth_scopes<C: ConnectionTrait>(
                 backend,
                 format!("DROP INDEX IF EXISTS {index}"),
             ))
-            .await?;
+            .await
+            .map_err(|error| DbErr::Custom(format!("drop reauth index failed: {error}")))?;
     }
     connection
         .execute(Statement::from_string(
             backend,
             "ALTER TABLE store_reauth_grants RENAME TO store_reauth_grants_v058".to_string(),
         ))
-        .await?;
+        .await
+        .map_err(|error| DbErr::Custom(format!("rename reauth table failed: {error}")))?;
     connection
         .execute(Statement::from_string(
             backend,
             sqlite_reauth_table(include_retention),
         ))
-        .await?;
+        .await
+        .map_err(|error| DbErr::Custom(format!("create reauth table failed: {error}")))?;
     connection
         .execute(Statement::from_string(
             backend,
@@ -130,13 +133,15 @@ async fn migrate_reauth_scopes<C: ConnectionTrait>(
                 }
             ),
         ))
-        .await?;
+        .await
+        .map_err(|error| DbErr::Custom(format!("copy reauth grants failed: {error}")))?;
     connection
         .execute(Statement::from_string(
             backend,
             "DROP TABLE store_reauth_grants_v058".to_string(),
         ))
-        .await?;
+        .await
+        .map_err(|error| DbErr::Custom(format!("drop prior reauth table failed: {error}")))?;
     connection
         .execute(Statement::from_string(
             backend,
@@ -144,14 +149,16 @@ async fn migrate_reauth_scopes<C: ConnectionTrait>(
              ON store_reauth_grants (token_digest)"
                 .to_string(),
         ))
-        .await?;
+        .await
+        .map_err(|error| DbErr::Custom(format!("create reauth digest index failed: {error}")))?;
     connection
         .execute(Statement::from_string(
             backend,
             "CREATE INDEX idx_store_reauth_expiry ON store_reauth_grants (expires_at, id)"
                 .to_string(),
         ))
-        .await?;
+        .await
+        .map_err(|error| DbErr::Custom(format!("create reauth expiry index failed: {error}")))?;
     Ok(())
 }
 
