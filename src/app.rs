@@ -2202,6 +2202,10 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::query_store_refund_admin),
         )
         .route(
+            "/dashboard/store/admin/provider-events/{event_id}/reprocess",
+            post(crate::dashboard_handlers::reprocess_store_provider_event_admin),
+        )
+        .route(
             "/dashboard/store/admin/redemption-codes",
             post(crate::dashboard_handlers::generate_store_redemption_codes_admin),
         )

@@ -136,7 +136,7 @@ impl ReauthStore {
 fn validate_scope(scope: &str) -> Result<(), ReauthError> {
     if matches!(
         scope,
-        "credential_update" | "redemption_access" | "compliance_confirm" | "refund"
+        "credential_update" | "redemption_access" | "compliance_confirm" | "refund" | "reprocess"
     ) {
         Ok(())
     } else {
@@ -286,6 +286,26 @@ mod tests {
         assert_eq!(
             store
                 .verify("admin-a", "session-a", &grant.token, "credential_update")
+                .await,
+            Err(ReauthError::InvalidGrant)
+        );
+    }
+
+    #[tokio::test]
+    async fn reprocess_is_a_distinct_five_minute_scope() {
+        let store = store().await;
+        let grant = store
+            .issue("admin-a", "session-a", "reprocess")
+            .await
+            .unwrap();
+
+        store
+            .verify("admin-a", "session-a", &grant.token, "reprocess")
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .verify("admin-a", "session-a", &grant.token, "refund")
                 .await,
             Err(ReauthError::InvalidGrant)
         );

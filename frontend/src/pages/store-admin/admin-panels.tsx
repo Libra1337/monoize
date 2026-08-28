@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { SiAlipay, SiStripe, SiWechat } from "@icons-pack/react-simple-icons";
-import { CreditCard, Package, Pencil, Plus, ReceiptText, TicketCheck, Trash2 } from "lucide-react";
+import { CreditCard, Eye, Package, Pencil, Plus, ReceiptText, TicketCheck, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -193,7 +193,13 @@ export function ChannelsPanel({
   );
 }
 
-export function OrdersPanel({ orders }: { orders: StoreOrder[] }) {
+export function OrdersPanel({
+  orders,
+  onSelectOrder,
+}: {
+  orders: StoreOrder[];
+  onSelectOrder: (orderId: string) => void;
+}) {
   const { t, i18n } = useTranslation();
   return (
     <section className="grid gap-4" aria-labelledby="store-admin-orders-title">
@@ -220,8 +226,22 @@ export function OrdersPanel({ orders }: { orders: StoreOrder[] }) {
             </thead>
             <tbody>
               {orders.map((order) => (
-                <tr key={order.id} className="border-t">
-                  <td className="px-4 py-3 font-medium">{order.order_number}</td>
+                <tr key={order.id} className="border-t transition-colors hover:bg-muted/30">
+                  <td className="px-4 py-2 font-medium">
+                    <div className="flex min-w-44 items-center justify-between gap-2">
+                      <span>{order.order_number}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-11 shrink-0 rounded-xl"
+                        aria-label={t("store.admin.orders.viewDetail", { number: order.order_number })}
+                        onClick={() => onSelectOrder(order.id)}
+                      >
+                        <Eye className="size-4" />
+                      </Button>
+                    </div>
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground">{order.user_id}</td>
                   <td className="px-4 py-3 tabular-nums">{formatMinor(order.payment_minor, order.payment_currency)}</td>
                   <td className="px-4 py-3">

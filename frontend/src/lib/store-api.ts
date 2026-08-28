@@ -122,7 +122,7 @@ export type PaymentCredentialPayload =
 
 export interface StoreReauthGrant {
   token: string;
-  scope: "credential_update" | "redemption_access";
+  scope: "credential_update" | "redemption_access" | "refund";
   expires_at: string;
 }
 
@@ -236,6 +236,36 @@ export interface StorePaymentAttempt {
   provider_expires_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface StoreRefundRecord {
+  id: string;
+  order_id: string;
+  attempt_id: string;
+  provider_refund_id: string | null;
+  idempotency_key: string;
+  state: "created" | "pending" | "succeeded" | "failed";
+  amount_minor: string;
+  currency: StoreCurrency;
+  recovery_id: string;
+  original_nano_usd: string;
+}
+
+export interface AdminStoreOrderDetail {
+  order: StoreOrder;
+  attempts: StorePaymentAttempt[];
+  refunds: StoreRefundRecord[];
+}
+
+export interface AdminOrderOperationResult {
+  order: StoreOrder;
+  attempt: StorePaymentAttempt;
+  provider_state: {
+    kind: "not_found" | "unpaid" | "paid" | "closed" | "ambiguous";
+    provider_transaction_id: string | null;
+  };
+  projection: "applied" | "duplicate" | null;
+  closed: boolean;
 }
 
 export type StoreCheckoutAction =
@@ -439,6 +469,42 @@ export const storeApi = {
     },
     listOrders: (limit = 100) =>
       storeRequest<StoreOrder[]>(listPath("/admin/orders", limit)),
+    getOrderDetail: (id: string) =>
+      storeRequest<AdminStoreOrderDetail>(`/admin/orders/${encodeURIComponent(id)}`),
+    queryOrder: (id: string, attemptId: string) =>
+      jsonMutation<AdminOrderOperationResult>(
+        `/admin/orders/${encodeURIComponent(id)}/query`,
+        "POST",
+        { attempt_id: attemptId },
+      ),
+    closeOrder: (id: string, attemptId: string) =>
+      jsonMutation<AdminOrderOperationResult>(
+        `/admin/orders/${encodeURIComponent(id)}/close`,
+        "POST",
+        { attempt_id: attemptId },
+      ),
+    createRefund: (id: string, idempotencyKey: string, reauthToken: string) =>
+      storeRequest<StoreRefundRecord>(`/admin/orders/${encodeURIComponent(id)}/refunds`, {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": idempotencyKey,
+          "X-Store-Reauth-Token": reauthToken,
+        },
+        body: JSON.stringify({}),
+      }),
+    getRefund: (id: string, refundId: string) =>
+      storeRequest<StoreRefundRecord>(
+        `/admin/orders/${encodeURIComponent(id)}/refunds/${encodeURIComponent(refundId)}`,
+      ),
+    queryRefund: (id: string, refundId: string, reauthToken: string) =>
+      storeRequest<StoreRefundRecord>(
+        `/admin/orders/${encodeURIComponent(id)}/refunds/${encodeURIComponent(refundId)}/query`,
+        {
+          method: "POST",
+          headers: { "X-Store-Reauth-Token": reauthToken },
+          body: JSON.stringify({}),
+        },
+      ),
     listRedemptionCodes: (limit = 100) =>
       storeRequest<RedemptionCodeRecord[]>(listPath("/admin/redemption-codes", limit)),
     generateRedemptionCodes: (input: GenerateRedemptionCodesInput) =>

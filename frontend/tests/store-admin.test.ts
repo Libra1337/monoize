@@ -5,6 +5,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { StoreAdminTabs } from "../src/pages/store-admin/store-admin-tabs";
+import { canCloseAttempt } from "../src/pages/store-admin/order-actions";
+import type { StoreOrder, StorePaymentAttempt } from "../src/lib/store-api";
 
 const testI18n = createInstance();
 await testI18n.init({
@@ -39,6 +41,7 @@ const productSource = readSource("../src/pages/store-admin/product-dialog.tsx");
 const channelSource = readSource("../src/pages/store-admin/channel-dialog.tsx");
 const redemptionSource = readSource("../src/pages/store-admin/redemption-dialog.tsx");
 const panelsSource = readSource("../src/pages/store-admin/admin-panels.tsx");
+const orderDialogSource = readSource("../src/pages/store-admin/order-dialog.tsx");
 const apiSource = readSource("../src/lib/store-api.ts");
 
 describe("Store admin page", () => {
@@ -121,6 +124,76 @@ describe("Store admin page", () => {
     expect(pageSource).toContain("rollbackOnError: true");
   });
 
+  test("opens an Admin order detail dialog backed by SWR data", () => {
+    expect(pageSource).toContain("selectedOrderId");
+    expect(pageSource).toContain("getOrderDetail");
+    expect(pageSource).toContain("OrderDialog");
+    expect(panelsSource).toContain("onSelectOrder");
+    expect(orderDialogSource).toContain("rounded-2xl");
+    expect(orderDialogSource).toContain("min-h-");
+    expect(orderDialogSource).toContain("Skeleton");
+    expect(orderDialogSource).toContain("onRetry");
+    expect(orderDialogSource).toContain("attempts.map");
+    expect(orderDialogSource).toContain("refunds.map");
+  });
+
+  test("uses only real Admin order and refund actions with state gating", () => {
+    for (const method of [
+      "getOrderDetail",
+      "queryOrder",
+      "closeOrder",
+      "createRefund",
+      "getRefund",
+      "queryRefund",
+    ]) {
+      expect(apiSource).toContain(method);
+    }
+    expect(apiSource).toContain('"refund"');
+    expect(orderDialogSource).toContain("canQueryAttempt");
+    expect(orderDialogSource).toContain("canCloseAttempt");
+    expect(orderDialogSource).toContain("canCreateRefund");
+    expect(orderDialogSource).toContain('type="password"');
+    expect(orderDialogSource).toContain("onCreateRefund");
+    expect(orderDialogSource).toContain("onQueryRefund");
+    expect(orderDialogSource).not.toContain("Complete");
+    expect(orderDialogSource).not.toContain("reprocess");
+    expect(orderDialogSource).not.toContain("caseAction");
+  });
+
+  test("hides close for an old failed Attempt while another Attempt is active", () => {
+    const order = { contract_version: 2, payment_state: "unpaid" } as StoreOrder;
+    const failed = {
+      id: "attempt-failed",
+      adapter_kind: "stripe",
+      state: "failed",
+      provider_object_id: "pi_failed",
+    } as StorePaymentAttempt;
+    const active = {
+      id: "attempt-active",
+      adapter_kind: "stripe",
+      state: "presented",
+      provider_object_id: "pi_active",
+    } as StorePaymentAttempt;
+
+    expect(canCloseAttempt(order, [failed, active], failed)).toBe(false);
+    expect(canCloseAttempt(order, [failed], failed)).toBe(true);
+  });
+
+  test("revalidates order detail and list after every Admin mutation", () => {
+    expect(pageSource).toContain("refreshSelectedOrder");
+    expect(pageSource).toContain("orders.mutate()");
+    expect(pageSource).toContain("orderDetail.mutate()");
+    expect(pageSource).toContain("crypto.randomUUID()");
+    expect(pageSource).toContain('createReauthGrant(currentPassword, "refund")');
+    expect(pageSource).not.toContain("optimisticRefund");
+    expect(pageSource).toContain("mutateSelectedOrderDetail");
+    expect(pageSource).not.toMatch(/optimisticData:\s*\(current\)\s*=>\s*current,\s*rollbackOnError/);
+    expect(pageSource).toContain("pending_action: actionKey");
+    expect(pageSource).toContain("orderDetail.data?.pending_action");
+    expect(pageSource).toContain("rollbackOnError: true");
+    expect(orderDialogSource).toMatch(/await onQueryRefund\(refundId, currentPassword\);\s*setCurrentPassword\(""\);/);
+  });
+
   test("generates bounded redemption batches and shows plaintext once", () => {
     expect(redemptionSource).toContain('min={1}');
     expect(redemptionSource).toContain('max={20}');
@@ -131,7 +204,7 @@ describe("Store admin page", () => {
   });
 
   test("supports scoped redemption reveal export and revocation", () => {
-    expect(apiSource).toContain('scope: "credential_update" | "redemption_access"');
+    expect(apiSource).toContain('scope: "credential_update" | "redemption_access" | "refund"');
     expect(apiSource).toContain("revealRedemptionCodes");
     expect(apiSource).toContain("exportRedemptionCodes");
     expect(apiSource).toContain("revokeRedemptionCode");

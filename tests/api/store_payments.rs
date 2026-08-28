@@ -936,6 +936,23 @@ async fn issue_refund_reauth(ctx: &super::TestContext, admin: &str) -> String {
     grant["token"].as_str().unwrap().to_string()
 }
 
+async fn issue_reprocess_reauth(ctx: &super::TestContext, admin: &str) -> String {
+    let (status, grant) = json_request(
+        ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        admin,
+        None,
+        Some(json!({
+            "current_password": "test-password",
+            "scope": "reprocess"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{grant}");
+    grant["token"].as_str().unwrap().to_string()
+}
+
 fn assert_no_store(response: &axum::response::Response) {
     assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-store");
 }
@@ -2513,7 +2530,6 @@ async fn admin_order_operation_errors_are_no_store() {
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_no_store(&response);
-
     let mut configuration_ctx = setup().await;
     let (_, configuration_order_id, configuration_attempt_id) = create_admin_operation_fixture(
         &mut configuration_ctx,
@@ -2771,4 +2787,99 @@ async fn admin_refund_mutation_guard_errors_are_no_store() {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
         assert_no_store(&response);
     }
+}
+
+#[tokio::test]
+async fn admin_provider_event_reprocess_enforces_auth_body_and_no_store_contract() {
+    let ctx = setup().await;
+    let admin = admin_session(&ctx, "admin_reprocess_contract").await;
+    let grant = issue_reprocess_reauth(&ctx, &admin).await;
+    let event_id = uuid::Uuid::new_v4().to_string();
+    ctx.state
+        .db_pool
+        .write()
+        .await
+        .execute(ctx.state.db_pool.stmt(
+            "INSERT INTO store_provider_events
+                (id, credential_version_id, provider_event_id, event_kind,
+                 body_digest, parsed_json, verification_result, projection_state,
+                 state_revision, received_at, applied_at)
+             VALUES ($1, 'api-reprocess-credential', 'evt-api-reprocess',
+                     'payment_succeeded', $2, $3, 'verified', 'applied', 4,
+                     '2026-08-28T00:00:00Z', '2026-08-28T00:00:00Z')",
+            vec![
+                event_id.clone().into(),
+                "a".repeat(64).into(),
+                json!({"event_id":"evt-api-reprocess"}).to_string().into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    let path = format!("/api/dashboard/store/admin/provider-events/{event_id}/reprocess");
+
+    let response = refund_request(
+        &ctx.router,
+        Method::POST,
+        &path,
+        Some(&admin),
+        Some(&grant),
+        None,
+        None,
+        None,
+        r#"{"unexpected":true}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_no_store(&response);
+    let invalid_body_audits = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT COUNT(*) AS value FROM store_access_audits
+             WHERE action = 'provider_event_reprocess'
+               AND result = 'invalid_request'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(invalid_body_audits.try_get::<i64>("", "value").unwrap(), 1);
+
+    let response = refund_request(
+        &ctx.router,
+        Method::POST,
+        &path,
+        Some(&admin),
+        None,
+        None,
+        None,
+        None,
+        "{}",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_no_store(&response);
+
+    let response = refund_request(
+        &ctx.router,
+        Method::POST,
+        &path,
+        Some(&admin),
+        Some(&grant),
+        None,
+        None,
+        None,
+        "{}",
+    )
+    .await;
+    assert_no_store(&response);
+    let (status, body) = response_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["event_id"], event_id);
+    assert_eq!(body["projection"], "duplicate");
+    assert_eq!(body["projection_state"], "applied");
+    assert_eq!(body["state_revision"], 4);
+    assert!(body["order_id"].is_null());
+    assert!(body["attempt_id"].is_null());
 }

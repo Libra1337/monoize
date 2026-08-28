@@ -78,9 +78,9 @@ pub use store_billing::{
     list_store_payment_channels_admin, list_store_products_admin,
     list_store_redemption_codes_admin, put_store_payment_capability_admin, query_store_order_admin,
     query_store_refund_admin, redeem_store_code, replace_store_payment_credential_admin,
-    reveal_store_redemption_codes_admin, revoke_store_redemption_code_admin,
-    update_store_payment_channel_admin, update_store_product_admin, update_store_settings_admin,
-    upload_store_payment_icon_admin,
+    reprocess_store_provider_event_admin, reveal_store_redemption_codes_admin,
+    revoke_store_redemption_code_admin, update_store_payment_channel_admin,
+    update_store_product_admin, update_store_settings_admin, upload_store_payment_icon_admin,
 };
 pub use users::{
     CreateUserRequest, UpdateUserRequest, create_user, delete_user, get_user, list_users,

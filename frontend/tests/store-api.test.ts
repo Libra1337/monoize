@@ -109,4 +109,87 @@ describe("Store API transport", () => {
     expect("completeOrder" in storeApi.admin).toBe(false);
     expect("cancelOrder" in storeApi.admin).toBe(false);
   });
+
+  test("maps Admin order detail query and close to exact contracts", async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    globalThis.fetch = (async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return Response.json({ order: {}, attempts: [], refunds: [] });
+    }) as typeof fetch;
+
+    await storeApi.admin.getOrderDetail("order /1");
+    await storeApi.admin.queryOrder("order /1", "attempt /1");
+    await storeApi.admin.closeOrder("order /1", "attempt /1");
+
+    expect(requests).toEqual([
+      {
+        url: "/api/dashboard/store/admin/orders/order%20%2F1",
+        method: "GET",
+        body: null,
+      },
+      {
+        url: "/api/dashboard/store/admin/orders/order%20%2F1/query",
+        method: "POST",
+        body: { attempt_id: "attempt /1" },
+      },
+      {
+        url: "/api/dashboard/store/admin/orders/order%20%2F1/close",
+        method: "POST",
+        body: { attempt_id: "attempt /1" },
+      },
+    ]);
+  });
+
+  test("maps Admin refund create detail and query with required headers", async () => {
+    const requests: Array<{
+      url: string;
+      method: string;
+      body: unknown;
+      reauth: string | null;
+      idempotency: string | null;
+    }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const headers = new Headers(init?.headers);
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+        reauth: headers.get("X-Store-Reauth-Token"),
+        idempotency: headers.get("Idempotency-Key"),
+      });
+      return Response.json({ id: "refund-1" });
+    }) as typeof fetch;
+
+    await storeApi.admin.createRefund("order /1", "refund-key", "refund-grant");
+    await storeApi.admin.getRefund("order /1", "refund /1");
+    await storeApi.admin.queryRefund("order /1", "refund /1", "refund-grant");
+
+    expect(requests).toEqual([
+      {
+        url: "/api/dashboard/store/admin/orders/order%20%2F1/refunds",
+        method: "POST",
+        body: {},
+        reauth: "refund-grant",
+        idempotency: "refund-key",
+      },
+      {
+        url: "/api/dashboard/store/admin/orders/order%20%2F1/refunds/refund%20%2F1",
+        method: "GET",
+        body: null,
+        reauth: null,
+        idempotency: null,
+      },
+      {
+        url: "/api/dashboard/store/admin/orders/order%20%2F1/refunds/refund%20%2F1/query",
+        method: "POST",
+        body: {},
+        reauth: "refund-grant",
+        idempotency: null,
+      },
+    ]);
+  });
 });

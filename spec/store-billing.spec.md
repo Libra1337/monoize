@@ -396,6 +396,24 @@ SB-EV-14. A contradictory terminal event MUST require a provider query and a new
 
 SB-EV-15. A database write failure MUST return a non-success callback acknowledgement so the provider can retry.
 
+SB-EV-16. `POST /api/dashboard/store/admin/provider-events/{event_id}/reprocess` MUST require an Admin session, the SB-S-2 Origin check, a Store Primary, and header `X-Store-Reauth-Token` with scope `reprocess`. Its exact JSON body MUST be `{}`. Every success and error response MUST use `Cache-Control: no-store`.
+
+SB-EV-17. Migration `056` MUST expand `store_reauth_grants.scope` to accept `reprocess`. It MUST preserve every existing grant and recreate `uq_store_reauth_token_digest` and `idx_store_reauth_expiry`. Migrations `052`, `054`, and `055` MUST remain unchanged.
+
+SB-EV-18. Reprocess MUST accept only a stored event whose `verification_result` equals `verified` and whose `event_kind` equals `payment_succeeded` or `payment_query_succeeded`. An `applied` event MUST return `duplicate` without another state mutation. A `superseded` event MUST return `event_not_reprocessable`. A `pending` event MAY be processed. A `manual_review` event MAY be processed only when its current binding produces exactly one legal attempt and no open `provider_event_identity_conflict` case references the event identity.
+
+SB-EV-19. Reprocess MUST use the stored verified event as verification evidence. It MUST NOT verify the expired Provider signature again. An event with encrypted raw body fields MUST decrypt them with AAD `store_provider_events:{event_id}:raw_body` and MUST require SHA-256 of the plaintext to equal the stored body digest. A query-synthesized event MUST have no raw body fields. Reprocess MUST strictly parse only the allow-listed immutable fields in `parsed_json`. A malformed, missing, or mismatched raw body, digest, parsed identity, amount, currency, merchant identity, credential binding, Provider object, or Provider transaction MUST change no business state.
+
+SB-EV-20. Reprocess MUST reconstruct binding from current database state and immutable stored evidence. Stripe MUST bind the stored Attempt ID and revalidate its order, credential, Provider object, Provider transaction, amount, currency, and merchant account. Alipay and WeChat Pay MAY bind an absent Provider object only under SB-EV-4A. They MUST use the stored verification credential, Channel, adapter kind, merchant identity, and order number. Candidate count MUST equal one before and after the order lock. Reprocess MUST preserve the attempt credential version and verification credential version as distinct values.
+
+SB-EV-21. Reprocess MUST lock or compare-and-swap the Provider event state revision before projection. It MUST then lock the order, repeat candidate selection, and repeat the open `provider_event_identity_conflict` case check. At most one concurrent callback or reprocess transaction MAY insert `store_order_event_applications` or change payment state. A competing request MUST reread the event and return the current idempotent result. Payment projection and fulfillment MUST remain separate transactions under SB-RC-1.
+
+SB-EV-22. Reprocess MUST NOT create or retry a Provider payment or refund mutation. An event that requires fresh Provider payment evidence MUST return `provider_query_required` and remain pending or manual review.
+
+SB-EV-23. Every authenticated and authorized reprocess request MUST append one immutable `store_access_audits` row with action `provider_event_reprocess`. The audit MUST contain actor ID, the requested event row ID, result, and time. It MUST contain the prior projection state and revision when the event exists. It MUST contain JSON `null` for both prior values when the event ID is invalid or the event does not exist. It MUST NOT contain a raw body, signature, credential, decrypted resource, or Provider response.
+
+SB-EV-24. A successful reprocess response MUST be `{ "event_id": string, "projection": "applied" | "duplicate" | "pending" | "manual_review", "projection_state": string, "state_revision": integer, "order_id": string | null, "attempt_id": string | null }`. `event_id` MUST be the Provider event row ID. Error codes MUST be `invalid_request`, `event_not_found`, `event_not_reprocessable`, `projection_manual_review`, `provider_query_required`, `event_identity_conflict`, `invalid_reauth_grant`, `store_write_rejected`, or `internal_error`.
+
 ## 7. Fulfillment, Refunds, Disputes, And Settlement
 
 SB-RC-1. Payment projection and fulfillment MUST use separate transactions. A crash between them MUST leave `paid/pending` for reconciliation.
@@ -772,7 +790,7 @@ SB-UI-10A. The WeChat Native QR modal MUST render the exact verified Provider pa
 
 SB-UI-11. Store Management MUST have Products, Payment Channels, Orders, and Redemption Codes child pages with an animated active indicator.
 
-SB-UI-12. Orders MUST show payment and fulfillment state separately. It MUST expose query, verified event reprocess, close, refund, dispute, hold, and case actions according to role and state. It MUST NOT show manual Complete.
+SB-UI-12. Orders MUST show payment and fulfillment state separately. It MUST expose query, verified event reprocess, close, refund, dispute, hold, and case actions according to role and state. Close MUST be hidden when another Attempt for the order has state `created` or `presented`. Each user-triggered order or refund mutation MUST use an SWR optimistic cache value, roll back that value on error, apply the returned record to the cache, and then revalidate order detail and list data. A successful refund query MUST clear the reauthentication password. It MUST NOT show manual Complete.
 
 SB-UI-13. Generated redemption codes MUST remain fully visible in the generation result. List rows MUST remain masked until scoped reveal.
 

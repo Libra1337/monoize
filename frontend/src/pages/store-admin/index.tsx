@@ -20,12 +20,15 @@ import { PageHeader } from "@/components/ui/page-header";
 import { api } from "@/lib/api";
 import {
   storeApi,
+  type AdminOrderOperationResult,
+  type AdminStoreOrderDetail,
   type GenerateRedemptionCodesInput,
   type PaymentChannelInput,
   type PaymentCredentialPayload,
   type StorePaymentChannel,
   type StoreProduct,
   type StoreProductInput,
+  type StoreRefundRecord,
   type StoreSettings,
 } from "@/lib/store-api";
 import { addMinor, decimalToMinor, minorToDecimal } from "@/lib/store-money";
@@ -37,6 +40,7 @@ import {
   RedemptionsPanel,
 } from "./admin-panels";
 import { ChannelDialog } from "./channel-dialog";
+import { OrderDialog } from "./order-dialog";
 import { ProductDialog } from "./product-dialog";
 import { RedemptionDialog } from "./redemption-dialog";
 import { StoreAdminTabs, type StoreAdminTab } from "./store-admin-tabs";
@@ -51,6 +55,10 @@ const GROUPS_KEY = "/api/dashboard/groups";
 type DeleteTarget =
   | { kind: "product"; record: StoreProduct }
   | { kind: "channel"; record: StorePaymentChannel };
+
+type AdminStoreOrderDetailCache = AdminStoreOrderDetail & {
+  pending_action?: string;
+};
 
 function optimisticProduct(input: StoreProductInput, id: string): StoreProduct {
   const now = new Date().toISOString();
@@ -67,6 +75,34 @@ function optimisticProduct(input: StoreProductInput, id: string): StoreProduct {
 function optimisticChannel(input: PaymentChannelInput, id: string): StorePaymentChannel {
   const now = new Date().toISOString();
   return { ...input, id, revision: 1, created_at: now, updated_at: now };
+}
+
+function applyOrderOperation(
+  current: AdminStoreOrderDetailCache | undefined,
+  result: AdminOrderOperationResult,
+): AdminStoreOrderDetailCache | undefined {
+  if (!current) return current;
+  return {
+    ...current,
+    order: result.order,
+    attempts: current.attempts.map((attempt) => (
+      attempt.id === result.attempt.id ? result.attempt : attempt
+    )),
+  };
+}
+
+function applyRefund(
+  current: AdminStoreOrderDetailCache | undefined,
+  refund: StoreRefundRecord,
+): AdminStoreOrderDetailCache | undefined {
+  if (!current) return current;
+  const exists = current.refunds.some((item) => item.id === refund.id);
+  return {
+    ...current,
+    refunds: exists
+      ? current.refunds.map((item) => item.id === refund.id ? refund : item)
+      : [refund, ...current.refunds],
+  };
 }
 
 function SettingsPanel({ settings, saving, onSave }: { settings: StoreSettings; saving: boolean; onSave: (settings: StoreSettings) => Promise<void> }) {
@@ -102,6 +138,7 @@ export function StoreAdminPage() {
   const [channelDialogOpen, setChannelDialogOpen] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<StorePaymentChannel | null>(null);
   const [redemptionDialogOpen, setRedemptionDialogOpen] = useState(false);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
 
@@ -111,6 +148,12 @@ export function StoreAdminPage() {
   const redemptions = useSWR(REDEMPTIONS_KEY, () => storeApi.admin.listRedemptionCodes(100));
   const settings = useSWR(SETTINGS_KEY, storeApi.admin.getSettings);
   const groups = useSWR(GROUPS_KEY, () => api.listDashboardGroups());
+  const orderDetail = useSWR<AdminStoreOrderDetailCache>(
+    selectedOrderId
+      ? `/api/dashboard/store/admin/orders/${encodeURIComponent(selectedOrderId)}`
+      : null,
+    () => storeApi.admin.getOrderDetail(selectedOrderId!),
+  );
 
   const saveProduct = async (input: StoreProductInput) => {
     setSaving(true);
@@ -223,18 +266,124 @@ export function StoreAdminPage() {
     } finally { setSaving(false); }
   };
 
+  const refreshSelectedOrder = async () => {
+    await Promise.all([
+      orders.mutate(),
+      orderDetail.mutate(),
+    ]);
+  };
+
+  const mutateSelectedOrderDetail = async <T,>(
+    actionKey: string,
+    request: () => Promise<T>,
+    apply: (current: AdminStoreOrderDetailCache | undefined, result: T) => AdminStoreOrderDetailCache | undefined,
+  ): Promise<T> => {
+    let result: T | undefined;
+    await orderDetail.mutate(async (current) => {
+      result = await request();
+      const applied = apply(current, result);
+      return applied ? { ...applied, pending_action: undefined } : applied;
+    }, {
+      optimisticData: (current) => current ? { ...current, pending_action: actionKey } : current,
+      rollbackOnError: true,
+      revalidate: false,
+    });
+    return result as T;
+  };
+
+  const querySelectedOrder = async (attemptId: string) => {
+    if (!selectedOrderId) return;
+    try {
+      await mutateSelectedOrderDetail(
+        `query:${attemptId}`,
+        () => storeApi.admin.queryOrder(selectedOrderId, attemptId),
+        applyOrderOperation,
+      );
+      await refreshSelectedOrder();
+      toast.success(t("store.admin.orders.querySucceeded"));
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : t("common.error"));
+    }
+  };
+
+  const closeSelectedOrder = async (attemptId: string) => {
+    if (!selectedOrderId) return;
+    try {
+      await mutateSelectedOrderDetail(
+        `close:${attemptId}`,
+        () => storeApi.admin.closeOrder(selectedOrderId, attemptId),
+        applyOrderOperation,
+      );
+      await refreshSelectedOrder();
+      toast.success(t("store.admin.orders.closeSucceeded"));
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : t("common.error"));
+    }
+  };
+
+  const createSelectedOrderRefund = async (currentPassword: string) => {
+    if (!selectedOrderId) return;
+    try {
+      await mutateSelectedOrderDetail(
+        "refund:create",
+        async () => {
+          const grant = await storeApi.admin.createReauthGrant(currentPassword, "refund");
+          return storeApi.admin.createRefund(selectedOrderId, crypto.randomUUID(), grant.token);
+        },
+        applyRefund,
+      );
+      await refreshSelectedOrder();
+      toast.success(t("store.admin.orders.refundCreated"));
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : t("common.error"));
+      throw cause;
+    }
+  };
+
+  const querySelectedOrderRefund = async (refundId: string, currentPassword: string) => {
+    if (!selectedOrderId) return;
+    try {
+      await mutateSelectedOrderDetail(
+        `refund:query:${refundId}`,
+        async () => {
+          const grant = await storeApi.admin.createReauthGrant(currentPassword, "refund");
+          return storeApi.admin.queryRefund(selectedOrderId, refundId, grant.token);
+        },
+        applyRefund,
+      );
+      await refreshSelectedOrder();
+      toast.success(t("store.admin.orders.refundQuerySucceeded"));
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : t("common.error"));
+      throw cause;
+    }
+  };
+
   return <div className="flex flex-col gap-6">
     <PageHeader title={t("store.admin.title")} description={t("store.admin.description")} />
     <StoreAdminTabs activeTab={activeTab} onTabChange={setActiveTab} />
     <div role="tabpanel" className="grid gap-6">
       {activeTab === "products" && <AdminLoadState loading={products.isLoading || settings.isLoading || groups.isLoading} error={products.error || settings.error || groups.error} onRetry={() => { void products.mutate(); void settings.mutate(); void groups.mutate(); }}><ProductsPanel products={products.data ?? []} onCreate={() => { setSelectedProduct(null); setProductDialogOpen(true); }} onEdit={(product) => { setSelectedProduct(product); setProductDialogOpen(true); }} onDelete={(product) => setDeleteTarget({ kind: "product", record: product })} />{settings.data && <SettingsPanel settings={settings.data} saving={saving} onSave={saveSettings} />}</AdminLoadState>}
       {activeTab === "channels" && <AdminLoadState loading={channels.isLoading} error={channels.error} onRetry={() => void channels.mutate()}><ChannelsPanel channels={channels.data ?? []} onCreate={() => { setSelectedChannel(null); setChannelDialogOpen(true); }} onEdit={(channel) => { setSelectedChannel(channel); setChannelDialogOpen(true); }} onDelete={(channel) => setDeleteTarget({ kind: "channel", record: channel })} /></AdminLoadState>}
-      {activeTab === "orders" && <AdminLoadState loading={orders.isLoading} error={orders.error} onRetry={() => void orders.mutate()}><OrdersPanel orders={orders.data ?? []} /></AdminLoadState>}
+      {activeTab === "orders" && <AdminLoadState loading={orders.isLoading} error={orders.error} onRetry={() => void orders.mutate()}><OrdersPanel orders={orders.data ?? []} onSelectOrder={setSelectedOrderId} /></AdminLoadState>}
       {activeTab === "redemptions" && <AdminLoadState loading={redemptions.isLoading || products.isLoading} error={redemptions.error || products.error} onRetry={() => { void redemptions.mutate(); void products.mutate(); }}><RedemptionsPanel codes={redemptions.data ?? []} onGenerate={() => setRedemptionDialogOpen(true)} /></AdminLoadState>}
     </div>
     <ProductDialog open={productDialogOpen} product={selectedProduct} groups={groups.data?.groups ?? []} saving={saving} onOpenChange={setProductDialogOpen} onSave={saveProduct} />
     <ChannelDialog open={channelDialogOpen} channel={selectedChannel} saving={saving} onOpenChange={setChannelDialogOpen} onSave={saveChannel} onSaveCredential={saveChannelCredential} />
     <RedemptionDialog open={redemptionDialogOpen} plans={(products.data ?? []).filter((product) => product.kind === "plan" && product.enabled)} generating={saving} onOpenChange={setRedemptionDialogOpen} onGenerate={generateCodes} />
+    <OrderDialog
+      open={selectedOrderId !== null}
+      detail={orderDetail.data}
+      loading={orderDetail.isLoading}
+      error={orderDetail.error}
+      actionLoading={orderDetail.data?.pending_action ?? null}
+      onOpenChange={(open) => { if (!open) setSelectedOrderId(null); }}
+      onRetry={() => void orderDetail.mutate()}
+      onQueryAttempt={querySelectedOrder}
+      onCloseAttempt={closeSelectedOrder}
+      onCreateRefund={createSelectedOrderRefund}
+      onQueryRefund={querySelectedOrderRefund}
+    />
     <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
       <AlertDialogContent className="rounded-2xl">
         <AlertDialogHeader>

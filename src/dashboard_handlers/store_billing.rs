@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::error::{AppError, AppResult};
+use crate::store_billing::callbacks::{PaymentCallbackStore, ReprocessProviderEventError};
 use crate::store_billing::checkout::{CheckoutError, CheckoutService};
 use crate::store_billing::credentials::{CredentialStore, CredentialStoreError};
 use crate::store_billing::exchange_rate::ExchangeRateError;
@@ -128,7 +129,12 @@ fn is_admin_order_operation_path(path: &str) -> bool {
         && segments[segments.len() - 3] == "refunds"
         && !segments[segments.len() - 2].is_empty()
         && segments[segments.len() - 1] == "query";
-    direct_order_operation || refund_query
+    let provider_event_reprocess = segments.len() >= 6
+        && segments[segments.len() - 5..segments.len() - 2]
+            == ["store", "admin", "provider-events"]
+        && !segments[segments.len() - 2].is_empty()
+        && segments[segments.len() - 1] == "reprocess";
+    direct_order_operation || refund_query || provider_event_reprocess
 }
 
 async fn require_refund_access(
@@ -151,6 +157,30 @@ async fn require_refund_access(
         .ok_or_else(|| map_reauth_error(ReauthError::InvalidGrant))?;
     ReauthStore::new(state.db_pool.clone())
         .verify(admin_id, &session_token, grant_token, "refund")
+        .await
+        .map_err(map_reauth_error)
+}
+
+async fn require_reprocess_access(
+    headers: &HeaderMap,
+    state: &AppState,
+    admin_id: &str,
+) -> AppResult<()> {
+    let session_token = extract_session_token(headers).ok_or_else(|| {
+        AppError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "missing dashboard session",
+        )
+    })?;
+    let grant_token = headers
+        .get("X-Store-Reauth-Token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| map_reauth_error(ReauthError::InvalidGrant))?;
+    ReauthStore::new(state.db_pool.clone())
+        .verify(admin_id, &session_token, grant_token, "reprocess")
         .await
         .map_err(map_reauth_error)
 }
@@ -519,6 +549,51 @@ fn map_admin_order_operation_error(error: AdminOrderOperationError) -> AppError 
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
                 "Admin order operation failed",
+            )
+            .with_internal_message(detail);
+        }
+    };
+    AppError::new(status, code, message)
+}
+
+fn map_reprocess_provider_event_error(error: ReprocessProviderEventError) -> AppError {
+    let (status, code, message) = match error {
+        ReprocessProviderEventError::InvalidInput => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Provider event reprocess input is invalid",
+        ),
+        ReprocessProviderEventError::NotFound => (
+            StatusCode::NOT_FOUND,
+            "event_not_found",
+            "Provider event was not found",
+        ),
+        ReprocessProviderEventError::NotReprocessable => (
+            StatusCode::CONFLICT,
+            "event_not_reprocessable",
+            "Provider event cannot be reprocessed",
+        ),
+        ReprocessProviderEventError::ManualReview => (
+            StatusCode::CONFLICT,
+            "projection_manual_review",
+            "Provider event requires manual review",
+        ),
+        ReprocessProviderEventError::ProviderQueryRequired => (
+            StatusCode::CONFLICT,
+            "provider_query_required",
+            "fresh Provider payment evidence is required",
+        ),
+        ReprocessProviderEventError::IdentityConflict => (
+            StatusCode::CONFLICT,
+            "event_identity_conflict",
+            "Provider event identity conflicts with stored evidence",
+        ),
+        ReprocessProviderEventError::Storage(detail)
+        | ReprocessProviderEventError::Fulfillment(detail) => {
+            return AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Provider event reprocess failed",
             )
             .with_internal_message(detail);
         }
@@ -1383,6 +1458,34 @@ pub async fn query_store_refund_admin(
             .await
             .map_err(map_refund_operations_error)?;
             Ok(Json(refund))
+        }
+        .await,
+    )
+}
+
+pub async fn reprocess_store_provider_event_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(event_id): Path<String>,
+    body: Result<Json<EmptyStoreMutation>, JsonRejection>,
+) -> Response {
+    no_store_response(
+        async {
+            let admin = require_admin(&headers, &state).await?;
+            require_reprocess_access(&headers, &state, &admin.id).await?;
+            let callbacks = PaymentCallbackStore::new(state.db_pool.clone());
+            if let Err(error) = parse_store_json(body) {
+                callbacks
+                    .audit_invalid_reprocess_request(&event_id, &admin.id)
+                    .await
+                    .map_err(map_reprocess_provider_event_error)?;
+                return Err(error);
+            }
+            let result = callbacks
+                .reprocess_verified_event(&event_id, state.payment_keys.as_deref(), &admin.id)
+                .await
+                .map_err(map_reprocess_provider_event_error)?;
+            Ok(Json(result))
         }
         .await,
     )
