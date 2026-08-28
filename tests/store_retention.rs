@@ -231,6 +231,131 @@ async fn raw_callback_deletion_is_bounded_and_legal_hold_expiry_is_automatic() {
 }
 
 #[tokio::test]
+async fn one_run_applies_every_privacy_data_class_without_deleting_event_evidence() {
+    let db = database().await;
+    let now = instant();
+    insert_user(&db, "admin").await;
+    insert_policy(&db, now).await;
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_provider_events
+                (id, credential_version_id, provider_event_id, event_kind, body_digest,
+                 parsed_json, verification_result, raw_format_version, raw_key_id,
+                 raw_nonce_base64, raw_ciphertext_base64, source_ip, user_agent,
+                 projection_state, state_revision, received_at)
+             VALUES ('event', 'credential', 'provider-event', 'payment', $1, '{\"ok\":true}',
+                     'valid', 1, 'key', 'nonce', 'ciphertext', '192.0.2.1', 'agent',
+                     'applied', 2, $2)",
+            vec![
+                "b".repeat(64).into(),
+                timestamp(now - Duration::days(100)).into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_reauth_grants
+                (id, user_id, session_token_digest, token_digest, scope, created_at, expires_at)
+             VALUES ('grant', 'admin', 'session', 'token', 'retention_operation', $1, $2)",
+            vec![
+                timestamp(now - Duration::hours(26)).into(),
+                timestamp(now - Duration::hours(25)).into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    for (id, action, created_at) in [
+        (
+            "redemption-audit",
+            "redemption_reveal",
+            now - Duration::days(731),
+        ),
+        (
+            "financial-audit",
+            "payment_evidence_read",
+            now - Duration::days(2556),
+        ),
+    ] {
+        db.write()
+            .await
+            .execute(db.stmt(
+                "INSERT INTO store_access_audits
+                    (id, actor_id, actor_role, action, scope_json, reason, result, created_at)
+                 VALUES ($1, 'admin', 'admin', $2, '{}', 'test', 'succeeded', $3)",
+                vec![id.into(), action.into(), timestamp(created_at).into()],
+            ))
+            .await
+            .unwrap();
+    }
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO billing_ledger
+                (id, user_id, kind, delta_nano_usd, balance_after_nano_usd,
+                 meta_json, created_at, idempotency_key)
+             VALUES ('ledger', 'admin', 'store_payment', '1', '1', '{}', $1, NULL)",
+            vec![timestamp(now - Duration::days(2556)).into()],
+        ))
+        .await
+        .unwrap();
+
+    let run = StoreRetention::new(db.clone(), "primary-a")
+        .run_at(now, RetentionRunActor::scheduled())
+        .await
+        .expect("retention run");
+
+    assert_eq!(run.counts.raw_callback_bodies, 1);
+    assert_eq!(run.counts.network_metadata, 1);
+    assert_eq!(run.counts.redemption_audits, 1);
+    assert_eq!(run.counts.expired_reauth_grants, 1);
+    assert_eq!(run.counts.financial_records, 2);
+    let event = row(
+        &db,
+        "SELECT raw_ciphertext_base64, source_ip, user_agent, body_digest,
+                parsed_json, verification_result, projection_state, state_revision
+         FROM store_provider_events WHERE id = 'event'",
+    )
+    .await;
+    assert!(
+        event
+            .try_get::<Option<String>>("", "raw_ciphertext_base64")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        event
+            .try_get::<Option<String>>("", "source_ip")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        event.try_get::<String>("", "verification_result").unwrap(),
+        "valid"
+    );
+    assert_eq!(event.try_get::<i64>("", "state_revision").unwrap(), 2);
+    assert_eq!(
+        scalar(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_reauth_grants WHERE id = 'grant'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_access_audits
+             WHERE id IN ('redemption-audit', 'financial-audit')"
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
 async fn legal_hold_extension_creates_new_immutable_approval_and_audit() {
     let db = database().await;
     let now = instant();
