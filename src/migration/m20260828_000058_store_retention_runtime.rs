@@ -29,9 +29,16 @@ async fn migrate(manager: &SchemaManager<'_>, up: bool) -> Result<(), DbErr> {
              ADD COLUMN worker_owner_id TEXT NOT NULL DEFAULT ''"
                 .to_string(),
         ))
-        .await?;
+        .await
+        .map_err(|error| DbErr::Custom(format!("add retention worker owner failed: {error}")))?;
         for sql in retention_runtime_tables(backend) {
-            tx.execute(Statement::from_string(backend, sql)).await?;
+            tx.execute(Statement::from_string(backend, sql.clone()))
+                .await
+                .map_err(|error| {
+                    DbErr::Custom(format!(
+                        "retention runtime statement failed ({sql}): {error}"
+                    ))
+                })?;
         }
     } else {
         migrate_reauth_scopes(&tx, backend, false).await?;
@@ -54,7 +61,9 @@ async fn migrate(manager: &SchemaManager<'_>, up: bool) -> Result<(), DbErr> {
         ))
         .await?;
     }
-    tx.commit().await
+    tx.commit()
+        .await
+        .map_err(|error| DbErr::Custom(format!("commit retention migration failed: {error}")))
 }
 
 async fn migrate_reauth_scopes<C: ConnectionTrait>(
