@@ -134,7 +134,12 @@ describe("Store admin page", () => {
     }
     expect(pageSource).toContain("PrivacyRecordsDialog");
     expect(pageSource).toContain("ChannelReadinessDialog");
+    expect(pageSource).toContain("onOpenPrivacyRecords");
     expect(panelsSource).toContain('channel.adapter_kind !== "http"');
+    expect(panelsSource).toContain("store.admin.governance.menu");
+    expect(governanceDialogsSource).toContain("onOpenPrivacyRecords");
+    expect(governanceDialogsSource).toContain("privacyRequiredTitle");
+    expect(governanceDialogsSource).toContain("ReadinessDialogLoading");
     expect(governanceDialogsSource).toContain("useSWR");
     expect(governanceDialogsSource).toContain("Skeleton");
     expect(governanceDialogsSource).toContain("optimisticData");
@@ -165,7 +170,13 @@ describe("Store admin page", () => {
     expect(pageSource).toContain("onCapabilities={setCapabilitiesChannel}");
     expect(panelsSource).toContain("store.admin.governance.compliance.action");
     expect(panelsSource).toContain("store.admin.governance.capabilities.action");
+    expect(panelsSource).toContain("DropdownMenu");
     expect(governanceDialogsSource).toContain("createReauthGrant(currentPassword, \"compliance_confirm\")");
+    expect(governanceDialogsSource).toContain("termsSummaryTitle");
+    expect(governanceDialogsSource).toContain("termsAcknowledgment");
+    expect(governanceDialogsSource).toContain("adminPassword");
+    expect(governanceDialogsSource).toContain("reauthHelp");
+    expect(governanceDialogsSource).toContain("ComplianceDialogLoading");
     expect(governanceDialogsSource).toContain("validateCapabilityInput");
     expect(governanceDialogsSource).toContain("optimisticCompliance");
     expect(governanceDialogsSource).toContain("optimisticCapability");

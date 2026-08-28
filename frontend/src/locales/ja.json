@@ -379,6 +379,7 @@
 					"callbackHelp": "署名付きコールバック試験に合格した後で有効にしてください。",
 					"amountRange": "{{currency}} 金額範囲",
 					"saved": "チャネル準備状況を保存しました",
+					"privacyRequiredTitle": "プライバシー記録が必要です",
 					"noPrivacyRecords": "チャネル準備状況を保存する前に、プライバシー記録を作成してください。",
 					"openPrivacyRecords": "プライバシー記録を開く"
 				},
@@ -397,9 +398,11 @@
 					"confirm": "現在の条件を確認",
 					"saved": "コンプライアンス確認を保存しました",
 					"passwordRequired": "現在の Admin パスワードを入力してください。",
+					"termsSummaryTitle": "Store 決済条件の確認",
 					"termsSummary": "加盟店アカウント、登録済みコールバック、提供商品、返金プロセス、異議申立てプロセス、適用される顧客通知を管理していることを確認します。これは運用上の確認であり、法的レビューの代替ではありません。",
 					"termsAcknowledgment": "上記の Store 決済条件を読みました。",
 					"adminPassword": "Admin パスワード",
+					"reauthHelp": "コンプライアンス確認を記録するには再認証が必要です。",
 					"acknowledgmentRequired": "条件を確認し、確認チェックボックスを選択してください。"
 				},
 				"capabilities": {

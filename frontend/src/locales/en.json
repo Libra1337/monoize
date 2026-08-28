@@ -379,6 +379,7 @@
 					"callbackHelp": "Enable only after the signed callback test passes.",
 					"amountRange": "{{currency}} amount range",
 					"saved": "Channel readiness saved",
+					"privacyRequiredTitle": "Privacy record required",
 					"noPrivacyRecords": "Create a privacy record before you save Channel readiness.",
 					"openPrivacyRecords": "Open privacy records"
 				},
@@ -397,9 +398,11 @@
 					"confirm": "Confirm current terms",
 					"saved": "Compliance confirmation saved",
 					"passwordRequired": "Enter the current Admin password.",
+					"termsSummaryTitle": "Store payment terms acknowledgement",
 					"termsSummary": "You confirm that you control the merchant account, registered callback, offered products, refund process, dispute process, and applicable customer notices. This is an operational confirmation, not a substitute for legal review.",
 					"termsAcknowledgment": "I have read the Store payment terms above.",
 					"adminPassword": "Admin password",
+					"reauthHelp": "Reauthentication is required to record compliance confirmation.",
 					"acknowledgmentRequired": "Review the terms and select the acknowledgment checkbox."
 				},
 				"capabilities": {
