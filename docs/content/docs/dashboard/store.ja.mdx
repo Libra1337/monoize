@@ -88,7 +88,8 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 - Milestone 1 では HTTP Channel を無効のままにします。
 - 支払い状態と履行状態を個別に確認します。手動完了操作は使用しません。
 - 1 回に 1 から 20 個の単回使用コードを生成します。Monoize が平文コードを表示したときに保存します。
-- **支払いチャネル**タブから**プライバシー記録**と**保持**を開きます。
+- **支払いチャネル**タブのヘッダーから**プライバシー記録**と**保持**を開きます。
+- 公式 Channel 行で **Governance** を選択します。**決済コンプライアンス**、**加盟店ケイパビリティ**、または**チャネル準備状況**を開きます。
 
 ## プライバシーとデータガバナンス
 
@@ -100,7 +101,15 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 
 ポリシー更新を承認したら新規レコードを作成します。政策バージョン、司法管轄、許可リージョン、法的根拠、evidence SHA-256 digest を入力します。財務記録保持日数、失効 grant 保持時間、レビュー間隔を設定します。作成後のレコードは変更できません。
 
-Channel 行の**チャネル準備状況**から privacy record を Channel にリンクします。readiness profile が現在 accepted なレコードを参照しない Channel は利用不可のままです。
+その Channel 行で **Governance** を選択します。**チャネル準備状況**を選択します。そのダイアログで privacy record をリンクします。privacy record がない場合は、準備状況の空状態から**プライバシー記録を開く**を選択します。readiness profile が現在 accepted なレコードを参照しない Channel は利用不可のままです。
+
+本番 checkout には、各公式 Channel の現在 Store 支払い条件確認も必要です。
+
+その Channel 行で **Governance** を選択します。**決済コンプライアンス**を選択します。Store 支払い条件確認要約と現在の条件バージョンを確認します。確認チェックボックスを選択します。Admin パスワードを入力します。**現在の条件を確認**を選択します。
+
+有効 Channel 可用性には、現在の加盟店ケイパビリティ記録も必要です。
+
+その Channel 行で **Governance** を選択します。**加盟店ケイパビリティ**を選択します。ケイパビリティ種別を選択します。状態、環境、Provider 製品、証跡 digest を設定します。Monoize は検証を記録し、有効期限を設定します。
 
 次の保持期間はすべてのレコードに適用されます。
 
@@ -121,7 +130,7 @@ Monoize は Store Primary 上で毎日 03:00 UTC に有界 retention job を実�
 
 ダイアログは連続失敗回数、checkout 停止状態、実行件数、法的保持件数を表示します。
 
-即時クリーンアップが必要な場合は retention を手動実行します。Admin パスワードと理由を入力します。**保持を実行**を選択します。Monoize は data class ごとに期限切れデータを有界バッチで削除またはクリアします。
+即時クリーンアップが必要な場合は retention を手動実行します。現在のパスワードと理由を入力します。**保持を実行**を選択します。Monoize は data class ごとに期限切れデータを有界バッチで削除またはクリアします。
 
 1 回の run では、各 data class につき held でない root records を最大 500 件処理します。financial root 削除時は関連 child rows も削除します。active entitlements は削除されません。
 
@@ -137,4 +146,4 @@ run が成功すると連続失敗回数は 0 にリセットされます。
 
 retention run が 3 回連続で失敗すると、Monoize は critical alert を作成し、新規 checkout を停止します。既存 orders と callback ingestion は継続します。新規 orders と payment attempts は HTTP `503`、code `store_retention_paused` を返します。
 
-containment で checkout 停止を解除します。checkout 停止中に**保持**ダイアログを開きます。Admin パスワード、理由、evidence SHA-256 digest を入力します。**アラートを封じ込める**を選択します。Monoize は containment を記録し、alert を contained にして checkout を再開します。その後 run が再び失敗すると checkout は再び停止される場合があります。
+containment で checkout 停止を解除します。checkout 停止中に**保持**ダイアログを開きます。現在のパスワード、理由、evidence SHA-256 digest を入力します。**アラートを封じ込める**を選択します。Monoize は containment を記録し、alert を contained にして checkout を再開します。その後 run が再び失敗すると checkout は再び停止される場合があります。

@@ -79,11 +79,14 @@ DOC-24. The Dashboard Store page MUST document `/dashboard/store`, `/dashboard/o
 and the admin-only `/dashboard/store-admin` route. It MUST describe balance recharge,
 plan purchase, CNY/USD display conversion, payment Channel selection, order processing,
 and redemption codes. It MUST state that redemption codes do not use a payment Channel.
-It MUST describe Store privacy records, Channel readiness linkage, fixed retention periods,
+It MUST describe Store privacy records, the Payment Channels tab header actions for
+privacy records and retention, the labeled Governance menu on official Channel rows,
+payment compliance confirmation with terms acknowledgment, merchant capability records,
+Channel readiness linkage including the privacy-record empty state, fixed retention periods,
 daily and manual retention runs, legal holds through
 `POST /api/dashboard/store/admin/retention/legal-holds`, and checkout pause plus containment
 after three consecutive retention failures. These statements MUST agree with
-`spec/store-billing.spec.md` SB-PR and SB-UI-16.
+`spec/store-billing.spec.md` SB-PR, SB-UI-16, SB-UI-17, SB-UI-18, and SB-UI-19.
 
 ## 4. Writing style
 

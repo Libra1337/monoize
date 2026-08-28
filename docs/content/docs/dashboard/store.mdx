@@ -88,7 +88,8 @@ Administrators open `/dashboard/store-admin`. Use its four tabs to manage produc
 - Keep an HTTP Channel disabled in Milestone 1.
 - Review payment state and fulfillment state separately. Do not use a manual completion action.
 - Generate 1 through 20 single-use codes. Copy the plaintext codes when Monoize shows them.
-- Open **Privacy records** and **Retention** from the Payment Channels tab.
+- Open **Privacy records** and **Retention** from the **Payment Channels** tab header.
+- Select **Governance** on an official Channel row. Open **Payment compliance**, **Merchant capabilities**, or **Channel readiness**.
 
 ## Privacy and data governance
 
@@ -100,7 +101,15 @@ Review existing records. Each record shows policy version, jurisdiction, allowed
 
 Create a new record when you approve a policy update. Enter policy version, jurisdiction, allowed regions, legal basis, and evidence SHA-256 digest. Set financial record retention days, expired grant retention hours, and review interval. Records are immutable after creation.
 
-Link a privacy record to a Channel through **Channel readiness** on that Channel row. A Channel stays unavailable until its readiness profile references a current accepted record.
+Select **Governance** on that Channel row. Select **Channel readiness**. Link a privacy record through that dialog. If no privacy record exists, select **Open privacy records** from the readiness empty state. A Channel stays unavailable until its readiness profile references a current accepted record.
+
+Production checkout also requires a current Store payment terms confirmation for each official Channel.
+
+Select **Governance** on that Channel row. Select **Payment compliance**. Review the Store payment terms acknowledgement summary and current terms version. Select the acknowledgment checkbox. Enter your Admin password. Select **Confirm current terms**.
+
+Effective Channel availability also requires current merchant capability records.
+
+Select **Governance** on that Channel row. Select **Merchant capabilities**. Select a capability kind. Set state, environment, provider product, and evidence digest. Monoize records verification with expiry.
 
 These retention periods apply to every record:
 
@@ -121,7 +130,7 @@ Open **Store Management**. Select the **Payment Channels** tab. Select **Retenti
 
 The dialog shows consecutive failure count, checkout pause state, retention run count, and legal hold count.
 
-Run retention manually when you need immediate cleanup. Enter your Admin password and a reason. Select **Run retention**. Monoize deletes or clears expired data in bounded batches per data class.
+Run retention manually when you need immediate cleanup. Enter your current password and a reason. Select **Run retention**. Monoize deletes or clears expired data in bounded batches per data class.
 
 Each run processes at most 500 unheld root records per data class. Financial root deletion also removes associated child rows. Active entitlements are never deleted.
 
@@ -137,4 +146,4 @@ The **Retention** dialog shows legal hold count. It does not create holds.
 
 When three consecutive retention runs fail, Monoize creates a critical alert and pauses new checkout. Existing orders and callback ingestion continue. New orders and payment attempts return HTTP `503` with code `store_retention_paused`.
 
-Clear a checkout pause through containment. Open the **Retention** dialog when checkout is paused. Enter your Admin password, reason, and evidence SHA-256 digest. Select **Contain alert**. Monoize records containment, marks the alert contained, and resumes checkout. A later failed run can pause checkout again.
+Clear a checkout pause through containment. Open the **Retention** dialog when checkout is paused. Enter your current password, reason, and evidence SHA-256 digest. Select **Contain alert**. Monoize records containment, marks the alert contained, and resumes checkout. A later failed run can pause checkout again.

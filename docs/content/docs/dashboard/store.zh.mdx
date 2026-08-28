@@ -88,7 +88,8 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 - 在 Milestone 1 中保持 HTTP Channel 停用。
 - 分别查看支付状态和履约状态。不要使用人工完成操作。
 - 一次生成 1 至 20 个单次兑换码。Monoize 显示明文时立即保存。
-- 在**支付渠道**标签页打开**隐私记录**和**保留策略**。
+- 在**支付渠道**标签页标题栏打开**隐私记录**和**保留策略**。
+- 在官方 Channel 行选择 **Governance**。打开**支付合规**、**商户能力**或**渠道就绪状态**。
 
 ## 隐私与数据治理
 
@@ -100,7 +101,15 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 
 批准策略更新后创建新记录。输入政策版本、司法辖区、允许区域、法律依据和证据 SHA-256 摘要。设置财务记录保留天数、过期授权保留小时数和复审间隔。记录创建后不可修改。
 
-通过该 Channel 行的**渠道就绪状态**将隐私记录关联到 Channel。readiness profile 未引用当前已接受记录时，Channel 保持不可用。
+在该 Channel 行选择 **Governance**。选择**渠道就绪状态**。通过该对话框关联隐私记录。若无隐私记录，在就绪状态空状态中选择**打开隐私记录**。readiness profile 未引用当前已接受记录时，Channel 保持不可用。
+
+生产 checkout 还需要每个官方 Channel 的当前 Store 支付条款确认。
+
+在该 Channel 行选择 **Governance**。选择**支付合规**。查看 Store 支付条款确认摘要和当前条款版本。勾选确认复选框。输入 Admin 密码。选择**确认当前条款**。
+
+有效 Channel 可用性还需要当前商户能力记录。
+
+在该 Channel 行选择 **Governance**。选择**商户能力**。选择能力类型。设置状态、环境、Provider 产品和证据摘要。Monoize 记录验证并设置到期时间。
 
 以下保留周期适用于每条记录：
 
@@ -121,7 +130,7 @@ Monoize 每天在 Store Primary 的 03:00 UTC 运行有界保留任务。Replica
 
 对话框显示连续失败次数、结账暂停状态、运行记录数和法律保留数。
 
-需要立即清理时手动运行保留。输入 Admin 密码和原因。选择**运行保留**。Monoize 按数据类别分批删除或清除过期数据。
+需要立即清理时手动运行保留。输入当前密码和原因。选择**运行保留**。Monoize 按数据类别分批删除或清除过期数据。
 
 每次运行每个数据类别最多处理 500 条未 hold 的根记录。删除财务根记录时也会删除关联子记录。有效 entitlement 不会被删除。
 
@@ -137,4 +146,4 @@ Monoize 每天在 Store Primary 的 03:00 UTC 运行有界保留任务。Replica
 
 三次连续保留运行失败后，Monoize 创建严重告警并暂停新结账。现有订单和回调 ingestion 继续运行。新订单和 payment attempts 返回 HTTP `503`，code 为 `store_retention_paused`。
 
-通过遏制清除结账暂停。结账暂停时打开**保留策略**对话框。输入 Admin 密码、原因和证据 SHA-256 摘要。选择**遏制告警**。Monoize 记录遏制、标记告警为已遏制，并恢复结账。后续运行再次失败时结账可能再次暂停。
+通过遏制清除结账暂停。结账暂停时打开**保留策略**对话框。输入当前密码、原因和证据 SHA-256 摘要。选择**遏制告警**。Monoize 记录遏制、标记告警为已遏制，并恢复结账。后续运行再次失败时结账可能再次暂停。
