@@ -228,7 +228,11 @@ fn redemption_audit_context(headers: &HeaderMap, admin_id: &str) -> RedemptionAu
     }
 }
 
-fn require_store_mutation(headers: &HeaderMap, state: &AppState) -> AppResult<()> {
+async fn require_store_mutation(headers: &HeaderMap, state: &AppState) -> AppResult<()> {
+    state
+        .store_billing
+        .require_write()
+        .map_err(map_store_error)?;
     let uses_bearer = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -258,7 +262,10 @@ fn require_store_mutation(headers: &HeaderMap, state: &AppState) -> AppResult<()
             ));
         }
     }
-    state.store_billing.require_write().map_err(map_store_error)
+    state
+        .validate_store_primary_lease()
+        .await
+        .map_err(map_store_primary_lease_error)
 }
 
 pub(crate) async fn store_mutation_guard(
@@ -267,7 +274,7 @@ pub(crate) async fn store_mutation_guard(
     next: axum::middleware::Next,
 ) -> Response {
     let admin_order_operation = is_admin_order_operation_path(request.uri().path());
-    if let Err(error) = require_store_mutation(request.headers(), &state) {
+    if let Err(error) = require_store_mutation(request.headers(), &state).await {
         let mut response = error.into_response();
         if admin_order_operation {
             apply_no_store_headers(&mut response);
@@ -275,6 +282,17 @@ pub(crate) async fn store_mutation_guard(
         return response;
     }
     next.run(request).await
+}
+
+fn map_store_primary_lease_error(
+    error: crate::store_billing::availability::StorePrimaryLeaseError,
+) -> AppError {
+    tracing::warn!(error = %error, "Store Primary lease validation failed");
+    AppError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "store_primary_unavailable",
+        "Store Primary is unavailable",
+    )
 }
 
 fn map_reauth_error(error: ReauthError) -> AppError {

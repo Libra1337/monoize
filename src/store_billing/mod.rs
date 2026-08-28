@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod admission_runtime;
 pub mod admission_token;
+pub mod availability;
 pub mod callback_limit;
 pub mod callbacks;
 pub mod checkout;

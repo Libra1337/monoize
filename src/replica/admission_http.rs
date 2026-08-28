@@ -99,13 +99,21 @@ pub(crate) fn internal_router(expected_digest: [u8; 32]) -> Router<AppState> {
         ))
 }
 
-pub(crate) fn spawn_unconfirmed_reaper(service: Arc<AdmissionService>, shutdown: Arc<AtomicBool>) {
+pub(crate) fn spawn_unconfirmed_reaper(
+    service: Arc<AdmissionService>,
+    lease: crate::store_billing::availability::StorePrimaryLease,
+    shutdown: Arc<AtomicBool>,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(UNCONFIRMED_REAPER_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
             if shutdown.load(Ordering::Acquire) {
+                break;
+            }
+            if let Err(error) = lease.validate().await {
+                tracing::error!(error = %error, "unconfirmed admission recovery lost Primary lease");
                 break;
             }
             if let Err(error) = service
@@ -154,6 +162,9 @@ async fn issue_admission(
     Extension(replica_id): Extension<AuthenticatedReplicaId>,
     request: Request<Body>,
 ) -> Response {
+    if let Err(response) = require_store_primary(&state).await {
+        return response;
+    }
     let body: IssueRequest = match read_json(request).await {
         Ok(body) => body,
         Err(response) => return response,
@@ -216,6 +227,9 @@ async fn confirm_admission(
     Extension(replica_id): Extension<AuthenticatedReplicaId>,
     request: Request<Body>,
 ) -> Response {
+    if let Err(response) = require_store_primary(&state).await {
+        return response;
+    }
     let body: ConfirmRequest = match read_json(request).await {
         Ok(body) => body,
         Err(response) => return response,
@@ -251,6 +265,17 @@ async fn confirm_admission(
         .into_response(),
         Err(error) => admission_runtime_error(error),
     }
+}
+
+async fn require_store_primary(state: &AppState) -> Result<(), Response> {
+    state.validate_store_primary_lease().await.map_err(|error| {
+        tracing::warn!(error = %error, "plan admission rejected by Store Primary lease");
+        admission_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_primary_unavailable",
+            "Store Primary is unavailable",
+        )
+    })
 }
 
 async fn admission_keyset(State(state): State<AppState>, request: Request<Body>) -> Response {

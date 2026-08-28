@@ -702,7 +702,19 @@ SB-HA-2. `postgresql_primary` MUST detect Primary loss within 30 seconds, have R
 
 SB-HA-3. PostgreSQL promotion MUST fence the old process and database writer before the replacement mounts Store endpoints.
 
-SB-HA-4. A Store process MUST hold an exclusive database lease with a monotonic epoch. Lease interval MUST be at most 15 seconds. Lease loss MUST fail Store writes and admission closed within one interval.
+SB-HA-4. A Store Primary process MUST hold the database lease row whose `name` is exactly `store_primary`. The lease owner ID MUST contain at least one non-whitespace character. The lease duration MUST equal 15 seconds.
+
+SB-HA-4A. The first `store_primary` acquisition MUST insert epoch `1`. An acquisition MUST succeed only when the row is absent, the stored `expires_at` is less than or equal to the acquisition time, or the stored owner ID equals the requesting owner ID. A same-owner acquisition MUST preserve the stored epoch, including after expiry. A different-owner acquisition after expiry MUST increment the stored signed 64-bit epoch by exactly `1`. A different-owner acquisition MUST fail when the stored lease has not expired. An acquisition that would increment `i64::MAX` MUST fail and MUST leave the row unchanged.
+
+SB-HA-4B. A renewal MUST match the exact stored lease name, owner ID, and epoch. The stored lease MUST be unexpired at the renewal time. A successful renewal MUST preserve the epoch and set `expires_at` to exactly 15 seconds after the renewal time. A failed renewal MUST mark the process lease as lost.
+
+SB-HA-4C. Each Store Primary validation MUST read committed state from `store_primary_leases`. Validation MUST reject a missing row, a different owner ID, a different epoch, an `expires_at` value less than or equal to the validation time, or a process lease marked lost. SQLite acquisition and renewal MUST use serialized immediate write transactions. PostgreSQL acquisition and renewal MUST lock the selected lease row with `FOR UPDATE` before changing it.
+
+SB-HA-4D. Primary startup MUST generate an opaque owner ID, acquire `store_primary` after Store migrations complete, and fail startup when acquisition fails. Primary startup MUST start one renewal task before it returns the application state. The task MUST attempt renewal every five seconds. The task MUST stop when `background_shutdown` is true or when renewal fails. A Replica MUST NOT acquire or renew `store_primary`.
+
+SB-HA-4E. The Store mutation middleware MUST validate the committed Primary lease after it verifies that the node is not a Replica. A missing, lost, or expired Primary lease MUST return HTTP `503` with code `store_primary_unavailable`. A Replica Store mutation MUST continue to return HTTP `503` with code `store_write_rejected`.
+
+SB-HA-4F. Every public payment callback MUST validate the committed Primary lease before rate limiting, body extraction, Provider verification, or a database mutation. Every internal plan admission issue or confirmation request MUST validate the committed Primary lease before a database mutation. Each background unconfirmed-admission recovery iteration MUST validate the committed Primary lease before it mutates the database and MUST stop after validation fails. A missing, lost, or expired lease on either HTTP surface MUST return HTTP `503` with code `store_primary_unavailable`.
 
 SB-HA-5. `sqlite_primary` MUST have process-restart RTO at most two minutes on a healthy host, host-loss RTO at most 30 minutes, and RPO at most 60 seconds.
 

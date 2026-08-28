@@ -211,6 +211,7 @@ pub struct AppState {
     pub model_registry_store: ModelRegistryStore,
     pub billing_rate_store: BillingRateStore,
     pub store_billing: StoreBillingStore,
+    pub store_primary_lease: Option<crate::store_billing::availability::StorePrimaryLease>,
     pub exchange_rate_service: ExchangeRateService,
     pub transform_registry: Arc<TransformRegistry>,
     pub cap_verifier: CapVerifier,
@@ -243,8 +244,43 @@ impl AppState {
             } else {
                 self.admission_service
             },
+            store_primary_lease: if is_replica {
+                None
+            } else {
+                self.store_primary_lease
+            },
             ..self
         }
+    }
+
+    pub async fn validate_store_primary_lease(
+        &self,
+    ) -> Result<(), crate::store_billing::availability::StorePrimaryLeaseError> {
+        self.store_primary_lease
+            .as_ref()
+            .ok_or(crate::store_billing::availability::StorePrimaryLeaseError::Missing)?
+            .validate()
+            .await
+    }
+
+    pub async fn acquire_store_primary_lease(
+        &mut self,
+        owner_id: impl Into<String>,
+    ) -> Result<(), crate::store_billing::availability::StorePrimaryLeaseError> {
+        if self.node.is_replica() {
+            return Err(crate::store_billing::availability::StorePrimaryLeaseError::Unavailable);
+        }
+        if self.store_primary_lease.is_some() {
+            return Err(crate::store_billing::availability::StorePrimaryLeaseError::Unavailable);
+        }
+        let lease = crate::store_billing::availability::StorePrimaryLease::acquire(
+            self.db_pool.clone(),
+            owner_id,
+        )
+        .await?;
+        lease.spawn_renewal(self.background_shutdown.clone());
+        self.store_primary_lease = Some(lease);
+        Ok(())
     }
 }
 
@@ -1023,9 +1059,28 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             })?,
         ))
     };
-    if let Some(service) = admission_service.clone() {
+    let store_primary_lease = if is_replica {
+        None
+    } else {
+        let lease = crate::store_billing::availability::StorePrimaryLease::acquire(
+            db.clone(),
+            uuid::Uuid::new_v4().to_string(),
+        )
+        .await
+        .map_err(|error| {
+            AppError::new(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "store_primary_unavailable",
+                error.to_string(),
+            )
+        })?;
+        lease.spawn_renewal(background_shutdown.clone());
+        Some(lease)
+    };
+    if let (Some(service), Some(lease)) = (admission_service.clone(), store_primary_lease.clone()) {
         crate::replica::admission_http::spawn_unconfirmed_reaper(
             service,
+            lease,
             background_shutdown.clone(),
         );
     }
@@ -1063,6 +1118,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         model_registry_store,
         billing_rate_store,
         store_billing,
+        store_primary_lease,
         exchange_rate_service,
         transform_registry,
         cap_verifier,

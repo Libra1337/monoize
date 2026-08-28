@@ -55,6 +55,17 @@ pub async fn store_payment_callback(
     State(state): State<AppState>,
     request: Request,
 ) -> AppResult<Response> {
+    state
+        .validate_store_primary_lease()
+        .await
+        .map_err(|error| {
+            tracing::warn!(error = %error, "Store callback rejected by Primary lease");
+            AppError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "store_primary_unavailable",
+                "Store Primary is unavailable",
+            )
+        })?;
     let headers = request.headers().clone();
     let source_ip = canonical_client_ip_from_headers(&headers);
     if !state.store_callback_limiter.allow(&channel_id, source_ip) {
