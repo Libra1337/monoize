@@ -127,6 +127,101 @@ export interface StorePrivacyRecordsView {
   records: StorePrivacyRecord[];
 }
 
+export type StoreRetentionDataClass =
+  | "raw_callback_bodies"
+  | "network_metadata"
+  | "financial_records"
+  | "redemption_audits"
+  | "expired_reauth_grants";
+
+export interface StoreRetentionCounts {
+  raw_callback_bodies: number;
+  network_metadata: number;
+  financial_records: number;
+  redemption_audits: number;
+  expired_reauth_grants: number;
+}
+
+export interface StoreRetentionRun {
+  id: string;
+  worker_owner_id: string;
+  policy_version: string;
+  counts: StoreRetentionCounts;
+  oldest_remaining_at: string | null;
+  state: "running" | "succeeded" | "failed";
+  error_category: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface StoreRetentionAlert {
+  id: string;
+  run_id: string;
+  severity: "critical";
+  consecutive_failures: number;
+  created_at: string;
+  contained_at: string | null;
+  containment_id: string | null;
+}
+
+export interface StoreRetentionContainment {
+  id: string;
+  alert_id: string;
+  actor_id: string;
+  reason: string;
+  evidence_digest: string;
+  created_at: string;
+}
+
+export interface StoreRetentionStatus {
+  current_run_id: string | null;
+  last_run_id: string | null;
+  consecutive_failures: number;
+  checkout_paused: boolean;
+  active_alert: StoreRetentionAlert | null;
+  latest_containment_id: string | null;
+  updated_at: string;
+}
+
+export interface StoreLegalHold {
+  id: string;
+  data_class: StoreRetentionDataClass;
+  identifiers: string[];
+  reason: string;
+  requesting_authority: string;
+  requester_id: string;
+  approver_id: string;
+  approver_role: "privacy" | "legal";
+  starts_at: string;
+  expires_at: string;
+  created_at: string;
+  extends_hold_id: string | null;
+  active: boolean;
+}
+
+export interface StoreRetentionOverview {
+  status: StoreRetentionStatus;
+  runs: StoreRetentionRun[];
+  holds: StoreLegalHold[];
+  containments: StoreRetentionContainment[];
+}
+
+export interface CreateStoreLegalHoldInput {
+  data_class: StoreRetentionDataClass;
+  identifiers: string[];
+  reason: string;
+  requesting_authority: string;
+  requester_id: string;
+  approver_role: "privacy" | "legal";
+  expires_at: string;
+  extends_hold_id: string | null;
+}
+
+export interface CreateStoreRetentionContainmentInput {
+  reason: string;
+  evidence_digest: string;
+}
+
 export interface PutStoreChannelReadinessInput {
   privacy_record_id: string;
   callback_verification_passed: boolean;
@@ -188,7 +283,14 @@ export type PaymentCredentialPayload =
 
 export interface StoreReauthGrant {
   token: string;
-  scope: "credential_update" | "redemption_access" | "refund";
+  scope:
+    | "credential_update"
+    | "redemption_access"
+    | "compliance_confirm"
+    | "refund"
+    | "reprocess"
+    | "retention_operation"
+    | "legal_hold";
   expires_at: string;
 }
 
@@ -502,6 +604,25 @@ export const storeApi = {
       storeRequest<StorePrivacyRecordsView>("/admin/privacy-records"),
     createPrivacyRecord: (input: CreateStorePrivacyRecordInput) =>
       jsonMutation<StorePrivacyRecord>("/admin/privacy-records", "POST", input),
+    getRetention: () => storeRequest<StoreRetentionOverview>("/admin/retention"),
+    runRetention: (reason: string, reauthToken: string) =>
+      storeRequest<StoreRetentionRun>("/admin/retention/runs", {
+        method: "POST",
+        headers: { "X-Store-Reauth-Token": reauthToken },
+        body: JSON.stringify({ reason }),
+      }),
+    containRetention: (input: CreateStoreRetentionContainmentInput, reauthToken: string) =>
+      storeRequest<StoreRetentionContainment>("/admin/retention/containment", {
+        method: "POST",
+        headers: { "X-Store-Reauth-Token": reauthToken },
+        body: JSON.stringify(input),
+      }),
+    createLegalHold: (input: CreateStoreLegalHoldInput, reauthToken: string) =>
+      storeRequest<StoreLegalHold>("/admin/retention/legal-holds", {
+        method: "POST",
+        headers: { "X-Store-Reauth-Token": reauthToken },
+        body: JSON.stringify(input),
+      }),
     getChannelReadiness: (id: string) =>
       storeRequest<StoreChannelReadinessView>(
         `/admin/payment-channels/${encodeURIComponent(id)}/readiness`,

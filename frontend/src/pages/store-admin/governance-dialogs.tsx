@@ -28,6 +28,7 @@ import {
   type StorePaymentChannel,
   type StorePrivacyRecord,
   type StorePrivacyRecordsView,
+  type StoreRetentionOverview,
 } from "@/lib/store-api";
 import type { StoreCurrency } from "@/lib/store-money";
 import {
@@ -340,6 +341,152 @@ export function ChannelReadinessDialog({
         </DialogHeader>
         {loading ? <DialogLoading /> : error ? <DialogError onRetry={() => { void readiness.mutate(); void privacy.mutate(); }} /> : channel ? <ReadinessForm key={profileKey} channel={channel} profile={readiness.data?.readiness ?? null} privacyRecords={privacy.data?.records ?? []} saving={saving} onSave={save} /> : null}
         <DialogFooter><Button type="button" variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)}>{t("common.close")}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+const RETENTION_KEY = "/api/dashboard/store/admin/retention";
+
+export function RetentionDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const [password, setPassword] = useState("");
+  const [reason, setReason] = useState("");
+  const [evidenceDigest, setEvidenceDigest] = useState("");
+  const [busy, setBusy] = useState(false);
+  const { data, error, isLoading, mutate } = useSWR<StoreRetentionOverview>(
+    open ? RETENTION_KEY : null,
+    () => storeApi.admin.getRetention(),
+  );
+
+  async function withRetentionReauth<T>(action: (token: string) => Promise<T>) {
+    const grant = await storeApi.admin.createReauthGrant(password, "retention_operation");
+    return action(grant.token);
+  }
+
+  async function runRetention() {
+    if (!reason.trim()) {
+      toast.error(t("store.admin.governance.invalid"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await withRetentionReauth((token) => storeApi.admin.runRetention(reason.trim(), token));
+      toast.success(t("store.admin.governance.retention.ran"));
+      setReason("");
+      setPassword("");
+      await mutate();
+    } catch {
+      toast.error(t("store.admin.governance.invalid"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function containRetention() {
+    if (!reason.trim() || evidenceDigest.trim().length !== 64) {
+      toast.error(t("store.admin.governance.invalid"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await withRetentionReauth((token) =>
+        storeApi.admin.containRetention(
+          { reason: reason.trim(), evidence_digest: evidenceDigest.trim() },
+          token,
+        ),
+      );
+      toast.success(t("store.admin.governance.retention.contained"));
+      setReason("");
+      setEvidenceDigest("");
+      setPassword("");
+      await mutate();
+    } catch {
+      toast.error(t("store.admin.governance.invalid"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{t("store.admin.governance.retention.title")}</DialogTitle>
+          <DialogDescription>{t("store.admin.governance.retention.description")}</DialogDescription>
+        </DialogHeader>
+        {isLoading ? (
+          <DialogLoading />
+        ) : error || !data ? (
+          <DialogError onRetry={() => void mutate()} />
+        ) : (
+          <div className="grid gap-4">
+            <div className="grid gap-2 rounded-xl border p-4 text-sm">
+              <p>
+                {t("store.admin.governance.retention.failures")}: {data.status.consecutive_failures}
+              </p>
+              <p>
+                {t("store.admin.governance.retention.checkout")}:{" "}
+                {data.status.checkout_paused
+                  ? t("store.admin.governance.retention.paused")
+                  : t("store.admin.governance.retention.open")}
+              </p>
+              <p>
+                {t("store.admin.governance.retention.runs")}: {data.runs.length} ·{" "}
+                {t("store.admin.governance.retention.holds")}: {data.holds.length}
+              </p>
+            </div>
+            <div className="grid gap-3">
+              <div className="grid gap-2">
+                <Label htmlFor="retention-password">{t("store.admin.orders.currentPassword")}</Label>
+                <Input
+                  id="retention-password"
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="rounded-xl"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="retention-reason">{t("store.admin.governance.retention.reason")}</Label>
+                <Textarea
+                  id="retention-reason"
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  className="min-h-24 rounded-xl"
+                />
+              </div>
+              {data.status.checkout_paused && (
+                <div className="grid gap-2">
+                  <Label htmlFor="retention-evidence">{t("store.admin.governance.fields.evidenceDigest")}</Label>
+                  <Input
+                    id="retention-evidence"
+                    value={evidenceDigest}
+                    onChange={(event) => setEvidenceDigest(event.target.value)}
+                    className="rounded-xl font-mono text-xs"
+                  />
+                </div>
+              )}
+            </div>
+            <DialogFooter className="gap-2 sm:justify-between">
+              <Button type="button" variant="outline" className="rounded-xl" disabled={busy} onClick={() => void runRetention()}>
+                {t("store.admin.governance.retention.run")}
+              </Button>
+              {data.status.checkout_paused && (
+                <Button type="button" className="rounded-xl" disabled={busy} onClick={() => void containRetention()}>
+                  {t("store.admin.governance.retention.contain")}
+                </Button>
+              )}
+            </DialogFooter>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

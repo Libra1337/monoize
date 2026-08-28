@@ -26,6 +26,11 @@ const PAYMENT_TABLES: &[&str] = &[
     "store_access_audits",
     "store_retention_runs",
     "store_legal_holds",
+    "store_retention_state",
+    "store_retention_alerts",
+    "store_retention_containments",
+    "store_legal_hold_approvals",
+    "store_legal_hold_items",
     "store_primary_leases",
     "store_quota_gates",
     "store_quota_buckets",
@@ -95,7 +100,7 @@ async fn migration_054_upgrades_reauth_scope_without_losing_existing_grants_or_i
         .is_err()
     );
 
-    Migrator::up(&db, None).await.unwrap();
+    Migrator::up(&db, Some(2)).await.unwrap();
     db.execute_unprepared(
         "INSERT INTO store_reauth_grants
             (id, user_id, session_token_digest, token_digest, scope, created_at, expires_at)
