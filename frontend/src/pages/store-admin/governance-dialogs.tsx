@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FileCheck2, Plus, ShieldCheck } from "lucide-react";
+import { ClipboardCheck, FileCheck2, Layers3, Plus, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import useSWR from "swr";
@@ -22,9 +22,13 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   storeApi,
+  type MerchantCapabilityKind,
+  type MerchantCapabilityState,
   type PutStoreChannelReadinessInput,
+  type PutStoreMerchantCapabilityInput,
   type StoreChannelReadinessProfile,
   type StoreCheckoutActionKind,
+  type StoreMerchantCapability,
   type StorePaymentChannel,
   type StorePrivacyRecord,
   type StorePrivacyRecordsView,
@@ -32,7 +36,11 @@ import {
 import type { StoreCurrency } from "@/lib/store-money";
 import {
   buildPrivacyRecordInput,
+  MERCHANT_CAPABILITY_KINDS,
+  optimisticCapability,
+  optimisticCompliance,
   optimisticReadiness,
+  validateCapabilityInput,
   validateReadinessInput,
 } from "./governance-state";
 
@@ -340,6 +348,337 @@ export function ChannelReadinessDialog({
         </DialogHeader>
         {loading ? <DialogLoading /> : error ? <DialogError onRetry={() => { void readiness.mutate(); void privacy.mutate(); }} /> : channel ? <ReadinessForm key={profileKey} channel={channel} profile={readiness.data?.readiness ?? null} privacyRecords={privacy.data?.records ?? []} saving={saving} onSave={save} /> : null}
         <DialogFooter><Button type="button" variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)}>{t("common.close")}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function capabilityRecord(
+  records: StoreMerchantCapability[],
+  kind: MerchantCapabilityKind,
+): StoreMerchantCapability | null {
+  return records.find((record) => record.capability === kind) ?? null;
+}
+
+function CapabilityEditor({
+  channel,
+  kind,
+  record,
+  saving,
+  onSave,
+}: {
+  channel: StorePaymentChannel;
+  kind: MerchantCapabilityKind;
+  record: StoreMerchantCapability | null;
+  saving: boolean;
+  onSave: (kind: MerchantCapabilityKind, input: PutStoreMerchantCapabilityInput) => Promise<void>;
+}) {
+  const { t, i18n } = useTranslation();
+  const [state, setState] = useState<MerchantCapabilityState>(record?.state ?? "supported");
+  const [environment, setEnvironment] = useState(record?.environment ?? "sandbox");
+  const [providerProduct, setProviderProduct] = useState(record?.provider_product ?? "checkout");
+  const [evidenceDigest, setEvidenceDigest] = useState(record?.evidence_digest ?? "");
+  const [controlledTransactionId, setControlledTransactionId] = useState(record?.controlled_transaction_id ?? "");
+
+  const submit = async () => {
+    const input: PutStoreMerchantCapabilityInput = {
+      state,
+      environment: environment.trim(),
+      provider_product: providerProduct.trim(),
+      evidence_digest: evidenceDigest,
+      controlled_transaction_id: controlledTransactionId.trim() ? controlledTransactionId.trim() : null,
+    };
+    if (!validateCapabilityInput(input)) {
+      toast.error(t("store.admin.governance.invalid"));
+      return;
+    }
+    await onSave(kind, input);
+  };
+
+  return (
+    <section className="grid gap-4 rounded-xl border p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">{t(`store.admin.governance.capabilities.kinds.${kind}`)}</h3>
+          {record && (
+            <p className="text-xs text-muted-foreground">
+              {t("store.admin.governance.capabilities.expires", {
+                date: new Intl.DateTimeFormat(i18n.language).format(new Date(record.expires_at)),
+              })}
+            </p>
+          )}
+        </div>
+        <Badge variant={record?.state === "supported" ? "default" : "secondary"}>
+          {t(`store.admin.governance.capabilities.states.${record?.state ?? state}`)}
+        </Badge>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor={`capability-${kind}-state`}>{t("store.admin.governance.fields.capabilityState")}</Label>
+          <Select value={state} onValueChange={(value) => setState(value as MerchantCapabilityState)}>
+            <SelectTrigger id={`capability-${kind}-state`} className="min-h-11 rounded-xl">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(["supported", "unsupported", "manual"] as const).map((option) => (
+                <SelectItem key={option} value={option}>{t(`store.admin.governance.capabilities.states.${option}`)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor={`capability-${kind}-environment`}>{t("store.admin.governance.fields.environment")}</Label>
+          <Input id={`capability-${kind}-environment`} className="min-h-11 rounded-xl" value={environment} onChange={(event) => setEnvironment(event.target.value)} />
+        </div>
+        <div className="grid gap-2 sm:col-span-2">
+          <Label htmlFor={`capability-${kind}-product`}>{t("store.admin.governance.fields.providerProduct")}</Label>
+          <Input id={`capability-${kind}-product`} className="min-h-11 rounded-xl" value={providerProduct} onChange={(event) => setProviderProduct(event.target.value)} />
+        </div>
+        <div className="grid gap-2 sm:col-span-2">
+          <Label htmlFor={`capability-${kind}-evidence`}>{t("store.admin.governance.fields.evidenceDigest")}</Label>
+          <Input id={`capability-${kind}-evidence`} className="min-h-11 rounded-xl font-mono text-xs" value={evidenceDigest} onChange={(event) => setEvidenceDigest(event.target.value)} />
+        </div>
+        <div className="grid gap-2 sm:col-span-2">
+          <Label htmlFor={`capability-${kind}-controlled`}>{t("store.admin.governance.fields.controlledTransactionId")}</Label>
+          <Input id={`capability-${kind}-controlled`} className="min-h-11 rounded-xl font-mono text-xs" value={controlledTransactionId} onChange={(event) => setControlledTransactionId(event.target.value)} />
+        </div>
+      </div>
+      {record?.merchant_account_digest && (
+        <p className="text-xs text-muted-foreground">
+          {t("store.admin.governance.capabilities.merchantDigest", { digest: record.merchant_account_digest })}
+        </p>
+      )}
+      <Button type="button" className="min-h-11 w-fit rounded-xl" disabled={saving || channel.adapter_kind === "http"} onClick={() => void submit()}>
+        <ShieldCheck className="size-4" />
+        {saving ? t("common.loading") : t("common.save")}
+      </Button>
+    </section>
+  );
+}
+
+export function ChannelCapabilitiesDialog({
+  channel,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  channel: StorePaymentChannel | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => Promise<unknown>;
+}) {
+  const { t } = useTranslation();
+  const capabilitiesKey = channel && open
+    ? `/api/dashboard/store/admin/payment-channels/${encodeURIComponent(channel.id)}/capabilities`
+    : null;
+  const capabilities = useSWR(capabilitiesKey, () => storeApi.admin.listChannelCapabilities(channel!.id));
+  const [savingKind, setSavingKind] = useState<MerchantCapabilityKind | null>(null);
+  const [selectedKind, setSelectedKind] = useState<MerchantCapabilityKind>("payment_query");
+
+  const save = async (kind: MerchantCapabilityKind, input: PutStoreMerchantCapabilityInput) => {
+    if (!channel) return;
+    setSavingKind(kind);
+    try {
+      await capabilities.mutate(
+        async (current) => {
+          const saved = await storeApi.admin.putChannelCapability(channel.id, kind, input);
+          const next = current?.capabilities.filter((item) => item.capability !== kind) ?? [];
+          return { capabilities: [...next, saved].sort((left, right) => left.capability.localeCompare(right.capability)) };
+        },
+        {
+          optimisticData: (current) => optimisticCapability(channel.id, kind, input, current),
+          rollbackOnError: true,
+          revalidate: false,
+        },
+      );
+      await onSaved();
+      toast.success(t("store.admin.governance.capabilities.saved"));
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : t("common.error"));
+    } finally {
+      setSavingKind(null);
+    }
+  };
+
+  const records = capabilities.data?.capabilities ?? [];
+  const editorKey = `${selectedKind}-${records.find((record) => record.capability === selectedKind)?.verified_at ?? "new"}`;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[88vh] overflow-y-auto rounded-2xl sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-lg">
+            <Layers3 className="size-5" />
+            {t("store.admin.governance.capabilities.title", { name: channel?.name ?? "" })}
+          </DialogTitle>
+          <DialogDescription>{t("store.admin.governance.capabilities.description")}</DialogDescription>
+        </DialogHeader>
+        {capabilities.isLoading ? (
+          <DialogLoading />
+        ) : capabilities.error ? (
+          <DialogError onRetry={() => void capabilities.mutate()} />
+        ) : channel ? (
+          <div className="grid gap-5">
+            <div className="grid gap-2">
+              <Label htmlFor="capability-kind">{t("store.admin.governance.capabilities.select")}</Label>
+              <Select value={selectedKind} onValueChange={(value) => setSelectedKind(value as MerchantCapabilityKind)}>
+                <SelectTrigger id="capability-kind" className="min-h-11 rounded-xl">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MERCHANT_CAPABILITY_KINDS.map((kind) => (
+                    <SelectItem key={kind} value={kind}>
+                      {t(`store.admin.governance.capabilities.kinds.${kind}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid max-h-40 gap-2 overflow-y-auto pr-1">
+              {MERCHANT_CAPABILITY_KINDS.map((kind) => {
+                const record = capabilityRecord(records, kind);
+                return (
+                  <div key={kind} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3">
+                    <span className="text-sm font-medium">{t(`store.admin.governance.capabilities.kinds.${kind}`)}</span>
+                    <Badge variant={record?.state === "supported" ? "default" : "secondary"}>
+                      {t(`store.admin.governance.capabilities.states.${record?.state ?? "unsupported"}`)}
+                    </Badge>
+                  </div>
+                );
+              })}
+            </div>
+            <CapabilityEditor
+              key={editorKey}
+              channel={channel}
+              kind={selectedKind}
+              record={capabilityRecord(records, selectedKind)}
+              saving={savingKind === selectedKind}
+              onSave={save}
+            />
+          </div>
+        ) : null}
+        <DialogFooter>
+          <Button type="button" variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)}>{t("common.close")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function ChannelComplianceDialog({
+  channel,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  channel: StorePaymentChannel | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => Promise<unknown>;
+}) {
+  const { t, i18n } = useTranslation();
+  const complianceKey = channel && open
+    ? `/api/dashboard/store/admin/payment-channels/${encodeURIComponent(channel.id)}/compliance`
+    : null;
+  const compliance = useSWR(complianceKey, () => storeApi.admin.getChannelCompliance(channel!.id));
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const currentTerms = compliance.data?.current_terms_version ?? "";
+  const active = compliance.data?.compliance;
+  const isCurrent = Boolean(active && !active.invalidated_at && active.terms_version === currentTerms);
+
+  const confirm = async () => {
+    if (!channel || !currentTerms) return;
+    if (!currentPassword.trim()) {
+      toast.error(t("store.admin.governance.compliance.passwordRequired"));
+      return;
+    }
+    const input = { confirmed: true as const, terms_version: currentTerms };
+    setSaving(true);
+    try {
+      await compliance.mutate(
+        async () => {
+          const grant = await storeApi.admin.createReauthGrant(currentPassword, "compliance_confirm");
+          const saved = await storeApi.admin.confirmChannelCompliance(channel.id, input, grant.token);
+          return {
+            current_terms_version: currentTerms,
+            compliance: saved,
+          };
+        },
+        {
+          optimisticData: (current) => optimisticCompliance(channel.id, currentTerms, current),
+          rollbackOnError: true,
+          revalidate: false,
+        },
+      );
+      setCurrentPassword("");
+      await onSaved();
+      toast.success(t("store.admin.governance.compliance.saved"));
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : t("common.error"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[88vh] overflow-y-auto rounded-2xl sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-lg">
+            <ClipboardCheck className="size-5" />
+            {t("store.admin.governance.compliance.title", { name: channel?.name ?? "" })}
+          </DialogTitle>
+          <DialogDescription>{t("store.admin.governance.compliance.description")}</DialogDescription>
+        </DialogHeader>
+        {compliance.isLoading ? (
+          <DialogLoading />
+        ) : compliance.error ? (
+          <DialogError onRetry={() => void compliance.mutate()} />
+        ) : (
+          <div className="grid gap-5">
+            <div className="rounded-xl border p-4 text-sm">
+              <p className="font-medium">{t("store.admin.governance.compliance.currentTerms")}</p>
+              <p className="mt-1 font-mono text-xs">{currentTerms || t("store.admin.governance.compliance.unknownTerms")}</p>
+            </div>
+            {active ? (
+              <div className="grid gap-3 rounded-xl border p-4 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span>{t("store.admin.governance.compliance.latestConfirmation")}</span>
+                  <Badge variant={isCurrent ? "default" : "secondary"}>
+                    {t(isCurrent ? "store.admin.governance.compliance.current" : "store.admin.governance.compliance.outdated")}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t("store.admin.governance.compliance.confirmedAt", {
+                    date: new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(new Date(active.confirmed_at)),
+                  })}
+                </p>
+                <p className="text-xs text-muted-foreground">{t("store.admin.governance.compliance.termsVersion", { version: active.terms_version })}</p>
+              </div>
+            ) : (
+              <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                {t("store.admin.governance.compliance.empty")}
+              </p>
+            )}
+            {!isCurrent && (
+              <section className="grid gap-4 border-t pt-5">
+                <div className="grid gap-2">
+                  <Label htmlFor="compliance-password">{t("store.admin.channels.credential.currentPassword")}</Label>
+                  <Input id="compliance-password" className="min-h-11 rounded-xl" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
+                </div>
+                <Button type="button" className="min-h-11 w-fit rounded-xl" disabled={saving || !currentTerms} onClick={() => void confirm()}>
+                  <ClipboardCheck className="size-4" />
+                  {saving ? t("common.loading") : t("store.admin.governance.compliance.confirm")}
+                </Button>
+              </section>
+            )}
+          </div>
+        )}
+        <DialogFooter>
+          <Button type="button" variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)}>{t("common.close")}</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

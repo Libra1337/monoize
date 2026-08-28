@@ -186,9 +186,67 @@ export type PaymentCredentialPayload =
   | Omit<Extract<PaymentCredentialInput, { adapter_kind: "alipay" }>, "adapter_kind">
   | Omit<Extract<PaymentCredentialInput, { adapter_kind: "wechat" }>, "adapter_kind">;
 
+export type MerchantCapabilityKind =
+  | "payment_query"
+  | "refund"
+  | "refund_query"
+  | "dispute_event"
+  | "dispute_query"
+  | "bill_download"
+  | "settlement_report";
+
+export type MerchantCapabilityState = "supported" | "unsupported" | "manual";
+
+export interface StorePaymentCompliance {
+  id: string;
+  channel_id: string;
+  terms_version: string;
+  admin_user_id: string;
+  source_ip: string;
+  confirmed_at: string;
+  invalidated_at: string | null;
+}
+
+export interface StoreComplianceView {
+  current_terms_version: string;
+  compliance: StorePaymentCompliance | null;
+}
+
+export interface ConfirmStoreComplianceInput {
+  confirmed: true;
+  terms_version: string;
+}
+
+export interface PutStoreMerchantCapabilityInput {
+  state: MerchantCapabilityState;
+  environment: string;
+  provider_product: string;
+  evidence_digest: string;
+  controlled_transaction_id: string | null;
+}
+
+export interface StoreMerchantCapability {
+  id: string;
+  channel_id: string;
+  capability: MerchantCapabilityKind;
+  state: MerchantCapabilityState;
+  environment: string;
+  merchant_account_digest: string;
+  provider_product: string;
+  evidence_digest: string;
+  controlled_transaction_id: string | null;
+  verifier_admin_id: string;
+  verified_at: string;
+  expires_at: string;
+}
+
+export interface StoreMerchantCapabilitiesView {
+  capabilities: StoreMerchantCapability[];
+}
+
 export interface StoreReauthGrant {
   token: string;
-  scope: "credential_update" | "redemption_access" | "refund";
+  scope: "credential_update" | "redemption_access" | "compliance_confirm" | "refund";
   expires_at: string;
 }
 
@@ -509,6 +567,37 @@ export const storeApi = {
     putChannelReadiness: (id: string, input: PutStoreChannelReadinessInput) =>
       jsonMutation<StoreChannelReadinessProfile>(
         `/admin/payment-channels/${encodeURIComponent(id)}/readiness`,
+        "PUT",
+        input,
+      ),
+    getChannelCompliance: (id: string) =>
+      storeRequest<StoreComplianceView>(
+        `/admin/payment-channels/${encodeURIComponent(id)}/compliance`,
+      ),
+    confirmChannelCompliance: (
+      id: string,
+      input: ConfirmStoreComplianceInput,
+      reauthToken: string,
+    ) =>
+      storeRequest<StorePaymentCompliance>(
+        `/admin/payment-channels/${encodeURIComponent(id)}/compliance`,
+        {
+          method: "PUT",
+          headers: { "X-Store-Reauth-Token": reauthToken },
+          body: JSON.stringify(input),
+        },
+      ),
+    listChannelCapabilities: (id: string) =>
+      storeRequest<StoreMerchantCapabilitiesView>(
+        `/admin/payment-channels/${encodeURIComponent(id)}/capabilities`,
+      ),
+    putChannelCapability: (
+      id: string,
+      capability: MerchantCapabilityKind,
+      input: PutStoreMerchantCapabilityInput,
+    ) =>
+      jsonMutation<StoreMerchantCapability>(
+        `/admin/payment-channels/${encodeURIComponent(id)}/capabilities/${encodeURIComponent(capability)}`,
         "PUT",
         input,
       ),

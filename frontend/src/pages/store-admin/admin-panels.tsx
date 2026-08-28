@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { SiAlipay, SiStripe, SiWechat } from "@icons-pack/react-simple-icons";
-import { CreditCard, Eye, FileCheck2, Package, Pencil, Plus, ReceiptText, ShieldCheck, TicketCheck, Trash2 } from "lucide-react";
+import { CreditCard, ClipboardCheck, Eye, FileCheck2, Layers3, Package, Pencil, Plus, ReceiptText, ShieldCheck, TicketCheck, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -135,6 +135,8 @@ export function ChannelsPanel({
   channels,
   onCreate,
   onPrivacyRecords,
+  onCompliance,
+  onCapabilities,
   onReadiness,
   onEdit,
   onDelete,
@@ -142,6 +144,8 @@ export function ChannelsPanel({
   channels: StorePaymentChannel[];
   onCreate: () => void;
   onPrivacyRecords: () => void;
+  onCompliance: (channel: StorePaymentChannel) => void;
+  onCapabilities: (channel: StorePaymentChannel) => void;
   onReadiness: (channel: StorePaymentChannel) => void;
   onEdit: (channel: StorePaymentChannel) => void;
   onDelete: (channel: StorePaymentChannel) => void;
@@ -212,9 +216,17 @@ export function ChannelsPanel({
               </div>
               <div className="flex items-center gap-1">
                 {channel.adapter_kind !== "http" && (
-                  <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("store.admin.governance.readiness.action")} onClick={() => onReadiness(channel)}>
-                    <ShieldCheck className="size-4" />
-                  </Button>
+                  <>
+                    <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("store.admin.governance.compliance.action")} onClick={() => onCompliance(channel)}>
+                      <ClipboardCheck className="size-4" />
+                    </Button>
+                    <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("store.admin.governance.capabilities.action")} onClick={() => onCapabilities(channel)}>
+                      <Layers3 className="size-4" />
+                    </Button>
+                    <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("store.admin.governance.readiness.action")} onClick={() => onReadiness(channel)}>
+                      <ShieldCheck className="size-4" />
+                    </Button>
+                  </>
                 )}
                 <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("common.edit")} onClick={() => onEdit(channel)}>
                   <Pencil className="size-4" />
