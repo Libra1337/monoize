@@ -504,6 +504,128 @@ impl PaymentOrderStore {
             .collect()
     }
 
+    pub async fn get_order_admin(
+        &self,
+        order_id: &str,
+    ) -> Result<Option<PaymentOrder>, PaymentOrderError> {
+        query_order_by_id(&self.db, self.db.read(), order_id, None).await
+    }
+
+    pub async fn get_attempt_admin(
+        &self,
+        attempt_id: &str,
+    ) -> Result<Option<PaymentAttempt>, PaymentOrderError> {
+        query_attempt_by_id(&self.db, self.db.read(), attempt_id).await
+    }
+
+    pub async fn list_attempts_admin(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<PaymentAttempt>, PaymentOrderError> {
+        self.db
+            .read()
+            .query_all(self.db.stmt(
+                &format!(
+                    "{} WHERE order_id = $1 ORDER BY created_at ASC, id ASC",
+                    attempt_select()
+                ),
+                vec![order_id.into()],
+            ))
+            .await
+            .map_err(storage)?
+            .into_iter()
+            .map(payment_attempt_from_row)
+            .collect()
+    }
+
+    pub async fn close_confirmed_unpaid_admin(
+        &self,
+        order_id: &str,
+        attempt_id: &str,
+    ) -> Result<(PaymentOrder, PaymentAttempt), PaymentOrderError> {
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let order = query_order_by_id_for_update(&self.db, &*tx, order_id, None)
+            .await?
+            .ok_or(PaymentOrderError::OrderNotFound)?;
+        let lock = if self.db.is_postgres() {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
+        let attempt = tx
+            .query_one(self.db.stmt(
+                &format!("{} WHERE id = $1 AND order_id = $2{lock}", attempt_select()),
+                vec![attempt_id.into(), order_id.into()],
+            ))
+            .await
+            .map_err(storage)?
+            .map(payment_attempt_from_row)
+            .transpose()?
+            .ok_or(PaymentOrderError::OrderNotFound)?;
+        if order.contract_version != 2 || order.payment_state != PaymentState::Unpaid {
+            return Err(PaymentOrderError::OrderNotPayable);
+        }
+        if !matches!(
+            attempt.state,
+            PaymentAttemptState::Created
+                | PaymentAttemptState::Presented
+                | PaymentAttemptState::Failed
+        ) {
+            return Err(PaymentOrderError::OrderNotPayable);
+        }
+        let other_active_attempts = tx
+            .query_all(self.db.stmt(
+                &format!(
+                    "SELECT id FROM store_payment_attempts
+                     WHERE order_id = $1 AND id <> $2
+                       AND state IN ('created', 'presented')
+                     ORDER BY id ASC{lock}"
+                ),
+                vec![order_id.into(), attempt_id.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        if !other_active_attempts.is_empty() {
+            return Err(PaymentOrderError::OrderNotPayable);
+        }
+        let now = timestamp(Utc::now());
+        let attempt_change = tx
+            .execute(self.db.stmt(
+                "UPDATE store_payment_attempts
+                 SET state = 'expired', failure_kind = NULL, updated_at = $3
+                 WHERE id = $1 AND order_id = $2
+                   AND state IN ('created', 'presented', 'failed')",
+                vec![attempt_id.into(), order_id.into(), now.clone().into()],
+            ))
+            .await
+            .map_err(storage)?;
+        if attempt_change.rows_affected() != 1 {
+            return Err(PaymentOrderError::OrderNotPayable);
+        }
+        let order_change = tx
+            .execute(self.db.stmt(
+                "UPDATE store_orders
+                 SET payment_state = 'closed', closed_at = $3, updated_at = $3,
+                     state_revision = state_revision + 1
+                 WHERE id = $1 AND payment_state = 'unpaid' AND contract_version = 2
+                   AND state_revision = $2",
+                vec![order_id.into(), order.state_revision.into(), now.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        if order_change.rows_affected() != 1 {
+            return Err(PaymentOrderError::OrderNotPayable);
+        }
+        let order = query_order_by_id(&self.db, &*tx, order_id, None)
+            .await?
+            .ok_or(PaymentOrderError::OrderNotFound)?;
+        let attempt = query_attempt_by_id(&self.db, &*tx, attempt_id)
+            .await?
+            .ok_or(PaymentOrderError::OrderNotFound)?;
+        tx.commit().await.map_err(storage)?;
+        Ok((order, attempt))
+    }
+
     pub async fn create_attempt(
         &self,
         user_id: &str,

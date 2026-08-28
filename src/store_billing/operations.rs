@@ -2,14 +2,22 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use sea_orm::{ConnectionTrait, QueryResult};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use super::adapters::alipay::{self, AlipayCredential};
 use super::adapters::stripe::{self, StripeCredential};
 use super::adapters::wechat::{self, WechatCredential, WechatPlatformVerifier};
+use super::callbacks::{
+    ApplyProviderEventInput, CallbackApplyResult, CallbackStoreError, PaymentCallbackStore,
+};
 use super::crypto::{EncryptedSecret, PaymentKeyRing};
 use super::money::Currency;
+use super::order::{PaymentAttempt, PaymentOrder, PaymentOrderError, PaymentOrderStore};
 use super::payment::{AdapterError, PaymentQuery, ProviderPaymentState, validate_payment_query};
+use super::recovery::{RecoveryError, RecoveryStore, RefundRecord};
+use super::state_machine::PaymentState;
 use crate::db::DbPool;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -220,6 +228,393 @@ impl PaymentQueryOperations {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdminOrderDetail {
+    pub order: PaymentOrder,
+    pub attempts: Vec<PaymentAttempt>,
+    pub refunds: Vec<RefundRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdminProviderPaymentState {
+    pub kind: String,
+    pub provider_transaction_id: Option<String>,
+}
+
+impl From<&ProviderPaymentState> for AdminProviderPaymentState {
+    fn from(state: &ProviderPaymentState) -> Self {
+        match state {
+            ProviderPaymentState::NotFound => Self {
+                kind: "not_found".to_string(),
+                provider_transaction_id: None,
+            },
+            ProviderPaymentState::Unpaid => Self {
+                kind: "unpaid".to_string(),
+                provider_transaction_id: None,
+            },
+            ProviderPaymentState::Paid {
+                provider_transaction_id,
+            } => Self {
+                kind: "paid".to_string(),
+                provider_transaction_id: Some(provider_transaction_id.clone()),
+            },
+            ProviderPaymentState::Closed => Self {
+                kind: "closed".to_string(),
+                provider_transaction_id: None,
+            },
+            ProviderPaymentState::Ambiguous => Self {
+                kind: "ambiguous".to_string(),
+                provider_transaction_id: None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdminOrderOperationResult {
+    pub order: PaymentOrder,
+    pub attempt: PaymentAttempt,
+    pub provider_state: AdminProviderPaymentState,
+    pub projection: Option<String>,
+    pub closed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AdminOrderOperationError {
+    #[error("Admin order operation input is invalid")]
+    InvalidInput,
+    #[error("Admin order or attempt was not found")]
+    NotFound,
+    #[error("legacy closed orders reject new operations")]
+    LegacyClosed,
+    #[error("order cannot be closed")]
+    OrderNotPayable,
+    #[error("Provider payment state is ambiguous")]
+    Ambiguous,
+    #[error("historical payment configuration is unavailable")]
+    ConfigurationUnavailable,
+    #[error("Provider payment query failed")]
+    ProviderQueryFailed,
+    #[error("verified Provider payment projection failed")]
+    ProjectionFailed,
+    #[error("Admin order operation storage failed: {0}")]
+    Storage(String),
+}
+
+#[derive(Clone)]
+pub struct AdminOrderOperations {
+    db: DbPool,
+    query: PaymentQueryOperations,
+}
+
+impl AdminOrderOperations {
+    pub fn new(
+        db: DbPool,
+        key_ring: Arc<PaymentKeyRing>,
+        provider: Arc<dyn PaymentQueryProvider>,
+    ) -> Self {
+        Self {
+            query: PaymentQueryOperations::new(db.clone(), key_ring, provider),
+            db,
+        }
+    }
+
+    pub async fn detail(&self, order_id: &str) -> Result<AdminOrderDetail, AdminOrderOperationError> {
+        Self::detail_from_db(&self.db, order_id).await
+    }
+
+    pub async fn detail_from_db(
+        db: &DbPool,
+        order_id: &str,
+    ) -> Result<AdminOrderDetail, AdminOrderOperationError> {
+        if !valid_identifier(order_id) {
+            return Err(AdminOrderOperationError::InvalidInput);
+        }
+        let orders = PaymentOrderStore::new(db.clone());
+        let order = orders
+            .get_order_admin(order_id)
+            .await
+            .map_err(map_order_error)?
+            .ok_or(AdminOrderOperationError::NotFound)?;
+        let attempts = orders
+            .list_attempts_admin(order_id)
+            .await
+            .map_err(map_order_error)?;
+        let refunds = RecoveryStore::new(db.clone())
+            .list_refunds_for_order(order_id)
+            .await
+            .map_err(map_recovery_error)?;
+        Ok(AdminOrderDetail {
+            order,
+            attempts,
+            refunds,
+        })
+    }
+
+    pub async fn query(
+        &self,
+        order_id: &str,
+        attempt_id: &str,
+    ) -> Result<AdminOrderOperationResult, AdminOrderOperationError> {
+        self.execute(order_id, attempt_id, false).await
+    }
+
+    pub async fn close(
+        &self,
+        order_id: &str,
+        attempt_id: &str,
+    ) -> Result<AdminOrderOperationResult, AdminOrderOperationError> {
+        self.execute(order_id, attempt_id, true).await
+    }
+
+    async fn execute(
+        &self,
+        order_id: &str,
+        attempt_id: &str,
+        close: bool,
+    ) -> Result<AdminOrderOperationResult, AdminOrderOperationError> {
+        if !valid_identifier(order_id) || !valid_identifier(attempt_id) {
+            return Err(AdminOrderOperationError::InvalidInput);
+        }
+        let orders = PaymentOrderStore::new(self.db.clone());
+        let order = orders
+            .get_order_admin(order_id)
+            .await
+            .map_err(map_order_error)?
+            .ok_or(AdminOrderOperationError::NotFound)?;
+        let attempt = orders
+            .get_attempt_admin(attempt_id)
+            .await
+            .map_err(map_order_error)?
+            .filter(|attempt| attempt.order_id == order_id)
+            .ok_or(AdminOrderOperationError::NotFound)?;
+        if close && (order.contract_version != 2 || order.payment_state != PaymentState::Unpaid) {
+            return Err(AdminOrderOperationError::OrderNotPayable);
+        }
+        if order.contract_version == 1 && order.payment_state == PaymentState::Closed {
+            return Err(AdminOrderOperationError::LegacyClosed);
+        }
+        let outcome = self
+            .query
+            .query_attempt_with_context(attempt_id)
+            .await
+            .map_err(map_query_error)?;
+        if outcome.order_id != order_id {
+            return Err(AdminOrderOperationError::NotFound);
+        }
+        let provider_state = outcome.state.clone();
+        match &provider_state {
+            ProviderPaymentState::Ambiguous => return Err(AdminOrderOperationError::Ambiguous),
+            ProviderPaymentState::Paid {
+                provider_transaction_id,
+            } => {
+                let projection = self
+                    .project_paid_query(&outcome, provider_transaction_id)
+                    .await?;
+                let order = orders
+                    .get_order_admin(order_id)
+                    .await
+                    .map_err(map_order_error)?
+                    .ok_or(AdminOrderOperationError::NotFound)?;
+                let attempt = orders
+                    .get_attempt_admin(attempt_id)
+                    .await
+                    .map_err(map_order_error)?
+                    .ok_or(AdminOrderOperationError::NotFound)?;
+                return Ok(AdminOrderOperationResult {
+                    order,
+                    attempt,
+                    provider_state: AdminProviderPaymentState::from(&provider_state),
+                    projection: Some(projection),
+                    closed: false,
+                });
+            }
+            ProviderPaymentState::NotFound
+            | ProviderPaymentState::Unpaid
+            | ProviderPaymentState::Closed => {}
+        }
+        if close {
+            let (order, attempt) = orders
+                .close_confirmed_unpaid_admin(order_id, attempt_id)
+                .await
+                .map_err(map_order_error)?;
+            return Ok(AdminOrderOperationResult {
+                order,
+                attempt,
+                provider_state: AdminProviderPaymentState::from(&provider_state),
+                projection: None,
+                closed: true,
+            });
+        }
+        Ok(AdminOrderOperationResult {
+            order,
+            attempt,
+            provider_state: AdminProviderPaymentState::from(&provider_state),
+            projection: None,
+            closed: false,
+        })
+    }
+
+    async fn project_paid_query(
+        &self,
+        outcome: &PaymentQueryOutcome,
+        provider_transaction_id: &str,
+    ) -> Result<String, AdminOrderOperationError> {
+        let identity = query_event_identity(outcome, provider_transaction_id);
+        let digest = hex_sha256(identity.as_bytes());
+        let event = ApplyProviderEventInput {
+            event_row_id: deterministic_uuid(&digest).to_string(),
+            credential_version_id: outcome.credential_version_id.clone(),
+            verification_credential_version_id: outcome.credential_version_id.clone(),
+            provider_event_id: format!("payment-query:{digest}"),
+            event_kind: "payment_query_succeeded".to_string(),
+            order_id: outcome.order_id.clone(),
+            attempt_id: outcome.attempt_id.clone(),
+            provider_transaction_id: provider_transaction_id.to_string(),
+            provider_object_id: outcome.provider_object_id.clone(),
+            order_number: outcome.order_number.clone(),
+            merchant_account_identity: outcome.merchant_account_identity.clone(),
+            amount_minor: outcome.amount_minor.clone(),
+            currency: outcome.currency,
+            body_digest: digest,
+            parsed_json: serde_json::json!({
+                "event_kind": "payment_query_succeeded",
+                "attempt_id": outcome.attempt_id,
+                "provider_object_id": outcome.provider_object_id,
+                "provider_transaction_id": provider_transaction_id,
+                "order_number": outcome.order_number,
+                "amount_minor": outcome.amount_minor,
+                "currency": currency_string(outcome.currency),
+            }),
+            raw_body: None,
+            source_ip: None,
+            user_agent: Some("monoize-admin-provider-query".to_string()),
+            received_at: chrono::Utc::now(),
+        };
+        let store = PaymentCallbackStore::new(self.db.clone());
+        match store
+            .apply_verified_query_payment(event)
+            .await
+            .map_err(map_callback_error)?
+        {
+            CallbackApplyResult::Applied => Ok("applied".to_string()),
+            CallbackApplyResult::Duplicate => {
+                store
+                    .fulfill_paid_order(&outcome.order_id)
+                    .await
+                    .map_err(map_callback_error)?;
+                Ok("duplicate".to_string())
+            }
+            CallbackApplyResult::ManualReview => Err(AdminOrderOperationError::ProjectionFailed),
+        }
+    }
+}
+
+fn valid_identifier(value: &str) -> bool {
+    let mut count = 0;
+    for character in value.chars() {
+        if character.is_whitespace() || count == 128 {
+            return false;
+        }
+        count += 1;
+    }
+    count > 0
+}
+
+fn query_event_identity(outcome: &PaymentQueryOutcome, provider_transaction_id: &str) -> String {
+    [
+        outcome.attempt_id.as_str(),
+        outcome.order_id.as_str(),
+        outcome.channel_id.as_str(),
+        outcome.credential_version_id.as_str(),
+        outcome.provider_object_id.as_str(),
+        outcome.merchant_account_identity.as_str(),
+        outcome.order_number.as_str(),
+        outcome.amount_minor.as_str(),
+        currency_string(outcome.currency),
+        provider_transaction_id,
+    ]
+    .into_iter()
+    .map(|value| format!("{}:{value}", value.len()))
+    .collect::<Vec<_>>()
+    .join("|")
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn deterministic_uuid(hex_digest: &str) -> Uuid {
+    let mut uuid = [0_u8; 16];
+    for (index, byte) in uuid.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex_digest[index * 2..index * 2 + 2], 16)
+            .expect("SHA-256 hex is valid");
+    }
+    uuid[6] = (uuid[6] & 0x0f) | 0x50;
+    uuid[8] = (uuid[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(uuid)
+}
+
+fn currency_string(currency: Currency) -> &'static str {
+    match currency {
+        Currency::CNY => "CNY",
+        Currency::USD => "USD",
+    }
+}
+
+fn map_query_error(error: PaymentOperationsError) -> AdminOrderOperationError {
+    match error {
+        PaymentOperationsError::AttemptNotFound => AdminOrderOperationError::NotFound,
+        PaymentOperationsError::CredentialNotFound
+        | PaymentOperationsError::CredentialBindingMismatch
+        | PaymentOperationsError::CredentialDecryptionFailed
+        | PaymentOperationsError::CredentialInvalid
+        | PaymentOperationsError::AccountIdentityMismatch
+        | PaymentOperationsError::PaymentContractInvalid
+        | PaymentOperationsError::UnsupportedAdapter => {
+            AdminOrderOperationError::ConfigurationUnavailable
+        }
+        PaymentOperationsError::Provider(
+            AdapterError::InvalidConfiguration | AdapterError::InvalidRequest,
+        ) => {
+            AdminOrderOperationError::ConfigurationUnavailable
+        }
+        PaymentOperationsError::Provider(_) => AdminOrderOperationError::ProviderQueryFailed,
+        PaymentOperationsError::Storage(detail) => AdminOrderOperationError::Storage(detail),
+    }
+}
+
+fn map_order_error(error: PaymentOrderError) -> AdminOrderOperationError {
+    match error {
+        PaymentOrderError::OrderNotFound => AdminOrderOperationError::NotFound,
+        PaymentOrderError::OrderNotPayable => AdminOrderOperationError::OrderNotPayable,
+        PaymentOrderError::Storage(detail) => AdminOrderOperationError::Storage(detail),
+        _ => AdminOrderOperationError::Storage(error.to_string()),
+    }
+}
+
+fn map_recovery_error(error: RecoveryError) -> AdminOrderOperationError {
+    match error {
+        RecoveryError::NotFound => AdminOrderOperationError::NotFound,
+        RecoveryError::Storage(detail) => AdminOrderOperationError::Storage(detail),
+        _ => AdminOrderOperationError::Storage(error.to_string()),
+    }
+}
+
+fn map_callback_error(error: CallbackStoreError) -> AdminOrderOperationError {
+    match error {
+        CallbackStoreError::InvalidInput | CallbackStoreError::NotFound => {
+            AdminOrderOperationError::ProjectionFailed
+        }
+        CallbackStoreError::Storage(detail) | CallbackStoreError::Fulfillment(detail) => {
+            AdminOrderOperationError::Storage(detail)
+        }
+    }
+}
+
 async fn load_wechat_platform_verifiers(
     db: &DbPool,
     key_ring: &PaymentKeyRing,
@@ -311,10 +706,11 @@ async fn load_attempt(
         .read()
         .query_one(db.stmt(
             "SELECT a.id AS attempt_id, a.state AS attempt_state, a.order_id,
-                    a.channel_id AS attempt_channel_id,
+                    a.channel_id AS attempt_channel_id, a.payment_contract_version,
                     a.adapter_kind AS attempt_adapter_kind, a.credential_version_id,
                     a.merchant_account_identity, a.provider_object_id,
-                    o.order_number, o.payment_minor, o.payment_currency, o.payment_hold,
+                    o.order_number, o.contract_version, o.payment_minor,
+                    o.payment_currency, o.payment_hold,
                     c.id AS stored_credential_id, c.channel_id AS credential_channel_id,
                     c.adapter_kind AS credential_adapter_kind, c.format_version,
                     c.key_id, c.nonce_base64, c.ciphertext_base64,
@@ -333,6 +729,17 @@ async fn load_attempt(
     let credential_version_id = row_string(&row, "credential_version_id")?;
     if credential_id != credential_version_id {
         return Err(PaymentOperationsError::CredentialBindingMismatch);
+    }
+    let attempt_contract_version = row
+        .try_get::<i32>("", "payment_contract_version")
+        .map_err(storage)?;
+    let order_contract_version = row
+        .try_get::<i32>("", "contract_version")
+        .map_err(storage)?;
+    if attempt_contract_version != order_contract_version
+        || !matches!(attempt_contract_version, 1 | 2)
+    {
+        return Err(PaymentOperationsError::PaymentContractInvalid);
     }
     let version = row
         .try_get::<Option<i32>>("", "format_version")

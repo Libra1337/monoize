@@ -185,6 +185,8 @@ pub struct AppState {
     pub payment_keys: Option<Arc<crate::store_billing::crypto::PaymentKeyRing>>,
     pub payment_public_origin: Option<url::Url>,
     pub checkout_provider: Arc<dyn crate::store_billing::checkout::CheckoutProvider>,
+    pub payment_query_provider:
+        Arc<dyn crate::store_billing::operations::PaymentQueryProvider>,
     pub store_order_poll_limiter: crate::store_billing::poll_limit::StoreOrderPollLimiter,
     pub store_callback_limiter: crate::store_billing::callback_limit::StoreCallbackLimiter,
     pub node: Arc<NodeSettings>,
@@ -374,6 +376,9 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     let http = http_clients.global_client();
     let checkout_provider =
         Arc::new(crate::store_billing::checkout::ReqwestCheckoutProvider::new(http.clone()));
+    let payment_query_provider = Arc::new(
+        crate::store_billing::operations::ReqwestPaymentQueryProvider::new(http.clone()),
+    );
 
     let db = DbPool::connect(&runtime.database_dsn)
         .await
@@ -1033,6 +1038,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         payment_keys,
         payment_public_origin,
         checkout_provider,
+        payment_query_provider,
         store_order_poll_limiter: crate::store_billing::poll_limit::StoreOrderPollLimiter::default(
         ),
         store_callback_limiter: crate::store_billing::callback_limit::StoreCallbackLimiter::default(
@@ -2178,6 +2184,14 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
             put(crate::dashboard_handlers::put_store_payment_capability_admin),
         )
         .route(
+            "/dashboard/store/admin/orders/{id}/query",
+            post(crate::dashboard_handlers::query_store_order_admin),
+        )
+        .route(
+            "/dashboard/store/admin/orders/{id}/close",
+            post(crate::dashboard_handlers::close_store_order_admin),
+        )
+        .route(
             "/dashboard/store/admin/redemption-codes",
             post(crate::dashboard_handlers::generate_store_redemption_codes_admin),
         )
@@ -2269,6 +2283,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/store/admin/orders",
             get(crate::dashboard_handlers::list_all_store_orders_admin),
+        )
+        .route(
+            "/dashboard/store/admin/orders/{id}",
+            get(crate::dashboard_handlers::get_store_order_admin),
         )
         .route(
             "/dashboard/store/admin/redemption-codes",

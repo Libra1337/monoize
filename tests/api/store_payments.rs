@@ -2,7 +2,7 @@ use aes_gcm::aead::{Aead, KeyInit as AesKeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use async_trait::async_trait;
 use axum::body::Body;
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::{Method, Request, StatusCode};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -21,7 +21,10 @@ use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::{
     ExchangeRateFetcher, ExchangeRateService, ExchangeRateSnapshot, ExchangeRateStore,
 };
-use monoize::store_billing::payment::{AdapterError, CheckoutAction, CheckoutRequest};
+use monoize::store_billing::operations::PaymentQueryProvider;
+use monoize::store_billing::payment::{
+    AdapterError, CheckoutAction, CheckoutRequest, PaymentQuery, ProviderPaymentState,
+};
 use monoize::users::UserRole;
 use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::rand_core::OsRng;
@@ -42,6 +45,59 @@ struct OfflineRateFetcher;
 #[derive(Clone, Default)]
 struct ApiCheckoutProvider {
     calls: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct ApiPaymentQueryProvider {
+    calls: Arc<AtomicUsize>,
+    outcome: Result<ProviderPaymentState, AdapterError>,
+}
+
+impl ApiPaymentQueryProvider {
+    fn returning(state: ProviderPaymentState) -> Self {
+        Self {
+            calls: Arc::new(AtomicUsize::new(0)),
+            outcome: Ok(state),
+        }
+    }
+
+    fn failing(error: AdapterError) -> Self {
+        Self {
+            calls: Arc::new(AtomicUsize::new(0)),
+            outcome: Err(error),
+        }
+    }
+}
+
+#[async_trait]
+impl PaymentQueryProvider for ApiPaymentQueryProvider {
+    async fn query_stripe_payment(
+        &self,
+        _credential: &StripeCredential,
+        _query: &PaymentQuery,
+    ) -> Result<ProviderPaymentState, AdapterError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.outcome.clone()
+    }
+
+    async fn query_alipay_payment(
+        &self,
+        _credential: &AlipayCredential,
+        _query: &PaymentQuery,
+    ) -> Result<ProviderPaymentState, AdapterError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.outcome.clone()
+    }
+
+    async fn query_wechat_payment(
+        &self,
+        _credential: &WechatCredential,
+        _verifiers: &[monoize::store_billing::adapters::wechat::WechatPlatformVerifier],
+        _query: &PaymentQuery,
+    ) -> Result<ProviderPaymentState, AdapterError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.outcome.clone()
+    }
 }
 
 #[async_trait]
@@ -696,6 +752,22 @@ async fn session(ctx: &super::TestContext, username: &str) -> String {
     format!("Bearer {}", session.token)
 }
 
+async fn admin_session(ctx: &super::TestContext, username: &str) -> String {
+    let user = ctx
+        .state
+        .user_store
+        .create_user(username, "test-password", UserRole::Admin, None)
+        .await
+        .unwrap();
+    let session = ctx
+        .state
+        .user_store
+        .create_session(&user.id, 7)
+        .await
+        .unwrap();
+    format!("Bearer {}", session.token)
+}
+
 async fn json_request(
     ctx: &super::TestContext,
     method: Method,
@@ -727,6 +799,37 @@ async fn json_request(
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
     (status, value)
+}
+
+async fn raw_json_request(
+    ctx: &super::TestContext,
+    method: Method,
+    path: &str,
+    authorization: Option<&str>,
+    body: Option<&str>,
+) -> axum::response::Response {
+    let mut builder = Request::builder().method(method).uri(path);
+    if let Some(authorization) = authorization {
+        builder = builder.header(AUTHORIZATION, authorization);
+    }
+    let body = if let Some(body) = body {
+        builder = builder.header(CONTENT_TYPE, "application/json");
+        Body::from(body.to_string())
+    } else {
+        Body::empty()
+    };
+    ctx.router
+        .clone()
+        .oneshot(builder.body(body).unwrap())
+        .await
+        .unwrap()
+}
+
+fn assert_no_store(response: &axum::response::Response) {
+    assert_eq!(
+        response.headers().get(CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
 }
 
 fn stripe_signature(secret: &[u8], timestamp: i64, body: &[u8]) -> String {
@@ -1920,4 +2023,445 @@ async fn payment_order_polling_is_limited_to_thirty_requests_per_user_per_minute
     let (status, error) = json_request(&ctx, Method::GET, &path, &user, None, None).await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{error}");
     assert_eq!(error["error"]["code"], "order_poll_rate_limited");
+}
+
+#[tokio::test]
+async fn admin_order_operation_routes_enforce_auth_origin_primary_and_no_manual_complete() {
+    let mut ctx = setup().await;
+    let admin = admin_session(&ctx, "admin_order_route_admin").await;
+    let user = session(&ctx, "admin_order_route_user").await;
+    ctx.state.payment_public_origin = Some(url::Url::parse("https://lynshen.org").unwrap());
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+
+    let (status, _) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/orders/missing",
+        "",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/orders/missing",
+        &user,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, error) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/orders/missing",
+        &admin,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
+
+    let session_token = admin.strip_prefix("Bearer ").unwrap();
+    for suffix in ["query", "close"] {
+        let response = ctx
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/api/dashboard/store/admin/orders/missing/{suffix}"
+                    ))
+                    .header("cookie", format!("monoize_session={session_token}"))
+                    .header("Origin", "https://attacker.example")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("not-json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        assert_no_store(&response);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, StatusCode::FORBIDDEN, "{suffix}: {body}");
+        assert_eq!(body["error"]["code"], "store_origin_invalid");
+    }
+
+    let replica = monoize::app::build_app(
+        ctx.state
+            .clone()
+            .with_node_role(monoize::node_config::NodeRole::Replica),
+    );
+    for suffix in ["query", "close"] {
+        let response = replica
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/api/dashboard/store/admin/orders/missing/{suffix}"
+                    ))
+                    .header(AUTHORIZATION, &admin)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"attempt_id":"attempt"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        assert_no_store(&response);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{suffix}: {body}");
+        assert_eq!(body["error"]["code"], "store_write_rejected");
+    }
+
+    let (status, _) = json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/orders/missing/complete",
+        &admin,
+        None,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+async fn create_admin_operation_fixture(
+    ctx: &mut super::TestContext,
+    query_provider: ApiPaymentQueryProvider,
+    suffix: &str,
+) -> (String, String, String) {
+    configure_payment_fixture(ctx).await;
+    configure_checkout_runtime(ctx, ApiCheckoutProvider::default()).await;
+    ctx.state.payment_query_provider = Arc::new(query_provider);
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+    let user = session(ctx, &format!("admin_operation_user_{suffix}")).await;
+    let (_, order) = json_request(
+        ctx,
+        Method::POST,
+        "/api/dashboard/store/orders",
+        &user,
+        Some(&format!("admin-operation-order-{suffix}")),
+        Some(json!({
+            "product_id":"api-payment-product",
+            "payment_channel_id":"store-channel-stripe",
+            "payment_currency":"CNY"
+        })),
+    )
+    .await;
+    let order_id = order["id"].as_str().unwrap().to_string();
+    let (_, checkout) = json_request(
+        ctx,
+        Method::POST,
+        &format!("/api/dashboard/store/orders/{order_id}/attempts"),
+        &user,
+        Some(&format!("admin-operation-attempt-{suffix}")),
+        Some(json!({"expected_payment_method":"card"})),
+    )
+    .await;
+    let attempt_id = checkout["attempt"]["id"].as_str().unwrap().to_string();
+    (user, order_id, attempt_id)
+}
+
+#[tokio::test]
+async fn admin_order_detail_is_no_store_and_confirmed_unpaid_close_is_visible() {
+    let mut ctx = setup().await;
+    let provider = ApiPaymentQueryProvider::returning(ProviderPaymentState::Unpaid);
+    let (_, order_id, attempt_id) =
+        create_admin_operation_fixture(&mut ctx, provider.clone(), "unpaid").await;
+    let admin = admin_session(&ctx, "admin_operation_unpaid_admin").await;
+
+    let response = ctx
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/dashboard/store/admin/orders/{order_id}"))
+                .header(AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("Cache-Control").unwrap(),
+        "no-store"
+    );
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let detail: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(detail["order"]["id"], order_id);
+    assert_eq!(detail["attempts"][0]["id"], attempt_id);
+    assert!(detail["refunds"].as_array().unwrap().is_empty());
+    let encoded = String::from_utf8(bytes.to_vec()).unwrap();
+    for forbidden in [
+        "ciphertext_base64",
+        "nonce_base64",
+        "raw_ciphertext_base64",
+        "secret_key",
+        "webhook_signing_secret",
+    ] {
+        assert!(!encoded.contains(forbidden), "leaked {forbidden}");
+    }
+
+    let (status, queried) = json_request(
+        &ctx,
+        Method::POST,
+        &format!("/api/dashboard/store/admin/orders/{order_id}/query"),
+        &admin,
+        None,
+        Some(json!({"attempt_id":attempt_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{queried}");
+    assert_eq!(queried["provider_state"]["kind"], "unpaid");
+    assert_eq!(queried["order"]["payment_state"], "unpaid");
+    assert_eq!(queried["attempt"]["state"], "presented");
+    assert_eq!(queried["closed"], false);
+
+    let (status, closed) = json_request(
+        &ctx,
+        Method::POST,
+        &format!("/api/dashboard/store/admin/orders/{order_id}/close"),
+        &admin,
+        None,
+        Some(json!({"attempt_id":attempt_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    assert_eq!(closed["provider_state"]["kind"], "unpaid");
+    assert_eq!(closed["order"]["payment_state"], "closed");
+    assert_eq!(closed["attempt"]["state"], "expired");
+    assert_eq!(closed["closed"], true);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+
+    let (status, repeated) = json_request(
+        &ctx,
+        Method::POST,
+        &format!("/api/dashboard/store/admin/orders/{order_id}/close"),
+        &admin,
+        None,
+        Some(json!({"attempt_id":attempt_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{repeated}");
+    assert_eq!(repeated["error"]["code"], "order_not_payable");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn admin_paid_query_projects_and_fulfills_once_with_deterministic_event() {
+    let mut ctx = setup().await;
+    let provider = ApiPaymentQueryProvider::returning(ProviderPaymentState::Paid {
+        provider_transaction_id: "pi_admin_query_paid".to_string(),
+    });
+    let (_, order_id, attempt_id) =
+        create_admin_operation_fixture(&mut ctx, provider.clone(), "paid").await;
+    let admin = admin_session(&ctx, "admin_operation_paid_admin").await;
+    let path = format!("/api/dashboard/store/admin/orders/{order_id}/query");
+
+    let (status, first) = json_request(
+        &ctx,
+        Method::POST,
+        &path,
+        &admin,
+        None,
+        Some(json!({"attempt_id":attempt_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["provider_state"]["kind"], "paid");
+    assert_eq!(first["projection"], "applied");
+    assert_eq!(first["order"]["payment_state"], "paid");
+    assert_eq!(first["order"]["fulfillment_state"], "fulfilled");
+
+    let (status, second) = json_request(
+        &ctx,
+        Method::POST,
+        &path,
+        &admin,
+        None,
+        Some(json!({"attempt_id":attempt_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["projection"], "duplicate");
+    let event_count: i64 = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT COUNT(*) AS value FROM store_provider_events
+             WHERE event_kind = 'payment_query_succeeded'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "value")
+        .unwrap();
+    assert_eq!(event_count, 1);
+    let ledger_count: i64 = ctx
+        .state
+        .db_pool
+        .read()
+        .query_one(ctx.state.db_pool.stmt(
+            "SELECT COUNT(*) AS value FROM billing_ledger
+             WHERE idempotency_key = $1",
+            vec![format!("store:fulfillment:{order_id}").into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "value")
+        .unwrap();
+    assert_eq!(ledger_count, 1);
+}
+
+#[tokio::test]
+async fn admin_ambiguous_close_and_invalid_json_leave_order_unchanged() {
+    let mut ctx = setup().await;
+    let provider = ApiPaymentQueryProvider::returning(ProviderPaymentState::Ambiguous);
+    let (_, order_id, attempt_id) =
+        create_admin_operation_fixture(&mut ctx, provider, "ambiguous").await;
+    let admin = admin_session(&ctx, "admin_operation_ambiguous_admin").await;
+    let path = format!("/api/dashboard/store/admin/orders/{order_id}/close");
+
+    let (status, invalid) = json_request(
+        &ctx,
+        Method::POST,
+        &path,
+        &admin,
+        None,
+        Some(json!({"attempt_id":attempt_id,"unexpected":true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{invalid}");
+    assert_eq!(invalid["error"]["code"], "invalid_request");
+
+    let (status, ambiguous) = json_request(
+        &ctx,
+        Method::POST,
+        &path,
+        &admin,
+        None,
+        Some(json!({"attempt_id":attempt_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{ambiguous}");
+    assert_eq!(
+        ambiguous["error"]["code"],
+        "payment_provider_ambiguous"
+    );
+    let (status, detail) = json_request(
+        &ctx,
+        Method::GET,
+        &format!("/api/dashboard/store/admin/orders/{order_id}"),
+        &admin,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["order"]["payment_state"], "unpaid");
+    assert_eq!(detail["attempts"][0]["state"], "presented");
+}
+
+#[tokio::test]
+async fn admin_order_operation_errors_are_no_store() {
+    let ctx = setup().await;
+    let admin = admin_session(&ctx, "admin_operation_error_header_admin").await;
+
+    let response = raw_json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/orders/missing",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_no_store(&response);
+
+    let response = raw_json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/orders/missing",
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_no_store(&response);
+
+    let response = raw_json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/orders/missing/close",
+        Some(&admin),
+        Some("not-json"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_no_store(&response);
+
+    let mut configuration_ctx = setup().await;
+    let (_, configuration_order_id, configuration_attempt_id) = create_admin_operation_fixture(
+        &mut configuration_ctx,
+        ApiPaymentQueryProvider::returning(ProviderPaymentState::Unpaid),
+        "configuration-error-header",
+    )
+    .await;
+    let configuration_admin =
+        admin_session(&configuration_ctx, "configuration_error_header_admin").await;
+    configuration_ctx.state.payment_keys = None;
+    configuration_ctx.router = monoize::app::build_app(configuration_ctx.state.clone());
+    let response = raw_json_request(
+        &configuration_ctx,
+        Method::POST,
+        &format!(
+            "/api/dashboard/store/admin/orders/{configuration_order_id}/query"
+        ),
+        Some(&configuration_admin),
+        Some(&json!({ "attempt_id": configuration_attempt_id }).to_string()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_no_store(&response);
+
+    for (suffix, provider, expected_status) in [
+        (
+            "provider-error-header",
+            ApiPaymentQueryProvider::failing(AdapterError::Rejected),
+            StatusCode::BAD_GATEWAY,
+        ),
+        (
+            "ambiguous-error-header",
+            ApiPaymentQueryProvider::returning(ProviderPaymentState::Ambiguous),
+            StatusCode::CONFLICT,
+        ),
+    ] {
+        let mut operation_ctx = setup().await;
+        let (_, order_id, attempt_id) =
+            create_admin_operation_fixture(&mut operation_ctx, provider, suffix).await;
+        let operation_admin =
+            admin_session(&operation_ctx, &format!("{suffix}-admin")).await;
+        let response = raw_json_request(
+            &operation_ctx,
+            Method::POST,
+            &format!("/api/dashboard/store/admin/orders/{order_id}/query"),
+            Some(&operation_admin),
+            Some(&json!({ "attempt_id": attempt_id }).to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), expected_status);
+        assert_no_store(&response);
+    }
 }

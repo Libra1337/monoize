@@ -92,6 +92,31 @@ impl RecoveryStore {
         Self { db }
     }
 
+    pub async fn list_refunds_for_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Vec<RefundRecord>, RecoveryError> {
+        self.db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT f.id, f.order_id, f.attempt_id, f.provider_refund_id,
+                        f.idempotency_key, f.state, f.amount_minor, f.currency,
+                        c.recovery_id, r.original_nano_usd
+                 FROM store_refunds f
+                 JOIN store_order_recovery_claims c
+                   ON c.provider_claim_id = f.idempotency_key AND c.kind = 'refund'
+                 JOIN store_order_reward_recoveries r ON r.id = c.recovery_id
+                 WHERE f.order_id = $1
+                 ORDER BY f.created_at ASC, f.id ASC",
+                vec![order_id.into()],
+            ))
+            .await
+            .map_err(storage)?
+            .into_iter()
+            .map(refund_from_row)
+            .collect()
+    }
+
     pub async fn begin_refund(
         &self,
         input: BeginRefundInput,

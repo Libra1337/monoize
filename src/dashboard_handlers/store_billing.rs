@@ -4,6 +4,7 @@ use crate::store_billing::checkout::{CheckoutError, CheckoutService};
 use crate::store_billing::credentials::{CredentialStore, CredentialStoreError};
 use crate::store_billing::exchange_rate::ExchangeRateError;
 use crate::store_billing::governance::PaymentGovernanceStore;
+use crate::store_billing::operations::{AdminOrderOperationError, AdminOrderOperations};
 use crate::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderError, PaymentOrderStore,
 };
@@ -73,6 +74,12 @@ pub struct StoreReauthRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminOrderAttemptRequest {
+    pub attempt_id: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct RedemptionCodeIdsRequest {
     pub code_ids: Vec<String>,
 }
@@ -88,6 +95,33 @@ fn no_store_headers() -> [(axum::http::HeaderName, HeaderValue); 4] {
         (REFERRER_POLICY, HeaderValue::from_static("no-referrer")),
         (X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
     ]
+}
+
+fn apply_no_store_headers(response: &mut Response) {
+    for (name, value) in no_store_headers() {
+        response.headers_mut().insert(name, value);
+    }
+}
+
+fn no_store_response<T: IntoResponse>(result: AppResult<T>) -> Response {
+    let mut response = match result {
+        Ok(value) => value.into_response(),
+        Err(error) => error.into_response(),
+    };
+    apply_no_store_headers(&mut response);
+    response
+}
+
+fn is_admin_order_operation_path(path: &str) -> bool {
+    let segments = path
+        .trim_matches('/')
+        .split('/')
+        .collect::<Vec<_>>();
+    segments.len() >= 6
+        && segments[segments.len() - 6..segments.len() - 2]
+            == ["dashboard", "store", "admin", "orders"]
+        && !segments[segments.len() - 2].is_empty()
+        && matches!(segments[segments.len() - 1], "query" | "close")
 }
 
 async fn require_redemption_access(
@@ -170,8 +204,13 @@ pub(crate) async fn store_mutation_guard(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    let admin_order_operation = is_admin_order_operation_path(request.uri().path());
     if let Err(error) = require_store_mutation(request.headers(), &state) {
-        return error.into_response();
+        let mut response = error.into_response();
+        if admin_order_operation {
+            apply_no_store_headers(&mut response);
+        }
+        return response;
     }
     next.run(request).await
 }
@@ -400,6 +439,56 @@ fn map_payment_order_error(error: PaymentOrderError) -> AppError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
                 "payment order operation failed",
+            )
+            .with_internal_message(detail);
+        }
+    };
+    AppError::new(status, code, message)
+}
+
+fn map_admin_order_operation_error(error: AdminOrderOperationError) -> AppError {
+    let (status, code, message) = match error {
+        AdminOrderOperationError::InvalidInput => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Admin order operation input is invalid",
+        ),
+        AdminOrderOperationError::NotFound => (
+            StatusCode::NOT_FOUND,
+            "order_not_found",
+            "order was not found",
+        ),
+        AdminOrderOperationError::LegacyClosed
+        | AdminOrderOperationError::OrderNotPayable => (
+            StatusCode::CONFLICT,
+            "order_not_payable",
+            "order does not allow this operation",
+        ),
+        AdminOrderOperationError::Ambiguous => (
+            StatusCode::CONFLICT,
+            "payment_provider_ambiguous",
+            "Provider payment state is ambiguous",
+        ),
+        AdminOrderOperationError::ConfigurationUnavailable => (
+            StatusCode::CONFLICT,
+            "payment_configuration_unavailable",
+            "historical payment configuration is unavailable",
+        ),
+        AdminOrderOperationError::ProviderQueryFailed => (
+            StatusCode::BAD_GATEWAY,
+            "payment_provider_query_failed",
+            "Provider payment query failed",
+        ),
+        AdminOrderOperationError::ProjectionFailed => (
+            StatusCode::CONFLICT,
+            "payment_projection_failed",
+            "verified Provider payment could not be projected",
+        ),
+        AdminOrderOperationError::Storage(detail) => {
+            return AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Admin order operation failed",
             )
             .with_internal_message(detail);
         }
@@ -1062,6 +1151,77 @@ pub async fn list_all_store_orders_admin(
         .await
         .map_err(map_payment_order_error)?;
     Ok(Json(orders))
+}
+
+pub async fn get_store_order_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    no_store_response(
+        async {
+            require_admin(&headers, &state).await?;
+            let detail = AdminOrderOperations::detail_from_db(&state.db_pool, &id)
+                .await
+                .map_err(map_admin_order_operation_error)?;
+            Ok(Json(detail))
+        }
+        .await,
+    )
+}
+
+pub async fn query_store_order_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<AdminOrderAttemptRequest>, JsonRejection>,
+) -> Response {
+    no_store_response(
+        async {
+            require_admin(&headers, &state).await?;
+            let input = parse_store_json(body)?;
+            let key_ring = state.payment_keys.clone().ok_or_else(|| {
+                map_admin_order_operation_error(AdminOrderOperationError::ConfigurationUnavailable)
+            })?;
+            let result = AdminOrderOperations::new(
+                state.db_pool.clone(),
+                key_ring,
+                state.payment_query_provider.clone(),
+            )
+            .query(&id, &input.attempt_id)
+            .await
+            .map_err(map_admin_order_operation_error)?;
+            Ok(Json(result))
+        }
+        .await,
+    )
+}
+
+pub async fn close_store_order_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<AdminOrderAttemptRequest>, JsonRejection>,
+) -> Response {
+    no_store_response(
+        async {
+            require_admin(&headers, &state).await?;
+            let input = parse_store_json(body)?;
+            let key_ring = state.payment_keys.clone().ok_or_else(|| {
+                map_admin_order_operation_error(AdminOrderOperationError::ConfigurationUnavailable)
+            })?;
+            let result = AdminOrderOperations::new(
+                state.db_pool.clone(),
+                key_ring,
+                state.payment_query_provider.clone(),
+            )
+            .close(&id, &input.attempt_id)
+            .await
+            .map_err(map_admin_order_operation_error)?;
+            Ok(Json(result))
+        }
+        .await,
+    )
 }
 
 pub async fn list_store_redemption_codes_admin(

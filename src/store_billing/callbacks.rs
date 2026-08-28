@@ -86,6 +86,16 @@ impl PaymentCallbackStore {
         self.apply_verified_payment_inner(input, None, true).await
     }
 
+    pub async fn apply_verified_query_payment(
+        &self,
+        input: ApplyProviderEventInput,
+    ) -> Result<CallbackApplyResult, CallbackStoreError> {
+        if input.event_kind != "payment_query_succeeded" || input.raw_body.is_some() {
+            return Err(CallbackStoreError::InvalidInput);
+        }
+        self.apply_verified_payment_inner(input, None, true).await
+    }
+
     pub async fn record_unbound_verified_event(
         &self,
         input: RecordUnboundProviderEventInput,
