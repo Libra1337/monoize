@@ -8,6 +8,7 @@ use super::exchange_rate::ExchangeRateSnapshot;
 use super::models::StoreSettings;
 use super::money::{Currency, ExchangeRateRational, convert_minor_rational, parse_minor};
 use super::payment::CheckoutAction;
+use super::quota_gate::QuotaGateStore;
 use super::state_machine::{FulfillmentState, PaymentState};
 use super::store::StoreBillingStore;
 use crate::db::DbPool;
@@ -190,6 +191,10 @@ impl PaymentOrderStore {
             .get_settings()
             .await
             .map_err(|error| PaymentOrderError::Storage(error.to_string()))?;
+        let plan_features_enabled = QuotaGateStore::new(self.db.clone())
+            .plan_features_enabled()
+            .await
+            .map_err(|error| PaymentOrderError::Storage(error.to_string()))?;
         let now = Utc::now();
         let now_text = timestamp(now);
         let recent_text = timestamp(now - Duration::minutes(1));
@@ -266,6 +271,32 @@ impl PaymentOrderStore {
             .ok_or(PaymentOrderError::ChannelUnavailable)?;
 
         let product_kind = row_string(&product, "kind")?;
+        if product_kind == "plan" && !plan_features_enabled {
+            return Err(PaymentOrderError::ProductUnavailable);
+        }
+        let quota_quote = if product_kind == "plan" {
+            tx.query_all(self.db.stmt(
+                "SELECT id, window_kind, window_seconds, quota_fen_cny, sort_order
+                 FROM store_plan_quotas WHERE product_id = $1
+                 ORDER BY sort_order, id",
+                vec![input.product_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .into_iter()
+            .map(|row| {
+                Ok(serde_json::json!({
+                    "id": row_string(&row, "id")?,
+                    "window_kind": row_string(&row, "window_kind")?,
+                    "window_seconds": row.try_get::<i64>("", "window_seconds").map_err(storage)?,
+                    "quota_fen_cny": row_string(&row, "quota_fen_cny")?,
+                    "sort_order": row.try_get::<i32>("", "sort_order").map_err(storage)?,
+                }))
+            })
+            .collect::<Result<Vec<_>, PaymentOrderError>>()?
+        } else {
+            Vec::new()
+        };
         let product_currency = parse_currency(&row_string(&product, "price_currency")?)?;
         let product_price =
             parse_minor(&row_string(&product, "price_minor")?).map_err(map_money_error)?;
@@ -313,6 +344,7 @@ impl PaymentOrderStore {
                 "group_ids": serde_json::from_str::<serde_json::Value>(&row_string(&product, "group_ids")?)
                     .map_err(|error| PaymentOrderError::Storage(error.to_string()))?,
                 "balance": balance_quote,
+                "quotas": quota_quote,
             },
             "payment_channel": {
                 "id": row_string(&channel, "id")?,

@@ -154,18 +154,20 @@ where
         match forwarding.await {
             Ok(stream) => {
                 tokio::pin!(stream);
+                let mut downstream_open = true;
                 while let Some(Ok(event)) = stream.next().await {
-                    if tx.send(event).await.is_err() {
-                        break;
+                    if downstream_open && tx.send(event).await.is_err() {
+                        downstream_open = false;
                     }
                 }
             }
             Err(err) => {
                 let err_stream = prestream_error_stream(downstream, err);
                 tokio::pin!(err_stream);
+                let mut downstream_open = true;
                 while let Some(Ok(event)) = err_stream.next().await {
-                    if tx.send(event).await.is_err() {
-                        break;
+                    if downstream_open && tx.send(event).await.is_err() {
+                        downstream_open = false;
                     }
                 }
             }
@@ -199,24 +201,32 @@ pub(super) async fn forward_stream_typed(
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let mut attempts = build_monoize_attempts(&state, &routing_stub, &auth).await?;
     attach_client_session_id(&mut attempts, client_session_id, Some(&req));
-    ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
-    let pending_request_log_guard = insert_pending_request_log(
+    let funding_scope = ensure_balance_before_forward_for_attempts(
         &state,
         &auth,
-        &req.model,
-        true,
+        &attempts,
+        Some(&req),
         request_id.as_deref(),
-        request_ip.as_deref(),
-        started_at,
     )
     .await?;
+    let outcome = async {
+        let pending_request_log_guard = insert_pending_request_log(
+            &state,
+            &auth,
+            &req.model,
+            true,
+            request_id.as_deref(),
+            request_ip.as_deref(),
+            started_at,
+        )
+        .await?;
 
-    let mut execution_state = AttemptExecutionState::default();
+        let mut execution_state = AttemptExecutionState::default();
 
-    for mut attempt in attempts {
-        if execution_state.should_skip(&attempt) {
-            continue;
-        }
+        for mut attempt in attempts {
+            if execution_state.should_skip(&attempt) {
+                continue;
+            }
 
         let global_transforms = state.monoize_runtime.read().await.global_transforms.clone();
 
@@ -376,6 +386,7 @@ pub(super) async fn forward_stream_typed(
                 let path =
                     upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
                 let http = client_http_for_attempt(&state, &attempt)?;
+                mark_plan_routed_before_dispatch(&funding_scope).await?;
                 let call = upstream::call_upstream_with_timeout_and_headers(
                     &http,
                     &provider,
@@ -604,6 +615,7 @@ pub(super) async fn forward_stream_typed(
                         let tried_providers_for_log = tried_providers;
                         let capture_session = capture.session.clone();
                         let pending_request_log_guard_for_stream = pending_request_log_guard;
+                        let funding_scope_for_owner = funding_scope.clone();
                         tokio::spawn(async move {
                             let _pending_request_log_guard = pending_request_log_guard_for_stream;
                             let tx_err = tx.clone();
@@ -619,9 +631,9 @@ pub(super) async fn forward_stream_typed(
                                     tx,
                                 )
                                 .await;
-                            match stream_result {
+                            let owner_success = match stream_result {
                                 Ok(()) => {
-                                    match maybe_charge_response(
+                                    let settled = match maybe_charge_response(
                                         &state_for_log,
                                         &auth_for_log,
                                         &attempt_for_log,
@@ -632,25 +644,28 @@ pub(super) async fn forward_stream_typed(
                                     )
                                     .await
                                     {
-                                        Ok(charge) => spawn_request_log(
-                                            &state_for_log,
-                                            &auth_for_log,
-                                            &attempt_for_log,
-                                            &logical_model_for_stream,
-                                            resp.usage.clone(),
-                                            charge.charge_nano_usd,
-                                            charge.billing_breakdown,
-                                            true,
-                                            started_at,
-                                            request_id_for_log,
-                                            request_ip_for_log,
-                                            attempt_for_log.channel_id.clone(),
-                                            Some(started_at.elapsed().as_millis() as u64),
-                                            None,
-                                            reasoning_effort_for_log,
-                                            tried_providers_for_log,
-                                            tx_err.is_closed(),
-                                        ),
+                                        Ok(charge) => {
+                                            spawn_request_log(
+                                                &state_for_log,
+                                                &auth_for_log,
+                                                &attempt_for_log,
+                                                &logical_model_for_stream,
+                                                resp.usage.clone(),
+                                                charge.charge_nano_usd,
+                                                charge.billing_breakdown,
+                                                true,
+                                                started_at,
+                                                request_id_for_log,
+                                                request_ip_for_log,
+                                                attempt_for_log.channel_id.clone(),
+                                                Some(started_at.elapsed().as_millis() as u64),
+                                                None,
+                                                reasoning_effort_for_log,
+                                                tried_providers_for_log,
+                                                tx_err.is_closed(),
+                                            );
+                                            true
+                                        }
                                         Err(err) => {
                                             tracing::error!(
                                                 code = %err.code,
@@ -680,13 +695,15 @@ pub(super) async fn forward_stream_typed(
                                                 tried_providers_for_log,
                                                 resp.usage.clone(),
                                             );
+                                            false
                                         }
-                                    }
+                                    };
                                     if let Some(session) = capture_session.as_ref() {
                                         session
                                             .persist_with_result(resp.usage.as_ref(), false)
                                             .await;
                                     }
+                                    settled
                                 }
                                 Err(err) => {
                                     tracing::warn!("synthetic stream failed: {}", err.message);
@@ -713,10 +730,15 @@ pub(super) async fn forward_stream_typed(
                                     if let Some(session) = capture_session.as_ref() {
                                         session.persist_with_result(None, true).await;
                                     }
+                                    false
                                 }
-                            }
+                            };
+                            finish_stream_owner(&funding_scope_for_owner, owner_success).await;
                         });
-                        return Ok(receiver_event_stream(rx));
+                        return Ok(funded_event_stream(
+                            receiver_event_stream(rx),
+                            funding_scope.clone(),
+                        ));
                     }
                     Err(err) => {
                         if let Some(session) = capture.session.as_ref() {
@@ -805,6 +827,7 @@ pub(super) async fn forward_stream_typed(
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
             let http = client_http_for_attempt(&state, &attempt)?;
+            mark_plan_routed_before_dispatch(&funding_scope).await?;
             let call = upstream::call_upstream_raw_with_timeout_and_headers(
                 &http,
                 &provider,
@@ -919,6 +942,7 @@ pub(super) async fn forward_stream_typed(
                             )
                         });
                     let pending_request_log_guard_for_stream = pending_request_log_guard;
+                    let funding_scope_for_owner = funding_scope.clone();
                     tokio::spawn(async move {
                         let _pending_request_log_guard = pending_request_log_guard_for_stream;
                         let tx_err = tx.clone();
@@ -1164,6 +1188,7 @@ pub(super) async fn forward_stream_typed(
                                     .persist_with_result(actual_upstream_usage.as_ref(), true)
                                     .await;
                             }
+                            finish_stream_owner(&funding_scope_for_owner, false).await;
                             return;
                         }
 
@@ -1280,6 +1305,7 @@ pub(super) async fn forward_stream_typed(
                                     .persist_with_result(actual_upstream_usage.as_ref(), true)
                                     .await;
                             }
+                            finish_stream_owner(&funding_scope_for_owner, false).await;
                             return;
                         }
 
@@ -1330,6 +1356,7 @@ pub(super) async fn forward_stream_typed(
                                 if let Some(session) = capture_session.as_ref() {
                                     session.persist_with_result(usage.as_ref(), true).await;
                                 }
+                                finish_stream_owner(&funding_scope_for_owner, false).await;
                                 return;
                             }
                         };
@@ -1406,8 +1433,12 @@ pub(super) async fn forward_stream_typed(
                                 .persist_with_result(actual_upstream_usage.as_ref(), false)
                                 .await;
                         }
+                        finish_stream_owner(&funding_scope_for_owner, true).await;
                     });
-                    return Ok(receiver_event_stream(rx));
+                    return Ok(funded_event_stream(
+                        receiver_event_stream(rx),
+                        funding_scope.clone(),
+                    ));
                 }
                 Err(err) => {
                     if let Some(session) = capture.session.as_ref() {
@@ -1468,41 +1499,113 @@ pub(super) async fn forward_stream_typed(
             }
         }
     }
-    let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
-    if let Some(attempt) = last_failed_attempt {
-        let terminal_error = stream_terminal_error_from_app(&final_err);
-        spawn_request_log_stream_terminal_error(
-            &state,
-            &auth,
-            &attempt,
-            &logical_model,
-            started_at,
-            request_id,
-            request_ip,
-            None,
-            terminal_error,
-            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-            tried_providers,
-            None,
-        );
+        let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
+        if let Some(attempt) = last_failed_attempt {
+            let terminal_error = stream_terminal_error_from_app(&final_err);
+            spawn_request_log_stream_terminal_error(
+                &state,
+                &auth,
+                &attempt,
+                &logical_model,
+                started_at,
+                request_id,
+                request_ip,
+                None,
+                terminal_error,
+                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                tried_providers,
+                None,
+            );
+        } else {
+            spawn_request_log_error_no_attempt(
+                &state,
+                &auth,
+                &logical_model,
+                true,
+                started_at,
+                request_id,
+                request_ip,
+                &final_err,
+                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                tried_providers,
+            );
+        }
+        if let Some(session) = capture.session.as_ref() {
+            session.persist_with_result(None, true).await;
+        }
+        Err(final_err)
+    }
+    .await;
+
+    finish_stream_forwarding_outcome(funding_scope, outcome).await
+}
+
+pub(super) async fn finish_stream_forwarding_outcome<T>(
+    funding_scope: AdmittedFundingScope,
+    outcome: AppResult<T>,
+) -> AppResult<T> {
+    match outcome {
+        Ok(value) => Ok(value),
+        Err(error) => funding_scope.finish(Err(error)).await,
+    }
+}
+
+async fn finish_stream_owner(funding_scope: &AdmittedFundingScope, success: bool) {
+    let outcome = if success {
+        Ok(())
     } else {
-        spawn_request_log_error_no_attempt(
-            &state,
-            &auth,
-            &logical_model,
-            true,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-            tried_providers,
+        Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "stream_terminal_failed",
+            "stream owner did not complete billing",
+        ))
+    };
+    if let Err(error) = funding_scope.clone().finish(outcome).await
+        && success
+    {
+        tracing::error!(
+            code = %error.code,
+            message = %error.message,
+            "plan-funded stream owner finalization failed"
         );
     }
-    if let Some(session) = capture.session.as_ref() {
-        session.persist_with_result(None, true).await;
+}
+
+fn funded_event_stream<S>(
+    stream: S,
+    funding_scope: AdmittedFundingScope,
+) -> impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static
+where
+    S: futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
+{
+    struct State<S> {
+        stream: std::pin::Pin<Box<S>>,
+        funding_scope: Option<AdmittedFundingScope>,
     }
-    Ok(prestream_error_stream(downstream, final_err))
+
+    futures_util::stream::unfold(
+        State {
+            stream: Box::pin(stream),
+            funding_scope: Some(funding_scope),
+        },
+        |mut state| async move {
+            match futures_util::StreamExt::next(&mut state.stream).await {
+                Some(item) => Some((item, state)),
+                None => {
+                    if let Some(scope) = state.funding_scope.take() {
+                        if let Err(error) = scope.finish(Ok(())).await {
+                            tracing::error!(
+                                code = error.code,
+                                message = %error.message,
+                                "plan-funded stream finalization failed"
+                            );
+                        }
+                    }
+                    None
+                }
+            }
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1529,6 +1632,29 @@ mod tests {
             .expect("SSE body remains open")
             .expect("SSE keep-alive frame is valid");
         assert_eq!(chunk.as_ref(), b": heartbeat\n\n");
+    }
+
+    #[tokio::test]
+    async fn deferred_stream_drains_inner_stream_after_client_drop() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let polled = std::sync::Arc::new(AtomicUsize::new(0));
+        let observed = polled.clone();
+        let inner = futures_util::stream::iter((0..100).map(move |index| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(Event::default().data(index.to_string()))
+        }));
+        let mut stream = deferred_forward_event_stream(DownstreamProtocol::Responses, async move {
+            Ok::<_, AppError>(inner)
+        });
+        assert!(stream.next().await.is_some());
+        drop(stream);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while polled.load(Ordering::SeqCst) != 100 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

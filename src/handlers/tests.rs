@@ -18,6 +18,21 @@ use std::collections::{BTreeSet, HashMap};
 
 const GROUP_ROUTING_MODEL: &str = "gpt-group-routing";
 
+#[test]
+fn admission_client_error_uses_fixed_public_message_and_retains_internal_detail() {
+    let error = crate::replica::admission_client::AdmissionClientError::new(
+        "plan_admission_verification_unavailable",
+        "database at https://secret.invalid/private failed",
+    );
+    let mapped = map_admission_client_error(error);
+    assert_eq!(mapped.code, "plan_admission_verification_unavailable");
+    assert_eq!(mapped.message, "plan admission is unavailable");
+    assert_eq!(
+        mapped.internal_message.as_deref(),
+        Some("database at https://secret.invalid/private failed")
+    );
+}
+
 fn test_rate(
     id: &str,
     usage_class: &str,
@@ -84,6 +99,389 @@ fn test_resolution(rates: Vec<DbBillingRateRecord>) -> BillingRateResolution {
         pricing_model: "test-model".to_string(),
         rates,
     }
+}
+
+#[test]
+fn plan_maximum_charge_requires_finite_input_output_and_meter_caps() {
+    let resolution = test_resolution(vec![
+        test_rate(
+            "input",
+            "input_uncached",
+            2,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        ),
+        test_rate(
+            "output",
+            "output",
+            5,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        ),
+        test_meter_rate(
+            "search",
+            "web_search",
+            "call",
+            100,
+            serde_json::json!({"maximum_units": 3}),
+        ),
+    ]);
+    assert_eq!(
+        plan_maximum_charge_nano(
+            &resolution,
+            1_000,
+            Some(200),
+            &["web_search".to_string()],
+            Multiplier::ONE,
+        )
+        .unwrap(),
+        3_300
+    );
+    let unbounded = test_resolution(vec![
+        test_rate(
+            "input",
+            "input_uncached",
+            2,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        ),
+        test_rate(
+            "output",
+            "output",
+            5,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        ),
+        test_meter_rate("search", "web_search", "call", 100, serde_json::json!({})),
+    ]);
+    assert!(
+        plan_maximum_charge_nano(
+            &unbounded,
+            1_000,
+            Some(200),
+            &["web_search".to_string()],
+            Multiplier::ONE,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn plan_maximum_charge_supports_bounded_input_only_embeddings() {
+    let resolution = test_resolution(vec![test_rate(
+        "embedding-input",
+        "input_uncached",
+        4,
+        None,
+        None,
+        None,
+        serde_json::json!({}),
+    )]);
+    assert_eq!(
+        plan_maximum_charge_nano(&resolution, 2_000, None, &[], Multiplier::ONE),
+        Some(8_000)
+    );
+}
+
+#[tokio::test]
+async fn admitted_funding_scope_releases_errors_and_preserves_settlement_and_balance() {
+    let store = handler_plan_store().await;
+    for code in [
+        "transform_failed",
+        "client_failed",
+        "encode_failed",
+        "upstream_usage_required",
+        "all_providers_failed",
+    ] {
+        let request_id = format!("handler-request-{code}");
+        reserve_handler_plan(&store, &request_id).await;
+        let result: AppResult<()> =
+            AdmittedFundingScope::primary_plan(store.clone(), request_id.clone())
+                .finish(Err(AppError::new(StatusCode::BAD_GATEWAY, code, code)))
+                .await;
+        assert_eq!(result.unwrap_err().code, code);
+        assert_eq!(
+            store
+                .reservation_for_request(&request_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            crate::store_billing::quota::QuotaTerminalState::Released
+        );
+    }
+
+    let settled_request = "handler-request-settled";
+    reserve_handler_plan(&store, settled_request).await;
+    store
+        .settle_request_if_reserved(settled_request, 5_000_000, chrono::Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(
+        AdmittedFundingScope::primary_plan(store.clone(), settled_request.to_string())
+            .finish(Ok(17_u8))
+            .await
+            .unwrap(),
+        17
+    );
+    assert_eq!(
+        store
+            .reservation_for_request(settled_request)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        crate::store_billing::quota::QuotaTerminalState::Settled
+    );
+
+    let balance_error = AppError::new(StatusCode::BAD_REQUEST, "balance-error", "balance-error");
+    let result: AppResult<()> = AdmittedFundingScope::balance()
+        .finish(Err(balance_error))
+        .await;
+    assert_eq!(result.unwrap_err().code, "balance-error");
+}
+
+#[tokio::test]
+async fn allowed_missing_usage_releases_plan_and_finishes_successfully() {
+    let state = load_state_with_runtime(RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+        node: crate::node_config::NodeSettings::primary_default(),
+    })
+    .await
+    .unwrap();
+    let store = seed_handler_plan(state.db_pool.clone()).await;
+    let request_id = "handler-allowed-missing-usage";
+    reserve_handler_plan(&store, request_id).await;
+    let mut attempt = affinity_test_attempt(
+        "handler-provider",
+        "handler-channel",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        0,
+    );
+    attempt.allow_missing_usage = true;
+    let mut response = urp::UrpResponse {
+        id: "response-1".to_string(),
+        model: "handler-model".to_string(),
+        created_at: None,
+        output: vec![],
+        finish_reason: Some(urp::FinishReason::Stop),
+        usage: None,
+        extra_body: HashMap::new(),
+    };
+    let skip_charge = substitute_zero_usage_if_allowed(&mut response.usage, &attempt);
+    assert!(skip_charge);
+
+    let charge = maybe_charge_response(
+        &state,
+        &build_test_auth(None),
+        &attempt,
+        "handler-model",
+        &response,
+        skip_charge,
+        Some(request_id),
+    )
+    .await
+    .unwrap();
+    let finished = AdmittedFundingScope::primary_plan(store.clone(), request_id.to_string())
+        .finish(Ok(charge))
+        .await
+        .unwrap();
+    assert_eq!(finished.charge_nano_usd, None);
+    assert_eq!(
+        store
+            .reservation_for_request(request_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        crate::store_billing::quota::QuotaTerminalState::Released
+    );
+}
+
+#[test]
+fn plan_quota_error_mapping_preserves_code_and_status() {
+    use crate::store_billing::quota::QuotaError;
+
+    for (error, status, code) in [
+        (
+            QuotaError::Code("plan_quota_exhausted"),
+            StatusCode::PAYMENT_REQUIRED,
+            "plan_quota_exhausted",
+        ),
+        (
+            QuotaError::Code("plan_request_unbounded"),
+            StatusCode::PAYMENT_REQUIRED,
+            "plan_request_unbounded",
+        ),
+        (
+            QuotaError::Code("plan_payment_hold"),
+            StatusCode::LOCKED,
+            "plan_payment_hold",
+        ),
+        (
+            QuotaError::Code("plan_quota_violation_blocked"),
+            StatusCode::LOCKED,
+            "plan_quota_violation_blocked",
+        ),
+        (
+            QuotaError::Code("quota_gate_unavailable"),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "quota_gate_unavailable",
+        ),
+        (
+            QuotaError::Storage("offline".to_string()),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "quota_storage_error",
+        ),
+    ] {
+        let mapped = map_plan_quota_error(error);
+        assert_eq!(mapped.status, status);
+        assert_eq!(mapped.code, code);
+    }
+}
+
+#[tokio::test]
+async fn stream_pre_return_error_releases_plan_reservation() {
+    let store = handler_plan_store().await;
+    let request_id = "handler-stream-pre-return-error";
+    reserve_handler_plan(&store, request_id).await;
+
+    let outcome: AppResult<()> = Err(AppError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "request_log_spool_unavailable",
+        "request log spool is unavailable",
+    ));
+    let error = finish_stream_forwarding_outcome(
+        AdmittedFundingScope::primary_plan(store.clone(), request_id.to_string()),
+        outcome,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.code, "request_log_spool_unavailable");
+    assert_eq!(
+        store
+            .reservation_for_request(request_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        crate::store_billing::quota::QuotaTerminalState::Released
+    );
+}
+
+async fn reserve_handler_plan(store: &crate::store_billing::quota::QuotaStore, request_id: &str) {
+    store
+        .reserve(crate::store_billing::quota::QuotaReservationInput {
+            user_id: "handler-plan-user".to_string(),
+            request_id: request_id.to_string(),
+            maximum_nano_usd: 10_000_000,
+            pricing_revision: "handler-pricing".to_string(),
+            now: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+}
+
+async fn handler_plan_store() -> crate::store_billing::quota::QuotaStore {
+    use crate::migration::Migrator;
+    use sea_orm_migration::MigratorTrait as _;
+
+    let db = crate::db::DbPool::connect("sqlite::memory:").await.unwrap();
+    Migrator::up(&*db.write().await, None).await.unwrap();
+    seed_handler_plan(db).await
+}
+
+async fn seed_handler_plan(db: crate::db::DbPool) -> crate::store_billing::quota::QuotaStore {
+    use crate::store_billing::models::{PlanQuota, WindowKind};
+    use crate::store_billing::quota::EntitlementGenerationInput;
+    use crate::store_billing::quota_gate::{GateSlot, QuotaGateStore, QuotaManifest};
+    use sea_orm::ConnectionTrait as _;
+
+    let group = db
+        .read()
+        .query_one(db.stmt("SELECT id FROM monoize_groups WHERE is_default = 1", vec![]))
+        .await
+        .unwrap()
+        .unwrap();
+    let group_id: String = group.try_get("", "id").unwrap();
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO users
+                (id, username, password_hash, role, created_at, updated_at, enabled,
+                 balance_nano_usd, balance_unlimited, group_id)
+             VALUES ('handler-plan-user', 'handler-plan-user', 'test', 'user',
+                     $1, $1, 1, '0', 0, $2)",
+            vec![chrono::Utc::now().to_rfc3339().into(), group_id.into()],
+        ))
+        .await
+        .unwrap();
+    db.write()
+        .await
+        .execute_unprepared(
+            "INSERT INTO store_products
+                (id, kind, name, description, price_currency, price_minor,
+                 duration_seconds, group_ids, sort_order, enabled, created_at,
+                 updated_at, revision)
+             VALUES ('handler-plan-product', 'plan', 'Handler plan', '', 'CNY', '100',
+                     86400, '[]', 0, 0, '2026-08-28T00:00:00Z',
+                     '2026-08-28T00:00:00Z', 1)",
+        )
+        .await
+        .unwrap();
+    let gate = QuotaGateStore::new(db.clone());
+    let environment = gate.live_environment().await.unwrap();
+    gate.import_manifest(
+        GateSlot::Current,
+        QuotaManifest::passed(
+            environment,
+            "test-app",
+            "handler-drill",
+            chrono::Utc::now(),
+            "handler-admin",
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let store = crate::store_billing::quota::QuotaStore::new(db);
+    let now = chrono::Utc::now();
+    store
+        .replace_entitlement(EntitlementGenerationInput {
+            expected_generation: None,
+            user_id: "handler-plan-user".to_string(),
+            product_id: "handler-plan-product".to_string(),
+            product_name: "Handler plan".to_string(),
+            starts_at: now - chrono::Duration::minutes(1),
+            ends_at: now + chrono::Duration::days(1),
+            rate_numerator: "6".to_string(),
+            rate_denominator: "1".to_string(),
+            group_ids: vec![],
+            quotas: vec![PlanQuota {
+                id: "handler-day".to_string(),
+                window_kind: WindowKind::Day,
+                window_seconds: 86_400,
+                quota_fen_cny: "1000".to_string(),
+                sort_order: 0,
+            }],
+            source_kind: "order".to_string(),
+            source_id: "handler-plan-source".to_string(),
+        })
+        .await
+        .unwrap();
+    store
 }
 
 fn build_test_auth(effective_groups: Option<Vec<String>>) -> AuthResult {

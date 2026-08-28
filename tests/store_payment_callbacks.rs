@@ -2,16 +2,19 @@ use chrono::{TimeZone, Utc};
 use futures_util::future::join_all;
 use monoize::db::DbPool;
 use monoize::migration::Migrator;
+use monoize::store_billing::StoreBillingStore;
 use monoize::store_billing::callbacks::{
     ApplyProviderEventInput, CallbackApplyResult, PaymentCallbackStore,
     RecordUnboundProviderEventInput,
 };
 use monoize::store_billing::crypto::EncryptedSecret;
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
+use monoize::store_billing::models::{CreateProductInput, PlanQuotaInput, ProductKind, WindowKind};
 use monoize::store_billing::money::Currency;
 use monoize::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderStore,
 };
+use monoize::store_billing::quota_gate::{GateSlot, QuotaGateStore, QuotaManifest};
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
 
@@ -686,6 +689,107 @@ async fn verified_payment_during_hold_is_recorded_without_fulfillment() {
         "pending"
     );
     assert_eq!(ledger_count.try_get::<i64>("", "value").unwrap(), 0);
+}
+
+#[tokio::test]
+async fn pending_sqlite_gate_blocks_plan_fulfillment() {
+    let (db, _, _, _) = setup().await;
+    let gate = QuotaGateStore::new(db.clone());
+    let environment = gate.live_environment().await.unwrap();
+    gate.import_manifest(
+        GateSlot::Current,
+        QuotaManifest::passed(
+            environment.clone(),
+            "callback-test",
+            "callback-drill",
+            Utc::now(),
+            "callback-admin",
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let product = StoreBillingStore::new(db.clone())
+        .create_product(CreateProductInput {
+            kind: ProductKind::Plan,
+            name: "Gated plan".to_string(),
+            description: String::new(),
+            price_currency: Currency::CNY,
+            price_minor: "5900".to_string(),
+            duration_seconds: Some(2_592_000),
+            group_ids: vec![],
+            sort_order: 0,
+            enabled: true,
+            balance: None,
+            quotas: vec![PlanQuotaInput {
+                window_kind: WindowKind::Day,
+                window_seconds: 86_400,
+                quota_fen_cny: "2000".to_string(),
+                sort_order: 0,
+            }],
+        })
+        .await
+        .unwrap();
+    let order = PaymentOrderStore::new(db.clone())
+        .create_order(
+            "callback-user",
+            CreatePaymentOrderInput {
+                idempotency_key: "gated-plan-order".to_string(),
+                product_id: product.id,
+                payment_channel_id: "store-channel-stripe".to_string(),
+                payment_currency: Currency::CNY,
+                custom_recharge_minor: None,
+            },
+            &ExchangeRateSnapshot {
+                base: "USD".to_string(),
+                quote: "CNY".to_string(),
+                cny_per_usd: "6.0000".to_string(),
+                source_updated_at: Utc.with_ymd_and_hms(2026, 8, 27, 0, 0, 0).unwrap(),
+                refreshed_at: Utc.with_ymd_and_hms(2026, 8, 27, 0, 1, 0).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+    gate.record_failure(
+        GateSlot::Current,
+        environment,
+        "callback-gate-failure",
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_orders
+             SET payment_state = 'paid', paid_at = $2
+             WHERE id = $1",
+            vec![order.id.clone().into(), "2026-08-28T00:00:00Z".into()],
+        ))
+        .await
+        .unwrap();
+
+    let error = PaymentCallbackStore::new(db.clone())
+        .fulfill_paid_order(&order.id)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("plan_requires_postgres"));
+    let state = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT fulfillment_state,
+                    (SELECT COUNT(*) FROM store_plan_entitlement_generations) AS entitlements
+             FROM store_orders WHERE id = $1",
+            vec![order.id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        state.try_get::<String>("", "fulfillment_state").unwrap(),
+        "pending"
+    );
+    assert_eq!(state.try_get::<i64>("", "entitlements").unwrap(), 0);
 }
 
 #[tokio::test]

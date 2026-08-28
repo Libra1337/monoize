@@ -251,11 +251,13 @@ export interface StoreCheckoutResponse {
 export interface StorePlanEntitlement {
   id: string;
   user_id: string;
+  generation: number;
   product_id: string;
   product_name: string;
   starts_at: string;
   ends_at: string;
-  cny_per_usd: string;
+  rate_numerator: string;
+  rate_denominator: string;
   group_ids: string[];
   quotas: StorePlanQuota[];
   source_kind: string;

@@ -1,9 +1,11 @@
 use sea_orm::{
-    ConnectOptions, Database, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, Statement,
-    TransactionTrait, Value,
+    ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DatabaseTransaction, DbBackend,
+    DbErr, Statement, TransactionTrait, Value,
 };
 use sqlx::sqlite::{SqliteJournalMode, SqliteSynchronous};
+use std::future::Future;
 use std::ops::Deref;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -61,6 +63,7 @@ pub struct DbPool {
     write_conn: DatabaseConnection,
     write_lock: Arc<Mutex<()>>,
     backend: DbBackend,
+    sqlite_filesystem_id: Option<Arc<str>>,
 }
 
 impl DbPool {
@@ -98,6 +101,7 @@ impl DbPool {
                 write_conn: conn,
                 write_lock: Arc::new(Mutex::new(())),
                 backend: DbBackend::Sqlite,
+                sqlite_filesystem_id: Some(format!("memory:{}", uuid::Uuid::new_v4()).into()),
             });
         }
 
@@ -112,12 +116,14 @@ impl DbPool {
 
         let write = Database::connect(write_opts).await?;
         let read = Database::connect(read_opts).await?;
+        let sqlite_filesystem_id = sqlite_filesystem_id(&write).await?;
 
         Ok(Self {
             read,
             write_conn: write,
             write_lock: Arc::new(Mutex::new(())),
             backend: DbBackend::Sqlite,
+            sqlite_filesystem_id: Some(sqlite_filesystem_id.into()),
         })
     }
 
@@ -153,6 +159,7 @@ impl DbPool {
             write_conn: conn,
             write_lock: Arc::new(Mutex::new(())),
             backend: DbBackend::Postgres,
+            sqlite_filesystem_id: None,
         })
     }
 
@@ -194,6 +201,10 @@ impl DbPool {
         self.backend == DbBackend::Postgres
     }
 
+    pub(crate) fn sqlite_filesystem_id(&self) -> Option<&str> {
+        self.sqlite_filesystem_id.as_deref()
+    }
+
     /// Acquire write connection and begin an explicit transaction.
     pub async fn begin_write(&self) -> Result<WriteTransaction, DbErr> {
         let guard = if self.backend == DbBackend::Sqlite {
@@ -206,6 +217,83 @@ impl DbPool {
             txn: Some(txn),
             _guard: guard,
         })
+    }
+
+    pub async fn with_immediate_write<T, E, F>(&self, operation: F) -> Result<T, E>
+    where
+        E: From<DbErr>,
+        F: for<'a> FnOnce(
+            &'a DatabaseConnection,
+        ) -> Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>,
+    {
+        if !self.is_sqlite() {
+            return Err(E::from(DbErr::Custom(
+                "BEGIN IMMEDIATE is available only for SQLite".to_string(),
+            )));
+        }
+        let _guard = self.write_lock.clone().lock_owned().await;
+        if let Err(error) = self
+            .write_conn
+            .execute_unprepared("PRAGMA busy_timeout = 5000")
+            .await
+        {
+            return Err(E::from(error));
+        }
+        if let Err(error) = self.write_conn.execute_unprepared("BEGIN IMMEDIATE").await {
+            let restore = self
+                .write_conn
+                .execute_unprepared("PRAGMA busy_timeout = 15000")
+                .await;
+            return Err(E::from(restore.err().unwrap_or(error)));
+        }
+
+        let outcome = operation(&self.write_conn).await;
+        let terminal_sql = if outcome.is_ok() {
+            "COMMIT"
+        } else {
+            "ROLLBACK"
+        };
+        if let Err(error) = self.write_conn.execute_unprepared(terminal_sql).await {
+            let _ = self.write_conn.execute_unprepared("ROLLBACK").await;
+            let restore = self
+                .write_conn
+                .execute_unprepared("PRAGMA busy_timeout = 15000")
+                .await;
+            return Err(E::from(restore.err().unwrap_or(error)));
+        }
+        self.write_conn
+            .execute_unprepared("PRAGMA busy_timeout = 15000")
+            .await
+            .map_err(E::from)?;
+        outcome
+    }
+
+    pub(crate) async fn with_sqlite_quota_probe<T, E, F>(&self, operation: F) -> Result<T, E>
+    where
+        E: From<DbErr>,
+        F: for<'a> FnOnce(
+            &'a DatabaseConnection,
+        ) -> Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>,
+    {
+        if !self.is_sqlite() {
+            return Err(E::from(DbErr::Custom(
+                "SQLite quota probe requires a SQLite database".to_string(),
+            )));
+        }
+        let _guard = self.write_lock.clone().lock_owned().await;
+        self.write_conn
+            .execute_unprepared("PRAGMA busy_timeout = 5000")
+            .await
+            .map_err(E::from)?;
+        let outcome = operation(&self.write_conn).await;
+        let restored = self
+            .write_conn
+            .execute_unprepared("PRAGMA busy_timeout = 15000")
+            .await;
+        match (outcome, restored) {
+            (_, Err(error)) => Err(E::from(error)),
+            (outcome, Ok(_)) => outcome,
+        }
     }
 
     /// Create a Statement with automatic placeholder conversion.
@@ -230,6 +318,64 @@ impl DbPool {
             Statement::from_sql_and_values(self.backend, sql, values)
         }
     }
+}
+
+async fn sqlite_filesystem_id(connection: &DatabaseConnection) -> Result<String, DbErr> {
+    let rows = connection
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "PRAGMA database_list".to_string(),
+        ))
+        .await?;
+    let path = rows
+        .iter()
+        .find_map(|row| {
+            let name = row.try_get::<String>("", "name").ok()?;
+            (name == "main")
+                .then(|| row.try_get::<String>("", "file").ok())
+                .flatten()
+        })
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| DbErr::Custom("SQLite main database path is unavailable".to_string()))?;
+    filesystem_id_for_path(std::path::Path::new(&path)).map_err(|error| {
+        DbErr::Custom(format!(
+            "SQLite filesystem identity is unavailable: {error}"
+        ))
+    })
+}
+
+#[cfg(unix)]
+fn filesystem_id_for_path(path: &std::path::Path) -> std::io::Result<String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    Ok(format!("unix-dev:{:x}", std::fs::metadata(path)?.dev()))
+}
+
+#[cfg(windows)]
+fn filesystem_id_for_path(path: &std::path::Path) -> std::io::Result<String> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let file = std::fs::File::open(path)?;
+    let mut information = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+    let succeeded = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
+    if succeeded == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(format!(
+        "windows-volume:{:08x}",
+        information.dwVolumeSerialNumber
+    ))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn filesystem_id_for_path(_path: &std::path::Path) -> std::io::Result<String> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "SQLite filesystem identity is unsupported on this platform",
+    ))
 }
 
 fn is_sqlite_memory_dsn(dsn: &str) -> bool {
@@ -266,7 +412,7 @@ fn ensure_sqlite_file(dsn: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::DbPool;
-    use sea_orm::{ConnectionTrait, TransactionTrait};
+    use sea_orm::{ConnectionTrait, DbErr, TransactionTrait};
 
     #[tokio::test]
     async fn sqlite_numbered_placeholders_preserve_repeated_bind_semantics() {
@@ -382,5 +528,97 @@ mod tests {
         ] {
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    #[tokio::test]
+    async fn immediate_write_rolls_back_errors_and_restores_busy_timeout() {
+        let db = DbPool::connect("sqlite::memory:").await.unwrap();
+        db.write()
+            .await
+            .execute_unprepared("CREATE TABLE immediate_probe (value INTEGER NOT NULL)")
+            .await
+            .unwrap();
+
+        let probe = db.clone();
+        let observed: Result<i64, DbErr> = db
+            .with_immediate_write(move |connection| {
+                Box::pin(async move {
+                    connection
+                        .execute_unprepared("INSERT INTO immediate_probe VALUES (1)")
+                        .await?;
+                    let row = connection
+                        .query_one(probe.stmt("PRAGMA busy_timeout", vec![]))
+                        .await?
+                        .unwrap();
+                    row.try_get("", "timeout")
+                })
+            })
+            .await;
+        assert_eq!(observed.unwrap(), 5_000);
+
+        let failed: Result<(), DbErr> = db
+            .with_immediate_write(|connection| {
+                Box::pin(async move {
+                    connection
+                        .execute_unprepared("INSERT INTO immediate_probe VALUES (2)")
+                        .await?;
+                    Err(DbErr::Custom("expected failure".to_string()))
+                })
+            })
+            .await;
+        assert!(matches!(failed, Err(DbErr::Custom(message)) if message == "expected failure"));
+
+        let row = db
+            .read()
+            .query_one(db.stmt("SELECT COUNT(*) AS value FROM immediate_probe", vec![]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.try_get::<i64>("", "value").unwrap(), 1);
+        let write = db.write().await;
+        let busy = write
+            .query_one(db.stmt("PRAGMA busy_timeout", vec![]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(busy.try_get::<i64>("", "timeout").unwrap(), 15_000);
+    }
+
+    #[tokio::test]
+    async fn quota_probe_uses_five_seconds_and_restores_fifteen_seconds() {
+        let db = DbPool::connect("sqlite::memory:").await.unwrap();
+        let probe = db.clone();
+        let observed: Result<i64, DbErr> = db
+            .with_sqlite_quota_probe(move |connection| {
+                Box::pin(async move {
+                    connection
+                        .query_one(probe.stmt("PRAGMA busy_timeout", vec![]))
+                        .await?
+                        .unwrap()
+                        .try_get("", "timeout")
+                })
+            })
+            .await;
+        assert_eq!(observed.unwrap(), 5_000);
+
+        let write = db.write().await;
+        let restored = write
+            .query_one(db.stmt("PRAGMA busy_timeout", vec![]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.try_get::<i64>("", "timeout").unwrap(), 15_000);
+    }
+
+    #[tokio::test]
+    async fn memory_identity_is_stable_across_clones_and_changes_on_reconnect() {
+        let first = DbPool::connect("sqlite::memory:").await.unwrap();
+        let cloned = first.clone();
+        let second = DbPool::connect("sqlite::memory:").await.unwrap();
+
+        let first_identity = first.sqlite_filesystem_id().unwrap();
+        assert!(first_identity.starts_with("memory:"));
+        assert_eq!(first_identity, cloned.sqlite_filesystem_id().unwrap());
+        assert_ne!(first_identity, second.sqlite_filesystem_id().unwrap());
     }
 }

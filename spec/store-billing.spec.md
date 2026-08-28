@@ -100,13 +100,27 @@ SB-P-15. Disabling a product MUST NOT modify an existing unpaid order. That orde
 
 SB-P-16. Emergency disable MUST create a close request for each unpaid order. It MUST query the provider before closing an attempt that may have been presented.
 
-SB-P-17. One user MUST have at most one current Store entitlement pointer. Each entitlement generation MUST be immutable.
+SB-P-17. One user MUST have at most one current Store entitlement pointer. The pointer MUST identify one immutable entitlement ID and generation.
+
+SB-P-17A. `(user_id, generation)` MUST be unique. A user's first generation MUST equal `1`. Each later generation MUST equal the prior current generation plus `1`.
+
+SB-P-17B. An entitlement generation row MUST NOT be updated or deleted after insertion. Suspension, admission blocking, and the current pointer MUST use separate rows.
 
 SB-P-18. A new plan fulfillment or redemption MUST replace the active plan immediately. Unused time and quota MUST NOT carry forward.
 
-SB-P-19. Each entitlement generation MUST copy one immutable exchange rational `N/D`. Every reservation and settlement for that generation MUST use that rational.
+SB-P-18A. Replacement MUST lock the current pointer, require the caller's expected current generation, insert one new generation, and change the pointer in one transaction. A stale expected generation MUST return `409 entitlement_generation_conflict` and write no generation or pointer change.
 
-SB-P-20. `(source_kind, source_id)` MUST be unique for entitlements. `source_kind` MUST be `order` or `redemption`.
+SB-P-18B. Replacement MUST NOT delete a prior generation, its buckets, or its reservations. A prior reservation MUST settle or release against its bound generation after replacement.
+
+SB-P-19. Each entitlement generation MUST copy one immutable exchange rational `N/D`. `N` and `D` MUST be positive canonical integer strings and MUST be reduced by their greatest common divisor.
+
+SB-P-19A. Reservation MUST convert maximum nano USD to CNY fen with ceiling division of `maximum_nano_usd * N / (D * 10,000,000)`.
+
+SB-P-19B. Settlement MUST convert actual nano USD to CNY fen with round-half-away-from-zero of `actual_nano_usd * N / (D * 10,000,000)`. Reservation and settlement MUST use the rational stored on the bound generation.
+
+SB-P-20. `(source_kind, source_id)` MUST be unique for entitlement generations. `source_kind` MUST be `order` or `redemption`.
+
+SB-P-20A. Repeating one source with the same immutable snapshot MUST return the existing generation. Repeating that source with a different user, duration, Group, quota, or exchange rational MUST return `409 entitlement_source_conflict` and change no row.
 
 ## 3. Payment Channels, Credentials, And Capability
 
@@ -436,31 +450,107 @@ SB-R-14A. Redemption limits MUST use a persistent lock row keyed by user and SHA
 
 ## 9. Plan Quota Admission
 
-SB-Q-1. A quota bucket MUST store settled and reserved CNY fen. A request reservation MUST store unique request ID, entitlement generation, maximum charge, state, and timestamps.
+SB-Q-1. A quota bucket MUST store nonnegative settled and reserved CNY fen. A reservation MUST store unique request ID, entitlement ID, generation, maximum nano USD, reserved CNY fen, exchange rational, pricing revision, state, admitted time, and terminal time.
 
-SB-Q-2. Admission MUST lock the entitlement and applicable buckets in deterministic order. It MUST require `settled + reserved + maximum <= quota` for every applicable rule.
+SB-Q-1A. A rolling `5h`, `12h`, or `custom` bucket admitted at time `t` MUST use `[t, t + window_seconds)`. Admission at time `u` MUST count each rolling bucket whose end is greater than `u`.
 
-SB-Q-3. Admission MUST fail with HTTP `402` and code `plan_quota_exhausted` when any rule fails.
+SB-Q-1B. A `day` bucket MUST use one Asia/Shanghai local day. A `week` bucket MUST start at Monday 00:00:00 Asia/Shanghai. A `month` bucket MUST start at local day 1 at 00:00:00. Stored boundaries MUST be UTC instants derived from those local boundaries.
 
-SB-Q-4. Settlement MUST subtract the reserved maximum and add exact actual CNY fen in one transaction. Release MUST subtract the reserved maximum and add no settled amount.
+SB-Q-2. Admission MUST lock the current entitlement pointer, generation, and applicable buckets in `(window_end, quota_rule_id, bucket_id)` byte order. It MUST require `settled_fen + reserved_fen + reserve_fen <= quota_fen` for every applicable rule.
 
-SB-Q-5. A provider charge above the reservation MUST apply to the old generation, block later plan admission, and create a critical quota violation. It MUST NOT charge a replacement generation.
+SB-Q-2A. One successful admission MUST insert one reservation, one link per applicable bucket, and update every applicable bucket in one transaction. Each link MUST store its exact reserved CNY fen. A plan with five applicable rules MUST reserve all five buckets or write none.
 
-SB-Q-6. SQLite admission MUST use one Store Primary, WAL, foreign keys, a five-second busy timeout, and short `BEGIN IMMEDIATE` transactions. Network calls and price calculation MUST occur outside the transaction.
+SB-Q-2B. Repeating a request ID with identical user, entitlement, generation, maximum, pricing revision, and bucket bindings MUST return the original reservation. A different binding MUST return `409 quota_idempotency_conflict` and change no bucket or reservation.
 
-SB-Q-7. SQLite plan features MUST require a persisted compatibility fingerprint and a passing quota gate for the exact application version, SQLite version, journal mode, busy timeout, filesystem identity, and quota manifest.
+SB-Q-3. Admission MUST fail with HTTP `402` and code `plan_quota_exhausted` when any rule fails. It MUST write no reservation or bucket change.
 
-SB-Q-8. A `pending` or `failed` SQLite gate MUST block plan product enablement, catalog availability, order creation, plan code generation, fulfillment, and admission. Balance products MUST remain available when other Store gates pass.
+SB-Q-3A. Funding admission MUST read the current entitlement generation and lifecycle by user ID without an RFC3339 range predicate. It MUST parse generation start, generation end, suspension, and revocation values as `DateTime<Utc>` before comparison. Start is inclusive and end is exclusive. A missing, not-started, expired, suspended, revoked, or group-inapplicable entitlement MUST select Balance. A malformed persisted time MUST return `quota_storage_error` and MUST NOT select Balance. A payment hold, quota admission block, or non-passed effective quota Gate MUST reject before quota mutation. A rejected request MUST write no reservation and MUST change no bucket.
 
-SB-Q-9. A Replica MUST obtain a Primary-signed Ed25519 admission token before routing a plan-funded request. Primary unavailability MUST fail plan admission closed.
+SB-Q-3B. Quota exhaustion MUST use `plan_quota_exhausted`. A request without a finite positive bound MUST use `plan_request_unbounded`. A payment hold MUST use `plan_payment_hold`. An uncleared quota violation block MUST use `plan_quota_violation_blocked`. A non-passed effective quota Gate MUST use `quota_gate_unavailable`. Admission runtime wrapping MUST preserve these codes and `quota_storage_error`; it MUST NOT replace them with `admission_storage_error`.
 
-SB-Q-10. A token MUST bind version, key ID, issuer, node audience, entitlement, generation, reservation, request ID, maximum charge, issued time, and expiry.
+SB-Q-4. Settlement MUST subtract the reservation's reserved CNY fen from every bound bucket and add the exact actual CNY fen to every bound bucket in one transaction. Release MUST subtract the reserved amount and add zero settled amount.
 
-SB-Q-11. Token TTL MUST be 30 seconds. Clock skew MUST be at most two minutes. Key rotation MUST publish a new key before activation and retain a prior key until all issued tokens expire plus skew.
+SB-Q-4A. Repeating the same terminal settlement or release MUST return the stored terminal result and change no counter. A different terminal kind or different actual amount MUST return `409 quota_terminal_conflict` and change no counter.
 
-SB-Q-12. A Replica MUST fsync a durable claim marker before routing. Same-node replay MUST fail by marker. Cross-node replay MUST fail by audience.
+SB-Q-4B. Settlement and release MUST use the bucket IDs and generation stored on the reservation. Current pointer replacement and window expiry MUST NOT redirect a terminal operation.
 
-SB-Q-13. A Replica MUST spool settlement or release before reporting terminal billing success. Primary application MUST be idempotent.
+SB-Q-4C. After a request handler creates a plan reservation, every error returned before the handler transfers ownership of that reservation to a response body MUST await release of the reservation before it returns the error. This rule applies to request-log admission, request transformation, HTTP client creation, request encoding, and exhausted routing.
+
+SB-Q-4D. A returned streaming response MUST own its plan reservation until terminal settlement or release. A downstream disconnect MUST NOT stop the internal stream drain that reaches this terminal operation. If the stream ends while the reservation remains reserved, finalization MUST release it and report `plan_settlement_required` internally.
+
+SB-Q-4E. A successful request MAY finish with reservation state `released` only when the selected handler branch explicitly requires zero charge, including `skip_charge` after missing usage is allowed. Such a branch MUST release the reservation before successful finalization. Successful finalization MUST accept `settled`, `violated`, or `released`. A successful request that remains `reserved` MUST release the reservation and return `plan_settlement_required`.
+
+SB-Q-5. When actual CNY fen exceeds reserved CNY fen, settlement MUST apply the full actual amount to every bound bucket, insert one quota violation, and insert one user admission block in the same transaction. The block MUST identify the bound generation and MUST block later plan admission after replacement. Settlement MUST NOT charge a replacement generation.
+
+SB-Q-5A. A quota violation MUST contain reservation ID, request ID, entitlement ID, generation, reserved CNY fen, actual CNY fen, detected time, and critical severity. Repeating the same settlement MUST NOT create a second violation or block.
+
+SB-Q-6. SQLite admission and terminal operations MUST use one Store Primary, WAL, foreign keys, `busy_timeout = 5000`, and short `BEGIN IMMEDIATE` transactions. Network calls and price calculation MUST occur outside the transaction.
+
+SB-Q-7. SQLite plan features MUST require one persisted quota-engine compatibility fingerprint. The fingerprint MUST bind quota compatibility ID, schema version, SQLite library version, journal mode, busy timeout, page size, synchronous mode, filesystem identity, and quota manifest digest. It MUST NOT bind the ordinary application version.
+
+SB-Q-7A. The Gate store MUST support `current` and `next` manifests. Cutover MUST promote `next` only when its fingerprint equals the starting process fingerprint. A nonmatching manifest MUST have effective state `pending`.
+
+SB-Q-7B. The starting process environment MUST use compatibility ID `store-plan-quota-v1` and logical schema version `1`. Logical schema version `1` MUST require applied migration records `m20260827_000049_store_billing` and `m20260827_000051_store_payment_core`. The quota manifest digest MUST equal the lowercase SHA-256 digest of the following exact ASCII bytes: `compatibility_id=store-plan-quota-v1\nschema_version=1\nrequired_migrations=m20260827_000049_store_billing,m20260827_000051_store_payment_core\n`.
+
+SB-Q-7C. A live SQLite environment probe MUST read `sqlite_version()`, `PRAGMA journal_mode`, `PRAGMA busy_timeout`, `PRAGMA page_size`, and `PRAGMA synchronous` from the quota write connection. It MUST lowercase ASCII journal mode. It MUST map synchronous values `0`, `1`, `2`, and `3` to `off`, `normal`, `full`, and `extra`. Any other synchronous value MUST make the effective Gate `pending`.
+
+SB-Q-7D. A live SQLite environment probe MUST hold the SQLite write mutex. It MUST set the connection-local busy timeout to `5000` before reading the environment. It MUST restore the connection-local busy timeout to `15000` after success or failure. It MUST NOT open a transaction.
+
+SB-Q-7E. A file-backed SQLite filesystem identity MUST identify the filesystem that contains the SQLite `main` database. On Unix it MUST equal `unix-dev:` followed by the lowercase hexadecimal `st_dev` value. On Windows it MUST equal `windows-volume:` followed by the eight-digit lowercase hexadecimal volume serial number. It MUST NOT bind the database path, inode, or file index. An in-memory SQLite connection MUST use `memory:` followed by a process-generated UUID. DbPool clones MUST retain that identity. A new in-memory connection MUST generate a different identity. An in-memory test database MAY use journal mode `memory`. A file-backed SQLite database MUST use journal mode `wal`.
+
+SB-Q-7F. A SQLite Gate is effective only when the stored row fingerprint, stored manifest fingerprint, stored manifest environment fingerprint, and live process environment fingerprint are equal and the stored manifest environment equals the live process environment. A missing or unreadable live component MUST make the effective Gate `pending`. PostgreSQL MUST NOT require a SQLite quota Gate.
+
+SB-Q-8. A `pending` or `failed` effective SQLite Gate MUST block plan product enablement, catalog availability, order creation, plan code generation, fulfillment, and admission. Balance products MUST remain available when other Store gates pass.
+
+SB-Q-9. A Replica MUST obtain a Primary-signed Ed25519 admission token before routing a plan-funded request. Primary unavailability MUST fail plan admission closed and MUST create no local reservation.
+
+SB-Q-10. A token MUST use compact JWS. Its protected header MUST contain `alg = EdDSA`, `typ = lynshen-plan-admission`, and a nonempty `kid`.
+
+SB-Q-10A. Token claims MUST bind version, issuer, Replica ID audience, token ID, reservation ID, request ID, entitlement ID, generation, maximum nano USD, reserved CNY fen, pricing revision, issued time, not-before time, and expiry.
+
+SB-Q-11. Token expiry MUST equal issued time plus 30 seconds. Not-before MUST equal issued time. Verification MUST reject when `now < nbf - 5 seconds` or `now >= exp + 5 seconds`; no larger skew is allowed. A token observed two minutes before or after its valid interval MUST be rejected.
+
+SB-Q-11A. Key rotation MUST publish a next public key before private-key activation. A prior public key MUST remain verifiable for at least five minutes after deactivation and until every token issued by that key has expired plus five seconds.
+
+SB-Q-12. Before routing, a Replica MUST atomically create and fsync a durable claim marker bound to token ID, reservation ID, request ID, and audience. It MUST fsync the containing directory before routing. An existing marker MUST reject same-node replay. A wrong audience MUST reject cross-node replay before marker creation.
+
+SB-Q-12A. A claim marker MUST remain until the Primary acknowledges one matching settlement or release and until at least five minutes after token expiry. Marker write or fsync failure MUST fail admission closed.
+
+SB-Q-13. A Replica MUST append and fsync one settlement or release record to its terminal spool before it reports terminal billing success. Spool write or fsync failure MUST fail closed and retain the claim marker.
+
+SB-Q-13A. Primary application of a terminal spool record MUST use SB-Q-4A idempotency. A replay with identical content MUST succeed without mutation. A replay with conflicting content MUST return `quota_terminal_conflict`.
+
+SB-Q-14. `store_admission_tokens` MUST persist token ID, audience, request ID, user ID, canonical effective groups JSON, reservation ID, entitlement ID, generation, maximum nano USD, reserved CNY fen, pricing revision, signing key ID, compact JWS, compact JWS SHA-256 digest, issued time, expiry, expiry Unix seconds, and nullable confirmation time. `expires_at_unix` MUST equal the signed 64-bit Unix-second value of the parsed `expires_at` instant. `(audience, request_id)`, token ID, reservation ID, and compact JWS digest MUST each be unique.
+
+SB-Q-14A. Primary issue input MUST contain user ID, Replica audience, external request ID, effective groups, finite positive maximum nano USD, pricing revision, and issue time. Effective groups MUST be sorted by UTF-8 bytes and deduplicated before persistence. Empty identifiers MUST be rejected with `admission_input_invalid`.
+
+SB-Q-14B. Primary issue MUST execute authoritative current-entitlement lookup, group applicability, quota reservation, token signing, provisional admission-token insertion, and active-key expiry update in one write transaction. It MUST lock the current generation and lifecycle rows. It MUST NOT compare RFC3339 timestamp text in SQL. It MUST parse entitlement start, end, suspension, and revocation values as instants and compare `DateTime<Utc>` values in application code. An entitlement applies only when its start time is not later than issue time, its end time is later than issue time, and its lifecycle has neither suspension nor revocation. An entitlement with no groups applies to every group set. A grouped entitlement requires at least one exact effective-group match. A missing, not-started, expired, suspended, revoked, or group-inapplicable current entitlement MUST return `Balance`, MUST NOT load admission signing keys, and MUST create no reservation or token. A malformed persisted generation or lifecycle time MUST return `quota_storage_error`, MUST NOT select Balance, and MUST create no reservation or token. An applicable entitlement MUST return `Plan(IssuedAdmission)` with null confirmation time. Failure MUST roll back every reservation, bucket, token, and key update.
+
+SB-Q-14C. Repeating `(audience, request_id)` with identical user ID, canonical effective groups, maximum nano USD, and pricing revision MUST return the stored compact JWS byte-for-byte and MUST create no reservation, bucket, or token. A changed binding MUST return `admission_issue_conflict`. Issue time MUST NOT participate in retry equality.
+
+SB-Q-14C-1. SQLite issue MUST use one `BEGIN IMMEDIATE` transaction. PostgreSQL issue MUST acquire one transaction-level advisory lock before its first admission-token lookup. The two signed 32-bit lock keys MUST be the first and second big-endian words of SHA-256 over the exact UTF-8 bytes `v=1\naudience=<audience>\nrequest_id=<external request ID>\n`. The lock call MUST be `pg_advisory_xact_lock(key1, key2)`. Therefore concurrent exact retries MUST return one compact JWS, and a concurrent changed binding MUST return `admission_issue_conflict`.
+
+SB-Q-14C-2. Quota reservation request IDs created by admission issue MUST be internal and audience-scoped. The internal value MUST equal `admission:` followed by lowercase SHA-256 hexadecimal over the same bytes defined by SB-Q-14C-1. `store_admission_tokens.request_id`, compact JWS `request_id`, terminal input, and terminal receipt MUST retain the external request ID. Equal external request IDs from different audiences MUST create independent reservations and tokens.
+
+SB-Q-14D. `store_admission_keys` MUST allow states `published`, `active`, and `retired`. A published key MUST have no activation, retirement, last-issued-expiry, or verify-until time. An active key MUST have encrypted seed JSON and activation time, and MUST have no retirement or verify-until time. A retired key MUST have encrypted seed JSON, activation time, retirement time, and verify-until time. At most one key MAY be active. Configuration epoch MUST be nonnegative.
+
+SB-Q-14E. Primary issue MUST read active and retired key rows without RFC3339 text range comparison. It MUST parse their time fields as `DateTime<Utc>` and exclude retired keys whose verify-until instant is not later than issue time before it decrypts seed data. It MUST decrypt the active and retained retired Ed25519 seeds with the configured Store `PaymentKeyRing`. Seed encryption AAD MUST equal `store-admission-key:` followed by key ID and `:seed:v1`. Each decrypted seed MUST contain exactly 32 bytes. Its derived public key MUST equal the canonical base64url-no-padding `public_key_base64` value. Active `last_issued_expires_at`, when present, MUST parse as an instant. Missing wrap keys MUST return `admission_wrap_key_missing`. Missing active keys MUST return `admission_active_key_missing`. Invalid encrypted, public, state, or time data MUST return `admission_key_invalid`.
+
+SB-Q-14E-1. PostgreSQL issue MUST read active and retired signing-key rows with `FOR UPDATE`. While holding the lock, issue MUST parse the active `last_issued_expires_at`, compute the later of that instant and the new token expiry, and write the resulting canonical UTC timestamp without SQL text comparison or `CASE`. The update MUST affect exactly one row. A zero-row or multi-row result MUST return `admission_key_invalid` and roll back reservation and token changes.
+
+SB-Q-14F. The Primary public keyset MUST read active and retired rows without RFC3339 text range comparison. It MUST parse all required state times as `DateTime<Utc>` and filter retired keys by instant in application code. It MUST validate key ID, state/time shape, canonical base64url-no-padding encoding, decoded length of exactly 32 bytes, and Ed25519 verifying-key validity before it excludes an expired retired row. Invalid data in an expired retired row MUST return `admission_key_invalid`. It MUST return only key ID, canonical public key, state, activation time, and verify-until time. It MUST include the active key and retired keys whose verify-until instant is greater than query time. It MUST exclude published and valid expired retired keys. It MUST NOT return encrypted seed JSON, wrap-key ID, configuration epoch, or private data.
+
+SB-Q-15. `store_admission_terminal_receipts` MUST persist one row per token ID. It MUST persist reservation ID, request ID, audience, terminal kind, optional actual nano USD, canonical terminal digest, and applied time. Settlement requires a nonnegative actual amount. Release requires no actual amount.
+
+SB-Q-15A. The canonical terminal payload MUST be the exact ASCII sequence `v=1\ntoken_id=<token>\nreservation_id=<reservation>\nrequest_id=<request>\naudience=<audience>\nkind=<settlement|release>\nactual_nano_usd=<canonical decimal or empty>\n`. Its digest MUST be lowercase SHA-256 hexadecimal. A supplied nonmatching digest MUST return `admission_terminal_digest_invalid` before mutation.
+
+SB-Q-15B. Primary terminal apply MUST lock the stored token row before it reads the terminal receipt. After the token exists, it MUST check receipt state before request binding. When a receipt exists, the same canonical digest MUST return `duplicate`; any changed digest, reservation ID, external request ID, or audience MUST return `admission_terminal_conflict`. Only when no receipt exists MUST a token binding mismatch return `admission_binding_mismatch`. It MUST apply quota settlement or release and insert the terminal receipt in one write transaction. SQLite MUST use `BEGIN IMMEDIATE`; PostgreSQL MUST use the token row `FOR UPDATE` lock. Concurrent exact terminal replays MUST produce one `applied` and one `duplicate`. Concurrent changed replays MUST produce one `applied` and one `admission_terminal_conflict`.
+
+SB-Q-15B-1. Settlement MUST require nonnull admission-token confirmation time. Release MAY apply before or after confirmation. A settlement on an unconfirmed token MUST return `admission_terminal_conflict` and change no quota or receipt. Unconfirmed-token recovery MUST skip a confirmed token and MUST treat any existing receipt as terminal.
+
+SB-Q-15D. RFC3339 values MUST be compared only after parsing to UTC instants. SQL lexical operators, SQL `CASE` expressions, and host-language string comparison MUST NOT decide entitlement activity, key retention, key expiry maxima, or public keyset membership.
+
+SB-Q-15C. Repeating a terminal apply with the same token ID and canonical digest MUST return `duplicate` and MUST perform no quota mutation. Repeating the token ID with a different digest or binding MUST return `admission_terminal_conflict`. Any receipt insertion failure MUST roll back the quota terminal mutation.
 
 ## 10. Reconciliation, Manual Cases, And Operations
 

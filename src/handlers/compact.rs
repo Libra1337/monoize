@@ -81,291 +81,305 @@ pub async fn compact_response(
         extract_client_session_id(&headers),
         Some(&routing_request),
     );
-    ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
-
-    let request_ip = extract_client_ip(&headers);
-    let started_at = std::time::Instant::now();
-    let capture = RequestCaptureContext {
-        raw_input,
-        session: capture_session,
-    };
-    let _pending_request_log_guard = insert_pending_request_log(
+    let funding_scope = ensure_balance_before_forward_for_attempts(
         &state,
         &auth,
-        &logical_model,
-        false,
+        &attempts,
+        Some(&routing_request),
         request_id.as_deref(),
-        request_ip.as_deref(),
-        started_at,
     )
     .await?;
 
-    let mut last_failed_attempt: Option<MonoizeAttempt> = None;
-    let mut tried_providers = Vec::new();
-    let mut execution_state = AttemptExecutionState::default();
+    let outcome = async {
+        let request_ip = extract_client_ip(&headers);
+        let started_at = std::time::Instant::now();
+        let capture = RequestCaptureContext {
+            raw_input,
+            session: capture_session,
+        };
+        let _pending_request_log_guard = insert_pending_request_log(
+            &state,
+            &auth,
+            &logical_model,
+            false,
+            request_id.as_deref(),
+            request_ip.as_deref(),
+            started_at,
+        )
+        .await?;
 
-    for mut attempt in attempts {
-        if execution_state.should_skip(&attempt) {
-            continue;
-        }
-        let max_channel_attempts = same_channel_attempt_slots(&attempt);
-        for channel_attempt in 0..max_channel_attempts {
+        let mut last_failed_attempt: Option<MonoizeAttempt> = None;
+        let mut tried_providers = Vec::new();
+        let mut execution_state = AttemptExecutionState::default();
+
+        for mut attempt in attempts {
             if execution_state.should_skip(&attempt) {
-                break;
+                continue;
             }
-            let attempt_number = execution_state.record_upstream_attempt(&attempt);
-            let mut upstream_body = crate::urp::encode::sanitize_provider_item_wire_body(&body);
-            if let Some(obj) = upstream_body.as_object_mut() {
-                obj.insert(
-                    "model".to_string(),
-                    Value::String(attempt.upstream_model.clone()),
-                );
-                obj.remove("max_multiplier");
-            }
-            let provider = build_channel_provider_config(&attempt);
-            let http = client_http_for_attempt(&state, &attempt)?;
-            let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
-            attempt.session_affinity_value =
-                resolve_session_affinity_value(&attempt, &upstream_body);
-            let result = upstream::call_upstream_with_timeout_and_headers(
-                &http,
-                &provider,
-                &attempt.api_key,
-                "/v1/responses/compact",
-                &upstream_body,
-                attempt.request_timeout_ms,
-                &extra_headers,
-            )
-            .await;
-
-            match result {
-                Ok(value) => {
-                    if let Some(session) = capture.session.as_ref() {
-                        session
-                            .push_attempt(crate::request_capture::build_attempt_dump(
-                                attempt_number,
-                                &attempt.provider_id,
-                                Some(&attempt.channel_id),
-                                attempt.provider_type,
-                                &logical_model,
-                                &attempt.upstream_model,
-                                "/v1/responses/compact",
-                                capture.raw_input.as_ref().clone(),
-                                &routing_request,
-                                upstream_body,
-                                Some(value.clone()),
-                                None,
-                                // RCD-D3b: the compact passthrough applies no URP transforms.
-                                json!([]),
-                                None,
-                            ))
-                            .await;
-                    }
-                    update_pending_channel_info(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        false,
-                        request_id.as_deref(),
-                        request_ip.as_deref(),
-                        started_at,
-                    )
-                    .await;
-                    let mut usage = parse_usage_from_responses_object(&value);
-                    let missing_usage_substituted =
-                        substitute_zero_usage_if_allowed(&mut usage, &attempt);
-                    let response_service_tier =
-                        usage::response_service_tier(&value).map(str::to_string);
-                    let charge = match usage.as_ref() {
-                        Some(usage) => {
-                            mark_channel_success(&state, &attempt).await;
-                            refresh_channel_affinity(&state, &attempt).await;
-                            match maybe_charge_usage(
-                                &state,
-                                &auth,
-                                &attempt,
-                                &logical_model,
-                                usage,
-                                missing_usage_substituted,
-                                response_service_tier.as_deref(),
-                                request_id.as_deref(),
-                            )
-                            .await
-                            {
-                                Ok(charge) => charge,
-                                Err(err) => {
-                                    spawn_request_log_error(
-                                        &state,
-                                        &auth,
-                                        &attempt,
-                                        &logical_model,
-                                        false,
-                                        started_at,
-                                        request_id.clone(),
-                                        request_ip.clone(),
-                                        &err,
-                                        None,
-                                        tried_providers,
-                                    );
-                                    if let Some(session) = capture.session.as_ref() {
-                                        session.persist_with_result(None, false).await;
-                                    }
-                                    return Err(err);
-                                }
-                            }
-                        }
-                        None => {
-                            let err = AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "upstream_usage_required",
-                                "upstream response did not include billable usage",
-                            );
-                            let same_channel_retryable = is_same_channel_retryable_app_error(&err);
-                            let passive_failure_class = same_channel_retryable
-                                .then(|| classify_retryable_app_failure(&err));
-                            record_upstream_attempt_failure(
-                                &state,
-                                &attempt,
-                                attempt_number,
-                                &err,
-                                passive_failure_class,
-                                &mut tried_providers,
-                                &mut execution_state,
-                            )
-                            .await;
-                            last_failed_attempt = Some(attempt.clone());
-                            if allow_same_channel_retry(
-                                &state,
-                                &attempt,
-                                &execution_state,
-                                channel_attempt + 1,
-                                passive_failure_class,
-                            )
-                            .await
-                            {
-                                maybe_sleep_before_channel_retry(&attempt).await;
-                                continue;
-                            }
-                            break;
-                        }
-                    };
-                    spawn_request_log(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        usage.clone(),
-                        charge.charge_nano_usd,
-                        charge.billing_breakdown,
-                        false,
-                        started_at,
-                        request_id,
-                        request_ip,
-                        attempt.channel_id.clone(),
-                        None,
-                        None,
-                        None,
-                        tried_providers,
-                        false,
-                    );
-                    if let Some(session) = capture.session.as_ref() {
-                        session.persist_with_result(usage.as_ref(), false).await;
-                    }
-                    return Ok(Json(value).into_response());
-                }
-                Err(err) => {
-                    if let Some(session) = capture.session.as_ref() {
-                        session
-                            .push_attempt(crate::request_capture::build_attempt_dump(
-                                attempt_number,
-                                &attempt.provider_id,
-                                Some(&attempt.channel_id),
-                                attempt.provider_type,
-                                &logical_model,
-                                &attempt.upstream_model,
-                                "/v1/responses/compact",
-                                capture.raw_input.as_ref().clone(),
-                                &routing_request,
-                                upstream_body,
-                                None,
-                                None,
-                                // RCD-D3b: the compact passthrough applies no URP transforms.
-                                json!([]),
-                                Some(json!({
-                                    "message": err.message,
-                                    "code": err.code,
-                                    "status": err.status.map(|status| status.as_u16()),
-                                })),
-                            ))
-                            .await;
-                    }
-                    let same_channel_retryable = is_same_channel_retryable_error(&err);
-                    let passive_failure_class =
-                        same_channel_retryable.then(|| classify_retryable_failure(&err));
-                    let mask_sensitive_info =
-                        state.monoize_runtime.read().await.mask_sensitive_info;
-                    let app_err = upstream_error_to_app(err, mask_sensitive_info);
-                    record_upstream_attempt_failure(
-                        &state,
-                        &attempt,
-                        attempt_number,
-                        &app_err,
-                        passive_failure_class,
-                        &mut tried_providers,
-                        &mut execution_state,
-                    )
-                    .await;
-                    last_failed_attempt = Some(attempt.clone());
-                    if allow_same_channel_retry(
-                        &state,
-                        &attempt,
-                        &execution_state,
-                        channel_attempt + 1,
-                        passive_failure_class,
-                    )
-                    .await
-                    {
-                        maybe_sleep_before_channel_retry(&attempt).await;
-                        continue;
-                    }
+            let max_channel_attempts = same_channel_attempt_slots(&attempt);
+            for channel_attempt in 0..max_channel_attempts {
+                if execution_state.should_skip(&attempt) {
                     break;
                 }
+                let attempt_number = execution_state.record_upstream_attempt(&attempt);
+                let mut upstream_body = crate::urp::encode::sanitize_provider_item_wire_body(&body);
+                if let Some(obj) = upstream_body.as_object_mut() {
+                    obj.insert(
+                        "model".to_string(),
+                        Value::String(attempt.upstream_model.clone()),
+                    );
+                    obj.remove("max_multiplier");
+                }
+                let provider = build_channel_provider_config(&attempt);
+                let http = client_http_for_attempt(&state, &attempt)?;
+                let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
+                attempt.session_affinity_value =
+                    resolve_session_affinity_value(&attempt, &upstream_body);
+                mark_plan_routed_before_dispatch(&funding_scope).await?;
+                let result = upstream::call_upstream_with_timeout_and_headers(
+                    &http,
+                    &provider,
+                    &attempt.api_key,
+                    "/v1/responses/compact",
+                    &upstream_body,
+                    attempt.request_timeout_ms,
+                    &extra_headers,
+                )
+                .await;
+
+                match result {
+                    Ok(value) => {
+                        if let Some(session) = capture.session.as_ref() {
+                            session
+                                .push_attempt(crate::request_capture::build_attempt_dump(
+                                    attempt_number,
+                                    &attempt.provider_id,
+                                    Some(&attempt.channel_id),
+                                    attempt.provider_type,
+                                    &logical_model,
+                                    &attempt.upstream_model,
+                                    "/v1/responses/compact",
+                                    capture.raw_input.as_ref().clone(),
+                                    &routing_request,
+                                    upstream_body,
+                                    Some(value.clone()),
+                                    None,
+                                    // RCD-D3b: the compact passthrough applies no URP transforms.
+                                    json!([]),
+                                    None,
+                                ))
+                                .await;
+                        }
+                        update_pending_channel_info(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            false,
+                            request_id.as_deref(),
+                            request_ip.as_deref(),
+                            started_at,
+                        )
+                        .await;
+                        let mut usage = parse_usage_from_responses_object(&value);
+                        let missing_usage_substituted =
+                            substitute_zero_usage_if_allowed(&mut usage, &attempt);
+                        let response_service_tier =
+                            usage::response_service_tier(&value).map(str::to_string);
+                        let charge = match usage.as_ref() {
+                            Some(usage) => {
+                                mark_channel_success(&state, &attempt).await;
+                                refresh_channel_affinity(&state, &attempt).await;
+                                match maybe_charge_usage(
+                                    &state,
+                                    &auth,
+                                    &attempt,
+                                    &logical_model,
+                                    usage,
+                                    missing_usage_substituted,
+                                    response_service_tier.as_deref(),
+                                    request_id.as_deref(),
+                                )
+                                .await
+                                {
+                                    Ok(charge) => charge,
+                                    Err(err) => {
+                                        spawn_request_log_error(
+                                            &state,
+                                            &auth,
+                                            &attempt,
+                                            &logical_model,
+                                            false,
+                                            started_at,
+                                            request_id.clone(),
+                                            request_ip.clone(),
+                                            &err,
+                                            None,
+                                            tried_providers,
+                                        );
+                                        if let Some(session) = capture.session.as_ref() {
+                                            session.persist_with_result(None, false).await;
+                                        }
+                                        return Err(err);
+                                    }
+                                }
+                            }
+                            None => {
+                                let err = AppError::new(
+                                    StatusCode::BAD_GATEWAY,
+                                    "upstream_usage_required",
+                                    "upstream response did not include billable usage",
+                                );
+                                let same_channel_retryable =
+                                    is_same_channel_retryable_app_error(&err);
+                                let passive_failure_class = same_channel_retryable
+                                    .then(|| classify_retryable_app_failure(&err));
+                                record_upstream_attempt_failure(
+                                    &state,
+                                    &attempt,
+                                    attempt_number,
+                                    &err,
+                                    passive_failure_class,
+                                    &mut tried_providers,
+                                    &mut execution_state,
+                                )
+                                .await;
+                                last_failed_attempt = Some(attempt.clone());
+                                if allow_same_channel_retry(
+                                    &state,
+                                    &attempt,
+                                    &execution_state,
+                                    channel_attempt + 1,
+                                    passive_failure_class,
+                                )
+                                .await
+                                {
+                                    maybe_sleep_before_channel_retry(&attempt).await;
+                                    continue;
+                                }
+                                break;
+                            }
+                        };
+                        spawn_request_log(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            usage.clone(),
+                            charge.charge_nano_usd,
+                            charge.billing_breakdown,
+                            false,
+                            started_at,
+                            request_id,
+                            request_ip,
+                            attempt.channel_id.clone(),
+                            None,
+                            None,
+                            None,
+                            tried_providers,
+                            false,
+                        );
+                        if let Some(session) = capture.session.as_ref() {
+                            session.persist_with_result(usage.as_ref(), false).await;
+                        }
+                        return Ok(Json(value).into_response());
+                    }
+                    Err(err) => {
+                        if let Some(session) = capture.session.as_ref() {
+                            session
+                                .push_attempt(crate::request_capture::build_attempt_dump(
+                                    attempt_number,
+                                    &attempt.provider_id,
+                                    Some(&attempt.channel_id),
+                                    attempt.provider_type,
+                                    &logical_model,
+                                    &attempt.upstream_model,
+                                    "/v1/responses/compact",
+                                    capture.raw_input.as_ref().clone(),
+                                    &routing_request,
+                                    upstream_body,
+                                    None,
+                                    None,
+                                    // RCD-D3b: the compact passthrough applies no URP transforms.
+                                    json!([]),
+                                    Some(json!({
+                                        "message": err.message,
+                                        "code": err.code,
+                                        "status": err.status.map(|status| status.as_u16()),
+                                    })),
+                                ))
+                                .await;
+                        }
+                        let same_channel_retryable = is_same_channel_retryable_error(&err);
+                        let passive_failure_class =
+                            same_channel_retryable.then(|| classify_retryable_failure(&err));
+                        let mask_sensitive_info =
+                            state.monoize_runtime.read().await.mask_sensitive_info;
+                        let app_err = upstream_error_to_app(err, mask_sensitive_info);
+                        record_upstream_attempt_failure(
+                            &state,
+                            &attempt,
+                            attempt_number,
+                            &app_err,
+                            passive_failure_class,
+                            &mut tried_providers,
+                            &mut execution_state,
+                        )
+                        .await;
+                        last_failed_attempt = Some(attempt.clone());
+                        if allow_same_channel_retry(
+                            &state,
+                            &attempt,
+                            &execution_state,
+                            channel_attempt + 1,
+                            passive_failure_class,
+                        )
+                        .await
+                        {
+                            maybe_sleep_before_channel_retry(&attempt).await;
+                            continue;
+                        }
+                        break;
+                    }
+                }
             }
         }
-    }
 
-    let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
-    if let Some(attempt) = last_failed_attempt {
-        spawn_request_log_error(
-            &state,
-            &auth,
-            &attempt,
-            &logical_model,
-            false,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            None,
-            tried_providers,
-        );
-    } else {
-        spawn_request_log_error_no_attempt(
-            &state,
-            &auth,
-            &logical_model,
-            false,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            None,
-            tried_providers,
-        );
+        let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
+        release_plan_reservation(&state, request_id.as_deref()).await?;
+        if let Some(attempt) = last_failed_attempt {
+            spawn_request_log_error(
+                &state,
+                &auth,
+                &attempt,
+                &logical_model,
+                false,
+                started_at,
+                request_id,
+                request_ip,
+                &final_err,
+                None,
+                tried_providers,
+            );
+        } else {
+            spawn_request_log_error_no_attempt(
+                &state,
+                &auth,
+                &logical_model,
+                false,
+                started_at,
+                request_id,
+                request_ip,
+                &final_err,
+                None,
+                tried_providers,
+            );
+        }
+        if let Some(session) = capture.session.as_ref() {
+            session.persist_with_result(None, true).await;
+        }
+        Err(final_err)
     }
-    if let Some(session) = capture.session.as_ref() {
-        session.persist_with_result(None, true).await;
-    }
-    Err(final_err)
+    .await;
+    funding_scope.finish(outcome).await
 }

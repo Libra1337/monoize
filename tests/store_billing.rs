@@ -3,6 +3,7 @@ use monoize::db::DbPool;
 use monoize::migration::Migrator;
 use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::order::{CreatePaymentOrderInput, PaymentOrderStore};
+use monoize::store_billing::quota_gate::{GateSlot, QuotaGateStore, QuotaManifest};
 use monoize::store_billing::{
     BalanceProductInput, CreatePaymentChannelInput, CreateProductInput, Currency,
     ExchangeRateSnapshot, GenerateRedemptionCodesInput, IconKind, PaymentAdapterKind,
@@ -77,6 +78,21 @@ fn redemption_keys() -> PaymentKeyRing {
     .unwrap()
 }
 
+async fn pass_quota_gate(db: &DbPool) {
+    let gate = QuotaGateStore::new(db.clone());
+    let manifest = QuotaManifest::passed(
+        gate.live_environment().await.unwrap(),
+        "store-billing-test",
+        "store-billing-drill",
+        Utc::now(),
+        "store-billing-admin",
+    )
+    .unwrap();
+    gate.import_manifest(GateSlot::Current, manifest)
+        .await
+        .unwrap();
+}
+
 fn balance_product(name: &str, sort_order: i32, enabled: bool) -> CreateProductInput {
     CreateProductInput {
         kind: ProductKind::Balance,
@@ -126,6 +142,122 @@ fn payment_channel(name: &str, sort_order: i32, enabled: bool) -> CreatePaymentC
         sort_order,
         enabled,
     }
+}
+
+#[tokio::test]
+async fn pending_sqlite_gate_blocks_enabled_plan_creation_but_not_balance() {
+    let (_db, store) = setup().await;
+
+    assert_eq!(
+        store
+            .create_product(plan_product("Blocked plan", "2000"))
+            .await
+            .unwrap_err(),
+        StoreBillingError::ProductNotAvailable
+    );
+
+    let mut disabled_plan = plan_product("Disabled plan", "2000");
+    disabled_plan.enabled = false;
+    assert!(store.create_product(disabled_plan).await.is_ok());
+    assert!(
+        store
+            .create_product(balance_product("Allowed balance", 0, true))
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn pending_sqlite_gate_blocks_enabling_an_existing_plan() {
+    let (_db, store) = setup().await;
+    let mut plan = plan_product("Disabled plan", "2000");
+    plan.enabled = false;
+    let created = store.create_product(plan.clone()).await.unwrap();
+
+    plan.enabled = true;
+    assert_eq!(
+        store.update_product(&created.id, plan).await.unwrap_err(),
+        StoreBillingError::ProductNotAvailable
+    );
+}
+
+#[tokio::test]
+async fn mismatched_sqlite_gate_hides_enabled_plans_from_catalog() {
+    let (db, store) = setup().await;
+    pass_quota_gate(&db).await;
+    store
+        .create_product(plan_product("Hidden plan", "2000"))
+        .await
+        .unwrap();
+    store
+        .create_product(balance_product("Visible balance", 1, true))
+        .await
+        .unwrap();
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_quota_gates SET compatibility_fingerprint = 'mismatched'
+             WHERE backend = 'sqlite' AND slot = 'current'",
+            vec![],
+        ))
+        .await
+        .unwrap();
+
+    let catalog = store.catalog().await.unwrap();
+    assert_eq!(catalog.products.len(), 1);
+    assert_eq!(catalog.products[0].kind, ProductKind::Balance);
+}
+
+#[tokio::test]
+async fn pending_sqlite_gate_rejects_plan_codes_but_not_balance_codes() {
+    let (db, store) = setup().await;
+    insert_user(&db, "gate-code-admin").await;
+    let mut plan = plan_product("Code plan", "2000");
+    plan.enabled = false;
+    let plan = store.create_product(plan).await.unwrap();
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_products SET enabled = 1 WHERE id = $1",
+            vec![plan.id.clone().into()],
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .generate_redemption_codes(
+                &redemption_keys(),
+                "gate-code-admin",
+                GenerateRedemptionCodesInput {
+                    reward: RedemptionRewardInput::Plan {
+                        product_id: plan.id,
+                    },
+                    count: 1,
+                    validity_days: 30,
+                },
+            )
+            .await
+            .unwrap_err(),
+        StoreBillingError::ProductNotAvailable
+    );
+    assert!(
+        store
+            .generate_redemption_codes(
+                &redemption_keys(),
+                "gate-code-admin",
+                GenerateRedemptionCodesInput {
+                    reward: RedemptionRewardInput::Balance {
+                        currency: Currency::USD,
+                        amount_minor: "100".to_string(),
+                    },
+                    count: 1,
+                    validity_days: 30,
+                },
+            )
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -355,6 +487,7 @@ async fn usd_balance_redemption_does_not_require_an_exchange_rate() {
 #[tokio::test]
 async fn plan_group_ids_are_canonical_and_validated_in_the_product_write() {
     let (db, store) = setup().await;
+    pass_quota_gate(&db).await;
     let group_id = default_group_id(&db).await;
     let mut input = plan_product("Canonical groups", "2000");
     input.group_ids = vec![

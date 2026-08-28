@@ -3,6 +3,8 @@ use super::{
     exchange_rate::ExchangeRateSnapshot,
     models::*,
     money::{Currency, MoneyError, convert_minor, parse_minor, quoted_received_to_nano_usd},
+    quota::{EntitlementGenerationInput, QuotaError, replace_entitlement_tx},
+    quota_gate::QuotaGateStore,
     redemption::{
         RedemptionAuditContext, RevealRedemptionInput, RevealedRedemptionCode, code_digest,
         decrypt_code, generate_code_material, normalize_code, source_ip_digest,
@@ -71,6 +73,17 @@ impl From<MoneyError> for StoreBillingError {
             MoneyError::InvalidExchangeRate => Self::InvalidExchangeRate,
             MoneyError::InvalidAmount => Self::InvalidAmount,
             MoneyError::AmountOverflow => Self::AmountOverflow,
+        }
+    }
+}
+
+impl From<QuotaError> for StoreBillingError {
+    fn from(error: QuotaError) -> Self {
+        match error.code() {
+            "plan_requires_postgres" => Self::ProductNotAvailable,
+            "entitlement_generation_conflict" | "entitlement_source_conflict" => Self::Conflict,
+            "invalid_entitlement" | "invalid_quota_window" => Self::InvalidInput,
+            _ => Self::Storage(error.to_string()),
         }
     }
 }
@@ -165,6 +178,15 @@ impl StoreBillingStore {
         let mut input = input;
         input.group_ids = canonical_group_ids(&input.group_ids)?;
         validate_product(&input)?;
+        if input.kind == ProductKind::Plan
+            && input.enabled
+            && !QuotaGateStore::new(self.db.clone())
+                .plan_features_enabled()
+                .await
+                .map_err(storage)?
+        {
+            return Err(StoreBillingError::ProductNotAvailable);
+        }
         let id = Uuid::new_v4().to_string();
         let now = timestamp(Utc::now());
         let group_ids = to_json(&input.group_ids)?;
@@ -206,6 +228,15 @@ impl StoreBillingStore {
         let mut input = input;
         input.group_ids = canonical_group_ids(&input.group_ids)?;
         validate_product(&input)?;
+        if input.kind == ProductKind::Plan
+            && input.enabled
+            && !QuotaGateStore::new(self.db.clone())
+                .plan_features_enabled()
+                .await
+                .map_err(storage)?
+        {
+            return Err(StoreBillingError::ProductNotAvailable);
+        }
         let group_ids = to_json(&input.group_ids)?;
         let tx = self.db.begin_write().await.map_err(storage)?;
         self.validate_group_ids(&*tx, &input.group_ids).await?;
@@ -573,14 +604,25 @@ impl StoreBillingStore {
     }
 
     pub async fn catalog(&self) -> Result<StoreCatalog, StoreBillingError> {
+        let plan_features_enabled = QuotaGateStore::new(self.db.clone())
+            .plan_features_enabled()
+            .await
+            .map_err(storage)?;
+        let plan_filter = if plan_features_enabled {
+            ""
+        } else {
+            " AND kind <> 'plan'"
+        };
         let rows = self
             .db
             .read()
             .query_all(self.db.stmt(
-                "SELECT id, kind, name, description, price_currency, price_minor,
-                        duration_seconds, group_ids, sort_order, enabled, created_at, updated_at
-                 FROM store_products WHERE enabled = 1
-                 ORDER BY sort_order ASC, created_at ASC, id ASC",
+                &format!(
+                    "SELECT id, kind, name, description, price_currency, price_minor,
+                            duration_seconds, group_ids, sort_order, enabled, created_at, updated_at
+                     FROM store_products WHERE enabled = 1{plan_filter}
+                     ORDER BY sort_order ASC, created_at ASC, id ASC"
+                ),
                 vec![],
             ))
             .await
@@ -688,10 +730,14 @@ impl StoreBillingStore {
         self.db
             .read()
             .query_one(self.db.stmt(
-                "SELECT id, user_id, product_id, product_name, starts_at, ends_at,
-                        cny_per_usd, group_ids, quota_json, source_kind, source_id
-                 FROM store_plan_entitlements
-                 WHERE user_id = $1 AND ends_at > $2 AND suspended_at IS NULL",
+                "SELECT g.id, g.user_id, g.generation, g.product_id, g.product_name,
+                        g.starts_at, g.ends_at, g.rate_numerator, g.rate_denominator,
+                        g.group_ids, g.quota_json, g.source_kind, g.source_id
+                 FROM store_plan_entitlement_current p
+                 JOIN store_plan_entitlement_generations g ON g.id = p.entitlement_id
+                 JOIN store_plan_entitlement_lifecycle l ON l.entitlement_id = g.id
+                 WHERE p.user_id = $1 AND g.ends_at > $2
+                   AND l.suspended_at IS NULL AND l.revoked_at IS NULL",
                 vec![user_id.into(), timestamp(Utc::now()).into()],
             ))
             .await
@@ -774,33 +820,35 @@ impl StoreBillingStore {
         let ends_at = starts_at
             .checked_add_signed(Duration::seconds(duration))
             .ok_or(StoreBillingError::InvalidInput)?;
-        conn.execute(self.db.stmt(
-            "INSERT INTO store_plan_entitlements
-                (id, user_id, product_id, product_name, starts_at, ends_at, cny_per_usd,
-                 group_ids, quota_json, source_kind, source_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-             ON CONFLICT (user_id) DO UPDATE SET
-                id = excluded.id, product_id = excluded.product_id,
-                product_name = excluded.product_name, starts_at = excluded.starts_at,
-                ends_at = excluded.ends_at, cny_per_usd = excluded.cny_per_usd,
-                group_ids = excluded.group_ids, quota_json = excluded.quota_json,
-                source_kind = excluded.source_kind, source_id = excluded.source_id",
-            vec![
-                Uuid::new_v4().to_string().into(),
-                user_id.into(),
-                product.id.clone().into(),
-                product.name.clone().into(),
-                timestamp(starts_at).into(),
-                timestamp(ends_at).into(),
-                cny_per_usd.into(),
-                to_json(&product.group_ids)?.into(),
-                to_json(&product.quotas)?.into(),
-                source_kind.into(),
-                source_id.into(),
-            ],
-        ))
-        .await
-        .map_err(storage)?;
+        let rate = super::money::ExchangeRateRational::parse(cny_per_usd)?;
+        let expected_generation = conn
+            .query_one(self.db.stmt(
+                "SELECT generation FROM store_plan_entitlement_current WHERE user_id = $1",
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(storage)?
+            .map(|row| row.try_get("", "generation").map_err(storage))
+            .transpose()?;
+        replace_entitlement_tx(
+            &self.db,
+            conn,
+            EntitlementGenerationInput {
+                expected_generation,
+                user_id: user_id.to_string(),
+                product_id: product.id.clone(),
+                product_name: product.name.clone(),
+                starts_at,
+                ends_at,
+                rate_numerator: rate.numerator().to_string(),
+                rate_denominator: rate.denominator().to_string(),
+                group_ids: product.group_ids.clone(),
+                quotas: product.quotas.clone(),
+                source_kind: source_kind.to_string(),
+                source_id: source_id.to_string(),
+            },
+        )
+        .await?;
         Ok(())
     }
 
@@ -827,6 +875,13 @@ impl StoreBillingStore {
                 }
             }
             RedemptionRewardInput::Plan { product_id } => {
+                if !QuotaGateStore::new(self.db.clone())
+                    .plan_features_enabled()
+                    .await
+                    .map_err(storage)?
+                {
+                    return Err(StoreBillingError::ProductNotAvailable);
+                }
                 let product = self
                     .product_by_id(&product_id, true)
                     .await?
@@ -1417,11 +1472,13 @@ fn plan_entitlement_from_row(row: QueryResult) -> Result<PlanEntitlement, StoreB
     Ok(PlanEntitlement {
         id: row_string(&row, "id")?,
         user_id: row_string(&row, "user_id")?,
+        generation: row.try_get("", "generation").map_err(storage)?,
         product_id: row_string(&row, "product_id")?,
         product_name: row_string(&row, "product_name")?,
         starts_at: parse_timestamp(&row_string(&row, "starts_at")?)?,
         ends_at: parse_timestamp(&row_string(&row, "ends_at")?)?,
-        cny_per_usd: row_string(&row, "cny_per_usd")?,
+        rate_numerator: row_string(&row, "rate_numerator")?,
+        rate_denominator: row_string(&row, "rate_denominator")?,
         group_ids: parse_json(&row_string(&row, "group_ids")?)?,
         quotas: parse_json(&row_string(&row, "quota_json")?)?,
         source_kind: row_string(&row, "source_kind")?,

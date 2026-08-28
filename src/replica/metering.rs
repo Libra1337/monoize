@@ -4,7 +4,7 @@
 //! PRP9 promotion drain.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,6 +17,17 @@ use serde_json::Value;
 
 use crate::db::DbPool;
 use crate::db_cache::{LastUsedBatcher, MeteringSink, RequestLogBatcher, SpoolRequestLog};
+use crate::replica::admission_client::AdmissionClient;
+use crate::replica::internal_http::read_internal_response;
+use crate::store_billing::admission_runtime::{
+    AdmissionRuntimeError, AdmissionService, TerminalApplyInput, TerminalApplyResult,
+    terminal_digest,
+};
+use crate::store_billing::admission_token::{
+    ADMISSION_ISSUER, AdmissionClaimStore, AdmissionVerifierRing, PlanTerminalAcknowledgement,
+    PlanTerminalWire, TerminalAcknowledgementResult, TerminalKind, TerminalSpoolInput,
+    TerminalSpoolRecord,
+};
 
 pub const METERING_INGEST_PATH: &str = "/internal/replica/metering";
 /// Hard per-batch cap enforced by both sides regardless of configuration (I3).
@@ -72,7 +83,7 @@ pub struct ReplicaHeartbeatRecord {
     pub last_seen_unix_ms: i64,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MeteringBatch {
     #[serde(default)]
     pub replica: Option<ReplicaHeartbeat>,
@@ -81,12 +92,17 @@ pub struct MeteringBatch {
     #[serde(default)]
     pub last_used: Vec<LastUsedPair>,
     #[serde(default)]
+    pub plan_terminals: Vec<PlanTerminalWire>,
+    #[serde(default)]
     pub balance_deltas: Vec<BalanceDelta>,
 }
 
 impl MeteringBatch {
     fn total_entries(&self) -> usize {
-        self.request_logs.len() + self.last_used.len() + self.balance_deltas.len()
+        self.request_logs.len()
+            + self.plan_terminals.len()
+            + self.balance_deltas.len()
+            + self.last_used.len()
     }
 
     fn is_empty(&self) -> bool {
@@ -99,6 +115,8 @@ pub struct MeteringAck {
     pub applied_request_logs: u64,
     pub applied_last_used: u64,
     pub applied_balance_deltas: u64,
+    #[serde(default)]
+    pub plan_terminal_acks: Vec<PlanTerminalAcknowledgement>,
 }
 
 pub fn valid_delta_kind(kind: &str) -> bool {
@@ -119,6 +137,49 @@ pub fn validate_delta(delta: &BalanceDelta) -> Result<(), &'static str> {
         return Err("created_at must be RFC 3339 text");
     }
     Ok(())
+}
+
+fn terminal_apply_input(
+    terminal: &PlanTerminalWire,
+) -> Result<TerminalApplyInput, AdmissionRuntimeError> {
+    if terminal.version != 1 {
+        return Err(AdmissionRuntimeError::InputInvalid);
+    }
+    let actual_nano_usd = match (terminal.kind, terminal.actual_nano_usd.as_deref()) {
+        (TerminalKind::Settlement, Some(value)) => {
+            if value.is_empty()
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+                || (value.len() > 1 && value.starts_with('0'))
+            {
+                return Err(AdmissionRuntimeError::InputInvalid);
+            }
+            Some(
+                value
+                    .parse::<i128>()
+                    .map_err(|_| AdmissionRuntimeError::InputInvalid)?,
+            )
+        }
+        (TerminalKind::Release, None) => None,
+        _ => return Err(AdmissionRuntimeError::InputInvalid),
+    };
+    let input = TerminalApplyInput {
+        token_id: terminal.token_id.clone(),
+        reservation_id: terminal.reservation_id.clone(),
+        request_id: terminal.request_id.clone(),
+        audience: terminal.audience.clone(),
+        kind: terminal.kind,
+        actual_nano_usd,
+        canonical_digest: terminal.canonical_digest.clone(),
+        applied_at: terminal.created_at,
+    };
+    if terminal_digest(&input)? != input.canonical_digest {
+        return Err(AdmissionRuntimeError::TerminalDigestInvalid);
+    }
+    Ok(input)
+}
+
+fn admission_batch_error(error: AdmissionRuntimeError) -> String {
+    format!("{}: {error}", error.code())
 }
 
 // ---------------------------------------------------------------------------
@@ -241,15 +302,83 @@ pub fn evict_expired_heartbeats(
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
+pub struct MeteringSpoolCapacity {
+    max_bytes: u64,
+    accounted_bytes: AtomicU64,
+    io_lock: tokio::sync::Mutex<()>,
+}
+
+impl MeteringSpoolCapacity {
+    pub fn new(max_bytes: u64) -> Self {
+        Self {
+            max_bytes: max_bytes.max(1),
+            accounted_bytes: AtomicU64::new(0),
+            io_lock: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    pub fn max_bytes(&self) -> u64 {
+        self.max_bytes
+    }
+
+    pub fn accounted_bytes(&self) -> u64 {
+        self.accounted_bytes.load(Ordering::Acquire)
+    }
+
+    pub(crate) async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.io_lock.lock().await
+    }
+
+    pub(crate) fn ensure_add(&self, bytes: u64) -> Result<(), ()> {
+        if self
+            .accounted_bytes()
+            .checked_add(bytes)
+            .is_none_or(|total| total > self.max_bytes)
+        {
+            Err(())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn add(&self, bytes: u64) {
+        self.accounted_bytes.fetch_add(bytes, Ordering::AcqRel);
+    }
+
+    pub(crate) fn add_reconstructed(&self, bytes: u64) {
+        self.accounted_bytes.fetch_add(bytes, Ordering::AcqRel);
+    }
+
+    pub(crate) fn replace(&self, old_bytes: u64, new_bytes: u64) {
+        if new_bytes >= old_bytes {
+            self.accounted_bytes
+                .fetch_add(new_bytes - old_bytes, Ordering::AcqRel);
+        } else {
+            self.accounted_bytes
+                .fetch_sub(old_bytes - new_bytes, Ordering::AcqRel);
+        }
+    }
+
+    pub(crate) fn subtract(&self, bytes: u64) {
+        self.accounted_bytes.fetch_sub(bytes, Ordering::AcqRel);
+    }
+}
+
+#[derive(Debug)]
 pub struct DeltaSpool {
     dir: PathBuf,
-    max_bytes: u64,
-    bytes: std::sync::atomic::AtomicU64,
-    io_lock: tokio::sync::Mutex<()>,
+    capacity: Arc<MeteringSpoolCapacity>,
 }
 
 impl DeltaSpool {
     pub fn new(dir: PathBuf, max_bytes: u64) -> Result<Self, String> {
+        Self::new_with_capacity(dir, Arc::new(MeteringSpoolCapacity::new(max_bytes)))
+    }
+
+    pub fn new_with_capacity(
+        dir: PathBuf,
+        capacity: Arc<MeteringSpoolCapacity>,
+    ) -> Result<Self, String> {
         std::fs::create_dir_all(&dir)
             .map_err(|error| format!("metering_spool_unwritable: create dir: {error}"))?;
         let probe = dir.join(format!(".write-probe-{}", uuid::Uuid::new_v4().simple()));
@@ -283,12 +412,8 @@ impl DeltaSpool {
                 let _ = std::fs::remove_file(&path);
             }
         }
-        Ok(Self {
-            dir,
-            max_bytes: max_bytes.max(1),
-            bytes: std::sync::atomic::AtomicU64::new(total),
-            io_lock: tokio::sync::Mutex::new(()),
-        })
+        capacity.add_reconstructed(total);
+        Ok(Self { dir, capacity })
     }
 
     fn list_json_files(&self) -> Vec<(String, u64)> {
@@ -363,12 +488,13 @@ impl DeltaSpool {
 
     pub async fn enqueue(&self, delta: &BalanceDelta) -> Result<(), String> {
         let payload = serde_json::to_vec(delta).map_err(|error| error.to_string())?;
-        let _io_guard = self.io_lock.lock().await;
-        let current = self.bytes.load(Ordering::Acquire);
-        if current + payload.len() as u64 > self.max_bytes {
+        let _io_guard = self.capacity.lock().await;
+        let current = self.capacity.accounted_bytes();
+        if self.capacity.ensure_add(payload.len() as u64).is_err() {
             return Err(format!(
-                "replica metering spool quota exhausted ({}/{})",
-                current, self.max_bytes
+                "metering_spool_quota_exhausted ({}/{})",
+                current,
+                self.capacity.max_bytes()
             ));
         }
         let name = format!(
@@ -386,12 +512,12 @@ impl DeltaSpool {
         if let Err(error) = sync_dir(&self.dir).await {
             tracing::warn!(error = %error, "delta spool directory sync failed");
         }
-        self.bytes.fetch_add(payload.len() as u64, Ordering::AcqRel);
+        self.capacity.add(payload.len() as u64);
         Ok(())
     }
 
     pub async fn load_batch(&self, max_entries: usize) -> Vec<(PathBuf, u64, BalanceDelta)> {
-        let _io_guard = self.io_lock.lock().await;
+        let _io_guard = self.capacity.lock().await;
         let mut names: Vec<(String, u64)> = self.list_json_files();
         // Oldest first: the timestamp prefix sorts lexicographically.
         names.sort_by(|left, right| left.0.cmp(&right.0));
@@ -404,7 +530,7 @@ impl DeltaSpool {
                     Err(error) => {
                         tracing::warn!(file = %name, error = %error, "skipping corrupt delta spool file");
                         let _ = tokio::fs::remove_file(&path).await;
-                        self.bytes.fetch_sub(size, Ordering::AcqRel);
+                        self.capacity.subtract(size);
                     }
                 },
                 Err(error) => {
@@ -416,7 +542,7 @@ impl DeltaSpool {
     }
 
     pub async fn release(&self, files: &[(PathBuf, u64)]) {
-        let _io_guard = self.io_lock.lock().await;
+        let _io_guard = self.capacity.lock().await;
         for (path, size) in files {
             match tokio::fs::remove_file(path).await {
                 Ok(()) => {}
@@ -426,7 +552,7 @@ impl DeltaSpool {
                     continue;
                 }
             }
-            self.bytes.fetch_sub(*size, Ordering::AcqRel);
+            self.capacity.subtract(*size);
         }
     }
 }
@@ -458,13 +584,14 @@ async fn sync_dir(dir: &std::path::Path) -> Result<(), String> {
 
 #[derive(Clone, Default)]
 struct ShipExtras {
+    terminals: Vec<TerminalSpoolRecord>,
     last_used: Vec<LastUsedPair>,
     deltas: Vec<(PathBuf, u64, BalanceDelta)>,
 }
 
 impl ShipExtras {
     fn is_empty(&self) -> bool {
-        self.last_used.is_empty() && self.deltas.is_empty()
+        self.terminals.is_empty() && self.last_used.is_empty() && self.deltas.is_empty()
     }
 
     fn into_batch(self, request_logs: Vec<SpoolRequestLog>) -> MeteringBatch {
@@ -472,16 +599,26 @@ impl ShipExtras {
             replica: None,
             request_logs,
             last_used: self.last_used,
+            plan_terminals: self
+                .terminals
+                .iter()
+                .map(TerminalSpoolRecord::wire)
+                .collect(),
             balance_deltas: self.deltas.into_iter().map(|(_, _, delta)| delta).collect(),
         }
     }
 
     fn trim_to_fit(&mut self, log_count: usize, hard_cap: usize) -> ShipExtras {
         let mut leftover = ShipExtras {
+            terminals: Vec::new(),
             last_used: Vec::new(),
             deltas: Vec::new(),
         };
         let mut remaining = hard_cap.saturating_sub(log_count);
+        if self.terminals.len() > remaining {
+            leftover.terminals = self.terminals.split_off(remaining);
+        }
+        remaining = remaining.saturating_sub(self.terminals.len());
         if self.deltas.len() > remaining {
             leftover.deltas = self.deltas.split_off(remaining);
         }
@@ -498,6 +635,7 @@ struct BatchSink<'a> {
     last_used: &'a LastUsedBatcher,
     extras: Mutex<Option<ShipExtras>>,
     released: AtomicBool,
+    invalid_plan_ack: AtomicBool,
     deliver_attempted: AtomicBool,
 }
 
@@ -516,6 +654,10 @@ impl<'a> BatchSink<'a> {
     fn deliver_attempted(&self) -> bool {
         self.deliver_attempted.load(Ordering::Acquire)
     }
+
+    fn invalid_plan_ack(&self) -> bool {
+        self.invalid_plan_ack.load(Ordering::Acquire)
+    }
 }
 
 #[async_trait::async_trait]
@@ -525,9 +667,12 @@ impl MeteringSink for BatchSink<'_> {
         let Some(extras) = self.take_extras() else {
             return Err("metering sink state unavailable".to_string());
         };
-        self.metering
+        let invalid_plan_ack = self
+            .metering
             .send_composed(entries.to_vec(), extras, self.last_used)
             .await?;
+        self.invalid_plan_ack
+            .store(invalid_plan_ack, Ordering::Release);
         self.released.store(true, Ordering::Release);
         Ok(())
     }
@@ -559,11 +704,16 @@ pub struct ReplicaHeartbeatSource {
 #[derive(Clone)]
 pub struct ReplicaMetering {
     delta_spool: Arc<DeltaSpool>,
+    capacity: Arc<MeteringSpoolCapacity>,
+    admission_verifier: AdmissionVerifierRing,
+    admission_claims: Arc<AdmissionClaimStore>,
+    admission_client: AdmissionClient,
     pending: Arc<PendingDeductions>,
     client: reqwest::Client,
     endpoint: String,
     token: String,
     ship_batch_max: usize,
+    replica_id: String,
     heartbeat_source: Option<ReplicaHeartbeatSource>,
     ship_notify: Arc<tokio::sync::Notify>,
 }
@@ -575,6 +725,7 @@ impl ReplicaMetering {
         primary_url: &str,
         token: &str,
         ship_batch_max: usize,
+        replica_id: String,
     ) -> Result<Self, String> {
         crate::node_config::ensure_rustls_crypto_provider()?;
         let client = reqwest::Client::builder()
@@ -590,25 +741,60 @@ impl ReplicaMetering {
             primary_url.trim_end_matches('/'),
             METERING_INGEST_PATH
         );
-        let delta_spool = DeltaSpool::new(spool_dir, spool_max_bytes)?;
+        let capacity = Arc::new(MeteringSpoolCapacity::new(spool_max_bytes));
+        let admission_verifier = AdmissionVerifierRing::new();
+        let delta_spool = DeltaSpool::new_with_capacity(spool_dir.clone(), capacity.clone())?;
+        let admission_claims = Arc::new(
+            AdmissionClaimStore::open_with_capacity(
+                spool_dir.join("plan-admission"),
+                capacity.clone(),
+            )
+            .map_err(|error| error.to_string())?,
+        );
+        let ship_notify = Arc::new(tokio::sync::Notify::new());
+        let admission_client = AdmissionClient::new(
+            client.clone(),
+            primary_url.to_string(),
+            token.to_string(),
+            replica_id.clone(),
+            Duration::from_secs(5),
+            admission_verifier.clone(),
+            admission_claims.clone(),
+            ship_notify.clone(),
+        )
+        .map_err(|error| error.to_string())?;
         let pending = PendingDeductions::default();
         for (subject, amount) in delta_spool.reconstruct_pending_amounts() {
             pending.add(&subject, amount);
         }
         Ok(Self {
             delta_spool: Arc::new(delta_spool),
+            capacity,
+            admission_verifier,
+            admission_claims,
+            admission_client,
             pending: Arc::new(pending),
             client,
             endpoint,
             token: token.to_string(),
             ship_batch_max: ship_batch_max.clamp(1, METERING_BATCH_HARD_CAP),
+            replica_id,
             heartbeat_source: None,
-            ship_notify: Arc::new(tokio::sync::Notify::new()),
+            ship_notify,
         })
     }
 
-    pub fn with_heartbeat_source(mut self, source: ReplicaHeartbeatSource) -> Self {
+    pub fn with_heartbeat_source(mut self, mut source: ReplicaHeartbeatSource) -> Self {
+        source.id = self.replica_id.clone();
         self.heartbeat_source = Some(source);
+        self
+    }
+
+    pub fn with_admission_refresh_interval(mut self, interval: Duration) -> Self {
+        self.admission_client = self
+            .admission_client
+            .clone()
+            .with_refresh_interval(interval);
         self
     }
 
@@ -643,6 +829,10 @@ impl ReplicaMetering {
         &self.pending
     }
 
+    pub fn replica_id(&self) -> &str {
+        &self.replica_id
+    }
+
     /// Charge-path entry point on replicas (M3): durable enqueue or fail; the caller
     /// maps failure onto the terminal billing-failure path per MB-C6.
     pub(crate) async fn enqueue_balance_delta_for_request(
@@ -663,6 +853,40 @@ impl ReplicaMetering {
 
     pub fn delta_spool(&self) -> &DeltaSpool {
         &self.delta_spool
+    }
+
+    pub fn spool_capacity(&self) -> &Arc<MeteringSpoolCapacity> {
+        &self.capacity
+    }
+
+    pub fn admission_verifier(&self) -> &AdmissionVerifierRing {
+        &self.admission_verifier
+    }
+
+    pub fn admission_claims(&self) -> &AdmissionClaimStore {
+        &self.admission_claims
+    }
+
+    pub fn admission_client(&self) -> &AdmissionClient {
+        &self.admission_client
+    }
+
+    pub fn spawn_admission_refresh_loop(
+        &self,
+        shutdown: Arc<std::sync::atomic::AtomicBool>,
+    ) -> tokio::task::JoinHandle<()> {
+        self.admission_client
+            .clone()
+            .spawn_keyset_refresh_loop(shutdown)
+    }
+
+    pub async fn spool_plan_terminal(
+        &self,
+        input: TerminalSpoolInput,
+    ) -> Result<TerminalSpoolRecord, crate::store_billing::admission_token::AdmissionError> {
+        let record = self.admission_claims.spool_terminal(input).await?;
+        self.ship_notify.notify_one();
+        Ok(record)
     }
 
     /// M3: durable publish before success, plus atomic pending-counter increment.
@@ -696,36 +920,87 @@ impl ReplicaMetering {
         &self,
         request_logs: Vec<SpoolRequestLog>,
         extras: &ShipExtras,
-    ) -> Result<(), String> {
+    ) -> Result<MeteringAck, String> {
         let mut batch = extras.clone().into_batch(request_logs);
         batch.replica = self.current_heartbeat();
         if batch.is_empty() && batch.replica.is_none() {
-            return Ok(());
+            return Ok(MeteringAck {
+                applied_request_logs: 0,
+                applied_last_used: 0,
+                applied_balance_deltas: 0,
+                plan_terminal_acks: Vec::new(),
+            });
         }
-        let response = self
+        if batch
+            .plan_terminals
+            .iter()
+            .any(|terminal| terminal.audience != self.replica_id)
+            || batch
+                .replica
+                .as_ref()
+                .is_some_and(|heartbeat| heartbeat.id != self.replica_id)
+        {
+            return Err("plan terminal audience mismatch".to_string());
+        }
+        let request = self
             .client
             .post(&self.endpoint)
             .bearer_auth(&self.token)
-            .json(&batch)
+            .header("X-Monoize-Replica-ID", &self.replica_id)
+            .json(&batch);
+        let response = request
             .send()
             .await
             .map_err(|error| format!("metering transport error: {error}"))?;
-        let status = response.status();
+        let (status, body) = read_internal_response(response)
+            .await
+            .map_err(|error| format!("invalid metering ack body: {error}"))?;
         if status == StatusCode::TOO_MANY_REQUESTS || status.as_u16() == 413 {
             return Err(format!("primary rejected batch as too large ({status})"));
         }
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("primary returned {status}: {body}"));
+            return Err(format!(
+                "primary returned {status}: {}",
+                String::from_utf8_lossy(&body)
+            ));
         }
-        let _ack: MeteringAck = response
-            .json()
-            .await
+        let ack: MeteringAck = serde_json::from_slice(&body)
             .map_err(|error| format!("invalid metering ack body: {error}"))?;
-        Ok(())
+        Ok(ack)
     }
 
-    async fn release_extras(&self, extras: &ShipExtras) {
+    async fn release_extras(&self, extras: &ShipExtras, ack: &MeteringAck) -> bool {
+        let unexpected_ack = ack.plan_terminal_acks.iter().any(|candidate| {
+            !extras.terminals.iter().any(|terminal| {
+                candidate.token_id == terminal.input.token_id
+                    && candidate.canonical_digest == terminal.canonical_digest
+            })
+        });
+        let mut invalid_plan_ack = unexpected_ack;
+        for terminal in &extras.terminals {
+            let matching = ack
+                .plan_terminal_acks
+                .iter()
+                .filter(|candidate| {
+                    candidate.token_id == terminal.input.token_id
+                        && candidate.canonical_digest == terminal.canonical_digest
+                })
+                .count();
+            if unexpected_ack
+                || matching != 1
+                || self
+                    .admission_claims
+                    .acknowledge_terminal(
+                        &terminal.input.token_id,
+                        &terminal.canonical_digest,
+                        chrono::Utc::now(),
+                    )
+                    .await
+                    .is_err()
+            {
+                invalid_plan_ack = true;
+            }
+        }
         let files: Vec<(PathBuf, u64)> = extras
             .deltas
             .iter()
@@ -741,6 +1016,7 @@ impl ReplicaMetering {
         metrics::counter!("monoize_replica_metering_shipped_total", "result" => "ok").increment(1);
         metrics::gauge!("monoize_replica_metering_pending_entries")
             .set(self.delta_spool.pending_files() as f64);
+        invalid_plan_ack
     }
 
     fn requeue_last_used(&self, pairs: Vec<LastUsedPair>, last_used: &LastUsedBatcher) {
@@ -756,13 +1032,17 @@ impl ReplicaMetering {
         request_logs: Vec<SpoolRequestLog>,
         mut extras: ShipExtras,
         last_used: &LastUsedBatcher,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let leftover = extras.trim_to_fit(request_logs.len(), METERING_BATCH_HARD_CAP);
         self.requeue_last_used(leftover.last_used, last_used);
         match self.post_batch(request_logs, &extras).await {
-            Ok(()) => {
-                self.release_extras(&extras).await;
-                Ok(())
+            Ok(ack) => {
+                let invalid_plan_ack = self.release_extras(&extras, &ack).await;
+                if invalid_plan_ack {
+                    metrics::counter!("monoize_replica_metering_shipped_total", "result" => "error")
+                        .increment(1);
+                }
+                Ok(invalid_plan_ack)
             }
             Err(error) => {
                 self.requeue_last_used(extras.last_used, last_used);
@@ -779,6 +1059,14 @@ impl ReplicaMetering {
         log_batcher: &RequestLogBatcher,
         last_used: &LastUsedBatcher,
     ) -> ShipTick {
+        if let Err(error) = self
+            .admission_claims
+            .publish_release_pending(chrono::Utc::now())
+            .await
+        {
+            tracing::warn!(error = %error, "release-pending admission publication failed");
+            return ShipTick::Failure;
+        }
         let last_used_pairs = last_used
             .drain_limit(METERING_BATCH_HARD_CAP)
             .into_iter()
@@ -787,8 +1075,20 @@ impl ReplicaMetering {
                 last_used_at: timestamp.to_rfc3339(),
             })
             .collect::<Vec<_>>();
+        let terminals = match self
+            .admission_claims
+            .load_pending_terminals(self.ship_batch_max)
+            .await
+        {
+            Ok(terminals) => terminals,
+            Err(error) => {
+                tracing::warn!(error = %error, "plan terminal spool load failed");
+                return ShipTick::Failure;
+            }
+        };
         let delta_files = self.delta_spool.load_batch(self.ship_batch_max).await;
         let extras = ShipExtras {
+            terminals,
             last_used: last_used_pairs,
             deltas: delta_files,
         };
@@ -798,11 +1098,16 @@ impl ReplicaMetering {
             last_used,
             extras: Mutex::new(Some(extras)),
             released: AtomicBool::new(false),
+            invalid_plan_ack: AtomicBool::new(false),
             deliver_attempted: AtomicBool::new(false),
         };
         let _shipped_logs = log_batcher.ship_via(self.ship_batch_max, &sink).await;
         if sink.was_released() {
-            return ShipTick::Success;
+            return if sink.invalid_plan_ack() {
+                ShipTick::Failure
+            } else {
+                ShipTick::Success
+            };
         }
         if sink.deliver_attempted() {
             return ShipTick::Failure;
@@ -813,7 +1118,8 @@ impl ReplicaMetering {
             return ShipTick::Idle;
         }
         match self.send_composed(Vec::new(), leftovers, last_used).await {
-            Ok(()) => ShipTick::Success,
+            Ok(false) => ShipTick::Success,
+            Ok(true) => ShipTick::Failure,
             Err(error) => {
                 tracing::warn!(error = %error, "replica metering shipment failed");
                 ShipTick::Failure
@@ -948,6 +1254,38 @@ pub(crate) async fn ingest_metering_handler(
             format!("batch exceeds hard cap of {METERING_BATCH_HARD_CAP} entries"),
         );
     }
+    if !batch.plan_terminals.is_empty() {
+        let replica_id = headers
+            .get("x-monoize-replica-id")
+            .and_then(|value| value.to_str().ok());
+        let audience_matches = replica_id.is_some_and(|replica_id| {
+            batch
+                .plan_terminals
+                .iter()
+                .all(|terminal| terminal.audience == replica_id)
+                && batch
+                    .replica
+                    .as_ref()
+                    .is_none_or(|heartbeat| heartbeat.id == replica_id)
+        });
+        if !audience_matches {
+            return metering_error(
+                StatusCode::FORBIDDEN,
+                "replica_audience_mismatch",
+                "plan terminal audience does not match replica identity",
+            );
+        }
+        for terminal in &batch.plan_terminals {
+            if let Err(error) = terminal_apply_input(terminal) {
+                let code = if matches!(error, AdmissionRuntimeError::TerminalDigestInvalid) {
+                    error.code()
+                } else {
+                    "metering_batch_invalid"
+                };
+                return metering_error(StatusCode::UNPROCESSABLE_ENTITY, code, error.to_string());
+            }
+        }
+    }
     for pair in &batch.last_used {
         if pair.api_key_id.is_empty() || pair.last_used_at.is_empty() {
             return metering_error(
@@ -992,7 +1330,7 @@ pub(crate) async fn ingest_metering_handler(
         );
     }
 
-    match apply_metering_batch(&state.db_pool, &batch).await {
+    match apply_metering_batch_result(&state.db_pool, &batch).await {
         Ok(ack) => {
             if !batch.request_logs.is_empty() {
                 let rows = batch
@@ -1006,11 +1344,25 @@ pub(crate) async fn ingest_metering_handler(
         }
         Err(error) => {
             tracing::warn!(error = %error, "metering batch apply failed; replica will retry");
-            metering_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "metering_apply_failed",
-                error,
-            )
+            match &error {
+                AdmissionRuntimeError::TokenNotFound => {
+                    metering_error(StatusCode::NOT_FOUND, error.code(), error.to_string())
+                }
+                AdmissionRuntimeError::BindingMismatch
+                | AdmissionRuntimeError::TerminalConflict => {
+                    metering_error(StatusCode::CONFLICT, error.code(), error.to_string())
+                }
+                AdmissionRuntimeError::TerminalDigestInvalid => metering_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    error.code(),
+                    error.to_string(),
+                ),
+                _ => metering_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "metering_apply_failed",
+                    error.to_string(),
+                ),
+            }
         }
     }
 }
@@ -1025,75 +1377,116 @@ pub async fn apply_metering_batch(
     db: &DbPool,
     batch: &MeteringBatch,
 ) -> Result<MeteringAck, String> {
-    use sea_orm::{ConnectionTrait, TransactionTrait};
+    apply_metering_batch_result(db, batch)
+        .await
+        .map_err(admission_batch_error)
+}
 
-    let write = db.write().await;
-    let tx = write.begin().await.map_err(|error| error.to_string())?;
+async fn apply_metering_batch_result(
+    db: &DbPool,
+    batch: &MeteringBatch,
+) -> Result<MeteringAck, AdmissionRuntimeError> {
+    let terminals = batch
+        .plan_terminals
+        .iter()
+        .map(terminal_apply_input)
+        .collect::<Result<Vec<_>, _>>()?;
+    if db.is_sqlite() {
+        let db_for_tx = db.clone();
+        let batch = batch.clone();
+        db.with_immediate_write(move |connection| {
+            Box::pin(async move {
+                apply_metering_batch_tx(&db_for_tx, connection, &batch, terminals).await
+            })
+        })
+        .await
+    } else {
+        let tx = db
+            .begin_write()
+            .await
+            .map_err(AdmissionRuntimeError::from)?;
+        let outcome = apply_metering_batch_tx(db, &*tx, batch, terminals).await;
+        match outcome {
+            Ok(ack) => {
+                tx.commit().await.map_err(AdmissionRuntimeError::from)?;
+                Ok(ack)
+            }
+            Err(error) => {
+                tx.rollback().await.map_err(AdmissionRuntimeError::from)?;
+                Err(error)
+            }
+        }
+    }
+}
 
+async fn apply_metering_batch_tx<C: sea_orm::ConnectionTrait>(
+    db: &DbPool,
+    connection: &C,
+    batch: &MeteringBatch,
+    terminals: Vec<TerminalApplyInput>,
+) -> Result<MeteringAck, AdmissionRuntimeError> {
+    let admission = AdmissionService::new(db.clone(), None, ADMISSION_ISSUER)?;
     let mut applied_request_logs = 0u64;
     let mut applied_balance_deltas = 0u64;
-    let mut apply_error: Option<String> = None;
+    let mut plan_terminal_acks = Vec::with_capacity(terminals.len());
 
     for chunk in batch
         .request_logs
         .chunks(crate::db_cache::REQUEST_LOG_INSERT_CHUNK_ENTRIES)
     {
         let (sql, values) = crate::db_cache::request_log_insert_chunk(chunk.iter());
-        match tx.execute(db.stmt(&sql, values)).await {
-            Ok(outcome) => applied_request_logs += outcome.rows_affected(),
-            Err(error) => {
-                apply_error = Some(error.to_string());
-                break;
-            }
-        }
+        let outcome = connection
+            .execute(db.stmt(&sql, values))
+            .await
+            .map_err(|error| AdmissionRuntimeError::Storage(error.to_string()))?;
+        applied_request_logs += outcome.rows_affected();
     }
 
-    if apply_error.is_none() {
-        for chunk in batch.last_used.chunks(LAST_USED_CHUNK_ENTRIES) {
-            let pairs = chunk
-                .iter()
-                .filter_map(|pair| {
-                    chrono::DateTime::parse_from_rfc3339(&pair.last_used_at)
-                        .ok()
-                        .map(|parsed| (pair.api_key_id.clone(), parsed.with_timezone(&chrono::Utc)))
-                })
-                .collect::<Vec<_>>();
-            if pairs.is_empty() {
-                continue;
-            }
-            let (sql, values) = crate::db_cache::last_used_bulk_update(&pairs);
-            if let Err(error) = tx.execute(db.stmt(&sql, values)).await {
-                apply_error = Some(error.to_string());
-                break;
-            }
-        }
+    for terminal in terminals {
+        let token_id = terminal.token_id.clone();
+        let canonical_digest = terminal.canonical_digest.clone();
+        let result = admission.apply_terminal_tx(connection, terminal).await?;
+        plan_terminal_acks.push(PlanTerminalAcknowledgement {
+            token_id,
+            canonical_digest,
+            result: match result {
+                TerminalApplyResult::Applied => TerminalAcknowledgementResult::Applied,
+                TerminalApplyResult::Duplicate => TerminalAcknowledgementResult::Duplicate,
+            },
+        });
     }
 
-    if apply_error.is_none() {
-        for delta in &batch.balance_deltas {
-            match apply_balance_delta(db, &tx, delta).await {
-                Ok(count) => applied_balance_deltas += count,
-                Err(error) => {
-                    apply_error = Some(error);
-                    break;
-                }
-            }
+    for chunk in batch.last_used.chunks(LAST_USED_CHUNK_ENTRIES) {
+        let pairs = chunk
+            .iter()
+            .filter_map(|pair| {
+                chrono::DateTime::parse_from_rfc3339(&pair.last_used_at)
+                    .ok()
+                    .map(|parsed| (pair.api_key_id.clone(), parsed.with_timezone(&chrono::Utc)))
+            })
+            .collect::<Vec<_>>();
+        if pairs.is_empty() {
+            continue;
         }
+        let (sql, values) = crate::db_cache::last_used_bulk_update(&pairs);
+        connection
+            .execute(db.stmt(&sql, values))
+            .await
+            .map_err(|error| AdmissionRuntimeError::Storage(error.to_string()))?;
     }
 
-    if let Some(error) = apply_error {
-        if let Err(rollback_error) = tx.rollback().await {
-            tracing::warn!("metering apply rollback error: {rollback_error}");
-        }
-        return Err(error);
+    for delta in &batch.balance_deltas {
+        applied_balance_deltas += apply_balance_delta(db, connection, delta)
+            .await
+            .map_err(AdmissionRuntimeError::Storage)?;
     }
 
-    tx.commit().await.map_err(|error| error.to_string())?;
     metrics::counter!("monoize_primary_metering_applied_total").increment(applied_balance_deltas);
     Ok(MeteringAck {
         applied_request_logs,
         applied_last_used: batch.last_used.len() as u64,
         applied_balance_deltas,
+        plan_terminal_acks,
     })
 }
 
@@ -1269,6 +1662,7 @@ pub async fn drain_delta_spool_to_local_db(db: &DbPool, spool: &DeltaSpool) -> R
             replica: None,
             request_logs: Vec::new(),
             last_used: Vec::new(),
+            plan_terminals: Vec::new(),
             balance_deltas: files.iter().map(|(_, _, delta)| delta.clone()).collect(),
         };
         let ack = apply_metering_batch(db, &batch).await.map_err(|error| {
@@ -1299,6 +1693,7 @@ mod tests {
     #[test]
     fn trim_to_fit_keeps_total_at_hard_cap() {
         let mut extras = ShipExtras {
+            terminals: Vec::new(),
             last_used: (0..1500)
                 .map(|i| LastUsedPair {
                     api_key_id: format!("k{i}"),
@@ -1348,18 +1743,16 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn delta_spool_rejects_unwritable_directory() {
         let temp = tempfile::TempDir::new().unwrap();
         let dir = temp.path().to_path_buf();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-            let result = DeltaSpool::new(dir.clone(), 1024);
-            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
-            if let Err(error) = result {
-                assert!(error.starts_with("metering_spool_unwritable"), "{error}");
-            }
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = DeltaSpool::new(dir.clone(), 1024);
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+        if let Err(error) = result {
+            assert!(error.starts_with("metering_spool_unwritable"), "{error}");
         }
     }
 }

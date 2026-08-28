@@ -30,6 +30,8 @@ const PAYMENT_TABLES: &[&str] = &[
     "store_quota_buckets",
     "store_quota_reservations",
     "store_admission_keys",
+    "store_admission_tokens",
+    "store_admission_terminal_receipts",
 ];
 
 async fn migrated_database() -> DatabaseConnection {
@@ -109,13 +111,25 @@ async fn payment_migration_replaces_legacy_store_shape() {
     }
     assert!(channel_columns.iter().any(|value| value == "adapter_kind"));
 
-    let entitlement_columns = sqlite_columns(&db, "store_plan_entitlements").await;
-    for column in ["suspended_at", "suspension_reason"] {
+    let entitlement_columns = sqlite_columns(&db, "store_plan_entitlement_generations").await;
+    for column in ["generation", "rate_numerator", "rate_denominator"] {
         assert!(
             entitlement_columns.iter().any(|value| value == column),
-            "missing store_plan_entitlements.{column}"
+            "missing store_plan_entitlement_generations.{column}"
         );
     }
+    let lifecycle_columns = sqlite_columns(&db, "store_plan_entitlement_lifecycle").await;
+    for column in ["suspended_at", "suspension_reason", "revoked_at"] {
+        assert!(
+            lifecycle_columns.iter().any(|value| value == column),
+            "missing store_plan_entitlement_lifecycle.{column}"
+        );
+    }
+    assert!(
+        sqlite_columns(&db, "store_plan_entitlements")
+            .await
+            .is_empty()
+    );
     let redemption_columns = sqlite_columns(&db, "store_redemption_codes").await;
     for column in [
         "code_format_version",
@@ -301,5 +315,86 @@ async fn reconciliation_migration_adds_bounded_fulfillment_retry_state() {
         String::try_get(&candidate_index_sql, "", "sql")
             .unwrap()
             .contains("(order_id, channel_id, adapter_kind, created_at DESC, id DESC)")
+    );
+}
+
+#[tokio::test]
+async fn admission_migration_installs_token_receipt_and_key_shape_guards() {
+    let db = migrated_database().await;
+    assert_eq!(
+        sqlite_columns(&db, "store_admission_tokens").await,
+        vec![
+            "token_id",
+            "audience",
+            "request_id",
+            "user_id",
+            "effective_groups_json",
+            "reservation_id",
+            "entitlement_id",
+            "generation",
+            "maximum_nano_usd",
+            "reserved_fen_cny",
+            "pricing_revision",
+            "key_id",
+            "compact_jws",
+            "compact_jws_digest",
+            "issued_at",
+            "expires_at",
+            "expires_at_unix",
+            "confirmed_at",
+        ]
+    );
+    assert_eq!(
+        sqlite_columns(&db, "store_admission_terminal_receipts").await,
+        vec![
+            "token_id",
+            "reservation_id",
+            "request_id",
+            "audience",
+            "terminal_kind",
+            "actual_nano_usd",
+            "canonical_digest",
+            "applied_at",
+        ]
+    );
+    let indexes = sqlite_names(&db, "index").await;
+    for index in [
+        "uq_store_admission_token_request",
+        "uq_store_admission_token_reservation",
+        "uq_store_admission_token_digest",
+        "idx_store_admission_unconfirmed_expiry",
+    ] {
+        assert!(
+            indexes.iter().any(|value| value == index),
+            "missing {index}"
+        );
+    }
+
+    assert!(
+        db.execute_unprepared(
+            "INSERT INTO store_admission_keys
+             (key_id, public_key_base64, encrypted_private_key_json, state,
+              published_at, activated_at, retired_at, last_issued_expires_at,
+              verify_until, config_epoch)
+             VALUES ('bad-active', 'bad', NULL, 'active',
+                     '2026-08-28T00:00:00Z', NULL, NULL, NULL, NULL, 0)",
+        )
+        .await
+        .is_err(),
+        "active key shape must require encrypted seed and activation time"
+    );
+    assert!(
+        db.execute_unprepared(
+            "INSERT INTO store_admission_keys
+             (key_id, public_key_base64, encrypted_private_key_json, state,
+              published_at, activated_at, retired_at, last_issued_expires_at,
+              verify_until, config_epoch)
+             VALUES ('bad-published', 'bad', '{}', 'published',
+                     '2026-08-28T00:00:00Z', '2026-08-28T00:00:00Z',
+                     NULL, NULL, NULL, 0)",
+        )
+        .await
+        .is_err(),
+        "published key shape must reject activation and encrypted seed"
     );
 }

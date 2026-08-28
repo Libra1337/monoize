@@ -193,6 +193,8 @@ pub struct AppState {
     pub metering: Option<Arc<crate::replica::metering::ReplicaMetering>>,
     /// SHA-256 digest of MONOIZE_REPLICA_TOKEN on primaries with ingest enabled.
     pub metering_token_digest: Option<[u8; 32]>,
+    /// Present only on the Primary; owns plan admission transactions and recovery.
+    pub admission_service: Option<Arc<crate::store_billing::admission_runtime::AdmissionService>>,
     /// Process-local replica heartbeats observed on the primary ingest path.
     pub replica_heartbeats: Arc<DashMap<String, crate::replica::metering::ReplicaHeartbeatRecord>>,
     pub metrics: PrometheusHandle,
@@ -225,8 +227,19 @@ impl AppState {
     pub fn with_node_role(self, role: NodeRole) -> Self {
         let mut node = (*self.node).clone();
         node.role = role;
+        let is_replica = role == NodeRole::Replica;
         Self {
             node: Arc::new(node),
+            metering_token_digest: if is_replica {
+                None
+            } else {
+                self.metering_token_digest
+            },
+            admission_service: if is_replica {
+                None
+            } else {
+                self.admission_service
+            },
             ..self
         }
     }
@@ -901,29 +914,30 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "unknown".to_string());
-        let metering = crate::replica::metering::ReplicaMetering::new(
-            runtime.node.metering_spool_dir.clone(),
-            runtime.node.metering_spool_max_bytes,
-            runtime.node.replica_primary_url.as_deref().unwrap_or(""),
-            runtime.node.replica_token.as_deref().unwrap_or(""),
-            runtime.node.metering_ship_batch_max_entries,
+        let metering = crate::replica::metering::resolve_replica_identity(
+            runtime.node.replica_id.as_deref(),
+            &runtime.node.metering_spool_dir,
         )
-        .and_then(|metering| {
-            // M9: the identity persists in the spool directory, so a restarted replica
-            // keeps its heartbeat map entry on the primary instead of adding a new one.
-            let replica_id = crate::replica::metering::resolve_replica_identity(
-                runtime.node.replica_id.as_deref(),
-                &runtime.node.metering_spool_dir,
-            )?;
-            Ok(
-                metering.with_heartbeat_source(crate::replica::metering::ReplicaHeartbeatSource {
-                    id: replica_id,
-                    hostname,
-                    listen: runtime.listen.clone(),
-                    version: env!("CARGO_PKG_VERSION").to_string(),
-                    started_at: started_at.to_rfc3339(),
-                }),
+        .and_then(|replica_id| {
+            crate::replica::metering::ReplicaMetering::new(
+                runtime.node.metering_spool_dir.clone(),
+                runtime.node.metering_spool_max_bytes,
+                runtime.node.replica_primary_url.as_deref().unwrap_or(""),
+                runtime.node.replica_token.as_deref().unwrap_or(""),
+                runtime.node.metering_ship_batch_max_entries,
+                replica_id.clone(),
             )
+            .map(|metering| {
+                metering
+                    .with_admission_refresh_interval(runtime.node.config_poll_interval)
+                    .with_heartbeat_source(crate::replica::metering::ReplicaHeartbeatSource {
+                        id: replica_id,
+                        hostname,
+                        listen: runtime.listen.clone(),
+                        version: env!("CARGO_PKG_VERSION").to_string(),
+                        started_at: started_at.to_rfc3339(),
+                    })
+            })
         })
         .map_err(|err| {
             let code = [
@@ -937,6 +951,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             AppError::new(axum::http::StatusCode::BAD_REQUEST, code, err)
         })?;
         let metering = Arc::new(metering);
+        metering.spawn_admission_refresh_loop(background_shutdown.clone());
         metering.spawn_ship_loop(
             user_store.request_log_batcher_clone(),
             user_store.last_used_batcher_clone(),
@@ -979,6 +994,30 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     } else {
         None
     };
+    let admission_service = if is_replica {
+        None
+    } else {
+        Some(Arc::new(
+            crate::store_billing::admission_runtime::AdmissionService::new(
+                db.clone(),
+                payment_keys.clone(),
+                crate::store_billing::admission_token::ADMISSION_ISSUER,
+            )
+            .map_err(|error| {
+                AppError::new(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    error.code(),
+                    error.to_string(),
+                )
+            })?,
+        ))
+    };
+    if let Some(service) = admission_service.clone() {
+        crate::replica::admission_http::spawn_unconfirmed_reaper(
+            service,
+            background_shutdown.clone(),
+        );
+    }
 
     Ok(AppState {
         runtime: Arc::new(runtime),
@@ -997,6 +1036,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         db_pool: db.clone(),
         metering,
         metering_token_digest,
+        admission_service,
         replica_heartbeats: Arc::new(DashMap::new()),
         metrics,
         user_store,
@@ -1945,12 +1985,10 @@ pub fn build_app(state: AppState) -> Router {
             .merge(dashboard_api_router)
             .merge(build_store_callback_router());
         app = app.nest("/api", api_router);
-        if state.metering_token_digest.is_some() {
-            // PRP6/I1: ingest mounted only when a replica token is configured.
-            app = app.route(
-                crate::replica::metering::METERING_INGEST_PATH,
-                post(crate::replica::metering::ingest_metering_handler),
-            );
+        if let Some(expected_digest) = state.metering_token_digest {
+            app = app.merge(crate::replica::admission_http::internal_router(
+                expected_digest,
+            ));
         }
         app = app.fallback(crate::frontend::frontend_fallback);
     }

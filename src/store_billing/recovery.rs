@@ -571,9 +571,12 @@ impl RecoveryStore {
         .await
         .map_err(storage)?;
         tx.execute(self.db.stmt(
-            "UPDATE store_plan_entitlements
-             SET suspended_at = $2, suspension_reason = 'payment_dispute'
-             WHERE source_kind = 'order' AND source_id = $1 AND suspended_at IS NULL",
+            "UPDATE store_plan_entitlement_lifecycle
+             SET suspended_at = $2, suspension_reason = 'payment_dispute', updated_at = $2
+             WHERE entitlement_id IN (
+                 SELECT id FROM store_plan_entitlement_generations
+                 WHERE source_kind = 'order' AND source_id = $1
+             ) AND suspended_at IS NULL AND revoked_at IS NULL",
             vec![input.order_id.into(), now.into()],
         ))
         .await
@@ -668,10 +671,12 @@ impl RecoveryStore {
                 .await
                 .map_err(storage)?;
                 tx.execute(self.db.stmt(
-                    "UPDATE store_plan_entitlements
-                     SET suspended_at = NULL, suspension_reason = NULL
-                     WHERE source_kind = 'order' AND source_id = $1
-                       AND ends_at > $2 AND suspension_reason = 'payment_dispute'",
+                    "UPDATE store_plan_entitlement_lifecycle
+                     SET suspended_at = NULL, suspension_reason = NULL, updated_at = $2
+                     WHERE entitlement_id IN (
+                         SELECT id FROM store_plan_entitlement_generations
+                         WHERE source_kind = 'order' AND source_id = $1 AND ends_at > $2
+                     ) AND suspension_reason = 'payment_dispute' AND revoked_at IS NULL",
                     vec![row_string(&row, "order_id")?.into(), now.into()],
                 ))
                 .await
@@ -752,7 +757,18 @@ impl RecoveryStore {
              ON CONFLICT (user_id) DO UPDATE SET
                 active = 1, reason = excluded.reason,
                 opened_at = excluded.opened_at, cleared_at = NULL",
-            vec![row_string(&row, "user_id")?.into(), now.into()],
+            vec![row_string(&row, "user_id")?.into(), now.clone().into()],
+        ))
+        .await
+        .map_err(storage)?;
+        tx.execute(self.db.stmt(
+            "UPDATE store_plan_entitlement_lifecycle
+             SET revoked_at = $2, revocation_reason = 'payment_loss', updated_at = $2
+             WHERE entitlement_id IN (
+                 SELECT id FROM store_plan_entitlement_generations
+                 WHERE source_kind = 'order' AND source_id = $1
+             ) AND revoked_at IS NULL",
+            vec![row_string(&row, "order_id")?.into(), now.into()],
         ))
         .await
         .map_err(storage)?;

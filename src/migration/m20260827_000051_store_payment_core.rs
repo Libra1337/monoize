@@ -77,7 +77,12 @@ const PAYMENT_TABLES: &[&str] = &[
     "store_quota_gates",
     "store_quota_buckets",
     "store_quota_reservations",
+    "store_quota_reservation_buckets",
+    "store_quota_violations",
+    "store_quota_admission_blocks",
     "store_admission_keys",
+    "store_admission_tokens",
+    "store_admission_terminal_receipts",
 ];
 
 async fn reject_unimported_legacy_secrets(
@@ -120,8 +125,6 @@ fn up_statements(backend: DbBackend) -> Vec<String> {
 fn sqlite_rebuild_statements() -> Vec<String> {
     vec![
         "ALTER TABLE store_products ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0)".to_string(),
-        "ALTER TABLE store_plan_entitlements ADD COLUMN suspended_at TEXT".to_string(),
-        "ALTER TABLE store_plan_entitlements ADD COLUMN suspension_reason TEXT".to_string(),
         sqlite_create_redemption_codes_v2(),
         "INSERT INTO store_redemption_codes_v2
             (id, code_format_version, code_digest, code_hint,
@@ -200,8 +203,6 @@ fn sqlite_rebuild_statements() -> Vec<String> {
 fn postgres_rebuild_statements() -> Vec<String> {
     vec![
         "ALTER TABLE store_products ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0)".to_string(),
-        "ALTER TABLE store_plan_entitlements ADD COLUMN suspended_at TEXT".to_string(),
-        "ALTER TABLE store_plan_entitlements ADD COLUMN suspension_reason TEXT".to_string(),
         "ALTER TABLE store_redemption_codes RENAME TO store_redemption_codes_legacy".to_string(),
         postgres_create_redemption_codes_v2(),
         "INSERT INTO store_redemption_codes_v2
@@ -537,27 +538,109 @@ fn common_table_statements() -> Vec<String> {
             expires_at TEXT NOT NULL, updated_at TEXT NOT NULL
         )",
         "CREATE TABLE store_quota_gates (
-            backend TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK (state IN ('pending', 'passed', 'failed')),
+            backend TEXT NOT NULL, slot TEXT NOT NULL CHECK (slot IN ('current', 'next')),
+            state TEXT NOT NULL CHECK (state IN ('pending', 'passed', 'failed')),
             compatibility_fingerprint TEXT NOT NULL, manifest_json TEXT NOT NULL,
-            tested_at TEXT, failure_reason TEXT, updated_at TEXT NOT NULL
+            tested_at TEXT, failure_reason TEXT, updated_at TEXT NOT NULL,
+            PRIMARY KEY (backend, slot)
         )",
         "CREATE TABLE store_quota_buckets (
             id TEXT NOT NULL PRIMARY KEY, entitlement_id TEXT NOT NULL, generation INTEGER NOT NULL,
-            window_kind TEXT NOT NULL, window_start TEXT NOT NULL, window_end TEXT NOT NULL,
+            quota_rule_id TEXT NOT NULL, window_kind TEXT NOT NULL,
+            window_start TEXT NOT NULL, window_end TEXT NOT NULL,
             settled_fen_cny TEXT NOT NULL DEFAULT '0', reserved_fen_cny TEXT NOT NULL DEFAULT '0',
-            quota_fen_cny TEXT NOT NULL, updated_at TEXT NOT NULL
+            quota_fen_cny TEXT NOT NULL, updated_at TEXT NOT NULL,
+            FOREIGN KEY (entitlement_id, generation)
+                REFERENCES store_plan_entitlement_generations (id, generation) ON DELETE RESTRICT
         )",
         "CREATE TABLE store_quota_reservations (
             id TEXT NOT NULL PRIMARY KEY, request_id TEXT NOT NULL, entitlement_id TEXT NOT NULL,
-            generation INTEGER NOT NULL, maximum_fen_cny TEXT NOT NULL,
-            actual_fen_cny TEXT, state TEXT NOT NULL CHECK (state IN ('reserved', 'settled', 'released', 'violated')),
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            generation INTEGER NOT NULL, user_id TEXT NOT NULL,
+            maximum_nano_usd TEXT NOT NULL, reserved_fen_cny TEXT NOT NULL,
+            rate_numerator TEXT NOT NULL, rate_denominator TEXT NOT NULL,
+            pricing_revision TEXT NOT NULL, actual_nano_usd TEXT, actual_fen_cny TEXT,
+            state TEXT NOT NULL CHECK (state IN ('reserved', 'settled', 'released', 'violated')),
+            admitted_at TEXT NOT NULL, terminal_at TEXT, updated_at TEXT NOT NULL,
+            FOREIGN KEY (entitlement_id, user_id, generation)
+                REFERENCES store_plan_entitlement_generations (id, user_id, generation) ON DELETE RESTRICT
+        )",
+        "CREATE TABLE store_quota_reservation_buckets (
+            reservation_id TEXT NOT NULL, bucket_id TEXT NOT NULL,
+            reserved_fen_cny TEXT NOT NULL,
+            PRIMARY KEY (reservation_id, bucket_id),
+            FOREIGN KEY (reservation_id) REFERENCES store_quota_reservations (id) ON DELETE RESTRICT,
+            FOREIGN KEY (bucket_id) REFERENCES store_quota_buckets (id) ON DELETE RESTRICT
+        )",
+        "CREATE TABLE store_quota_violations (
+            id TEXT NOT NULL PRIMARY KEY, reservation_id TEXT NOT NULL UNIQUE,
+            request_id TEXT NOT NULL, user_id TEXT NOT NULL, entitlement_id TEXT NOT NULL,
+            generation INTEGER NOT NULL, reserved_fen_cny TEXT NOT NULL,
+            actual_fen_cny TEXT NOT NULL, severity TEXT NOT NULL CHECK (severity = 'critical'),
+            detected_at TEXT NOT NULL,
+            FOREIGN KEY (reservation_id) REFERENCES store_quota_reservations (id) ON DELETE RESTRICT,
+            FOREIGN KEY (entitlement_id, generation)
+                REFERENCES store_plan_entitlement_generations (id, generation) ON DELETE RESTRICT
+        )",
+        "CREATE TABLE store_quota_admission_blocks (
+            user_id TEXT NOT NULL PRIMARY KEY, violation_id TEXT NOT NULL UNIQUE,
+            entitlement_id TEXT NOT NULL, generation INTEGER NOT NULL,
+            reason TEXT NOT NULL CHECK (reason = 'above_reserve'),
+            blocked_at TEXT NOT NULL, cleared_at TEXT,
+            FOREIGN KEY (violation_id) REFERENCES store_quota_violations (id) ON DELETE RESTRICT,
+            FOREIGN KEY (entitlement_id, generation)
+                REFERENCES store_plan_entitlement_generations (id, generation) ON DELETE RESTRICT
         )",
         "CREATE TABLE store_admission_keys (
             key_id TEXT NOT NULL PRIMARY KEY, public_key_base64 TEXT NOT NULL,
             encrypted_private_key_json TEXT, state TEXT NOT NULL CHECK (state IN ('published', 'active', 'retired')),
-            published_at TEXT NOT NULL, activated_at TEXT, retired_at TEXT
+            published_at TEXT NOT NULL, activated_at TEXT, retired_at TEXT,
+            last_issued_expires_at TEXT, verify_until TEXT, config_epoch INTEGER NOT NULL DEFAULT 0,
+            CHECK (config_epoch >= 0),
+            CHECK (
+                (state = 'published' AND encrypted_private_key_json IS NULL
+                    AND activated_at IS NULL AND retired_at IS NULL
+                    AND last_issued_expires_at IS NULL AND verify_until IS NULL) OR
+                (state = 'active' AND encrypted_private_key_json IS NOT NULL
+                    AND activated_at IS NOT NULL AND retired_at IS NULL AND verify_until IS NULL) OR
+                (state = 'retired' AND encrypted_private_key_json IS NOT NULL
+                    AND activated_at IS NOT NULL AND retired_at IS NOT NULL
+                    AND verify_until IS NOT NULL)
+            )
         )",
+        "CREATE TABLE store_admission_tokens (
+            token_id TEXT NOT NULL PRIMARY KEY, audience TEXT NOT NULL, request_id TEXT NOT NULL,
+            user_id TEXT NOT NULL, effective_groups_json TEXT NOT NULL,
+            reservation_id TEXT NOT NULL, entitlement_id TEXT NOT NULL, generation INTEGER NOT NULL,
+            maximum_nano_usd TEXT NOT NULL, reserved_fen_cny TEXT NOT NULL,
+            pricing_revision TEXT NOT NULL, key_id TEXT NOT NULL,
+            compact_jws TEXT NOT NULL, compact_jws_digest TEXT NOT NULL,
+            issued_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+            expires_at_unix INTEGER NOT NULL, confirmed_at TEXT,
+            FOREIGN KEY (reservation_id) REFERENCES store_quota_reservations (id) ON DELETE RESTRICT,
+            FOREIGN KEY (key_id) REFERENCES store_admission_keys (key_id) ON DELETE RESTRICT
+        )",
+        "CREATE TABLE store_admission_terminal_receipts (
+            token_id TEXT NOT NULL PRIMARY KEY, reservation_id TEXT NOT NULL,
+            request_id TEXT NOT NULL, audience TEXT NOT NULL,
+            terminal_kind TEXT NOT NULL CHECK (terminal_kind IN ('settlement', 'release')),
+            actual_nano_usd TEXT, canonical_digest TEXT NOT NULL, applied_at TEXT NOT NULL,
+            CHECK ((terminal_kind = 'settlement' AND actual_nano_usd IS NOT NULL) OR
+                   (terminal_kind = 'release' AND actual_nano_usd IS NULL)),
+            FOREIGN KEY (token_id) REFERENCES store_admission_tokens (token_id) ON DELETE RESTRICT,
+            FOREIGN KEY (reservation_id) REFERENCES store_quota_reservations (id) ON DELETE RESTRICT
+        )",
+        "INSERT INTO store_quota_gates
+            (backend, slot, state, compatibility_fingerprint, manifest_json, tested_at,
+             failure_reason, updated_at)
+         VALUES ('sqlite', 'current', 'pending', '', '{}', NULL, NULL,
+                 '2026-08-27T00:00:00Z')
+         ON CONFLICT (backend, slot) DO NOTHING",
+        "INSERT INTO store_quota_gates
+            (backend, slot, state, compatibility_fingerprint, manifest_json, tested_at,
+             failure_reason, updated_at)
+         VALUES ('sqlite', 'next', 'pending', '', '{}', NULL, NULL,
+                 '2026-08-27T00:00:00Z')
+         ON CONFLICT (backend, slot) DO NOTHING",
     ]
     .into_iter()
     .map(str::to_string)
@@ -587,6 +670,17 @@ fn common_index_statements() -> Vec<String> {
         "CREATE INDEX idx_store_redemption_codes_status_expires_v2 ON store_redemption_codes (status, expires_at, id)",
         "CREATE INDEX idx_store_redemption_attempts_limit ON store_redemption_attempts (user_id, source_ip_digest, attempted_at)",
         "CREATE UNIQUE INDEX uq_store_quota_request ON store_quota_reservations (request_id)",
+        "CREATE UNIQUE INDEX uq_store_quota_bucket_window ON store_quota_buckets
+            (entitlement_id, generation, quota_rule_id, window_start, window_end)",
+        "CREATE INDEX idx_store_quota_bucket_active ON store_quota_buckets
+            (entitlement_id, generation, quota_rule_id, window_end, id)",
+        "CREATE UNIQUE INDEX uq_store_admission_active_key ON store_admission_keys (state)
+            WHERE state = 'active'",
+        "CREATE UNIQUE INDEX uq_store_admission_token_request ON store_admission_tokens (audience, request_id)",
+        "CREATE UNIQUE INDEX uq_store_admission_token_reservation ON store_admission_tokens (reservation_id)",
+        "CREATE UNIQUE INDEX uq_store_admission_token_digest ON store_admission_tokens (compact_jws_digest)",
+        "CREATE INDEX idx_store_admission_unconfirmed_expiry ON store_admission_tokens
+            (confirmed_at, expires_at_unix, token_id)",
         "CREATE INDEX idx_store_provider_events_projection ON store_provider_events (projection_state, received_at, id)",
         "CREATE INDEX idx_store_refunds_state ON store_refunds (state, updated_at, id)",
     ]
@@ -725,6 +819,9 @@ mod tests {
             "store_guard_recovery_limit",
             "store-channel-stripe",
             "store_payment_attempts",
+            "store_admission_tokens",
+            "store_admission_terminal_receipts",
+            "uq_store_admission_token_request",
         ] {
             assert!(
                 sql.contains(required),

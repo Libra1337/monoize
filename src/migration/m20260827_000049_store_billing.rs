@@ -28,7 +28,9 @@ impl MigrationTrait for Migration {
         let tx = manager.get_connection().begin().await?;
         for table in [
             "store_redemption_codes",
-            "store_plan_entitlements",
+            "store_plan_entitlement_current",
+            "store_plan_entitlement_lifecycle",
+            "store_plan_entitlement_generations",
             "store_orders",
             "store_plan_quotas",
             "store_balance_products",
@@ -39,6 +41,14 @@ impl MigrationTrait for Migration {
             tx.execute(Statement::from_string(
                 backend,
                 format!("DROP TABLE IF EXISTS {table}"),
+            ))
+            .await?;
+        }
+        if backend == DbBackend::Postgres {
+            tx.execute(Statement::from_string(
+                backend,
+                "DROP FUNCTION IF EXISTS store_guard_entitlement_generation_immutable()"
+                    .to_string(),
             ))
             .await?;
         }
@@ -78,12 +88,14 @@ fn up_statements(backend: DbBackend) -> Vec<String> {
     let quota_positive = canonical_positive("quota_fen_cny", backend);
     let payment_positive = canonical_positive("payment_minor", backend);
     let rate_positive = positive_decimal("cny_per_usd", backend);
+    let numerator_positive = canonical_positive("rate_numerator", backend);
+    let denominator_positive = canonical_positive("rate_denominator", backend);
     let digest_check = match backend {
         DbBackend::Postgres => "code_digest ~ '^[0-9a-f]{64}$'",
         _ => "length(code_digest) = 64 AND code_digest NOT GLOB '*[^0-9a-f]*'",
     };
 
-    vec![
+    let mut statements = vec![
         format!(
             "CREATE TABLE IF NOT EXISTS store_exchange_rates (base_currency TEXT NOT NULL, quote_currency TEXT NOT NULL, cny_per_usd TEXT NOT NULL, source_updated_at TEXT NOT NULL, refreshed_at TEXT NOT NULL, PRIMARY KEY (base_currency, quote_currency), CONSTRAINT ck_store_exchange_rates_pair CHECK (base_currency = 'USD' AND quote_currency = 'CNY'), CONSTRAINT ck_store_exchange_rates_positive CHECK ({rate_positive}))"
         ),
@@ -101,8 +113,66 @@ fn up_statements(backend: DbBackend) -> Vec<String> {
             "CREATE TABLE IF NOT EXISTS store_orders (id TEXT NOT NULL PRIMARY KEY, order_number TEXT NOT NULL, user_id TEXT NOT NULL, product_id TEXT NOT NULL, product_kind TEXT NOT NULL, status TEXT NOT NULL, payment_channel_id TEXT NOT NULL, payment_currency TEXT NOT NULL, payment_minor TEXT NOT NULL, cny_per_usd TEXT NOT NULL, rate_source_updated_at TEXT NOT NULL, quote_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, cancelled_at TEXT, CONSTRAINT fk_store_orders_product FOREIGN KEY (product_id) REFERENCES store_products (id) ON DELETE RESTRICT, CONSTRAINT fk_store_orders_channel FOREIGN KEY (payment_channel_id) REFERENCES store_payment_channels (id) ON DELETE RESTRICT, CONSTRAINT ck_store_orders_product_kind CHECK (product_kind IN ('balance', 'plan')), CONSTRAINT ck_store_orders_status CHECK (status IN ('pending', 'completed', 'cancelled')), CONSTRAINT ck_store_orders_currency CHECK (payment_currency IN ('CNY', 'USD')), CONSTRAINT ck_store_orders_payment CHECK ({payment_positive}), CONSTRAINT ck_store_orders_rate CHECK ({rate_positive}), CONSTRAINT ck_store_orders_state_time CHECK ((status = 'pending' AND completed_at IS NULL AND cancelled_at IS NULL) OR (status = 'completed' AND completed_at IS NOT NULL AND cancelled_at IS NULL) OR (status = 'cancelled' AND completed_at IS NULL AND cancelled_at IS NOT NULL)))"
         ),
         format!(
-            "CREATE TABLE IF NOT EXISTS store_plan_entitlements (id TEXT NOT NULL PRIMARY KEY, user_id TEXT NOT NULL, product_id TEXT NOT NULL, product_name TEXT NOT NULL, starts_at TEXT NOT NULL, ends_at TEXT NOT NULL, cny_per_usd TEXT NOT NULL, group_ids TEXT NOT NULL, quota_json TEXT NOT NULL, source_kind TEXT NOT NULL, source_id TEXT NOT NULL, CONSTRAINT ck_store_plan_entitlements_name CHECK (length(trim(product_name)) BETWEEN 1 AND 100), CONSTRAINT ck_store_plan_entitlements_rate CHECK ({rate_positive}), CONSTRAINT ck_store_plan_entitlements_source_kind CHECK (source_kind IN ('order', 'redemption')))"
+            "CREATE TABLE IF NOT EXISTS store_plan_entitlement_generations (
+                id TEXT NOT NULL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                generation BIGINT NOT NULL,
+                product_id TEXT NOT NULL,
+                product_name TEXT NOT NULL,
+                starts_at TEXT NOT NULL,
+                ends_at TEXT NOT NULL,
+                rate_numerator TEXT NOT NULL,
+                rate_denominator TEXT NOT NULL,
+                group_ids TEXT NOT NULL,
+                quota_json TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (id, generation),
+                UNIQUE (id, user_id, generation),
+                CONSTRAINT ck_store_plan_entitlement_generation CHECK (generation > 0),
+                CONSTRAINT ck_store_plan_entitlement_name CHECK (length(trim(product_name)) BETWEEN 1 AND 100),
+                CONSTRAINT ck_store_plan_entitlement_time CHECK (ends_at > starts_at),
+                CONSTRAINT ck_store_plan_entitlement_numerator CHECK ({numerator_positive}),
+                CONSTRAINT ck_store_plan_entitlement_denominator CHECK ({denominator_positive}),
+                CONSTRAINT ck_store_plan_entitlement_source_kind CHECK (source_kind IN ('order', 'redemption')),
+                CONSTRAINT fk_store_plan_entitlement_user
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT,
+                CONSTRAINT fk_store_plan_entitlement_product
+                    FOREIGN KEY (product_id) REFERENCES store_products (id) ON DELETE RESTRICT
+            )"
         ),
+        "CREATE TABLE IF NOT EXISTS store_plan_entitlement_current (
+            user_id TEXT NOT NULL PRIMARY KEY,
+            entitlement_id TEXT NOT NULL UNIQUE,
+            generation BIGINT NOT NULL CHECK (generation > 0),
+            updated_at TEXT NOT NULL,
+            CONSTRAINT fk_store_plan_entitlement_current_generation
+                FOREIGN KEY (entitlement_id, user_id, generation)
+                REFERENCES store_plan_entitlement_generations (id, user_id, generation)
+                ON DELETE RESTRICT
+        )"
+        .to_string(),
+        "CREATE TABLE IF NOT EXISTS store_plan_entitlement_lifecycle (
+            entitlement_id TEXT NOT NULL PRIMARY KEY,
+            suspended_at TEXT,
+            suspension_reason TEXT,
+            revoked_at TEXT,
+            revocation_reason TEXT,
+            updated_at TEXT NOT NULL,
+            CONSTRAINT fk_store_plan_entitlement_lifecycle_generation
+                FOREIGN KEY (entitlement_id) REFERENCES store_plan_entitlement_generations (id)
+                ON DELETE RESTRICT,
+            CONSTRAINT ck_store_plan_entitlement_suspension CHECK (
+                (suspended_at IS NULL AND suspension_reason IS NULL) OR
+                (suspended_at IS NOT NULL AND suspension_reason IS NOT NULL)
+            ),
+            CONSTRAINT ck_store_plan_entitlement_revocation CHECK (
+                (revoked_at IS NULL AND revocation_reason IS NULL) OR
+                (revoked_at IS NOT NULL AND revocation_reason IS NOT NULL)
+            )
+        )"
+        .to_string(),
         format!(
             "CREATE TABLE IF NOT EXISTS store_redemption_codes (id TEXT NOT NULL PRIMARY KEY, code_digest TEXT NOT NULL, code_hint TEXT NOT NULL, reward_kind TEXT NOT NULL, reward_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'unused', expires_at TEXT NOT NULL, redeemed_by_user_id TEXT, redeemed_at TEXT, created_by_user_id TEXT NOT NULL, created_at TEXT NOT NULL, CONSTRAINT ck_store_redemption_codes_digest CHECK ({digest_check}), CONSTRAINT ck_store_redemption_codes_hint CHECK (length(code_hint) = 4), CONSTRAINT ck_store_redemption_codes_reward_kind CHECK (reward_kind IN ('balance', 'plan')), CONSTRAINT ck_store_redemption_codes_status CHECK (status IN ('unused', 'used')), CONSTRAINT ck_store_redemption_codes_state CHECK ((status = 'unused' AND redeemed_by_user_id IS NULL AND redeemed_at IS NULL) OR (status = 'used' AND redeemed_by_user_id IS NOT NULL AND redeemed_at IS NOT NULL)))"
         ),
@@ -113,13 +183,38 @@ fn up_statements(backend: DbBackend) -> Vec<String> {
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_orders_order_number ON store_orders (order_number)".to_string(),
         "CREATE INDEX IF NOT EXISTS idx_store_orders_user_created ON store_orders (user_id, created_at DESC, id DESC)".to_string(),
         "CREATE INDEX IF NOT EXISTS idx_store_orders_status_created ON store_orders (status, created_at DESC, id DESC)".to_string(),
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_plan_entitlements_user ON store_plan_entitlements (user_id)".to_string(),
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_plan_entitlements_source ON store_plan_entitlements (source_kind, source_id)".to_string(),
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_plan_entitlement_user_generation ON store_plan_entitlement_generations (user_id, generation)".to_string(),
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_plan_entitlement_source ON store_plan_entitlement_generations (source_kind, source_id)".to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_store_plan_entitlement_user_time ON store_plan_entitlement_generations (user_id, ends_at, generation)".to_string(),
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_redemption_codes_digest ON store_redemption_codes (code_digest)".to_string(),
         "CREATE INDEX IF NOT EXISTS idx_store_redemption_codes_status_expires ON store_redemption_codes (status, expires_at, id)".to_string(),
         "INSERT INTO store_payment_channels (id, kind, name, mode, endpoint, icon_kind, icon_value, config_secret, sort_order, enabled, created_at, updated_at) VALUES ('store-channel-alipay', 'alipay', 'Alipay', 'manual', NULL, 'builtin', 'alipay', NULL, 10, 0, '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z') ON CONFLICT (id) DO NOTHING".to_string(),
         "INSERT INTO store_payment_channels (id, kind, name, mode, endpoint, icon_kind, icon_value, config_secret, sort_order, enabled, created_at, updated_at) VALUES ('store-channel-wechat', 'wechat', 'WeChat Pay', 'manual', NULL, 'builtin', 'wechat', NULL, 20, 0, '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z') ON CONFLICT (id) DO NOTHING".to_string(),
-    ]
+    ];
+    statements.extend(match backend {
+        DbBackend::Sqlite => vec![
+            "CREATE TRIGGER trg_store_plan_entitlement_generation_no_update
+             BEFORE UPDATE ON store_plan_entitlement_generations
+             BEGIN SELECT RAISE(ABORT, 'immutable entitlement generation'); END"
+                .to_string(),
+            "CREATE TRIGGER trg_store_plan_entitlement_generation_no_delete
+             BEFORE DELETE ON store_plan_entitlement_generations
+             BEGIN SELECT RAISE(ABORT, 'immutable entitlement generation'); END"
+                .to_string(),
+        ],
+        DbBackend::Postgres => vec![
+            "CREATE FUNCTION store_guard_entitlement_generation_immutable()
+             RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'immutable entitlement generation'; END $$"
+                .to_string(),
+            "CREATE TRIGGER trg_store_plan_entitlement_generation_no_update
+             BEFORE UPDATE OR DELETE ON store_plan_entitlement_generations
+             FOR EACH ROW EXECUTE FUNCTION store_guard_entitlement_generation_immutable()"
+                .to_string(),
+        ],
+        _ => Vec::new(),
+    });
+    statements
 }
 
 #[cfg(test)]
@@ -135,7 +230,9 @@ mod tests {
         "store_plan_quotas",
         "store_payment_channels",
         "store_orders",
-        "store_plan_entitlements",
+        "store_plan_entitlement_generations",
+        "store_plan_entitlement_current",
+        "store_plan_entitlement_lifecycle",
         "store_redemption_codes",
     ];
 
@@ -147,8 +244,9 @@ mod tests {
         "uq_store_orders_order_number",
         "idx_store_orders_user_created",
         "idx_store_orders_status_created",
-        "uq_store_plan_entitlements_user",
-        "uq_store_plan_entitlements_source",
+        "uq_store_plan_entitlement_user_generation",
+        "uq_store_plan_entitlement_source",
+        "idx_store_plan_entitlement_user_time",
         "uq_store_redemption_codes_digest",
         "idx_store_redemption_codes_status_expires",
     ];

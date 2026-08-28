@@ -541,14 +541,58 @@ impl PaymentCallbackStore {
                 "order is not eligible for fulfillment".to_string(),
             ));
         }
-        if row_string(&row, "product_kind")? != "balance" {
-            return Err(CallbackStoreError::Fulfillment(
-                "plan fulfillment is handled by the quota workstream".to_string(),
-            ));
-        }
-
         let quote: OrderQuote = serde_json::from_str(&row_string(&row, "quote_json")?)
             .map_err(|error| CallbackStoreError::Fulfillment(error.to_string()))?;
+        if row_string(&row, "product_kind")? == "plan" {
+            let duration = quote.product.duration_seconds.ok_or_else(|| {
+                CallbackStoreError::Fulfillment("plan duration is missing".to_string())
+            })?;
+            let ends_at = now_at
+                .checked_add_signed(chrono::Duration::seconds(duration))
+                .ok_or_else(|| {
+                    CallbackStoreError::Fulfillment("plan duration overflow".to_string())
+                })?;
+            let user_id = row_string(&row, "user_id")?;
+            let expected_generation = tx
+                .query_one(self.db.stmt(
+                    "SELECT generation FROM store_plan_entitlement_current WHERE user_id = $1",
+                    vec![user_id.clone().into()],
+                ))
+                .await
+                .map_err(storage)?
+                .map(|current| row_i64(&current, "generation"))
+                .transpose()?;
+            crate::store_billing::quota::replace_entitlement_tx(
+                &self.db,
+                &*tx,
+                crate::store_billing::quota::EntitlementGenerationInput {
+                    expected_generation,
+                    user_id,
+                    product_id: quote.product.id,
+                    product_name: quote.product.name,
+                    starts_at: now_at,
+                    ends_at,
+                    rate_numerator: row_string(&row, "rate_numerator")?,
+                    rate_denominator: row_string(&row, "rate_denominator")?,
+                    group_ids: quote.product.group_ids,
+                    quotas: quote.product.quotas,
+                    source_kind: "order".to_string(),
+                    source_id: order_id.to_string(),
+                },
+            )
+            .await
+            .map_err(|error| CallbackStoreError::Fulfillment(error.to_string()))?;
+            finish_order_fulfillment(
+                &self.db,
+                &*tx,
+                order_id,
+                row_i64(&row, "state_revision")?,
+                now_at,
+            )
+            .await?;
+            tx.commit().await.map_err(storage)?;
+            return Ok(());
+        }
         let received = quote
             .product
             .balance
@@ -647,6 +691,41 @@ impl PaymentCallbackStore {
         .map_err(storage)?;
         tx.commit().await.map_err(storage)
     }
+}
+
+async fn finish_order_fulfillment<C: ConnectionTrait>(
+    db: &DbPool,
+    connection: &C,
+    order_id: &str,
+    expected_revision: i64,
+    now: DateTime<Utc>,
+) -> Result<(), CallbackStoreError> {
+    let now = timestamp(now);
+    let changed = connection
+        .execute(db.stmt(
+            "UPDATE store_orders
+             SET fulfillment_state = 'fulfilled', fulfillment_started_at = $2,
+                 fulfilled_at = $2, updated_at = $2, state_revision = state_revision + 1
+             WHERE id = $1 AND payment_state = 'paid'
+               AND fulfillment_state IN ('pending', 'failed') AND payment_hold = 0
+               AND state_revision = $3",
+            vec![order_id.into(), now.into(), expected_revision.into()],
+        ))
+        .await
+        .map_err(storage)?;
+    if changed.rows_affected() != 1 {
+        return Err(CallbackStoreError::Storage(
+            "order state changed during fulfillment".to_string(),
+        ));
+    }
+    connection
+        .execute(db.stmt(
+            "DELETE FROM store_fulfillment_retries WHERE order_id = $1",
+            vec![order_id.into()],
+        ))
+        .await
+        .map_err(storage)?;
+    Ok(())
 }
 
 async fn validate_reconciliation_fence<C: ConnectionTrait>(
@@ -858,6 +937,12 @@ struct OrderQuote {
 
 #[derive(Debug, Deserialize)]
 struct ProductQuote {
+    id: String,
+    name: String,
+    duration_seconds: Option<i64>,
+    group_ids: Vec<String>,
+    #[serde(default)]
+    quotas: Vec<crate::store_billing::models::PlanQuota>,
     balance: Option<BalanceQuote>,
 }
 

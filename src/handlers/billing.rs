@@ -2,6 +2,7 @@ use super::*;
 use crate::billing_rate_store::DbBillingRateRecord;
 #[cfg(test)]
 use crate::model_registry_store::ModelPricing;
+use sha2::Digest as _;
 
 #[derive(Debug, Clone)]
 pub(super) struct BillingRateResolution {
@@ -112,6 +113,134 @@ pub(super) fn parse_u64_value(value: &Value) -> Option<u64> {
         .as_u64()
         .or_else(|| value.as_i64().and_then(|v| u64::try_from(v).ok()))
         .or_else(|| value.as_str().and_then(|s| s.parse::<u64>().ok()))
+}
+
+pub(super) fn plan_maximum_charge_nano(
+    resolution: &BillingRateResolution,
+    max_input_tokens: u64,
+    max_output_tokens: Option<u64>,
+    server_tool_usage_classes: &[String],
+    provider_multiplier: Multiplier,
+) -> Option<i128> {
+    if max_input_tokens == 0 || max_output_tokens == Some(0) {
+        return None;
+    }
+    let maximum_token_rate = |output: bool| {
+        resolution
+            .rates
+            .iter()
+            .filter(|rate| {
+                rate.enabled
+                    && rate.rate_kind == "token"
+                    && if output {
+                        rate.usage_class == "output" || rate.usage_class == "reasoning_output"
+                    } else {
+                        rate.usage_class.starts_with("input_")
+                            || rate.usage_class.starts_with("cache_")
+                    }
+            })
+            .map(DbBillingRateRecord::unit_price_nano)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?
+            .into_iter()
+            .max()
+    };
+    let input_rate = maximum_token_rate(false)?;
+    let mut maximum = i128::from(max_input_tokens).checked_mul(input_rate)?;
+    if let Some(max_output_tokens) = max_output_tokens {
+        let output_rate = maximum_token_rate(true)?;
+        maximum = maximum.checked_add(i128::from(max_output_tokens).checked_mul(output_rate)?)?;
+    }
+    for usage_class in server_tool_usage_classes {
+        let meter_maximum = resolution
+            .rates
+            .iter()
+            .filter(|rate| {
+                rate.enabled && rate.rate_kind == "meter" && rate.usage_class == *usage_class
+            })
+            .map(|rate| {
+                let units = rate
+                    .match_json
+                    .get("maximum_units")
+                    .and_then(parse_u64_value)?;
+                i128::from(units).checked_mul(rate.unit_price_nano().ok()?)
+            })
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .max()?;
+        maximum = maximum.checked_add(meter_maximum)?;
+    }
+    provider_multiplier.checked_scale_i128(maximum)
+}
+
+pub(super) async fn plan_maximum_for_attempts(
+    state: &AppState,
+    request: Option<&urp::UrpRequest>,
+    attempts: &[MonoizeAttempt],
+) -> Option<(i128, String)> {
+    let mut maximum = 0_i128;
+    let mut revision_parts = Vec::new();
+    let mut found_billable = false;
+    for attempt in attempts
+        .iter()
+        .filter(|attempt| attempt.billable_pricing_available)
+    {
+        found_billable = true;
+        let resolution = attempt.billing_rate_resolution.as_ref()?;
+        let model = state
+            .model_registry_store
+            .get_model_by_logical_and_provider(&attempt.logical_model, &attempt.provider_id)
+            .await
+            .ok()??;
+        let metadata = state
+            .model_registry_store
+            .get_model_metadata(&model.id)
+            .await
+            .ok()??;
+        let max_input = metadata
+            .max_input_tokens
+            .or(metadata.max_tokens)
+            .and_then(|value| u64::try_from(value).ok())?;
+        let max_output = request.and_then(|request| {
+            request.max_output_tokens.or_else(|| {
+                metadata
+                    .max_output_tokens
+                    .and_then(|value| u64::try_from(value).ok())
+            })
+        });
+        let attempt_maximum = plan_maximum_charge_nano(
+            resolution,
+            max_input,
+            max_output,
+            &attempt.server_tool_usage_classes,
+            attempt.model_multiplier,
+        )?;
+        maximum = maximum.max(attempt_maximum);
+        revision_parts.push(format!(
+            "{}:{}:{}:{}",
+            attempt.provider_id,
+            attempt.routing_config_revision,
+            resolution.pricing_profile,
+            resolution.pricing_model
+        ));
+        revision_parts.extend(
+            resolution
+                .rates
+                .iter()
+                .map(|rate| format!("{}:{}", rate.id, rate.updated_at.timestamp_micros())),
+        );
+    }
+    if !found_billable || maximum <= 0 {
+        return None;
+    }
+    revision_parts.sort();
+    let digest = sha2::Sha256::digest(revision_parts.join("\n").as_bytes());
+    let mut revision = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(revision, "{byte:02x}");
+    }
+    Some((maximum, revision))
 }
 
 pub(super) fn map_get_u64(map: &Map<String, Value>, key: &str) -> Option<u64> {
@@ -1573,6 +1702,7 @@ pub(super) async fn maybe_charge_usage(
     request_id: Option<&str>,
 ) -> AppResult<ChargeComputation> {
     if skip_charge {
+        release_plan_reservation(state, request_id).await?;
         return Ok(ChargeComputation::default());
     }
     maybe_charge_usage_with_output(
@@ -1667,6 +1797,39 @@ async fn maybe_charge_usage_with_output(
     let billing_breakdown =
         build_matrix_billing_breakdown(logical_model, attempt, &resolution, &components);
     let charge_nano = components.final_charge;
+    if state.node.is_replica()
+        && let (Some(metering), Some(request_id)) = (state.metering.as_ref(), request_id)
+        && metering.admission_client().has_active(request_id)
+    {
+        let client = metering.admission_client();
+        if charge_nano <= 0 {
+            client
+                .release(request_id, chrono::Utc::now())
+                .await
+                .map_err(super::map_admission_client_error)?;
+        } else {
+            client
+                .settle(request_id, charge_nano, chrono::Utc::now())
+                .await
+                .map_err(super::map_admission_client_error)?;
+        }
+        return Ok(ChargeComputation {
+            charge_nano_usd: (charge_nano > 0).then_some(charge_nano),
+            billing_breakdown: Some(billing_breakdown),
+        });
+    }
+    if let Some(request_id) = request_id
+        && crate::store_billing::quota::QuotaStore::new(state.db_pool.clone())
+            .settle_request_if_reserved(request_id, charge_nano.max(0), chrono::Utc::now())
+            .await
+            .map_err(map_plan_quota_error)?
+            .is_some()
+    {
+        return Ok(ChargeComputation {
+            charge_nano_usd: (charge_nano > 0).then_some(charge_nano),
+            billing_breakdown: Some(billing_breakdown),
+        });
+    }
     if charge_nano <= 0 {
         return Ok(ChargeComputation {
             charge_nano_usd: None,
@@ -1815,6 +1978,7 @@ pub(super) async fn maybe_charge_stream_usage(
     request_id: Option<&str>,
 ) -> AppResult<ChargeComputation> {
     if skip_charge {
+        release_plan_reservation(state, request_id).await?;
         return Ok(ChargeComputation::default());
     }
     maybe_charge_usage_with_output(
@@ -1840,6 +2004,7 @@ pub(super) async fn maybe_charge_response(
     request_id: Option<&str>,
 ) -> AppResult<ChargeComputation> {
     if skip_charge {
+        release_plan_reservation(state, request_id).await?;
         return Ok(ChargeComputation::default());
     }
     let Some(usage) = response.usage.as_ref() else {
@@ -1866,6 +2031,30 @@ pub(super) async fn maybe_charge_response(
         request_id,
     )
     .await
+}
+
+pub(super) async fn release_plan_reservation(
+    state: &AppState,
+    request_id: Option<&str>,
+) -> AppResult<()> {
+    let Some(request_id) = request_id else {
+        return Ok(());
+    };
+    if state.node.is_replica() {
+        if let Some(metering) = state.metering.as_ref() {
+            metering
+                .admission_client()
+                .release(request_id, chrono::Utc::now())
+                .await
+                .map_err(super::map_admission_client_error)?;
+        }
+        return Ok(());
+    }
+    crate::store_billing::quota::QuotaStore::new(state.db_pool.clone())
+        .release_request_if_reserved(request_id, chrono::Utc::now())
+        .await
+        .map_err(map_plan_quota_error)?;
+    Ok(())
 }
 
 pub(super) fn substitute_zero_usage_if_allowed(

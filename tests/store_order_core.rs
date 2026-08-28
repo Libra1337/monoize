@@ -116,6 +116,46 @@ async fn order_creation_is_user_scoped_and_idempotent() {
 }
 
 #[tokio::test]
+async fn pending_sqlite_gate_rejects_plan_orders_but_not_balance_orders() {
+    let (db, store) = setup().await;
+    db.write()
+        .await
+        .execute_unprepared(
+            "INSERT INTO store_products
+                (id, kind, name, description, price_currency, price_minor,
+                 duration_seconds, group_ids, sort_order, enabled, created_at, updated_at)
+             VALUES ('plan-1', 'plan', 'Plan', '', 'CNY', '5900', 2592000, '[]', 0, 1,
+                     '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z');
+             INSERT INTO store_plan_quotas
+                (id, product_id, window_kind, window_seconds, quota_fen_cny, sort_order)
+             VALUES ('plan-1-day', 'plan-1', 'day', 86400, '2000', 0);",
+        )
+        .await
+        .unwrap();
+    let plan = CreatePaymentOrderInput {
+        idempotency_key: "plan-order-gated".to_string(),
+        product_id: "plan-1".to_string(),
+        payment_channel_id: "store-channel-stripe".to_string(),
+        payment_currency: Currency::CNY,
+        custom_recharge_minor: None,
+    };
+
+    assert_eq!(
+        store
+            .create_order("user-1", plan, &rate())
+            .await
+            .unwrap_err(),
+        PaymentOrderError::ProductUnavailable
+    );
+    assert!(
+        store
+            .create_order("user-1", order_input("balance-still-allowed"), &rate())
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn idempotency_key_reuse_with_different_input_is_rejected() {
     let (_db, store) = setup().await;
     store

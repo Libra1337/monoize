@@ -610,233 +610,246 @@ pub async fn create_embeddings(
     let routing_stub = build_embeddings_routing_stub(&logical_model, max_multiplier);
     let mut attempts = build_monoize_attempts(&state, &routing_stub, &auth).await?;
     attach_client_session_id(&mut attempts, extract_client_session_id(&headers), None);
-    ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
-    let _pending_request_log_guard = insert_pending_request_log(
+    let funding_scope = ensure_balance_before_forward_for_attempts(
         &state,
         &auth,
-        &logical_model,
-        false,
+        &attempts,
+        None,
         request_id.as_deref(),
-        request_ip.as_deref(),
-        started_at,
     )
     .await?;
-    let mut last_failed_attempt: Option<MonoizeAttempt> = None;
-    let mut tried_providers: Vec<TriedProvider> = Vec::new();
-    let mut execution_state = AttemptExecutionState::default();
+    let outcome = async {
+        let _pending_request_log_guard = insert_pending_request_log(
+            &state,
+            &auth,
+            &logical_model,
+            false,
+            request_id.as_deref(),
+            request_ip.as_deref(),
+            started_at,
+        )
+        .await?;
+        let mut last_failed_attempt: Option<MonoizeAttempt> = None;
+        let mut tried_providers: Vec<TriedProvider> = Vec::new();
+        let mut execution_state = AttemptExecutionState::default();
 
-    for attempt in attempts {
-        if execution_state.should_skip(&attempt) {
-            continue;
-        }
-
-        let max_channel_attempts = same_channel_attempt_slots(&attempt);
-        for channel_attempt in 0..max_channel_attempts {
+        for attempt in attempts {
             if execution_state.should_skip(&attempt) {
-                break;
+                continue;
             }
 
-            let attempt_number = execution_state.record_upstream_attempt(&attempt);
-            let mut upstream_body = body.clone();
-            if let Some(upstream_obj) = upstream_body.as_object_mut() {
-                upstream_obj.insert(
-                    "model".to_string(),
-                    Value::String(attempt.upstream_model.clone()),
-                );
-            }
-
-            let provider = build_channel_provider_config(&attempt);
-            let http = client_http_for_attempt(&state, &attempt)?;
-            let result = upstream::call_upstream_with_timeout_and_headers(
-                &http,
-                &provider,
-                &attempt.api_key,
-                "/v1/embeddings",
-                &upstream_body,
-                attempt.request_timeout_ms,
-                &[],
-            )
-            .await;
-
-            match result {
-                Ok(mut value) => {
-                    update_pending_channel_info(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        false,
-                        request_id.as_deref(),
-                        request_ip.as_deref(),
-                        started_at,
-                    )
-                    .await;
-                    let mut usage = parse_usage_from_embeddings_object(&value);
-                    let missing_usage_substituted =
-                        substitute_zero_usage_if_allowed(&mut usage, &attempt);
-                    let response_service_tier =
-                        usage::response_service_tier(&value).map(str::to_string);
-                    let charge = match usage.as_ref() {
-                        Some(usage_row) => {
-                            mark_channel_success(&state, &attempt).await;
-                            match maybe_charge_usage(
-                                &state,
-                                &auth,
-                                &attempt,
-                                &logical_model,
-                                usage_row,
-                                missing_usage_substituted,
-                                response_service_tier.as_deref(),
-                                request_id.as_deref(),
-                            )
-                            .await
-                            {
-                                Ok(charge) => charge,
-                                Err(err) => {
-                                    spawn_request_log_error(
-                                        &state,
-                                        &auth,
-                                        &attempt,
-                                        &logical_model,
-                                        false,
-                                        started_at,
-                                        request_id.clone(),
-                                        request_ip.clone(),
-                                        &err,
-                                        None,
-                                        tried_providers,
-                                    );
-                                    return Err(err);
-                                }
-                            }
-                        }
-                        None => {
-                            let err = AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "upstream_usage_required",
-                                "upstream response did not include billable usage",
-                            );
-                            let same_channel_retryable = is_same_channel_retryable_app_error(&err);
-                            let passive_failure_class = same_channel_retryable
-                                .then(|| classify_retryable_app_failure(&err));
-                            record_upstream_attempt_failure(
-                                &state,
-                                &attempt,
-                                attempt_number,
-                                &err,
-                                passive_failure_class,
-                                &mut tried_providers,
-                                &mut execution_state,
-                            )
-                            .await;
-                            last_failed_attempt = Some(attempt.clone());
-                            if allow_same_channel_retry(
-                                &state,
-                                &attempt,
-                                &execution_state,
-                                channel_attempt + 1,
-                                passive_failure_class,
-                            )
-                            .await
-                            {
-                                maybe_sleep_before_channel_retry(&attempt).await;
-                                continue;
-                            }
-                            break;
-                        }
-                    };
-
-                    if let Some(obj) = value.as_object_mut() {
-                        obj.insert("model".to_string(), Value::String(logical_model.clone()));
-                    }
-
-                    spawn_request_log(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        usage,
-                        charge.charge_nano_usd,
-                        charge.billing_breakdown,
-                        false,
-                        started_at,
-                        request_id.clone(),
-                        request_ip.clone(),
-                        attempt.channel_id.clone(),
-                        None,
-                        None,
-                        None,
-                        tried_providers,
-                        false,
-                    );
-
-                    return Ok(Json(value).into_response());
-                }
-                Err(err) => {
-                    let same_channel_retryable = is_same_channel_retryable_error(&err);
-                    let passive_failure_class =
-                        same_channel_retryable.then(|| classify_retryable_failure(&err));
-                    let mask_sensitive_info =
-                        state.monoize_runtime.read().await.mask_sensitive_info;
-                    let app_err = upstream_error_to_app(err, mask_sensitive_info);
-                    record_upstream_attempt_failure(
-                        &state,
-                        &attempt,
-                        attempt_number,
-                        &app_err,
-                        passive_failure_class,
-                        &mut tried_providers,
-                        &mut execution_state,
-                    )
-                    .await;
-                    last_failed_attempt = Some(attempt.clone());
-                    if allow_same_channel_retry(
-                        &state,
-                        &attempt,
-                        &execution_state,
-                        channel_attempt + 1,
-                        passive_failure_class,
-                    )
-                    .await
-                    {
-                        maybe_sleep_before_channel_retry(&attempt).await;
-                        continue;
-                    }
+            let max_channel_attempts = same_channel_attempt_slots(&attempt);
+            for channel_attempt in 0..max_channel_attempts {
+                if execution_state.should_skip(&attempt) {
                     break;
                 }
+
+                let attempt_number = execution_state.record_upstream_attempt(&attempt);
+                let mut upstream_body = body.clone();
+                if let Some(upstream_obj) = upstream_body.as_object_mut() {
+                    upstream_obj.insert(
+                        "model".to_string(),
+                        Value::String(attempt.upstream_model.clone()),
+                    );
+                }
+
+                let provider = build_channel_provider_config(&attempt);
+                let http = client_http_for_attempt(&state, &attempt)?;
+                mark_plan_routed_before_dispatch(&funding_scope).await?;
+                let result = upstream::call_upstream_with_timeout_and_headers(
+                    &http,
+                    &provider,
+                    &attempt.api_key,
+                    "/v1/embeddings",
+                    &upstream_body,
+                    attempt.request_timeout_ms,
+                    &[],
+                )
+                .await;
+
+                match result {
+                    Ok(mut value) => {
+                        update_pending_channel_info(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            false,
+                            request_id.as_deref(),
+                            request_ip.as_deref(),
+                            started_at,
+                        )
+                        .await;
+                        let mut usage = parse_usage_from_embeddings_object(&value);
+                        let missing_usage_substituted =
+                            substitute_zero_usage_if_allowed(&mut usage, &attempt);
+                        let response_service_tier =
+                            usage::response_service_tier(&value).map(str::to_string);
+                        let charge = match usage.as_ref() {
+                            Some(usage_row) => {
+                                mark_channel_success(&state, &attempt).await;
+                                match maybe_charge_usage(
+                                    &state,
+                                    &auth,
+                                    &attempt,
+                                    &logical_model,
+                                    usage_row,
+                                    missing_usage_substituted,
+                                    response_service_tier.as_deref(),
+                                    request_id.as_deref(),
+                                )
+                                .await
+                                {
+                                    Ok(charge) => charge,
+                                    Err(err) => {
+                                        spawn_request_log_error(
+                                            &state,
+                                            &auth,
+                                            &attempt,
+                                            &logical_model,
+                                            false,
+                                            started_at,
+                                            request_id.clone(),
+                                            request_ip.clone(),
+                                            &err,
+                                            None,
+                                            tried_providers,
+                                        );
+                                        return Err(err);
+                                    }
+                                }
+                            }
+                            None => {
+                                let err = AppError::new(
+                                    StatusCode::BAD_GATEWAY,
+                                    "upstream_usage_required",
+                                    "upstream response did not include billable usage",
+                                );
+                                let same_channel_retryable =
+                                    is_same_channel_retryable_app_error(&err);
+                                let passive_failure_class = same_channel_retryable
+                                    .then(|| classify_retryable_app_failure(&err));
+                                record_upstream_attempt_failure(
+                                    &state,
+                                    &attempt,
+                                    attempt_number,
+                                    &err,
+                                    passive_failure_class,
+                                    &mut tried_providers,
+                                    &mut execution_state,
+                                )
+                                .await;
+                                last_failed_attempt = Some(attempt.clone());
+                                if allow_same_channel_retry(
+                                    &state,
+                                    &attempt,
+                                    &execution_state,
+                                    channel_attempt + 1,
+                                    passive_failure_class,
+                                )
+                                .await
+                                {
+                                    maybe_sleep_before_channel_retry(&attempt).await;
+                                    continue;
+                                }
+                                break;
+                            }
+                        };
+
+                        if let Some(obj) = value.as_object_mut() {
+                            obj.insert("model".to_string(), Value::String(logical_model.clone()));
+                        }
+
+                        spawn_request_log(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            usage,
+                            charge.charge_nano_usd,
+                            charge.billing_breakdown,
+                            false,
+                            started_at,
+                            request_id.clone(),
+                            request_ip.clone(),
+                            attempt.channel_id.clone(),
+                            None,
+                            None,
+                            None,
+                            tried_providers,
+                            false,
+                        );
+
+                        return Ok(Json(value).into_response());
+                    }
+                    Err(err) => {
+                        let same_channel_retryable = is_same_channel_retryable_error(&err);
+                        let passive_failure_class =
+                            same_channel_retryable.then(|| classify_retryable_failure(&err));
+                        let mask_sensitive_info =
+                            state.monoize_runtime.read().await.mask_sensitive_info;
+                        let app_err = upstream_error_to_app(err, mask_sensitive_info);
+                        record_upstream_attempt_failure(
+                            &state,
+                            &attempt,
+                            attempt_number,
+                            &app_err,
+                            passive_failure_class,
+                            &mut tried_providers,
+                            &mut execution_state,
+                        )
+                        .await;
+                        last_failed_attempt = Some(attempt.clone());
+                        if allow_same_channel_retry(
+                            &state,
+                            &attempt,
+                            &execution_state,
+                            channel_attempt + 1,
+                            passive_failure_class,
+                        )
+                        .await
+                        {
+                            maybe_sleep_before_channel_retry(&attempt).await;
+                            continue;
+                        }
+                        break;
+                    }
+                }
             }
         }
+        let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
+        if let Some(attempt) = last_failed_attempt {
+            spawn_request_log_error(
+                &state,
+                &auth,
+                &attempt,
+                &logical_model,
+                false,
+                started_at,
+                request_id,
+                request_ip,
+                &final_err,
+                None,
+                tried_providers,
+            );
+        } else {
+            spawn_request_log_error_no_attempt(
+                &state,
+                &auth,
+                &logical_model,
+                false,
+                started_at,
+                request_id,
+                request_ip,
+                &final_err,
+                None,
+                tried_providers,
+            );
+        }
+        Err(final_err)
     }
-    let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
-    if let Some(attempt) = last_failed_attempt {
-        spawn_request_log_error(
-            &state,
-            &auth,
-            &attempt,
-            &logical_model,
-            false,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            None,
-            tried_providers,
-        );
-    } else {
-        spawn_request_log_error_no_attempt(
-            &state,
-            &auth,
-            &logical_model,
-            false,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            None,
-            tried_providers,
-        );
-    }
-    Err(final_err)
+    .await;
+    funding_scope.finish(outcome).await
 }
 
 const URP_KNOWN_RESPONSE_FIELDS: [&str; 13] = [
@@ -1344,15 +1357,258 @@ fn attempts_require_balance(attempts: &[MonoizeAttempt]) -> bool {
         .any(|attempt| attempt.billable_pricing_available)
 }
 
+#[derive(Clone)]
+struct AdmittedFundingScope {
+    funding: AdmittedFunding,
+}
+
+#[derive(Clone)]
+enum AdmittedFunding {
+    Balance,
+    PrimaryPlan(crate::store_billing::quota::QuotaStore, String),
+    ReplicaPlan(crate::replica::admission_client::AdmissionHandlerScope),
+}
+
+impl AdmittedFundingScope {
+    fn balance() -> Self {
+        Self {
+            funding: AdmittedFunding::Balance,
+        }
+    }
+
+    fn primary_plan(store: crate::store_billing::quota::QuotaStore, request_id: String) -> Self {
+        Self {
+            funding: AdmittedFunding::PrimaryPlan(store, request_id),
+        }
+    }
+
+    fn replica_plan(scope: crate::replica::admission_client::AdmissionHandlerScope) -> Self {
+        Self {
+            funding: AdmittedFunding::ReplicaPlan(scope),
+        }
+    }
+
+    async fn mark_routed(&self) -> AppResult<()> {
+        let AdmittedFunding::ReplicaPlan(scope) = &self.funding else {
+            return Ok(());
+        };
+        scope
+            .mark_routed(chrono::Utc::now())
+            .await
+            .map_err(map_admission_client_error)?;
+        Ok(())
+    }
+
+    async fn finish<T>(self, outcome: AppResult<T>) -> AppResult<T> {
+        let (store, request_id) = match self.funding {
+            AdmittedFunding::Balance => return outcome,
+            AdmittedFunding::ReplicaPlan(scope) => {
+                return match outcome {
+                    Err(error) => {
+                        scope
+                            .release(chrono::Utc::now())
+                            .await
+                            .map_err(map_admission_client_error)?;
+                        Err(error)
+                    }
+                    Ok(value) if scope.complete_if_inactive() => Ok(value),
+                    Ok(_) => {
+                        scope
+                            .release(chrono::Utc::now())
+                            .await
+                            .map_err(map_admission_client_error)?;
+                        Err(AppError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "plan_settlement_required",
+                            "successful plan-funded request did not publish a terminal",
+                        ))
+                    }
+                };
+            }
+            AdmittedFunding::PrimaryPlan(store, request_id) => (store, request_id),
+        };
+        let reservation = store
+            .reservation_for_request(&request_id)
+            .await
+            .map_err(map_plan_quota_error)?
+            .ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "plan_reservation_missing",
+                    "plan reservation disappeared before finalization",
+                )
+            })?;
+        use crate::store_billing::quota::QuotaTerminalState;
+        match outcome {
+            Err(error) => {
+                if reservation.state == QuotaTerminalState::Reserved {
+                    store
+                        .release(&reservation.id, chrono::Utc::now())
+                        .await
+                        .map_err(map_plan_quota_error)?;
+                }
+                Err(error)
+            }
+            Ok(value)
+                if matches!(
+                    reservation.state,
+                    QuotaTerminalState::Settled
+                        | QuotaTerminalState::Released
+                        | QuotaTerminalState::Violated
+                ) =>
+            {
+                Ok(value)
+            }
+            Ok(_) => {
+                if reservation.state == QuotaTerminalState::Reserved {
+                    store
+                        .release(&reservation.id, chrono::Utc::now())
+                        .await
+                        .map_err(map_plan_quota_error)?;
+                }
+                Err(AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "plan_settlement_required",
+                    "successful plan-funded request did not settle quota",
+                ))
+            }
+        }
+    }
+}
+
 async fn ensure_balance_before_forward_for_attempts(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     attempts: &[MonoizeAttempt],
-) -> AppResult<()> {
+    request: Option<&urp::UrpRequest>,
+    request_id: Option<&str>,
+) -> AppResult<AdmittedFundingScope> {
     if !attempts_require_balance(attempts) {
-        return Ok(());
+        return Ok(AdmittedFundingScope::balance());
     }
-    ensure_balance_before_forward(state, auth).await
+    if let Some(user_id) = auth.user_id.as_deref() {
+        let maximum = billing::plan_maximum_for_attempts(state, request, attempts).await;
+        if state.node.is_replica() {
+            let (maximum_nano_usd, pricing_revision) = maximum.ok_or_else(|| {
+                AppError::new(
+                    StatusCode::PAYMENT_REQUIRED,
+                    "plan_request_unbounded",
+                    "plan request has no finite billing bound",
+                )
+            })?;
+            let metering = state.metering.as_ref().ok_or_else(|| {
+                AppError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "plan_admission_unavailable",
+                    "Replica admission client is unavailable",
+                )
+            })?;
+            let client = metering.admission_client().clone();
+            let decision = client
+                .issue(crate::replica::admission_client::ReplicaIssueInput {
+                    user_id: user_id.to_string(),
+                    request_id: request_id.unwrap_or_default().to_string(),
+                    effective_groups: auth.effective_groups.clone().unwrap_or_default(),
+                    maximum_nano_usd,
+                    pricing_revision,
+                })
+                .await
+                .map_err(map_admission_client_error)?;
+            if let crate::replica::admission_client::ReplicaFundingDecision::Plan(admission) =
+                decision
+            {
+                let scope = client.handler_scope(&admission.request_id).ok_or_else(|| {
+                    AppError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "plan_admission_unavailable",
+                        "Replica admission scope is unavailable",
+                    )
+                })?;
+                return Ok(AdmittedFundingScope::replica_plan(scope));
+            }
+            ensure_balance_before_forward(state, auth).await?;
+            return Ok(AdmittedFundingScope::balance());
+        }
+        let store = crate::store_billing::quota::QuotaStore::new(state.db_pool.clone());
+        let admission = store
+            .admit_funding(crate::store_billing::quota::PlanFundingInput {
+                user_id: user_id.to_string(),
+                request_id: request_id.unwrap_or_default().to_string(),
+                effective_groups: auth.effective_groups.clone().unwrap_or_default(),
+                maximum_nano_usd: maximum.as_ref().map(|value| value.0),
+                pricing_revision: maximum
+                    .as_ref()
+                    .map(|value| value.1.clone())
+                    .unwrap_or_else(|| "unbounded".to_string()),
+                now: chrono::Utc::now(),
+                replica: state.node.is_replica(),
+            })
+            .await
+            .map_err(map_plan_quota_error)?;
+        if let crate::store_billing::quota::PlanFundingAdmission::Plan(reservation) = admission {
+            return Ok(AdmittedFundingScope::primary_plan(
+                store,
+                reservation.request_id,
+            ));
+        }
+    }
+    ensure_balance_before_forward(state, auth).await?;
+    Ok(AdmittedFundingScope::balance())
+}
+
+fn map_plan_quota_error(error: crate::store_billing::quota::QuotaError) -> AppError {
+    match error.code() {
+        "plan_quota_exhausted" => AppError::new(
+            StatusCode::PAYMENT_REQUIRED,
+            "plan_quota_exhausted",
+            "plan quota exhausted",
+        ),
+        "plan_request_unbounded" => AppError::new(
+            StatusCode::PAYMENT_REQUIRED,
+            "plan_request_unbounded",
+            "plan request has no finite billing bound",
+        ),
+        "plan_payment_hold" => AppError::new(
+            StatusCode::LOCKED,
+            "plan_payment_hold",
+            "plan admission is blocked by a payment hold",
+        ),
+        "plan_quota_violation_blocked" => AppError::new(
+            StatusCode::LOCKED,
+            "plan_quota_violation_blocked",
+            "plan admission is blocked by a quota violation",
+        ),
+        "quota_gate_unavailable" => AppError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "quota_gate_unavailable",
+            "plan quota gate is unavailable",
+        ),
+        "quota_storage_error" => AppError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "quota_storage_error",
+            "plan quota storage is unavailable",
+        ),
+        code => AppError::new(StatusCode::INTERNAL_SERVER_ERROR, code, error.to_string()),
+    }
+}
+
+fn map_admission_client_error(
+    error: crate::replica::admission_client::AdmissionClientError,
+) -> AppError {
+    let status = match error.code() {
+        "plan_quota_exhausted" | "plan_request_unbounded" => StatusCode::PAYMENT_REQUIRED,
+        "plan_payment_hold" | "plan_quota_violation_blocked" => StatusCode::LOCKED,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    let internal_message = error
+        .internal_message()
+        .map(str::to_string)
+        .unwrap_or_else(|| error.to_string());
+    AppError::new(status, error.code(), error.message()).with_internal_message(internal_message)
+}
+
+async fn mark_plan_routed_before_dispatch(funding_scope: &AdmittedFundingScope) -> AppResult<()> {
+    funding_scope.mark_routed().await
 }
 
 /// M7: effective-balance preflight for replicas. Mirrors the primary's

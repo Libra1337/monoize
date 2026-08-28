@@ -1,24 +1,37 @@
 //! `primary-replica-deployment.spec.md` test matrix (T1–T8).
 
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
-use axum::http::Request;
+use axum::http::{Request, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::post;
+use base64::Engine as _;
+use futures_util::{StreamExt as _, stream};
 use http_body_util::BodyExt;
 use monoize::db_cache::{LastUsedBatcher, RequestLogBatcher};
 use monoize::node_config::NodeRole;
 use monoize::replica::metering::{
-    BalanceDelta, DeltaSpool, HEARTBEAT_EVICT_INTERVALS, REPLICA_IDENTITY_FILE_NAME,
-    ReplicaHeartbeat, ReplicaHeartbeatRecord, ReplicaMetering, ShipTick, apply_metering_batch,
+    BalanceDelta, DeltaSpool, HEARTBEAT_EVICT_INTERVALS, MeteringAck, MeteringBatch,
+    MeteringSpoolCapacity, REPLICA_IDENTITY_FILE_NAME, ReplicaHeartbeat, ReplicaHeartbeatRecord,
+    ReplicaHeartbeatSource, ReplicaMetering, ShipTick, apply_metering_batch,
     drain_delta_spool_to_local_db, evict_expired_heartbeats, resolve_replica_identity,
+};
+use monoize::store_billing::admission_runtime::{TerminalApplyInput, terminal_digest};
+use monoize::store_billing::admission_token::{
+    AdmissionClaimStore, PlanTerminalAcknowledgement, PlanTerminalWire,
+    TerminalAcknowledgementResult, TerminalKind, TerminalSpoolInput, VerifiedAdmission,
 };
 use sea_orm::ConnectionTrait;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
+
+const TEST_REPLICA_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 fn test_runtime(database_dsn: String) -> monoize::app::RuntimeConfig {
     monoize::app::RuntimeConfig {
@@ -40,6 +53,502 @@ fn delta(kind: &str, user_id: &str, api_key_id: Option<&str>, amount: i128) -> B
         meta_json: serde_json::json!({ "request_id": "req-1" }),
         created_at: chrono::Utc::now().to_rfc3339(),
     }
+}
+
+fn oversized_pending_response() -> Response {
+    let first = stream::once(async { Ok::<_, Infallible>(bytes::Bytes::from(vec![b'x'; 65_537])) });
+    let pending = stream::pending::<Result<bytes::Bytes, Infallible>>();
+    Body::from_stream(first.chain(pending)).into_response()
+}
+
+fn capacity_admission(now: chrono::DateTime<chrono::Utc>) -> VerifiedAdmission {
+    VerifiedAdmission {
+        issuer: "lynshen-primary".to_string(),
+        key_id: "key".to_string(),
+        audience: TEST_REPLICA_ID.to_string(),
+        token_id: "capacity-token".to_string(),
+        reservation_id: "capacity-reservation".to_string(),
+        request_id: "capacity-request".to_string(),
+        entitlement_id: "capacity-entitlement".to_string(),
+        generation: 1,
+        maximum_nano_usd: 100,
+        reserved_fen_cny: 1,
+        pricing_revision: "pricing-v1".to_string(),
+        issued_at: now,
+        expires_at: now + chrono::Duration::seconds(30),
+    }
+}
+
+#[test]
+fn plan_terminal_wire_fields_default_for_backward_compatibility() {
+    let batch: MeteringBatch = serde_json::from_value(serde_json::json!({
+        "request_logs": [],
+        "last_used": [],
+        "balance_deltas": []
+    }))
+    .unwrap();
+    assert!(batch.plan_terminals.is_empty());
+    let ack: MeteringAck = serde_json::from_value(serde_json::json!({
+        "applied_request_logs": 0,
+        "applied_last_used": 0,
+        "applied_balance_deltas": 0
+    }))
+    .unwrap();
+    assert!(ack.plan_terminal_acks.is_empty());
+}
+
+#[tokio::test]
+async fn delta_and_claim_publication_share_one_capacity_limit() {
+    let now = chrono::Utc::now();
+    let admission = capacity_admission(now);
+    let sizing = TempDir::new().unwrap();
+    let sizing_capacity = Arc::new(MeteringSpoolCapacity::new(1024 * 1024));
+    let sizing_store =
+        AdmissionClaimStore::new_with_capacity(sizing.path(), sizing_capacity.clone())
+            .await
+            .unwrap();
+    sizing_store.claim(&admission).await.unwrap();
+    let exact_claim_capacity = sizing_capacity.accounted_bytes();
+
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("metering");
+    let capacity = Arc::new(MeteringSpoolCapacity::new(exact_claim_capacity));
+    let spool = Arc::new(
+        DeltaSpool::new_with_capacity(root.clone(), capacity.clone()).expect("delta spool"),
+    );
+    let claims =
+        AdmissionClaimStore::new_with_capacity(root.join("plan-admission"), capacity.clone())
+            .await
+            .unwrap();
+    let delta = delta("request_charge", "capacity-user", None, 1);
+    let (delta_result, claim_result) =
+        tokio::join!(spool.enqueue(&delta), claims.claim(&admission));
+
+    assert_eq!(
+        usize::from(delta_result.is_ok()) + usize::from(claim_result.is_ok()),
+        1
+    );
+    assert!(capacity.accounted_bytes() <= capacity.max_bytes());
+}
+
+#[tokio::test]
+async fn replica_metering_owns_one_capacity_verifier_and_claim_store() {
+    let temp = TempDir::new().unwrap();
+    let metering = ReplicaMetering::new(
+        temp.path().join("metering"),
+        1024 * 1024,
+        "http://127.0.0.1:9",
+        "token",
+        10,
+        TEST_REPLICA_ID.to_string(),
+    )
+    .unwrap();
+    assert!(Arc::ptr_eq(
+        metering.spool_capacity(),
+        metering.admission_claims().capacity()
+    ));
+    assert!(
+        metering
+            .admission_verifier()
+            .key_ids(chrono::Utc::now())
+            .is_empty()
+    );
+    assert!(temp.path().join("metering/plan-admission/claims").is_dir());
+    assert!(
+        temp.path()
+            .join("metering/plan-admission/terminal")
+            .is_dir()
+    );
+}
+
+#[tokio::test]
+async fn replica_metering_and_admission_client_share_the_refreshed_verifier_snapshot() {
+    let temp = TempDir::new().unwrap();
+    let seed = [91_u8; 32];
+    let public = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+        ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .as_bytes(),
+    );
+    let app = Router::new().route(
+        monoize::replica::admission_http::ADMISSION_KEYSET_PATH,
+        axum::routing::get(move || {
+            let public = public.clone();
+            async move {
+                axum::Json(serde_json::json!({
+                    "keys": [{
+                        "key_id": "shared-key",
+                        "public_key_base64": public,
+                        "state": "active",
+                        "activated_at": chrono::Utc::now() - chrono::Duration::minutes(1),
+                        "verify_until": null
+                    }]
+                }))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let metering = ReplicaMetering::new(
+        temp.path().join("metering"),
+        1024 * 1024,
+        &address,
+        "token",
+        10,
+        TEST_REPLICA_ID.to_string(),
+    )
+    .unwrap()
+    .with_heartbeat_source(ReplicaHeartbeatSource {
+        id: TEST_REPLICA_ID.to_string(),
+        hostname: "replica-a".to_string(),
+        listen: "127.0.0.1:8080".to_string(),
+        version: "test".to_string(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+    });
+
+    metering
+        .admission_client()
+        .refresh_if_due(chrono::Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(
+        metering.admission_verifier().key_ids(chrono::Utc::now()),
+        vec!["shared-key"]
+    );
+}
+
+#[tokio::test]
+async fn exact_plan_terminal_acknowledgement_deletes_terminal_and_sends_audience_header() {
+    let temp = TempDir::new().unwrap();
+    let app = Router::new().route(
+        monoize::replica::metering::METERING_INGEST_PATH,
+        post(
+            |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
+                let batch: MeteringBatch = serde_json::from_slice(&body).unwrap();
+                assert_eq!(
+                    headers
+                        .get("x-monoize-replica-id")
+                        .unwrap()
+                        .to_str()
+                        .unwrap(),
+                    TEST_REPLICA_ID
+                );
+                assert_eq!(batch.plan_terminals.len(), 1);
+                let terminal = &batch.plan_terminals[0];
+                axum::Json(MeteringAck {
+                    applied_request_logs: 0,
+                    applied_last_used: 0,
+                    applied_balance_deltas: 0,
+                    plan_terminal_acks: vec![PlanTerminalAcknowledgement {
+                        token_id: terminal.token_id.clone(),
+                        canonical_digest: terminal.canonical_digest.clone(),
+                        result: TerminalAcknowledgementResult::Applied,
+                    }],
+                })
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let metering = ReplicaMetering::new(
+        temp.path().join("metering"),
+        1024 * 1024,
+        &addr,
+        "token",
+        10,
+        TEST_REPLICA_ID.to_string(),
+    )
+    .unwrap()
+    .with_heartbeat_source(ReplicaHeartbeatSource {
+        id: TEST_REPLICA_ID.to_string(),
+        hostname: "replica-a".to_string(),
+        listen: "127.0.0.1:8080".to_string(),
+        version: "test".to_string(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+    });
+    let admission = capacity_admission(chrono::Utc::now());
+    metering.admission_claims().claim(&admission).await.unwrap();
+    let terminal = metering
+        .spool_plan_terminal(TerminalSpoolInput::release(&admission, chrono::Utc::now()))
+        .await
+        .unwrap();
+    let log_batcher = RequestLogBatcher::new_with_limits(
+        8,
+        temp.path().join("rl-spool"),
+        64 * 1024 * 1024,
+        8 * 1024 * 1024,
+        broadcast::channel(4).0,
+        Arc::new(dashmap::DashMap::new()),
+    );
+    let last_used = LastUsedBatcher::with_capacity(16);
+    assert_eq!(
+        metering.ship_once(&log_batcher, &last_used).await,
+        ShipTick::Success
+    );
+    assert!(!terminal.path.exists());
+    assert!(
+        metering
+            .admission_claims()
+            .marker_exists(&admission.token_id)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn ship_tick_publishes_release_for_release_pending_claim_without_terminal() {
+    let temp = TempDir::new().unwrap();
+    let app = Router::new().route(
+        monoize::replica::metering::METERING_INGEST_PATH,
+        post(|body: axum::body::Bytes| async move {
+            let batch: MeteringBatch = serde_json::from_slice(&body).unwrap();
+            assert_eq!(batch.plan_terminals.len(), 1);
+            let terminal = &batch.plan_terminals[0];
+            assert_eq!(terminal.kind, TerminalKind::Release);
+            axum::Json(MeteringAck {
+                applied_request_logs: 0,
+                applied_last_used: 0,
+                applied_balance_deltas: 0,
+                plan_terminal_acks: vec![PlanTerminalAcknowledgement {
+                    token_id: terminal.token_id.clone(),
+                    canonical_digest: terminal.canonical_digest.clone(),
+                    result: TerminalAcknowledgementResult::Applied,
+                }],
+            })
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let metering = ReplicaMetering::new(
+        temp.path().join("metering"),
+        1024 * 1024,
+        &addr,
+        "token",
+        10,
+        TEST_REPLICA_ID.to_string(),
+    )
+    .unwrap()
+    .with_heartbeat_source(ReplicaHeartbeatSource {
+        id: TEST_REPLICA_ID.to_string(),
+        hostname: "replica-a".to_string(),
+        listen: "127.0.0.1:8080".to_string(),
+        version: "test".to_string(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+    });
+    let mut admission = capacity_admission(chrono::Utc::now());
+    admission.audience = TEST_REPLICA_ID.to_string();
+    admission.token_id = "release-pending-token".to_string();
+    admission.request_id = "release-pending-request".to_string();
+    metering.admission_claims().claim(&admission).await.unwrap();
+    metering
+        .admission_claims()
+        .mark_release_pending(&admission.token_id)
+        .await
+        .unwrap();
+    assert!(
+        metering
+            .admission_claims()
+            .load_pending_terminals(10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let log_batcher = RequestLogBatcher::new_with_limits(
+        8,
+        temp.path().join("rl-spool"),
+        64 * 1024 * 1024,
+        8 * 1024 * 1024,
+        broadcast::channel(4).0,
+        Arc::new(dashmap::DashMap::new()),
+    );
+    let last_used = LastUsedBatcher::with_capacity(16);
+    assert_eq!(
+        metering.ship_once(&log_batcher, &last_used).await,
+        ShipTick::Success
+    );
+    assert!(
+        metering
+            .admission_claims()
+            .load_pending_terminals(10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn invalid_plan_ack_retains_terminal_but_releases_balance_delta() {
+    let temp = TempDir::new().unwrap();
+    let app = Router::new().route(
+        monoize::replica::metering::METERING_INGEST_PATH,
+        post(|body: axum::body::Bytes| async move {
+            let batch: MeteringBatch = serde_json::from_slice(&body).unwrap();
+            let terminal = &batch.plan_terminals[0];
+            axum::Json(MeteringAck {
+                applied_request_logs: 0,
+                applied_last_used: 0,
+                applied_balance_deltas: batch.balance_deltas.len() as u64,
+                plan_terminal_acks: vec![
+                    PlanTerminalAcknowledgement {
+                        token_id: terminal.token_id.clone(),
+                        canonical_digest: terminal.canonical_digest.clone(),
+                        result: TerminalAcknowledgementResult::Applied,
+                    },
+                    PlanTerminalAcknowledgement {
+                        token_id: terminal.token_id.clone(),
+                        canonical_digest: "0".repeat(64),
+                        result: TerminalAcknowledgementResult::Applied,
+                    },
+                ],
+            })
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let metering = ReplicaMetering::new(
+        temp.path().join("metering"),
+        1024 * 1024,
+        &addr,
+        "token",
+        10,
+        TEST_REPLICA_ID.to_string(),
+    )
+    .unwrap()
+    .with_heartbeat_source(ReplicaHeartbeatSource {
+        id: TEST_REPLICA_ID.to_string(),
+        hostname: "replica-a".to_string(),
+        listen: "127.0.0.1:8080".to_string(),
+        version: "test".to_string(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+    });
+    let admission = capacity_admission(chrono::Utc::now());
+    metering.admission_claims().claim(&admission).await.unwrap();
+    let terminal = metering
+        .spool_plan_terminal(TerminalSpoolInput::release(&admission, chrono::Utc::now()))
+        .await
+        .unwrap();
+    metering
+        .enqueue_balance_delta("request_charge", "u-1", None, 1, &serde_json::json!({}))
+        .await
+        .unwrap();
+    let log_batcher = RequestLogBatcher::new_with_limits(
+        8,
+        temp.path().join("rl-spool"),
+        64 * 1024 * 1024,
+        8 * 1024 * 1024,
+        broadcast::channel(4).0,
+        Arc::new(dashmap::DashMap::new()),
+    );
+    let last_used = LastUsedBatcher::with_capacity(16);
+    assert_eq!(
+        metering.ship_once(&log_batcher, &last_used).await,
+        ShipTick::Failure
+    );
+    assert_eq!(metering.delta_spool().pending_files(), 0);
+    assert!(terminal.path.exists());
+}
+
+#[tokio::test]
+async fn non_terminal_batch_sends_canonical_replica_identity_header() {
+    let temp = TempDir::new().unwrap();
+    let spool_dir = temp.path().join("metering");
+    let replica_id = resolve_replica_identity(None, &spool_dir).unwrap();
+    let expected_id = replica_id.clone();
+    let app = Router::new().route(
+        monoize::replica::metering::METERING_INGEST_PATH,
+        post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let expected_id = expected_id.clone();
+                async move {
+                    assert_eq!(
+                        headers
+                            .get("x-monoize-replica-id")
+                            .and_then(|value| value.to_str().ok()),
+                        Some(expected_id.as_str())
+                    );
+                    let batch: MeteringBatch = serde_json::from_slice(&body).unwrap();
+                    assert!(batch.plan_terminals.is_empty());
+                    axum::Json(MeteringAck {
+                        applied_request_logs: batch.request_logs.len() as u64,
+                        applied_last_used: batch.last_used.len() as u64,
+                        applied_balance_deltas: batch.balance_deltas.len() as u64,
+                        plan_terminal_acks: vec![],
+                    })
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let metering =
+        ReplicaMetering::new(spool_dir, 1024 * 1024, &addr, "token", 10, replica_id).unwrap();
+    metering
+        .enqueue_balance_delta("request_charge", "u-1", None, 1, &serde_json::json!({}))
+        .await
+        .unwrap();
+    let log_batcher = RequestLogBatcher::new_with_limits(
+        8,
+        temp.path().join("rl-spool"),
+        64 * 1024 * 1024,
+        8 * 1024 * 1024,
+        broadcast::channel(4).0,
+        Arc::new(dashmap::DashMap::new()),
+    );
+    let last_used = LastUsedBatcher::with_capacity(16);
+
+    assert_eq!(
+        metering.ship_once(&log_batcher, &last_used).await,
+        ShipTick::Success
+    );
+}
+
+#[tokio::test]
+async fn oversized_streaming_metering_ack_stops_at_limit_and_retains_durable_batch() {
+    let temp = TempDir::new().unwrap();
+    let spool_dir = temp.path().join("metering-oversized-ack");
+    let app = Router::new().route(
+        monoize::replica::metering::METERING_INGEST_PATH,
+        post(|| async { oversized_pending_response() }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let metering = ReplicaMetering::new(
+        spool_dir,
+        1024 * 1024,
+        &addr,
+        "token",
+        10,
+        TEST_REPLICA_ID.to_string(),
+    )
+    .unwrap();
+    metering
+        .enqueue_balance_delta("request_charge", "u-1", None, 1, &serde_json::json!({}))
+        .await
+        .unwrap();
+    let log_batcher = RequestLogBatcher::new_with_limits(
+        8,
+        temp.path().join("rl-spool-oversized-ack"),
+        64 * 1024 * 1024,
+        8 * 1024 * 1024,
+        broadcast::channel(4).0,
+        Arc::new(dashmap::DashMap::new()),
+    );
+    let last_used = LastUsedBatcher::with_capacity(16);
+
+    let tick = tokio::time::timeout(
+        Duration::from_millis(500),
+        metering.ship_once(&log_batcher, &last_used),
+    )
+    .await
+    .expect("metering reader must stop after byte 65537");
+    assert_eq!(tick, ShipTick::Failure);
+    assert_eq!(metering.delta_spool().pending_files(), 1);
 }
 
 async fn boot() -> (TempDir, monoize::app::AppState) {
@@ -79,6 +588,7 @@ async fn ingest_applies_balance_delta_idempotently() {
         replica: None,
         request_logs: vec![],
         last_used: vec![],
+        plan_terminals: vec![],
         balance_deltas: vec![delta("request_charge", &user.id, None, 1_000_000_000)],
     };
 
@@ -144,6 +654,7 @@ async fn ingest_allows_negative_result_and_counts_unlimited_as_applied_without_u
         replica: None,
         request_logs: vec![],
         last_used: vec![],
+        plan_terminals: vec![],
         balance_deltas: vec![delta("request_charge", &limited.id, None, 100)],
     };
     let ack = apply_metering_batch(&state.db_pool, &batch)
@@ -163,6 +674,7 @@ async fn ingest_allows_negative_result_and_counts_unlimited_as_applied_without_u
         replica: None,
         request_logs: vec![],
         last_used: vec![],
+        plan_terminals: vec![],
         balance_deltas: vec![delta("request_charge", &unlimited.id, None, 77)],
     };
     let ack_u = apply_metering_batch(&state.db_pool, &batch_u)
@@ -204,8 +716,15 @@ async fn shipper_acks_delete_and_failures_retain() {
     let addr = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, fail_app).await.unwrap() });
 
-    let metering =
-        ReplicaMetering::new(spool_dir.clone(), 1024 * 1024, &addr, "token", 10).expect("metering");
+    let metering = ReplicaMetering::new(
+        spool_dir.clone(),
+        1024 * 1024,
+        &addr,
+        "token",
+        10,
+        TEST_REPLICA_ID.to_string(),
+    )
+    .expect("metering");
     metering
         .enqueue_balance_delta("request_charge", "u-1", None, 1234, &serde_json::json!({}))
         .await
@@ -253,6 +772,7 @@ async fn shipper_acks_delete_and_failures_retain() {
                 applied_request_logs: batch.request_logs.len() as u64,
                 applied_last_used: batch.last_used.len() as u64,
                 applied_balance_deltas: batch.balance_deltas.len() as u64,
+                plan_terminal_acks: vec![],
             })
         }),
     );
@@ -260,8 +780,15 @@ async fn shipper_acks_delete_and_failures_retain() {
     let addr2 = format!("http://{}", listener2.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener2, ok_app).await.unwrap() });
 
-    let metering_ok =
-        ReplicaMetering::new(spool_dir, 1024 * 1024, &addr2, "token", 10).expect("metering 2");
+    let metering_ok = ReplicaMetering::new(
+        spool_dir,
+        1024 * 1024,
+        &addr2,
+        "token",
+        10,
+        TEST_REPLICA_ID.to_string(),
+    )
+    .expect("metering 2");
     assert_eq!(
         metering_ok.pending().outstanding("u-1"),
         1234,
@@ -370,6 +897,7 @@ async fn shipper_idle_tick_is_not_a_failure() {
         "http://127.0.0.1:1",
         "token",
         10,
+        TEST_REPLICA_ID.to_string(),
     )
     .expect("metering");
     let log_batcher = RequestLogBatcher::new_with_limits(
@@ -412,6 +940,7 @@ async fn shipper_does_not_post_a_second_batch_after_combined_failure() {
         &addr,
         "token",
         10,
+        TEST_REPLICA_ID.to_string(),
     )
     .expect("metering");
     metering
@@ -454,13 +983,17 @@ async fn shipper_caps_last_used_so_batch_stays_under_hard_cap() {
                 serde_json::from_slice(&body).unwrap();
             seen_flag.store(batch.last_used.len(), Ordering::SeqCst);
             assert!(
-                batch.request_logs.len() + batch.last_used.len() + batch.balance_deltas.len()
+                batch.request_logs.len()
+                    + batch.plan_terminals.len()
+                    + batch.balance_deltas.len()
+                    + batch.last_used.len()
                     <= monoize::replica::metering::METERING_BATCH_HARD_CAP
             );
             axum::Json(monoize::replica::metering::MeteringAck {
                 applied_request_logs: batch.request_logs.len() as u64,
                 applied_last_used: batch.last_used.len() as u64,
                 applied_balance_deltas: batch.balance_deltas.len() as u64,
+                plan_terminal_acks: vec![],
             })
         }),
     );
@@ -474,6 +1007,7 @@ async fn shipper_caps_last_used_so_batch_stays_under_hard_cap() {
         &addr,
         "token",
         10,
+        TEST_REPLICA_ID.to_string(),
     )
     .expect("metering");
     let log_batcher = RequestLogBatcher::new_with_limits(
@@ -508,8 +1042,18 @@ async fn t3_ingest_rejects_oversized_batch_without_apply() {
     state.node = std::sync::Arc::new(node);
     state.metering_token_digest = Some(monoize::replica::metering::sha256_hex_lower("tok"));
     let app = monoize::app::build_app(state);
+    let replica_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     let batch = monoize::replica::metering::MeteringBatch {
-        replica: None,
+        replica: Some(ReplicaHeartbeat {
+            id: replica_id.to_string(),
+            hostname: "replica-a".to_string(),
+            listen: "127.0.0.1:8080".to_string(),
+            version: "test".to_string(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+            uptime_seconds: 0,
+            spool_pending_count: 0,
+            spool_pending_bytes: 0,
+        }),
         request_logs: vec![],
         last_used: (0..2001)
             .map(|i| monoize::replica::metering::LastUsedPair {
@@ -517,6 +1061,7 @@ async fn t3_ingest_rejects_oversized_batch_without_apply() {
                 last_used_at: chrono::Utc::now().to_rfc3339(),
             })
             .collect(),
+        plan_terminals: vec![],
         balance_deltas: vec![],
     };
     let response = app
@@ -525,6 +1070,7 @@ async fn t3_ingest_rejects_oversized_batch_without_apply() {
                 .method("POST")
                 .uri(monoize::replica::metering::METERING_INGEST_PATH)
                 .header("authorization", "Bearer tok")
+                .header("x-monoize-replica-id", replica_id)
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&batch).unwrap()))
                 .unwrap(),
@@ -535,6 +1081,107 @@ async fn t3_ingest_rejects_oversized_batch_without_apply() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"]["code"], "metering_batch_too_large");
+}
+
+fn metering_terminal(audience: &str) -> PlanTerminalWire {
+    let mut input = TerminalApplyInput {
+        token_id: "missing-token".to_string(),
+        reservation_id: "missing-reservation".to_string(),
+        request_id: "missing-request".to_string(),
+        audience: audience.to_string(),
+        kind: TerminalKind::Release,
+        actual_nano_usd: None,
+        canonical_digest: String::new(),
+        applied_at: chrono::Utc::now(),
+    };
+    input.canonical_digest = terminal_digest(&input).unwrap();
+    PlanTerminalWire {
+        version: 1,
+        token_id: input.token_id,
+        reservation_id: input.reservation_id,
+        request_id: input.request_id,
+        audience: input.audience,
+        kind: input.kind,
+        actual_nano_usd: None,
+        canonical_digest: input.canonical_digest,
+        created_at: input.applied_at,
+    }
+}
+
+#[tokio::test]
+async fn metering_plan_terminal_requires_matching_replica_audience() {
+    let (_temp, state) = boot().await;
+    let mut node = (*state.node).clone();
+    node.replica_token = Some("tok".to_string());
+    let mut state = state.with_node_role(NodeRole::Primary);
+    state.node = Arc::new(node);
+    state.metering_token_digest = Some(monoize::replica::metering::sha256_hex_lower("tok"));
+    let app = monoize::app::build_app(state);
+    let header_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let terminal_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let batch = MeteringBatch {
+        plan_terminals: vec![metering_terminal(terminal_id)],
+        ..Default::default()
+    };
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(monoize::replica::metering::METERING_INGEST_PATH)
+                .header("authorization", "Bearer tok")
+                .header("x-monoize-replica-id", header_id)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&batch).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "replica_audience_mismatch");
+}
+
+#[tokio::test]
+async fn metering_plan_terminal_maps_unknown_token_and_invalid_digest() {
+    let (_temp, state) = boot().await;
+    let mut node = (*state.node).clone();
+    node.replica_token = Some("tok".to_string());
+    let mut state = state.with_node_role(NodeRole::Primary);
+    state.node = Arc::new(node);
+    state.metering_token_digest = Some(monoize::replica::metering::sha256_hex_lower("tok"));
+    let app = monoize::app::build_app(state);
+    let replica_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let request = |terminal: PlanTerminalWire| {
+        Request::builder()
+            .method("POST")
+            .uri(monoize::replica::metering::METERING_INGEST_PATH)
+            .header("authorization", "Bearer tok")
+            .header("x-monoize-replica-id", replica_id)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&MeteringBatch {
+                    plan_terminals: vec![terminal],
+                    ..Default::default()
+                })
+                .unwrap(),
+            ))
+            .unwrap()
+    };
+
+    let unknown = app
+        .clone()
+        .oneshot(request(metering_terminal(replica_id)))
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    let mut invalid = metering_terminal(replica_id);
+    invalid.canonical_digest = "0".repeat(64);
+    let invalid = app.oneshot(request(invalid)).await.unwrap();
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = invalid.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "admission_terminal_digest_invalid");
 }
 
 #[tokio::test]
@@ -727,6 +1374,26 @@ fn t9_replica_identity_env_override_and_validation() {
     assert!(err.starts_with("replica_id_invalid"), "{err}");
 }
 
+#[test]
+fn replica_metering_uses_one_explicit_identity_without_touching_identity_file() {
+    let temp = TempDir::new().unwrap();
+    let spool_dir = temp.path().join("metering-explicit-identity");
+    let configured = uuid::Uuid::new_v4().hyphenated().to_string();
+    let metering = ReplicaMetering::new(
+        spool_dir.clone(),
+        1024 * 1024,
+        "http://127.0.0.1:1",
+        "token",
+        10,
+        configured.clone(),
+    )
+    .unwrap();
+
+    assert_eq!(metering.replica_id(), configured);
+    assert_eq!(metering.admission_client().replica_id(), configured);
+    assert!(!spool_dir.join(REPLICA_IDENTITY_FILE_NAME).exists());
+}
+
 /// T9: a corrupt identity file is replaced by a freshly generated identity.
 #[test]
 fn t9_replica_identity_regenerates_corrupt_file() {
@@ -850,6 +1517,7 @@ async fn t8_postgres_ingest_parity_when_configured() {
         replica: None,
         request_logs: vec![],
         last_used: vec![],
+        plan_terminals: vec![],
         balance_deltas: vec![delta("request_charge", &user.id, None, 1_000_000_000)],
     };
     let ack1 = apply_metering_batch(&state.db_pool, &batch)

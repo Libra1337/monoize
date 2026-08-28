@@ -257,6 +257,7 @@ async fn replica_routes_subtract_pending_deductions_and_do_not_add_aliases() {
         "http://127.0.0.1:9",
         "replica-token",
         100,
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_string(),
     )
     .expect("create replica metering");
     metering

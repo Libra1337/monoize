@@ -123,6 +123,9 @@ async fn finish_nonstream_error(
     capture_upstream_failure: bool,
     error: AppError,
 ) -> AppError {
+    if let Err(release_error) = release_plan_reservation(state, request_id.as_deref()).await {
+        return release_error;
+    }
     spawn_request_log_error(
         state,
         auth,
@@ -227,229 +230,175 @@ pub(super) async fn execute_nonstream_typed_with_validator(
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let mut attempts = build_monoize_attempts(state, &routing_stub, auth).await?;
     attach_client_session_id(&mut attempts, client_session_id, Some(&req));
-    ensure_balance_before_forward_for_attempts(state, auth, &attempts).await?;
-    let pending_request_log_guard = insert_pending_request_log(
+    let funding_scope = ensure_balance_before_forward_for_attempts(
         state,
         auth,
-        &req.model,
-        false,
+        &attempts,
+        Some(&req),
         request_id.as_deref(),
-        request_ip.as_deref(),
-        started_at,
     )
     .await?;
-    let _local_pending_request_log_guard = if let Some(task_state) = task_state {
-        task_state.retain_pending_guard(pending_request_log_guard);
-        None
-    } else {
-        pending_request_log_guard
-    };
-    let mut last_failed_attempt: Option<MonoizeAttempt> = None;
-    let mut tried_providers: Vec<TriedProvider> = Vec::new();
-    let mut execution_state = AttemptExecutionState::default();
-    for mut attempt in attempts {
-        if execution_state.should_skip(&attempt) {
-            continue;
-        }
-
-        let max_channel_attempts = same_channel_attempt_slots(&attempt);
-        'channel_attempts: for channel_attempt in 0..max_channel_attempts {
+    let outcome = async {
+        let pending_request_log_guard = insert_pending_request_log(
+            state,
+            auth,
+            &req.model,
+            false,
+            request_id.as_deref(),
+            request_ip.as_deref(),
+            started_at,
+        )
+        .await?;
+        let _local_pending_request_log_guard = if let Some(task_state) = task_state {
+            task_state.retain_pending_guard(pending_request_log_guard);
+            None
+        } else {
+            pending_request_log_guard
+        };
+        let mut last_failed_attempt: Option<MonoizeAttempt> = None;
+        let mut tried_providers: Vec<TriedProvider> = Vec::new();
+        let mut execution_state = AttemptExecutionState::default();
+        for mut attempt in attempts {
             if execution_state.should_skip(&attempt) {
-                break;
+                continue;
             }
 
-            let attempt_number = execution_state.record_upstream_attempt(&attempt);
-            if let Some(task_state) = task_state {
-                task_state.set_attempt(&attempt);
-            }
-            // Clone from the pristine original request (pre-transforms) so
-            // that the cross-family strip can run BEFORE provider, global,
-            // and API-key transforms. This guarantees that transforms which
-            // inject upstream-specific part-level metadata (e.g.
-            // `cache_anthropic_system`, `cache_anthropic_tool_use`) survive into the
-            // encoded upstream request even when the downstream and upstream
-            // protocol families differ.
-            let mut req_attempt = original_req.clone();
-            if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
-                urp::retain_provider_items_for_protocol(&mut req_attempt.input, target_protocol);
-                if target_protocol == urp::ProviderProtocol::Responses {
-                    urp::remove_downstream_only_reasoning_for_responses(&mut req_attempt.input);
+            let max_channel_attempts = same_channel_attempt_slots(&attempt);
+            'channel_attempts: for channel_attempt in 0..max_channel_attempts {
+                if execution_state.should_skip(&attempt) {
+                    break;
                 }
-            }
-            if attempt.strip_cross_protocol_nested_extra
-                && !downstream.is_same_family(attempt.provider_type)
-            {
-                urp::strip_nested_extra_body(&mut req_attempt.input);
-            }
-            inject_monoize_context(auth, &mut req_attempt);
-            req_attempt.model = attempt.upstream_model.clone();
-            // Unwrap mz2 reasoning envelopes BEFORE any request-phase transform
-            // observes the request input. Per spec/urp-transform-system.spec.md
-            // PIPE-1 step 6 and PIPE-1d, transforms must not see encrypted
-            // reasoning replays still in `mz2.` envelope form, and they must not
-            // be allowed to mutate the reasoning payload before envelope-bound
-            // provider/model checks (PR4c.6) decide whether to keep or drop the
-            // replayed reasoning node for this attempt.
-            urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
-                &mut req_attempt.input,
-                reasoning_envelope_provider_type(attempt.provider_type),
-                &req_attempt.model,
-                auth.reasoning_envelope_enabled,
-            );
-            if let Err(err) = apply_transform_rules_request(
-                state,
-                &mut req_attempt,
-                &attempt.provider_transforms,
-                &transform_match_model,
-                Some(attempt.provider_type),
-            )
-            .await
-            {
-                return Err(finish_nonstream_error(
-                    state,
-                    auth,
-                    &attempt,
-                    &logical_model,
-                    started_at,
-                    &request_id,
-                    &request_ip,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                    tried_providers,
-                    &capture,
-                    false,
-                    err,
-                )
-                .await);
-            }
-            let global_transforms = state.monoize_runtime.read().await.global_transforms.clone();
-            if let Err(err) = apply_transform_rules_request(
-                state,
-                &mut req_attempt,
-                &global_transforms,
-                &transform_match_model,
-                Some(attempt.provider_type),
-            )
-            .await
-            {
-                return Err(finish_nonstream_error(
-                    state,
-                    auth,
-                    &attempt,
-                    &logical_model,
-                    started_at,
-                    &request_id,
-                    &request_ip,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                    tried_providers,
-                    &capture,
-                    false,
-                    err,
-                )
-                .await);
-            }
-            if let Err(err) = apply_transform_rules_request(
-                state,
-                &mut req_attempt,
-                &auth.transforms,
-                &transform_match_model,
-                Some(attempt.provider_type),
-            )
-            .await
-            {
-                return Err(finish_nonstream_error(
-                    state,
-                    auth,
-                    &attempt,
-                    &logical_model,
-                    started_at,
-                    &request_id,
-                    &request_ip,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                    tried_providers,
-                    &capture,
-                    false,
-                    err,
-                )
-                .await);
-            }
-            strip_monoize_context(&mut req_attempt);
-            let capture_transform_chain = crate::request_capture::build_transform_chain(
-                &attempt.provider_transforms,
-                &global_transforms,
-                &auth.transforms,
-                &transform_match_model,
-            );
 
-            let upstream_body =
-                match encode_request_for_provider(&mut req_attempt, &attempt, downstream) {
-                    Ok(body) => body,
-                    Err(err) => {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
+                let attempt_number = execution_state.record_upstream_attempt(&attempt);
+                if let Some(task_state) = task_state {
+                    task_state.set_attempt(&attempt);
+                }
+                // Clone from the pristine original request (pre-transforms) so
+                // that the cross-family strip can run BEFORE provider, global,
+                // and API-key transforms. This guarantees that transforms which
+                // inject upstream-specific part-level metadata (e.g.
+                // `cache_anthropic_system`, `cache_anthropic_tool_use`) survive into the
+                // encoded upstream request even when the downstream and upstream
+                // protocol families differ.
+                let mut req_attempt = original_req.clone();
+                if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
+                    urp::retain_provider_items_for_protocol(
+                        &mut req_attempt.input,
+                        target_protocol,
+                    );
+                    if target_protocol == urp::ProviderProtocol::Responses {
+                        urp::remove_downstream_only_reasoning_for_responses(&mut req_attempt.input);
                     }
-                };
-            let provider = build_channel_provider_config(&attempt);
-            let openai_image_edit = attempt.provider_type == ProviderType::OpenaiImage
-                && urp::encode::openai_image::has_user_image_input(&req_attempt);
-            let path = if openai_image_edit {
-                "/v1/images/edits".to_string()
-            } else {
-                upstream_path_for_model(
-                    attempt.provider_type,
+                }
+                if attempt.strip_cross_protocol_nested_extra
+                    && !downstream.is_same_family(attempt.provider_type)
+                {
+                    urp::strip_nested_extra_body(&mut req_attempt.input);
+                }
+                inject_monoize_context(auth, &mut req_attempt);
+                req_attempt.model = attempt.upstream_model.clone();
+                // Unwrap mz2 reasoning envelopes BEFORE any request-phase transform
+                // observes the request input. Per spec/urp-transform-system.spec.md
+                // PIPE-1 step 6 and PIPE-1d, transforms must not see encrypted
+                // reasoning replays still in `mz2.` envelope form, and they must not
+                // be allowed to mutate the reasoning payload before envelope-bound
+                // provider/model checks (PR4c.6) decide whether to keep or drop the
+                // replayed reasoning node for this attempt.
+                urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
+                    &mut req_attempt.input,
+                    reasoning_envelope_provider_type(attempt.provider_type),
                     &req_attempt.model,
-                    req_attempt.stream.unwrap_or(false),
+                    auth.reasoning_envelope_enabled,
+                );
+                if let Err(err) = apply_transform_rules_request(
+                    state,
+                    &mut req_attempt,
+                    &attempt.provider_transforms,
+                    &transform_match_model,
+                    Some(attempt.provider_type),
                 )
-            };
-            let call_value = if req_attempt.stream == Some(true)
-                && supports_nonstream_upstream_stream_collection(attempt.provider_type)
-            {
-                let stream_idle_timeout_ms = state
-                    .monoize_runtime
-                    .read()
-                    .await
-                    .stream_idle_timeout_ms
-                    .max(1);
-                let http = client_http_for_attempt(state, &attempt)?;
-                let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
-                attempt.session_affinity_value =
-                    resolve_session_affinity_value(&attempt, &upstream_body);
-                let call = upstream::call_upstream_raw_with_timeout_and_headers(
-                    &http,
-                    &provider,
-                    &attempt.api_key,
-                    &path,
-                    &upstream_body,
-                    attempt.request_timeout_ms.saturating_mul(10).max(600_000),
-                    &extra_headers,
-                )
-                .await;
-                match call {
-                    Ok(upstream_resp) => match collect_streamed_upstream_response(
-                        &req_attempt,
-                        max_multiplier,
-                        attempt.provider_type,
-                        upstream_resp,
-                        started_at,
+                .await
+                {
+                    return Err(finish_nonstream_error(
+                        state,
+                        auth,
+                        &attempt,
                         &logical_model,
-                        stream_idle_timeout_ms,
+                        started_at,
+                        &request_id,
+                        &request_ip,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
+                        &capture,
+                        false,
+                        err,
                     )
-                    .await
-                    {
-                        Ok(resp) => Ok((None, Some(resp))),
-                        Err(CollectedUpstreamError::Internal(err)) => {
+                    .await);
+                }
+                let global_transforms =
+                    state.monoize_runtime.read().await.global_transforms.clone();
+                if let Err(err) = apply_transform_rules_request(
+                    state,
+                    &mut req_attempt,
+                    &global_transforms,
+                    &transform_match_model,
+                    Some(attempt.provider_type),
+                )
+                .await
+                {
+                    return Err(finish_nonstream_error(
+                        state,
+                        auth,
+                        &attempt,
+                        &logical_model,
+                        started_at,
+                        &request_id,
+                        &request_ip,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
+                        &capture,
+                        false,
+                        err,
+                    )
+                    .await);
+                }
+                if let Err(err) = apply_transform_rules_request(
+                    state,
+                    &mut req_attempt,
+                    &auth.transforms,
+                    &transform_match_model,
+                    Some(attempt.provider_type),
+                )
+                .await
+                {
+                    return Err(finish_nonstream_error(
+                        state,
+                        auth,
+                        &attempt,
+                        &logical_model,
+                        started_at,
+                        &request_id,
+                        &request_ip,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
+                        &capture,
+                        false,
+                        err,
+                    )
+                    .await);
+                }
+                strip_monoize_context(&mut req_attempt);
+                let capture_transform_chain = crate::request_capture::build_transform_chain(
+                    &attempt.provider_transforms,
+                    &global_transforms,
+                    &auth.transforms,
+                    &transform_match_model,
+                );
+
+                let upstream_body =
+                    match encode_request_for_provider(&mut req_attempt, &attempt, downstream) {
+                        Ok(body) => body,
+                        Err(err) => {
                             return Err(finish_nonstream_error(
                                 state,
                                 auth,
@@ -466,7 +415,294 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             )
                             .await);
                         }
-                        Err(CollectedUpstreamError::Upstream(err)) => {
+                    };
+                let provider = build_channel_provider_config(&attempt);
+                let openai_image_edit = attempt.provider_type == ProviderType::OpenaiImage
+                    && urp::encode::openai_image::has_user_image_input(&req_attempt);
+                let path = if openai_image_edit {
+                    "/v1/images/edits".to_string()
+                } else {
+                    upstream_path_for_model(
+                        attempt.provider_type,
+                        &req_attempt.model,
+                        req_attempt.stream.unwrap_or(false),
+                    )
+                };
+                let call_value = if req_attempt.stream == Some(true)
+                    && supports_nonstream_upstream_stream_collection(attempt.provider_type)
+                {
+                    let stream_idle_timeout_ms = state
+                        .monoize_runtime
+                        .read()
+                        .await
+                        .stream_idle_timeout_ms
+                        .max(1);
+                    let http = client_http_for_attempt(state, &attempt)?;
+                    let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
+                    attempt.session_affinity_value =
+                        resolve_session_affinity_value(&attempt, &upstream_body);
+                    mark_plan_routed_before_dispatch(&funding_scope).await?;
+                    let call = upstream::call_upstream_raw_with_timeout_and_headers(
+                        &http,
+                        &provider,
+                        &attempt.api_key,
+                        &path,
+                        &upstream_body,
+                        attempt.request_timeout_ms.saturating_mul(10).max(600_000),
+                        &extra_headers,
+                    )
+                    .await;
+                    match call {
+                        Ok(upstream_resp) => match collect_streamed_upstream_response(
+                            &req_attempt,
+                            max_multiplier,
+                            attempt.provider_type,
+                            upstream_resp,
+                            started_at,
+                            &logical_model,
+                            stream_idle_timeout_ms,
+                        )
+                        .await
+                        {
+                            Ok(resp) => Ok((None, Some(resp))),
+                            Err(CollectedUpstreamError::Internal(err)) => {
+                                return Err(finish_nonstream_error(
+                                    state,
+                                    auth,
+                                    &attempt,
+                                    &logical_model,
+                                    started_at,
+                                    &request_id,
+                                    &request_ip,
+                                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                    tried_providers,
+                                    &capture,
+                                    false,
+                                    err,
+                                )
+                                .await);
+                            }
+                            Err(CollectedUpstreamError::Upstream(err)) => {
+                                let same_channel_retryable =
+                                    is_same_channel_retryable_app_error(&err);
+                                let passive_failure_class = same_channel_retryable
+                                    .then(|| classify_retryable_app_failure(&err));
+                                record_upstream_attempt_failure(
+                                    state,
+                                    &attempt,
+                                    attempt_number,
+                                    &err,
+                                    passive_failure_class,
+                                    &mut tried_providers,
+                                    &mut execution_state,
+                                )
+                                .await;
+                                last_failed_attempt = Some(attempt.clone());
+                                if allow_same_channel_retry(
+                                    state,
+                                    &attempt,
+                                    &execution_state,
+                                    channel_attempt + 1,
+                                    passive_failure_class,
+                                )
+                                .await
+                                {
+                                    maybe_sleep_before_channel_retry(&attempt).await;
+                                    continue 'channel_attempts;
+                                }
+                                break 'channel_attempts;
+                            }
+                        },
+                        Err(err) => Err(err),
+                    }
+                } else if openai_image_edit {
+                    let form = match urp::encode::openai_image::multipart_form(
+                        &req_attempt,
+                        &req_attempt.model,
+                    ) {
+                        Ok(form) => form,
+                        Err(message) => {
+                            let err =
+                                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message);
+                            return Err(finish_nonstream_error(
+                                state,
+                                auth,
+                                &attempt,
+                                &logical_model,
+                                started_at,
+                                &request_id,
+                                &request_ip,
+                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                tried_providers,
+                                &capture,
+                                false,
+                                err,
+                            )
+                            .await);
+                        }
+                    };
+                    let http = client_http_for_attempt(state, &attempt)?;
+                    let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
+                    attempt.session_affinity_value =
+                        resolve_session_affinity_value(&attempt, &upstream_body);
+                    mark_plan_routed_before_dispatch(&funding_scope).await?;
+                    match upstream::call_upstream_multipart_with_timeout_and_headers(
+                        &http,
+                        &provider,
+                        &attempt.api_key,
+                        &path,
+                        form,
+                        attempt.request_timeout_ms,
+                        &extra_headers,
+                    )
+                    .await
+                    {
+                        Ok(resp) => {
+                            let status = resp.status();
+                            match resp.text().await {
+                                Ok(text) => serde_json::from_str::<Value>(&text)
+                                    .map(|value| (Some(value), None))
+                                    .map_err(|err| {
+                                        upstream::UpstreamCallError::new(
+                                            upstream::UpstreamErrorKind::Http,
+                                            Some(status),
+                                            err.to_string(),
+                                        )
+                                    }),
+                                Err(err) => Err(upstream::UpstreamCallError::new(
+                                    upstream::UpstreamErrorKind::Network,
+                                    Some(status),
+                                    err.to_string(),
+                                )),
+                            }
+                        }
+                        Err(err) => Err(err),
+                    }
+                } else {
+                    let http = client_http_for_attempt(state, &attempt)?;
+                    let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
+                    attempt.session_affinity_value =
+                        resolve_session_affinity_value(&attempt, &upstream_body);
+                    mark_plan_routed_before_dispatch(&funding_scope).await?;
+                    upstream::call_upstream_with_timeout_and_headers(
+                        &http,
+                        &provider,
+                        &attempt.api_key,
+                        &path,
+                        &upstream_body,
+                        attempt.request_timeout_ms,
+                        &extra_headers,
+                    )
+                    .await
+                    .map(|value| (Some(value), None))
+                };
+                match call_value {
+                    Ok((value, collected_resp)) => {
+                        if let Some(session) = capture.session.as_ref() {
+                            session
+                                .push_attempt(crate::request_capture::build_attempt_dump(
+                                    attempt_number,
+                                    &attempt.provider_id,
+                                    Some(&attempt.channel_id),
+                                    attempt.provider_type,
+                                    &logical_model,
+                                    &req_attempt.model,
+                                    &path,
+                                    capture.raw_input.as_ref().clone(),
+                                    &req_attempt,
+                                    upstream_body.clone(),
+                                    value.clone(),
+                                    None,
+                                    capture_transform_chain.clone(),
+                                    None,
+                                ))
+                                .await;
+                        }
+                        update_pending_channel_info(
+                            state,
+                            auth,
+                            &attempt,
+                            &logical_model,
+                            false,
+                            request_id.as_deref(),
+                            request_ip.as_deref(),
+                            started_at,
+                        )
+                        .await;
+                        let mut resp = match collected_resp {
+                            Some(resp) => resp,
+                            None => match value.as_ref() {
+                                Some(value) => match decode_response_from_provider(
+                                    attempt.provider_type,
+                                    value,
+                                    &req_attempt.model,
+                                    state.monoize_runtime.read().await.mask_sensitive_info,
+                                ) {
+                                    Ok(resp) => resp,
+                                    Err(err) => {
+                                        let same_channel_retryable =
+                                            is_same_channel_retryable_app_error(&err);
+                                        let passive_failure_class = same_channel_retryable
+                                            .then(|| classify_retryable_app_failure(&err));
+                                        record_upstream_attempt_failure(
+                                            state,
+                                            &attempt,
+                                            attempt_number,
+                                            &err,
+                                            passive_failure_class,
+                                            &mut tried_providers,
+                                            &mut execution_state,
+                                        )
+                                        .await;
+                                        last_failed_attempt = Some(attempt.clone());
+                                        if allow_same_channel_retry(
+                                            state,
+                                            &attempt,
+                                            &execution_state,
+                                            channel_attempt + 1,
+                                            passive_failure_class,
+                                        )
+                                        .await
+                                        {
+                                            maybe_sleep_before_channel_retry(&attempt).await;
+                                            continue 'channel_attempts;
+                                        }
+                                        break 'channel_attempts;
+                                    }
+                                },
+                                None => {
+                                    let err = AppError::new(
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        "internal_error",
+                                        "non-stream upstream response value is missing",
+                                    )
+                                    .with_type("server_error");
+                                    return Err(finish_nonstream_error(
+                                        state,
+                                        auth,
+                                        &attempt,
+                                        &logical_model,
+                                        started_at,
+                                        &request_id,
+                                        &request_ip,
+                                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                        tried_providers,
+                                        &capture,
+                                        false,
+                                        err,
+                                    )
+                                    .await);
+                                }
+                            },
+                        };
+                        let missing_usage_substituted =
+                            substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
+                        if resp.usage.is_none() {
+                            let err = AppError::new(
+                                StatusCode::BAD_GATEWAY,
+                                "upstream_usage_required",
+                                "upstream response did not include billable usage",
+                            );
                             let same_channel_retryable = is_same_channel_retryable_app_error(&err);
                             let passive_failure_class = same_channel_retryable
                                 .then(|| classify_retryable_app_failure(&err));
@@ -495,361 +731,41 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             }
                             break 'channel_attempts;
                         }
-                    },
-                    Err(err) => Err(err),
-                }
-            } else if openai_image_edit {
-                let form = match urp::encode::openai_image::multipart_form(
-                    &req_attempt,
-                    &req_attempt.model,
-                ) {
-                    Ok(form) => form,
-                    Err(message) => {
-                        let err =
-                            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message);
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                };
-                let http = client_http_for_attempt(state, &attempt)?;
-                let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
-                attempt.session_affinity_value =
-                    resolve_session_affinity_value(&attempt, &upstream_body);
-                match upstream::call_upstream_multipart_with_timeout_and_headers(
-                    &http,
-                    &provider,
-                    &attempt.api_key,
-                    &path,
-                    form,
-                    attempt.request_timeout_ms,
-                    &extra_headers,
-                )
-                .await
-                {
-                    Ok(resp) => {
-                        let status = resp.status();
-                        match resp.text().await {
-                            Ok(text) => serde_json::from_str::<Value>(&text)
-                                .map(|value| (Some(value), None))
-                                .map_err(|err| {
-                                    upstream::UpstreamCallError::new(
-                                        upstream::UpstreamErrorKind::Http,
-                                        Some(status),
-                                        err.to_string(),
-                                    )
-                                }),
-                            Err(err) => Err(upstream::UpstreamCallError::new(
-                                upstream::UpstreamErrorKind::Network,
-                                Some(status),
-                                err.to_string(),
-                            )),
-                        }
-                    }
-                    Err(err) => Err(err),
-                }
-            } else {
-                let http = client_http_for_attempt(state, &attempt)?;
-                let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
-                attempt.session_affinity_value =
-                    resolve_session_affinity_value(&attempt, &upstream_body);
-                upstream::call_upstream_with_timeout_and_headers(
-                    &http,
-                    &provider,
-                    &attempt.api_key,
-                    &path,
-                    &upstream_body,
-                    attempt.request_timeout_ms,
-                    &extra_headers,
-                )
-                .await
-                .map(|value| (Some(value), None))
-            };
-            match call_value {
-                Ok((value, collected_resp)) => {
-                    if let Some(session) = capture.session.as_ref() {
-                        session
-                            .push_attempt(crate::request_capture::build_attempt_dump(
-                                attempt_number,
-                                &attempt.provider_id,
-                                Some(&attempt.channel_id),
-                                attempt.provider_type,
+                        mark_channel_success(state, &attempt).await;
+                        refresh_channel_affinity(state, &attempt).await;
+                        if attempt.provider_type == ProviderType::Responses {
+                            refresh_response_id_affinity(
+                                state,
+                                auth,
                                 &logical_model,
-                                &req_attempt.model,
-                                &path,
-                                capture.raw_input.as_ref().clone(),
-                                &req_attempt,
-                                upstream_body.clone(),
-                                value.clone(),
-                                None,
-                                capture_transform_chain.clone(),
-                                None,
-                            ))
+                                &resp.id,
+                                &attempt,
+                            )
                             .await;
-                    }
-                    update_pending_channel_info(
-                        state,
-                        auth,
-                        &attempt,
-                        &logical_model,
-                        false,
-                        request_id.as_deref(),
-                        request_ip.as_deref(),
-                        started_at,
-                    )
-                    .await;
-                    let mut resp = match collected_resp {
-                        Some(resp) => resp,
-                        None => match value.as_ref() {
-                            Some(value) => match decode_response_from_provider(
-                                attempt.provider_type,
-                                value,
+                        }
+                        // Wrap newly produced encrypted reasoning payloads in mz2
+                        // envelopes BEFORE any response-phase transform observes
+                        // the response. Per spec/urp-transform-system.spec.md
+                        // PIPE-1 step 12 and PIPE-1d, transforms must only see
+                        // encrypted reasoning in `mz2.` envelope form so that
+                        // bulk-mutation transforms (e.g. reasoning_strip_encrypted)
+                        // can reason about that single canonical surface.
+                        if auth.reasoning_envelope_enabled {
+                            urp::wrap_reasoning_envelopes_in_response(
+                                &mut resp,
+                                reasoning_envelope_provider_type(attempt.provider_type),
                                 &req_attempt.model,
-                                state.monoize_runtime.read().await.mask_sensitive_info,
-                            ) {
-                                Ok(resp) => resp,
-                                Err(err) => {
-                                    let same_channel_retryable =
-                                        is_same_channel_retryable_app_error(&err);
-                                    let passive_failure_class = same_channel_retryable
-                                        .then(|| classify_retryable_app_failure(&err));
-                                    record_upstream_attempt_failure(
-                                        state,
-                                        &attempt,
-                                        attempt_number,
-                                        &err,
-                                        passive_failure_class,
-                                        &mut tried_providers,
-                                        &mut execution_state,
-                                    )
-                                    .await;
-                                    last_failed_attempt = Some(attempt.clone());
-                                    if allow_same_channel_retry(
-                                        state,
-                                        &attempt,
-                                        &execution_state,
-                                        channel_attempt + 1,
-                                        passive_failure_class,
-                                    )
-                                    .await
-                                    {
-                                        maybe_sleep_before_channel_retry(&attempt).await;
-                                        continue 'channel_attempts;
-                                    }
-                                    break 'channel_attempts;
-                                }
-                            },
-                            None => {
-                                let err = AppError::new(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "internal_error",
-                                    "non-stream upstream response value is missing",
-                                )
-                                .with_type("server_error");
-                                return Err(finish_nonstream_error(
-                                    state,
-                                    auth,
-                                    &attempt,
-                                    &logical_model,
-                                    started_at,
-                                    &request_id,
-                                    &request_ip,
-                                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                                    tried_providers,
-                                    &capture,
-                                    false,
-                                    err,
-                                )
-                                .await);
-                            }
-                        },
-                    };
-                    let missing_usage_substituted =
-                        substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
-                    if resp.usage.is_none() {
-                        let err = AppError::new(
-                            StatusCode::BAD_GATEWAY,
-                            "upstream_usage_required",
-                            "upstream response did not include billable usage",
-                        );
-                        let same_channel_retryable = is_same_channel_retryable_app_error(&err);
-                        let passive_failure_class =
-                            same_channel_retryable.then(|| classify_retryable_app_failure(&err));
-                        record_upstream_attempt_failure(
+                            );
+                        }
+                        if let Err(err) = apply_transform_rules_response(
                             state,
-                            &attempt,
-                            attempt_number,
-                            &err,
-                            passive_failure_class,
-                            &mut tried_providers,
-                            &mut execution_state,
-                        )
-                        .await;
-                        last_failed_attempt = Some(attempt.clone());
-                        if allow_same_channel_retry(
-                            state,
-                            &attempt,
-                            &execution_state,
-                            channel_attempt + 1,
-                            passive_failure_class,
+                            &mut resp,
+                            &attempt.provider_transforms,
+                            &req.model,
+                            Some(attempt.provider_type),
                         )
                         .await
                         {
-                            maybe_sleep_before_channel_retry(&attempt).await;
-                            continue 'channel_attempts;
-                        }
-                        break 'channel_attempts;
-                    }
-                    mark_channel_success(state, &attempt).await;
-                    refresh_channel_affinity(state, &attempt).await;
-                    if attempt.provider_type == ProviderType::Responses {
-                        refresh_response_id_affinity(
-                            state,
-                            auth,
-                            &logical_model,
-                            &resp.id,
-                            &attempt,
-                        )
-                        .await;
-                    }
-                    // Wrap newly produced encrypted reasoning payloads in mz2
-                    // envelopes BEFORE any response-phase transform observes
-                    // the response. Per spec/urp-transform-system.spec.md
-                    // PIPE-1 step 12 and PIPE-1d, transforms must only see
-                    // encrypted reasoning in `mz2.` envelope form so that
-                    // bulk-mutation transforms (e.g. reasoning_strip_encrypted)
-                    // can reason about that single canonical surface.
-                    if auth.reasoning_envelope_enabled {
-                        urp::wrap_reasoning_envelopes_in_response(
-                            &mut resp,
-                            reasoning_envelope_provider_type(attempt.provider_type),
-                            &req_attempt.model,
-                        );
-                    }
-                    if let Err(err) = apply_transform_rules_response(
-                        state,
-                        &mut resp,
-                        &attempt.provider_transforms,
-                        &req.model,
-                        Some(attempt.provider_type),
-                    )
-                    .await
-                    {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                    if let Err(err) = apply_transform_rules_response(
-                        state,
-                        &mut resp,
-                        &global_transforms,
-                        &req.model,
-                        Some(attempt.provider_type),
-                    )
-                    .await
-                    {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                    if let Err(err) = apply_transform_rules_response(
-                        state,
-                        &mut resp,
-                        &auth.transforms,
-                        &req.model,
-                        Some(attempt.provider_type),
-                    )
-                    .await
-                    {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                    if attempt.provider_type == ProviderType::OpenaiImage
-                        && !matches!(downstream, DownstreamProtocol::Responses)
-                    {
-                        convert_assistant_images_to_markdown(&mut resp);
-                    }
-                    if let Some(validate) = response_validator
-                        && let Err(err) = validate(&resp)
-                    {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                    let charge = match maybe_charge_response(
-                        state,
-                        auth,
-                        &attempt,
-                        &logical_model,
-                        &resp,
-                        missing_usage_substituted,
-                        request_id.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(charge) => charge,
-                        Err(err) => {
                             return Err(finish_nonstream_error(
                                 state,
                                 auth,
@@ -866,125 +782,232 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             )
                             .await);
                         }
-                    };
-                    spawn_request_log(
-                        state,
-                        auth,
-                        &attempt,
-                        &logical_model,
-                        resp.usage.clone(),
-                        charge.charge_nano_usd,
-                        charge.billing_breakdown,
-                        false,
-                        started_at,
-                        request_id.clone(),
-                        request_ip.clone(),
-                        attempt.channel_id.clone(),
-                        None,
-                        None,
-                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                        tried_providers,
-                        client_gone_flag(task_state),
-                    );
-                    if let Some(session) = capture.session.as_ref() {
-                        session
-                            .persist_with_result(resp.usage.as_ref(), false)
-                            .await;
-                    }
-                    return Ok((resp, logical_model.clone()));
-                }
-                Err(err) => {
-                    if let Some(session) = capture.session.as_ref() {
-                        session
-                            .push_attempt(crate::request_capture::build_attempt_dump(
-                                attempt_number,
-                                &attempt.provider_id,
-                                Some(&attempt.channel_id),
-                                attempt.provider_type,
+                        if let Err(err) = apply_transform_rules_response(
+                            state,
+                            &mut resp,
+                            &global_transforms,
+                            &req.model,
+                            Some(attempt.provider_type),
+                        )
+                        .await
+                        {
+                            return Err(finish_nonstream_error(
+                                state,
+                                auth,
+                                &attempt,
                                 &logical_model,
-                                &req_attempt.model,
-                                &path,
-                                capture.raw_input.as_ref().clone(),
-                                &req_attempt,
-                                upstream_body.clone(),
-                                None,
-                                None,
-                                capture_transform_chain.clone(),
-                                Some(json!({
-                                    "message": err.message,
-                                    "code": err.code,
-                                    "status": err.status.map(|status| status.as_u16()),
-                                })),
-                            ))
-                            .await;
+                                started_at,
+                                &request_id,
+                                &request_ip,
+                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                tried_providers,
+                                &capture,
+                                false,
+                                err,
+                            )
+                            .await);
+                        }
+                        if let Err(err) = apply_transform_rules_response(
+                            state,
+                            &mut resp,
+                            &auth.transforms,
+                            &req.model,
+                            Some(attempt.provider_type),
+                        )
+                        .await
+                        {
+                            return Err(finish_nonstream_error(
+                                state,
+                                auth,
+                                &attempt,
+                                &logical_model,
+                                started_at,
+                                &request_id,
+                                &request_ip,
+                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                tried_providers,
+                                &capture,
+                                false,
+                                err,
+                            )
+                            .await);
+                        }
+                        if attempt.provider_type == ProviderType::OpenaiImage
+                            && !matches!(downstream, DownstreamProtocol::Responses)
+                        {
+                            convert_assistant_images_to_markdown(&mut resp);
+                        }
+                        if let Some(validate) = response_validator
+                            && let Err(err) = validate(&resp)
+                        {
+                            return Err(finish_nonstream_error(
+                                state,
+                                auth,
+                                &attempt,
+                                &logical_model,
+                                started_at,
+                                &request_id,
+                                &request_ip,
+                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                tried_providers,
+                                &capture,
+                                false,
+                                err,
+                            )
+                            .await);
+                        }
+                        let charge = match maybe_charge_response(
+                            state,
+                            auth,
+                            &attempt,
+                            &logical_model,
+                            &resp,
+                            missing_usage_substituted,
+                            request_id.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(charge) => charge,
+                            Err(err) => {
+                                return Err(finish_nonstream_error(
+                                    state,
+                                    auth,
+                                    &attempt,
+                                    &logical_model,
+                                    started_at,
+                                    &request_id,
+                                    &request_ip,
+                                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                    tried_providers,
+                                    &capture,
+                                    false,
+                                    err,
+                                )
+                                .await);
+                            }
+                        };
+                        spawn_request_log(
+                            state,
+                            auth,
+                            &attempt,
+                            &logical_model,
+                            resp.usage.clone(),
+                            charge.charge_nano_usd,
+                            charge.billing_breakdown,
+                            false,
+                            started_at,
+                            request_id.clone(),
+                            request_ip.clone(),
+                            attempt.channel_id.clone(),
+                            None,
+                            None,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
+                            client_gone_flag(task_state),
+                        );
+                        if let Some(session) = capture.session.as_ref() {
+                            session
+                                .persist_with_result(resp.usage.as_ref(), false)
+                                .await;
+                        }
+                        return Ok((resp, logical_model.clone()));
                     }
-                    let same_channel_retryable = is_same_channel_retryable_error(&err);
-                    let passive_failure_class =
-                        same_channel_retryable.then(|| classify_retryable_failure(&err));
-                    let mask_sensitive_info =
-                        state.monoize_runtime.read().await.mask_sensitive_info;
-                    let app_err = upstream_error_to_app(err, mask_sensitive_info);
-                    record_upstream_attempt_failure(
-                        state,
-                        &attempt,
-                        attempt_number,
-                        &app_err,
-                        passive_failure_class,
-                        &mut tried_providers,
-                        &mut execution_state,
-                    )
-                    .await;
-                    last_failed_attempt = Some(attempt.clone());
-                    if allow_same_channel_retry(
-                        state,
-                        &attempt,
-                        &execution_state,
-                        channel_attempt + 1,
-                        passive_failure_class,
-                    )
-                    .await
-                    {
-                        maybe_sleep_before_channel_retry(&attempt).await;
-                        continue;
+                    Err(err) => {
+                        if let Some(session) = capture.session.as_ref() {
+                            session
+                                .push_attempt(crate::request_capture::build_attempt_dump(
+                                    attempt_number,
+                                    &attempt.provider_id,
+                                    Some(&attempt.channel_id),
+                                    attempt.provider_type,
+                                    &logical_model,
+                                    &req_attempt.model,
+                                    &path,
+                                    capture.raw_input.as_ref().clone(),
+                                    &req_attempt,
+                                    upstream_body.clone(),
+                                    None,
+                                    None,
+                                    capture_transform_chain.clone(),
+                                    Some(json!({
+                                        "message": err.message,
+                                        "code": err.code,
+                                        "status": err.status.map(|status| status.as_u16()),
+                                    })),
+                                ))
+                                .await;
+                        }
+                        let same_channel_retryable = is_same_channel_retryable_error(&err);
+                        let passive_failure_class =
+                            same_channel_retryable.then(|| classify_retryable_failure(&err));
+                        let mask_sensitive_info =
+                            state.monoize_runtime.read().await.mask_sensitive_info;
+                        let app_err = upstream_error_to_app(err, mask_sensitive_info);
+                        record_upstream_attempt_failure(
+                            state,
+                            &attempt,
+                            attempt_number,
+                            &app_err,
+                            passive_failure_class,
+                            &mut tried_providers,
+                            &mut execution_state,
+                        )
+                        .await;
+                        last_failed_attempt = Some(attempt.clone());
+                        if allow_same_channel_retry(
+                            state,
+                            &attempt,
+                            &execution_state,
+                            channel_attempt + 1,
+                            passive_failure_class,
+                        )
+                        .await
+                        {
+                            maybe_sleep_before_channel_retry(&attempt).await;
+                            continue;
+                        }
+                        break;
                     }
-                    break;
                 }
             }
         }
+        let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
+        release_plan_reservation(state, request_id.as_deref()).await?;
+        if let Some(attempt) = last_failed_attempt {
+            spawn_request_log_error(
+                state,
+                auth,
+                &attempt,
+                &logical_model,
+                false,
+                started_at,
+                request_id,
+                request_ip,
+                &final_err,
+                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                tried_providers,
+            );
+        } else {
+            spawn_request_log_error_no_attempt(
+                state,
+                auth,
+                &logical_model,
+                false,
+                started_at,
+                request_id,
+                request_ip,
+                &final_err,
+                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                tried_providers,
+            );
+        }
+        if let Some(session) = capture.session.as_ref() {
+            session.persist_with_result(None, true).await;
+        }
+        Err(final_err)
     }
-    let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
-    if let Some(attempt) = last_failed_attempt {
-        spawn_request_log_error(
-            state,
-            auth,
-            &attempt,
-            &logical_model,
-            false,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-            tried_providers,
-        );
-    } else {
-        spawn_request_log_error_no_attempt(
-            state,
-            auth,
-            &logical_model,
-            false,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-            tried_providers,
-        );
-    }
-    if let Some(session) = capture.session.as_ref() {
-        session.persist_with_result(None, true).await;
-    }
-    Err(final_err)
+    .await;
+    funding_scope.finish(outcome).await
 }
 
 fn supports_nonstream_upstream_stream_collection(provider_type: ProviderType) -> bool {
