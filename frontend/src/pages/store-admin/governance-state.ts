@@ -1,5 +1,6 @@
 import type {
   CreateStorePrivacyRecordInput,
+  CreateStoreRetentionContainmentInput,
   MerchantCapabilityKind,
   PutStoreChannelReadinessInput,
   PutStoreMerchantCapabilityInput,
@@ -8,6 +9,8 @@ import type {
   StoreMerchantCapabilitiesView,
   StoreMerchantCapability,
   StorePaymentChannel,
+  StoreRetentionContainment,
+  StoreRetentionOverview,
 } from "@/lib/store-api";
 
 export const MERCHANT_CAPABILITY_KINDS: MerchantCapabilityKind[] = [
@@ -216,6 +219,34 @@ export function optimisticCompliance(
       confirmed_at: now.toISOString(),
       invalidated_at: null,
     },
+  };
+}
+
+export function optimisticContainment(
+  input: CreateStoreRetentionContainmentInput,
+  current: StoreRetentionOverview | undefined,
+): StoreRetentionOverview | undefined {
+  if (!current) return current;
+  const containment: StoreRetentionContainment = {
+    id: `optimistic-${crypto.randomUUID()}`,
+    alert_id: current.status.active_alert?.id ?? "pending",
+    actor_id: "pending",
+    reason: input.reason,
+    evidence_digest: input.evidence_digest,
+    created_at: new Date().toISOString(),
+  };
+  // SB-PR-12B: containment clears the pause and the active alert but keeps
+  // the consecutive failure count, so those are the only status fields
+  // mutated optimistically.
+  return {
+    ...current,
+    status: {
+      ...current.status,
+      checkout_paused: false,
+      active_alert: null,
+      latest_containment_id: containment.id,
+    },
+    containments: [containment, ...current.containments],
   };
 }
 

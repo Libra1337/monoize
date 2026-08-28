@@ -40,6 +40,7 @@ import {
   MERCHANT_CAPABILITY_KINDS,
   optimisticCapability,
   optimisticCompliance,
+  optimisticContainment,
   optimisticReadiness,
   validateCapabilityInput,
   validateReadinessInput,
@@ -443,6 +444,19 @@ export function ChannelReadinessDialog({
 
 const RETENTION_KEY = "/api/dashboard/store/admin/retention";
 
+function RetentionDialogLoading() {
+  return (
+    <div className="grid gap-4" aria-busy="true">
+      <Skeleton className="h-24 rounded-xl" />
+      <div className="grid gap-3">
+        <Skeleton className="h-11 rounded-xl" />
+        <Skeleton className="h-24 rounded-xl" />
+      </div>
+      <Skeleton className="h-11 w-36 rounded-xl" />
+    </div>
+  );
+}
+
 export function RetentionDialog({
   open,
   onOpenChange,
@@ -489,19 +503,39 @@ export function RetentionDialog({
       toast.error(t("store.admin.governance.invalid"));
       return;
     }
+    const input = { reason: reason.trim(), evidence_digest: evidenceDigest.trim() };
     setBusy(true);
     try {
-      await withRetentionReauth((token) =>
-        storeApi.admin.containRetention(
-          { reason: reason.trim(), evidence_digest: evidenceDigest.trim() },
-          token,
-        ),
+      await mutate(
+        async (current) => {
+          const containment = await withRetentionReauth((token) =>
+            storeApi.admin.containRetention(input, token),
+          );
+          const base = current ?? (await storeApi.admin.getRetention());
+          return {
+            ...base,
+            status: {
+              ...base.status,
+              checkout_paused: false,
+              active_alert: null,
+              latest_containment_id: containment.id,
+            },
+            containments: [
+              containment,
+              ...base.containments.filter((item) => item.id !== containment.id),
+            ],
+          };
+        },
+        {
+          optimisticData: (current) => optimisticContainment(input, current),
+          rollbackOnError: true,
+          revalidate: true,
+        },
       );
       toast.success(t("store.admin.governance.retention.contained"));
       setReason("");
       setEvidenceDigest("");
       setPassword("");
-      await mutate();
     } catch {
       toast.error(t("store.admin.governance.invalid"));
     } finally {
@@ -517,7 +551,7 @@ export function RetentionDialog({
           <DialogDescription>{t("store.admin.governance.retention.description")}</DialogDescription>
         </DialogHeader>
         {isLoading ? (
-          <DialogLoading />
+          <RetentionDialogLoading />
         ) : error || !data ? (
           <DialogError onRetry={() => void mutate()} />
         ) : (

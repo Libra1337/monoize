@@ -188,6 +188,43 @@ describe("Store admin page", () => {
     }
   });
 
+  test("operates retention runs and containment in a resilient dialog", () => {
+    for (const method of ["getRetention", "runRetention", "containRetention"]) {
+      expect(apiSource).toContain(method);
+    }
+    expect(pageSource).toContain("RetentionDialog");
+    expect(pageSource).toContain("onRetention={() => setRetentionOpen(true)}");
+    expect(panelsSource).toContain("store.admin.governance.retention.action");
+    expect(governanceDialogsSource).toContain("RetentionDialogLoading");
+    expect(governanceDialogsSource).toContain('createReauthGrant(password, "retention_operation")');
+    expect(governanceDialogsSource).toContain("optimisticContainment");
+    expect(governanceDialogsSource).toContain("rollbackOnError: true");
+    expect(governanceDialogsSource).toContain("evidenceDigest.trim().length !== 64");
+  });
+
+  test("keeps governance locale keys for retention, compliance, and capabilities", () => {
+    const retentionKeys = [
+      "action", "checkout", "contain", "contained", "description", "failures",
+      "holds", "open", "paused", "ran", "reason", "run", "runs", "title",
+    ];
+    const complianceKeys = ["action", "confirm", "currentTerms", "description", "saved", "termsAcknowledgment", "title"];
+    const capabilityKeys = ["action", "description", "kinds", "saved", "select", "states", "title"];
+    const reference = JSON.parse(readSource("../src/locales/en.json")) as {
+      store: { admin: { governance: Record<string, Record<string, unknown>> } };
+    };
+    expect(Object.keys(reference.store.admin.governance.retention).sort()).toEqual(retentionKeys);
+    expect(Object.keys(reference.store.admin.governance.compliance)).toEqual(expect.arrayContaining(complianceKeys));
+    expect(Object.keys(reference.store.admin.governance.capabilities)).toEqual(expect.arrayContaining(capabilityKeys));
+    for (const locale of ["zh", "zh-TW", "ja"]) {
+      const parsed = JSON.parse(readSource(`../src/locales/${locale}.json`)) as typeof reference;
+      for (const section of ["retention", "compliance", "capabilities"]) {
+        expect(Object.keys(parsed.store.admin.governance[section] ?? {}).sort()).toEqual(
+          Object.keys(reference.store.admin.governance[section]).sort(),
+        );
+      }
+    }
+  });
+
   test("replaces official credentials through scoped reauthentication without prefilling secrets", () => {
     expect(apiSource).toContain("createReauthGrant");
     expect(apiSource).toContain("replacePaymentCredential");
