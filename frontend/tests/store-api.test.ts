@@ -192,4 +192,71 @@ describe("Store API transport", () => {
       },
     ]);
   });
+
+  test("maps compliance and capability governance with scoped reauthentication", async () => {
+    const requests: Array<{
+      url: string;
+      method: string;
+      body: unknown;
+      reauth: string | null;
+    }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const headers = new Headers(init?.headers);
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+        reauth: headers.get("X-Store-Reauth-Token"),
+      });
+      return Response.json({ id: "record-1" });
+    }) as typeof fetch;
+
+    await storeApi.admin.getChannelCompliance("channel /1");
+    await storeApi.admin.confirmChannelCompliance(
+      "channel /1",
+      { confirmed: true, terms_version: "2026-08-28" },
+      "compliance-grant",
+    );
+    await storeApi.admin.listChannelCapabilities("channel /1");
+    await storeApi.admin.putChannelCapability("channel /1", "refund", {
+      state: "supported",
+      environment: "sandbox",
+      provider_product: "checkout",
+      evidence_digest: "a".repeat(64),
+      controlled_transaction_id: "controlled-refund",
+    });
+
+    expect(requests).toEqual([
+      {
+        url: "/api/dashboard/store/admin/payment-channels/channel%20%2F1/compliance",
+        method: "GET",
+        body: null,
+        reauth: null,
+      },
+      {
+        url: "/api/dashboard/store/admin/payment-channels/channel%20%2F1/compliance",
+        method: "PUT",
+        body: { confirmed: true, terms_version: "2026-08-28" },
+        reauth: "compliance-grant",
+      },
+      {
+        url: "/api/dashboard/store/admin/payment-channels/channel%20%2F1/capabilities",
+        method: "GET",
+        body: null,
+        reauth: null,
+      },
+      {
+        url: "/api/dashboard/store/admin/payment-channels/channel%20%2F1/capabilities/refund",
+        method: "PUT",
+        body: {
+          state: "supported",
+          environment: "sandbox",
+          provider_product: "checkout",
+          evidence_digest: "a".repeat(64),
+          controlled_transaction_id: "controlled-refund",
+        },
+        reauth: null,
+      },
+    ]);
+  });
 });

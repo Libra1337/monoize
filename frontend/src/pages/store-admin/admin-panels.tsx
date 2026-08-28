@@ -1,9 +1,15 @@
 import { useState } from "react";
 import { SiAlipay, SiStripe, SiWechat } from "@icons-pack/react-simple-icons";
-import { CreditCard, Eye, FileCheck2, Package, Pencil, Plus, ReceiptText, ShieldCheck, TicketCheck, Trash2 } from "lucide-react";
+import { CreditCard, ClipboardCheck, ChevronDown, Eye, FileCheck2, Layers3, Package, Pencil, Plus, ReceiptText, ShieldCheck, TicketCheck, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import type {
   RedemptionCodeRecord,
@@ -42,6 +48,32 @@ export function AdminLoadState({ loading, error, onRetry, children }: LoadStateP
     );
   }
   return <>{children}</>;
+}
+
+// Capability reason codes are generated as capability_<kind>_<issue>, where both
+// segments contain underscores, so the issue alternation must anchor the suffix.
+const CAPABILITY_REASON_PATTERN = /^capability_(.+)_(missing|invalid|not_supported|expired|credential_mismatch)$/;
+
+function unavailableReasonLabel(reason: string, t: ReturnType<typeof useTranslation>["t"]): string | null {
+  const label = t(`store.admin.channelAvailability.reasonLabels.${reason}`, { defaultValue: "" });
+  if (label) return label;
+  const match = CAPABILITY_REASON_PATTERN.exec(reason);
+  if (!match) return null;
+  return t("store.admin.channelAvailability.capabilityReason", {
+    capability: t(`store.admin.governance.capabilities.kinds.${match[1]}`, { defaultValue: match[1] }),
+    issue: t(`store.admin.channelAvailability.capabilityIssues.${match[2]}`, { defaultValue: match[2] }),
+  });
+}
+
+function UnavailableReasonChip({ reason }: { reason: string }) {
+  const { t } = useTranslation();
+  const label = unavailableReasonLabel(reason, t);
+  return (
+    <span className="inline-flex max-w-full flex-wrap items-baseline gap-x-1.5 rounded-md bg-muted px-2 py-1">
+      {label ?? <code className="break-all">{reason}</code>}
+      {label && <code className="break-all text-[10px] opacity-60">{reason}</code>}
+    </span>
+  );
 }
 
 function EmptyPanel({ icon, title }: { icon: React.ReactNode; title: string }) {
@@ -136,6 +168,8 @@ export function ChannelsPanel({
   onCreate,
   onPrivacyRecords,
   onRetention,
+  onCompliance,
+  onCapabilities,
   onReadiness,
   onEdit,
   onDelete,
@@ -144,6 +178,8 @@ export function ChannelsPanel({
   onCreate: () => void;
   onPrivacyRecords: () => void;
   onRetention: () => void;
+  onCompliance: (channel: StorePaymentChannel) => void;
+  onCapabilities: (channel: StorePaymentChannel) => void;
   onReadiness: (channel: StorePaymentChannel) => void;
   onEdit: (channel: StorePaymentChannel) => void;
   onDelete: (channel: StorePaymentChannel) => void;
@@ -209,18 +245,35 @@ export function ChannelsPanel({
                   <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span>{t("store.admin.channelAvailability.unavailableReasons")}</span>
                     {[...channel.unavailable_reasons].sort().map((reason) => (
-                      <code key={reason} className="max-w-full break-all rounded-md bg-muted px-2 py-1">
-                        {reason}
-                      </code>
+                      <UnavailableReasonChip key={reason} reason={reason} />
                     ))}
                   </div>
                 )}
               </div>
               <div className="flex items-center gap-1">
                 {channel.adapter_kind !== "http" && (
-                  <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("store.admin.governance.readiness.action")} onClick={() => onReadiness(channel)}>
-                    <ShieldCheck className="size-4" />
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="outline" className="min-h-11 rounded-xl gap-1">
+                        {t("store.admin.governance.menu")}
+                        <ChevronDown className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="rounded-xl">
+                      <DropdownMenuItem className="min-h-11 gap-2 rounded-lg" onClick={() => onCompliance(channel)}>
+                        <ClipboardCheck className="size-4" />
+                        {t("store.admin.governance.compliance.action")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="min-h-11 gap-2 rounded-lg" onClick={() => onCapabilities(channel)}>
+                        <Layers3 className="size-4" />
+                        {t("store.admin.governance.capabilities.action")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="min-h-11 gap-2 rounded-lg" onClick={() => onReadiness(channel)}>
+                        <ShieldCheck className="size-4" />
+                        {t("store.admin.governance.readiness.action")}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
                 <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("common.edit")} onClick={() => onEdit(channel)}>
                   <Pencil className="size-4" />

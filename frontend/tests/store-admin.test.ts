@@ -115,11 +115,15 @@ describe("Store admin page", () => {
     expect(panelsSource).toContain("store.admin.channelAvailability.configuredState");
     expect(panelsSource).toContain("store.admin.channelAvailability.effectiveState");
     expect(panelsSource).toContain("store.admin.channelAvailability.unavailableReasons");
+    expect(panelsSource).toContain("UnavailableReasonChip");
+    expect(panelsSource).toContain("CAPABILITY_REASON_PATTERN");
     for (const locale of ["en", "zh", "zh-TW", "ja"]) {
       const source = readSource(`../src/locales/${locale}.json`);
       expect(source).toContain('"configuredState"');
       expect(source).toContain('"effectiveState"');
       expect(source).toContain('"unavailableReasons"');
+      expect(source).toContain('"reasonLabels"');
+      expect(source).toContain('"active_credential_missing"');
     }
   });
 
@@ -134,7 +138,12 @@ describe("Store admin page", () => {
     }
     expect(pageSource).toContain("PrivacyRecordsDialog");
     expect(pageSource).toContain("ChannelReadinessDialog");
+    expect(pageSource).toContain("onOpenPrivacyRecords");
     expect(panelsSource).toContain('channel.adapter_kind !== "http"');
+    expect(panelsSource).toContain("store.admin.governance.menu");
+    expect(governanceDialogsSource).toContain("onOpenPrivacyRecords");
+    expect(governanceDialogsSource).toContain("privacyRequiredTitle");
+    expect(governanceDialogsSource).toContain("ReadinessDialogLoading");
     expect(governanceDialogsSource).toContain("useSWR");
     expect(governanceDialogsSource).toContain("Skeleton");
     expect(governanceDialogsSource).toContain("optimisticData");
@@ -146,6 +155,81 @@ describe("Store admin page", () => {
       const source = readSource(`../src/locales/${locale}.json`);
       expect(source).toContain('"privacyRecords"');
       expect(source).toContain('"readiness"');
+    }
+  });
+
+  test("manages compliance and merchant capabilities in resilient dialogs", () => {
+    for (const method of [
+      "getChannelCompliance",
+      "confirmChannelCompliance",
+      "listChannelCapabilities",
+      "putChannelCapability",
+    ]) {
+      expect(apiSource).toContain(method);
+    }
+    expect(apiSource).toContain('"compliance_confirm"');
+    expect(pageSource).toContain("ChannelComplianceDialog");
+    expect(pageSource).toContain("ChannelCapabilitiesDialog");
+    expect(pageSource).toContain("onCompliance={setComplianceChannel}");
+    expect(pageSource).toContain("onCapabilities={setCapabilitiesChannel}");
+    expect(panelsSource).toContain("store.admin.governance.compliance.action");
+    expect(panelsSource).toContain("store.admin.governance.capabilities.action");
+    expect(panelsSource).toContain("DropdownMenu");
+    expect(governanceDialogsSource).toContain("createReauthGrant(currentPassword, \"compliance_confirm\")");
+    expect(governanceDialogsSource).toContain("termsSummaryTitle");
+    expect(governanceDialogsSource).toContain("termsAcknowledgment");
+    expect(governanceDialogsSource).toContain("adminPassword");
+    expect(governanceDialogsSource).toContain("reauthHelp");
+    expect(governanceDialogsSource).toContain("ComplianceDialogLoading");
+    expect(governanceDialogsSource).toContain("validateCapabilityInput");
+    expect(governanceDialogsSource).toContain("optimisticCompliance");
+    expect(governanceDialogsSource).toContain("optimisticCapability");
+    expect(governanceDialogsSource).not.toContain("secret_key");
+    for (const locale of ["en", "zh", "zh-TW", "ja"]) {
+      const source = readSource(`../src/locales/${locale}.json`);
+      expect(source).toContain('"compliance"');
+      expect(source).toContain('"capabilities"');
+    }
+  });
+
+  test("operates retention runs and containment in a resilient dialog", () => {
+    for (const method of ["getRetention", "runRetention", "containRetention"]) {
+      expect(apiSource).toContain(method);
+    }
+    expect(pageSource).toContain("RetentionDialog");
+    expect(pageSource).toContain("onRetention={() => setRetentionOpen(true)}");
+    expect(panelsSource).toContain("store.admin.governance.retention.action");
+    expect(governanceDialogsSource).toContain("RetentionDialogLoading");
+    expect(governanceDialogsSource).toContain('createReauthGrant(password, "retention_operation")');
+    expect(governanceDialogsSource).toContain("optimisticContainment");
+    expect(governanceDialogsSource).toContain("rollbackOnError: true");
+    expect(governanceDialogsSource).toContain("evidenceDigest.trim().length !== 64");
+    expect(governanceDialogsSource).toContain("disabled={busy || !runReady}");
+    expect(governanceDialogsSource).toContain("disabled={busy || !containReady}");
+    expect(governanceDialogsSource).toContain("runConsequence");
+    expect(governanceDialogsSource).toContain("containConsequence");
+  });
+
+  test("keeps governance locale keys for retention, compliance, and capabilities", () => {
+    const retentionKeys = [
+      "action", "checkout", "contain", "containConsequence", "contained", "description", "failures",
+      "holds", "open", "paused", "ran", "reason", "run", "runConsequence", "runs", "title",
+    ];
+    const complianceKeys = ["action", "confirm", "currentTerms", "description", "saved", "termsAcknowledgment", "title"];
+    const capabilityKeys = ["action", "description", "kinds", "saved", "select", "states", "title"];
+    const reference = JSON.parse(readSource("../src/locales/en.json")) as {
+      store: { admin: { governance: Record<string, Record<string, unknown>> } };
+    };
+    expect(Object.keys(reference.store.admin.governance.retention).sort()).toEqual(retentionKeys);
+    expect(Object.keys(reference.store.admin.governance.compliance)).toEqual(expect.arrayContaining(complianceKeys));
+    expect(Object.keys(reference.store.admin.governance.capabilities)).toEqual(expect.arrayContaining(capabilityKeys));
+    for (const locale of ["zh", "zh-TW", "ja"]) {
+      const parsed = JSON.parse(readSource(`../src/locales/${locale}.json`)) as typeof reference;
+      for (const section of ["retention", "compliance", "capabilities"]) {
+        expect(Object.keys(parsed.store.admin.governance[section] ?? {}).sort()).toEqual(
+          Object.keys(reference.store.admin.governance[section]).sort(),
+        );
+      }
     }
   });
 
