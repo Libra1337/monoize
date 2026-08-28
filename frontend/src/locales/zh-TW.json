@@ -312,6 +312,7 @@
 				"invalid": "請檢查所有必填欄位並輸入有效值。",
 				"accepted": "已接受",
 				"rejected": "已拒絕",
+				"menu": "Governance",
 				"actions": {
 					"redirect": "重新導向",
 					"qr": "QR Code",
@@ -377,7 +378,9 @@
 					"selectPrivacy": "選擇有效的隱私記錄",
 					"callbackHelp": "僅在簽章回呼測試通過後啟用。",
 					"amountRange": "{{currency}} 金額範圍",
-					"saved": "管道就緒狀態已儲存"
+					"saved": "管道就緒狀態已儲存",
+					"noPrivacyRecords": "儲存管道就緒狀態前，請先建立隱私記錄。",
+					"openPrivacyRecords": "開啟隱私記錄"
 				},
 				"compliance": {
 					"action": "支付合規",
@@ -393,7 +396,11 @@
 					"empty": "此 Channel 尚無合規確認。",
 					"confirm": "確認目前條款",
 					"saved": "合規確認已儲存",
-					"passwordRequired": "請輸入目前管理員密碼。"
+					"passwordRequired": "請輸入目前 Admin 密碼。",
+					"termsSummary": "你確認你控制商戶帳戶、已註冊回呼、所售產品、退款流程、爭議流程以及適用的客戶通知。這是營運確認，不能替代法律審查。",
+					"termsAcknowledgment": "我已閱讀上述 Store 支付條款。",
+					"adminPassword": "Admin 密碼",
+					"acknowledgmentRequired": "請先閱讀條款並勾選確認核取方塊。"
 				},
 				"capabilities": {
 					"action": "商戶能力",
@@ -511,9 +518,9 @@
 					"platformCertificateSerial": "平台憑證序號",
 					"platformPublicKey": "平台公開金鑰（PEM）",
 					"apiV3Key": "API v3 密鑰",
-					"currentPassword": "目前管理員密碼",
+					"currentPassword": "目前 Admin 密碼",
 					"replace": "替換憑證",
-					"invalid": "請填寫全部憑證欄位和目前管理員密碼。",
+					"invalid": "請填寫全部憑證欄位和目前 Admin 密碼。",
 					"saved": "付款憑證已儲存，管道已停用。"
 				},
 				"deleteConfirm": "確定刪除 {{name}}？"

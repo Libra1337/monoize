@@ -312,6 +312,7 @@
 				"invalid": "必須項目を確認し、有効な値を入力してください。",
 				"accepted": "承認済み",
 				"rejected": "却下",
+				"menu": "Governance",
 				"actions": {
 					"redirect": "リダイレクト",
 					"qr": "QR コード",
@@ -377,7 +378,9 @@
 					"selectPrivacy": "有効なプライバシー記録を選択",
 					"callbackHelp": "署名付きコールバック試験に合格した後で有効にしてください。",
 					"amountRange": "{{currency}} 金額範囲",
-					"saved": "チャネル準備状況を保存しました"
+					"saved": "チャネル準備状況を保存しました",
+					"noPrivacyRecords": "チャネル準備状況を保存する前に、プライバシー記録を作成してください。",
+					"openPrivacyRecords": "プライバシー記録を開く"
 				},
 				"compliance": {
 					"action": "決済コンプライアンス",
@@ -393,7 +396,11 @@
 					"empty": "この Channel にはコンプライアンス確認がありません。",
 					"confirm": "現在の条件を確認",
 					"saved": "コンプライアンス確認を保存しました",
-					"passwordRequired": "現在の管理者パスワードを入力してください。"
+					"passwordRequired": "現在の Admin パスワードを入力してください。",
+					"termsSummary": "加盟店アカウント、登録済みコールバック、提供商品、返金プロセス、異議申立てプロセス、適用される顧客通知を管理していることを確認します。これは運用上の確認であり、法的レビューの代替ではありません。",
+					"termsAcknowledgment": "上記の Store 決済条件を読みました。",
+					"adminPassword": "Admin パスワード",
+					"acknowledgmentRequired": "条件を確認し、確認チェックボックスを選択してください。"
 				},
 				"capabilities": {
 					"action": "加盟店ケイパビリティ",
@@ -511,9 +518,9 @@
 					"platformCertificateSerial": "プラットフォーム証明書シリアル",
 					"platformPublicKey": "プラットフォーム公開鍵（PEM）",
 					"apiV3Key": "API v3 キー",
-					"currentPassword": "現在の管理者パスワード",
+					"currentPassword": "現在の Admin パスワード",
 					"replace": "認証情報を置換",
-					"invalid": "すべての認証情報と現在の管理者パスワードを入力してください。",
+					"invalid": "すべての認証情報と現在の Admin パスワードを入力してください。",
 					"saved": "支払い認証情報を保存しました。チャネルは無効です。"
 				},
 				"deleteConfirm": "{{name}}を削除しますか？"

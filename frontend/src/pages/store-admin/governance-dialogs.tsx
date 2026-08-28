@@ -47,12 +47,79 @@ import {
 
 const PRIVACY_KEY = "/api/dashboard/store/admin/privacy-records";
 
-function DialogLoading() {
+function PrivacyDialogLoading() {
   return (
-    <div className="grid gap-3" aria-busy="true">
-      <Skeleton className="h-16 rounded-xl" />
-      <Skeleton className="h-24 rounded-xl" />
+    <div className="grid gap-5" aria-busy="true">
+      <div className="grid max-h-44 gap-2">
+        <Skeleton className="h-14 rounded-xl" />
+        <Skeleton className="h-14 rounded-xl" />
+      </div>
+      <div className="grid gap-4 border-t pt-5 sm:grid-cols-2">
+        <Skeleton className="h-5 w-40 rounded-md" />
+        <Skeleton className="h-11 rounded-xl" />
+        <Skeleton className="h-11 rounded-xl" />
+        <Skeleton className="h-11 rounded-xl sm:col-span-2" />
+        <Skeleton className="h-20 rounded-xl sm:col-span-2" />
+        <Skeleton className="h-11 rounded-xl sm:col-span-2" />
+        <Skeleton className="h-11 rounded-xl" />
+        <Skeleton className="h-11 rounded-xl" />
+        <Skeleton className="h-11 rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
+function ReadinessDialogLoading() {
+  return (
+    <div className="grid gap-5" aria-busy="true">
+      <Skeleton className="h-12 rounded-xl" />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Skeleton className="h-11 rounded-xl sm:col-span-2" />
+        <Skeleton className="h-14 rounded-xl sm:col-span-2" />
+        <Skeleton className="h-28 rounded-xl" />
+        <Skeleton className="h-28 rounded-xl" />
+        <Skeleton className="h-24 rounded-xl sm:col-span-2" />
+        <Skeleton className="h-11 rounded-xl sm:col-span-2" />
+        <Skeleton className="h-11 rounded-xl sm:col-span-2" />
+        <Skeleton className="h-11 rounded-xl" />
+      </div>
+      <Skeleton className="h-11 w-28 rounded-xl" />
+    </div>
+  );
+}
+
+function CapabilitiesDialogLoading() {
+  return (
+    <div className="grid gap-5" aria-busy="true">
       <Skeleton className="h-11 rounded-xl" />
+      <div className="grid max-h-40 gap-2">
+        {Array.from({ length: 4 }, (_, index) => (
+          <Skeleton key={index} className="h-12 rounded-xl" />
+        ))}
+      </div>
+      <div className="grid gap-4 rounded-xl border p-4">
+        <Skeleton className="h-5 w-48 rounded-md" />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Skeleton className="h-11 rounded-xl" />
+          <Skeleton className="h-11 rounded-xl" />
+          <Skeleton className="h-11 rounded-xl sm:col-span-2" />
+          <Skeleton className="h-11 rounded-xl sm:col-span-2" />
+        </div>
+        <Skeleton className="h-11 w-28 rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
+function ComplianceDialogLoading() {
+  return (
+    <div className="grid gap-5" aria-busy="true">
+      <Skeleton className="h-28 rounded-xl" />
+      <Skeleton className="h-20 rounded-xl" />
+      <div className="grid gap-4 border-t pt-5">
+        <Skeleton className="h-11 rounded-xl" />
+        <Skeleton className="h-11 w-40 rounded-xl" />
+      </div>
     </div>
   );
 }
@@ -149,7 +216,7 @@ export function PrivacyRecordsDialog({
           <DialogDescription>{t("store.admin.governance.privacyRecords.description")}</DialogDescription>
         </DialogHeader>
         {records.isLoading ? (
-          <DialogLoading />
+          <PrivacyDialogLoading />
         ) : records.error ? (
           <DialogError onRetry={() => void records.mutate()} />
         ) : (
@@ -223,12 +290,14 @@ function ReadinessForm({
   privacyRecords,
   saving,
   onSave,
+  onOpenPrivacyRecords,
 }: {
   channel: StorePaymentChannel;
   profile: StoreChannelReadinessProfile | null;
   privacyRecords: StorePrivacyRecord[];
   saving: boolean;
   onSave: (input: PutStoreChannelReadinessInput) => Promise<void>;
+  onOpenPrivacyRecords: () => void;
 }) {
   const { t } = useTranslation();
   const defaults = adapterDefaults(channel);
@@ -276,6 +345,21 @@ function ReadinessForm({
   const currencyOptions: StoreCurrency[] = channel.adapter_kind === "stripe" ? ["CNY", "USD"] : ["CNY"];
   const actionOptions: StoreCheckoutActionKind[] = channel.adapter_kind === "wechat" ? ["qr", "redirect"] : defaults.actions;
 
+  if (privacyRecords.length === 0) {
+    return (
+      <div className="flex min-h-36 flex-col items-center justify-center gap-4 rounded-xl border border-dashed p-5 text-center">
+        <div className="grid gap-1">
+          <p className="text-base font-semibold text-balance">{t("store.admin.governance.readiness.privacyRequiredTitle")}</p>
+          <p className="text-sm text-muted-foreground text-pretty">{t("store.admin.governance.readiness.noPrivacyRecords")}</p>
+        </div>
+        <Button type="button" className="min-h-11 rounded-xl" onClick={onOpenPrivacyRecords}>
+          <FileCheck2 className="size-4" />
+          {t("store.admin.governance.readiness.openPrivacyRecords")}
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="grid gap-5">
       {profile && (
@@ -293,7 +377,7 @@ function ReadinessForm({
         {(["license", "runtime", "availability"] as const).map((kind) => <div key={kind} className="grid gap-2 sm:col-span-2"><Label htmlFor={`readiness-${kind}`}>{t(`store.admin.governance.fields.${kind}Evidence`)}</Label><Input id={`readiness-${kind}`} className="min-h-11 rounded-xl font-mono text-xs" value={kind === "license" ? licenseDigest : kind === "runtime" ? runtimeDigest : availabilityDigest} onChange={(event) => { if (kind === "license") setLicenseDigest(event.target.value); else if (kind === "runtime") setRuntimeDigest(event.target.value); else setAvailabilityDigest(event.target.value); }} /></div>)}
         <div className="grid gap-2"><Label htmlFor="readiness-valid-days">{t("store.admin.governance.fields.validDays")}</Label><Input id="readiness-valid-days" className="min-h-11 rounded-xl" type="number" min={1} max={90} value={validDays} onChange={(event) => setValidDays(event.target.value)} /></div>
       </div>
-      <Button type="button" className="min-h-11 w-fit rounded-xl" disabled={saving || privacyRecords.length === 0} onClick={() => void submit()}><ShieldCheck className="size-4" />{saving ? t("common.loading") : t("common.save")}</Button>
+      <Button type="button" className="min-h-11 w-fit rounded-xl" disabled={saving} onClick={() => void submit()}><ShieldCheck className="size-4" />{saving ? t("common.loading") : t("common.save")}</Button>
     </div>
   );
 }
@@ -303,11 +387,13 @@ export function ChannelReadinessDialog({
   open,
   onOpenChange,
   onSaved,
+  onOpenPrivacyRecords,
 }: {
   channel: StorePaymentChannel | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => Promise<unknown>;
+  onOpenPrivacyRecords: () => void;
 }) {
   const { t } = useTranslation();
   const readinessKey = channel && open ? `/api/dashboard/store/admin/payment-channels/${encodeURIComponent(channel.id)}/readiness` : null;
@@ -347,7 +433,7 @@ export function ChannelReadinessDialog({
           <DialogTitle className="flex items-center gap-2 text-lg"><ShieldCheck className="size-5" />{t("store.admin.governance.readiness.title", { name: channel?.name ?? "" })}</DialogTitle>
           <DialogDescription>{t("store.admin.governance.readiness.description")}</DialogDescription>
         </DialogHeader>
-        {loading ? <DialogLoading /> : error ? <DialogError onRetry={() => { void readiness.mutate(); void privacy.mutate(); }} /> : channel ? <ReadinessForm key={profileKey} channel={channel} profile={readiness.data?.readiness ?? null} privacyRecords={privacy.data?.records ?? []} saving={saving} onSave={save} /> : null}
+        {loading ? <ReadinessDialogLoading /> : error ? <DialogError onRetry={() => { void readiness.mutate(); void privacy.mutate(); }} /> : channel ? <ReadinessForm key={profileKey} channel={channel} profile={readiness.data?.readiness ?? null} privacyRecords={privacy.data?.records ?? []} saving={saving} onSave={save} onOpenPrivacyRecords={onOpenPrivacyRecords} /> : null}
         <DialogFooter><Button type="button" variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)}>{t("common.close")}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
@@ -661,7 +747,7 @@ export function ChannelCapabilitiesDialog({
           <DialogDescription>{t("store.admin.governance.capabilities.description")}</DialogDescription>
         </DialogHeader>
         {capabilities.isLoading ? (
-          <DialogLoading />
+          <CapabilitiesDialogLoading />
         ) : capabilities.error ? (
           <DialogError onRetry={() => void capabilities.mutate()} />
         ) : channel ? (
@@ -729,6 +815,7 @@ export function ChannelComplianceDialog({
     : null;
   const compliance = useSWR(complianceKey, () => storeApi.admin.getChannelCompliance(channel!.id));
   const [currentPassword, setCurrentPassword] = useState("");
+  const [termsAcknowledged, setTermsAcknowledged] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const currentTerms = compliance.data?.current_terms_version ?? "";
@@ -739,6 +826,10 @@ export function ChannelComplianceDialog({
     if (!channel || !currentTerms) return;
     if (!currentPassword.trim()) {
       toast.error(t("store.admin.governance.compliance.passwordRequired"));
+      return;
+    }
+    if (!termsAcknowledged) {
+      toast.error(t("store.admin.governance.compliance.acknowledgmentRequired"));
       return;
     }
     const input = { confirmed: true as const, terms_version: currentTerms };
@@ -760,6 +851,7 @@ export function ChannelComplianceDialog({
         },
       );
       setCurrentPassword("");
+      setTermsAcknowledged(false);
       await onSaved();
       toast.success(t("store.admin.governance.compliance.saved"));
     } catch (cause) {
@@ -780,15 +872,19 @@ export function ChannelComplianceDialog({
           <DialogDescription>{t("store.admin.governance.compliance.description")}</DialogDescription>
         </DialogHeader>
         {compliance.isLoading ? (
-          <DialogLoading />
+          <ComplianceDialogLoading />
         ) : compliance.error ? (
           <DialogError onRetry={() => void compliance.mutate()} />
         ) : (
           <div className="grid gap-5">
-            <div className="rounded-xl border p-4 text-sm">
+            <section className="grid gap-3 rounded-xl border p-4 text-sm" aria-labelledby="compliance-terms-summary-title">
+              <h3 id="compliance-terms-summary-title" className="font-medium text-balance">
+                {t("store.admin.governance.compliance.termsSummaryTitle")}
+              </h3>
+              <p className="leading-relaxed text-muted-foreground text-pretty">{t("store.admin.governance.compliance.termsSummary")}</p>
               <p className="font-medium">{t("store.admin.governance.compliance.currentTerms")}</p>
-              <p className="mt-1 font-mono text-xs">{currentTerms || t("store.admin.governance.compliance.unknownTerms")}</p>
-            </div>
+              <p className="font-mono text-xs text-muted-foreground">{currentTerms || t("store.admin.governance.compliance.unknownTerms")}</p>
+            </section>
             {active ? (
               <div className="grid gap-3 rounded-xl border p-4 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -811,11 +907,20 @@ export function ChannelComplianceDialog({
             )}
             {!isCurrent && (
               <section className="grid gap-4 border-t pt-5">
+                <label className="flex items-start gap-3 rounded-xl border p-3 text-sm">
+                  <Checkbox
+                    checked={termsAcknowledged}
+                    onCheckedChange={(checked) => setTermsAcknowledged(checked === true)}
+                    className="mt-0.5"
+                  />
+                  <span>{t("store.admin.governance.compliance.termsAcknowledgment")}</span>
+                </label>
                 <div className="grid gap-2">
-                  <Label htmlFor="compliance-password">{t("store.admin.channels.credential.currentPassword")}</Label>
+                  <Label htmlFor="compliance-password">{t("store.admin.governance.compliance.adminPassword")}</Label>
+                  <p className="text-xs text-muted-foreground text-pretty">{t("store.admin.governance.compliance.reauthHelp")}</p>
                   <Input id="compliance-password" className="min-h-11 rounded-xl" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
                 </div>
-                <Button type="button" className="min-h-11 w-fit rounded-xl" disabled={saving || !currentTerms} onClick={() => void confirm()}>
+                <Button type="button" className="min-h-11 w-fit rounded-xl" disabled={saving || !currentTerms || !termsAcknowledged} onClick={() => void confirm()}>
                   <ClipboardCheck className="size-4" />
                   {saving ? t("common.loading") : t("store.admin.governance.compliance.confirm")}
                 </Button>

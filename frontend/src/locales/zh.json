@@ -312,6 +312,7 @@
 				"invalid": "请检查所有必填字段并输入有效值。",
 				"accepted": "已接受",
 				"rejected": "已拒绝",
+				"menu": "Governance",
 				"actions": {
 					"redirect": "跳转",
 					"qr": "二维码",
@@ -377,7 +378,9 @@
 					"selectPrivacy": "选择有效的隐私记录",
 					"callbackHelp": "仅在签名回调测试通过后启用。",
 					"amountRange": "{{currency}} 金额范围",
-					"saved": "渠道就绪状态已保存"
+					"saved": "渠道就绪状态已保存",
+					"noPrivacyRecords": "保存渠道就绪状态前，请先创建隐私记录。",
+					"openPrivacyRecords": "打开隐私记录"
 				},
 				"compliance": {
 					"action": "支付合规",
@@ -393,7 +396,11 @@
 					"empty": "此 Channel 尚无合规确认。",
 					"confirm": "确认当前条款",
 					"saved": "合规确认已保存",
-					"passwordRequired": "请输入当前管理员密码。"
+					"passwordRequired": "请输入当前 Admin 密码。",
+					"termsSummary": "你确认你控制商户账户、已注册回调、所售产品、退款流程、争议流程以及适用的客户通知。这是运营确认，不能替代法律审查。",
+					"termsAcknowledgment": "我已阅读上述 Store 支付条款。",
+					"adminPassword": "Admin 密码",
+					"acknowledgmentRequired": "请先阅读条款并勾选确认复选框。"
 				},
 				"capabilities": {
 					"action": "商户能力",
@@ -511,9 +518,9 @@
 					"platformCertificateSerial": "平台证书序列号",
 					"platformPublicKey": "平台公钥（PEM）",
 					"apiV3Key": "API v3 密钥",
-					"currentPassword": "当前管理员密码",
+					"currentPassword": "当前 Admin 密码",
 					"replace": "替换凭据",
-					"invalid": "请填写全部凭据字段和当前管理员密码。",
+					"invalid": "请填写全部凭据字段和当前 Admin 密码。",
 					"saved": "支付凭据已保存，渠道已禁用。"
 				},
 				"deleteConfirm": "确认删除 {{name}}？"
