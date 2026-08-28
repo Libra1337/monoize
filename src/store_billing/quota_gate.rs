@@ -36,6 +36,7 @@ pub enum QuotaGateState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QuotaEnvironment {
     pub compatibility_id: String,
     pub schema_version: i64,
@@ -69,6 +70,7 @@ impl QuotaEnvironment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QuotaManifest {
     pub environment: QuotaEnvironment,
     pub application_version: String,
@@ -140,14 +142,47 @@ impl QuotaGateStore {
         slot: GateSlot,
         manifest: QuotaManifest,
     ) -> Result<(), QuotaGateError> {
+        let write = self.db.write().await;
+        self.import_manifest_on(&*write, slot, manifest).await
+    }
+
+    pub async fn import_matching_manifest(
+        &self,
+        slot: GateSlot,
+        manifest: QuotaManifest,
+    ) -> Result<(), QuotaGateError> {
+        if !self.db.is_sqlite() {
+            return Err(QuotaGateError::Storage(
+                "offline quota Gate import requires SQLite".to_string(),
+            ));
+        }
+        let db = self.db.clone();
+        self.db
+            .with_sqlite_quota_probe(move |connection| {
+                Box::pin(async move {
+                    let store = QuotaGateStore::new(db);
+                    let live = store.live_environment_on(connection).await?;
+                    if live != manifest.environment {
+                        return Err(QuotaGateError::FingerprintConflict);
+                    }
+                    store.import_manifest_on(connection, slot, manifest).await
+                })
+            })
+            .await
+    }
+
+    async fn import_manifest_on<C: ConnectionTrait>(
+        &self,
+        connection: &C,
+        slot: GateSlot,
+        manifest: QuotaManifest,
+    ) -> Result<(), QuotaGateError> {
         let expected = manifest.environment.compatibility_fingerprint()?;
         if expected != manifest.compatibility_fingerprint {
             return Err(QuotaGateError::FingerprintConflict);
         }
         let json = serde_json::to_string(&manifest).map_err(QuotaGateError::Serialize)?;
-        self.db
-            .write()
-            .await
+        connection
             .execute(self.db.stmt(
                 "INSERT INTO store_quota_gates
                     (backend, slot, state, compatibility_fingerprint, manifest_json,

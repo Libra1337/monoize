@@ -2581,6 +2581,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "chrono-tz",
+ "clap",
  "cron",
  "dashmap",
  "ed25519-dalek",

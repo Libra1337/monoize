@@ -56,6 +56,24 @@ Monoize 僅在驗證 Channel 付款後發放餘額。管理員不能把未付款
 
 Monoize 以人民幣儲存方案額度。商店會把額度顯示為四捨五入後的整數人民幣或美元金額。
 
+## 為 SQLite 啟用方案
+
+變更 SQLite 配額 Gate 前，停止 Monoize 應用程式。把 `MONOIZE_DATABASE_DSN` 設為目標 SQLite 資料庫。
+
+把已通過演練的 manifest 匯入 `next` 槽位：
+
+```bash
+monoize-store-ops quota-gate import --slot next --manifest ./quota-manifest.json
+```
+
+從命令輸出讀取相容性 fingerprint。啟動新應用程式版本前，推廣已匯入的 manifest：
+
+```bash
+monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
+```
+
+此命令會拒絕 PostgreSQL、過大的 manifest、無效 JSON，以及與目前 SQLite 環境不相符的 manifest。
+
 ## 使用兌換碼
 
 在**兌換碼**中輸入一個未使用的兌換碼。兌換碼可以增加餘額或啟用方案。兌換流程不使用付款 Channel，也不建立訂單。

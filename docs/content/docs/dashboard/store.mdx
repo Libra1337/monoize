@@ -56,6 +56,24 @@ Select a plan and a payment Channel. Each plan can apply several quota windows a
 
 Monoize stores plan quotas in CNY. The Store shows each quota as a rounded whole CNY or USD amount.
 
+## Qualify SQLite for plans
+
+Stop the Monoize application before you change the SQLite quota Gate. Set `MONOIZE_DATABASE_DSN` to the target SQLite database.
+
+Import a passed drill manifest into the `next` slot:
+
+```bash
+monoize-store-ops quota-gate import --slot next --manifest ./quota-manifest.json
+```
+
+Read the compatibility fingerprint from the command output. Promote the imported manifest before you start the new application version:
+
+```bash
+monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
+```
+
+The command rejects PostgreSQL, an oversized manifest, invalid JSON, and a manifest that does not match the live SQLite environment.
+
 ## Redeem a code
 
 Enter one unused code in **Redeem code**. A code grants balance or activates a plan. Redemption does not use a payment Channel and does not create an order.

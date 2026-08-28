@@ -56,6 +56,24 @@ Monoize 仅在验证渠道支付后发放余额。管理员不能把未支付订
 
 Monoize 以人民币存储套餐额度。商店会把额度显示为四舍五入后的整数人民币或美元金额。
 
+## 为 SQLite 启用套餐
+
+更改 SQLite 配额 Gate 前，停止 Monoize 应用。把 `MONOIZE_DATABASE_DSN` 设为目标 SQLite 数据库。
+
+把已通过演练的 manifest 导入 `next` 槽位：
+
+```bash
+monoize-store-ops quota-gate import --slot next --manifest ./quota-manifest.json
+```
+
+从命令输出中读取兼容性 fingerprint。启动新应用版本前，推广已导入的 manifest：
+
+```bash
+monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
+```
+
+此命令会拒绝 PostgreSQL、过大的 manifest、无效 JSON，以及与当前 SQLite 环境不匹配的 manifest。
+
 ## 使用兑换码
 
 在**兑换码**中输入一个未使用的兑换码。兑换码可以增加余额或激活套餐。兑换过程不使用支付 Channel，也不创建订单。

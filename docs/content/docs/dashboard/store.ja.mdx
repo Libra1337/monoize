@@ -56,6 +56,24 @@ WeChat Pay 通知 URL を `https://lynshen.org/api/store/callbacks/{channel_id}`
 
 Monoize はプラン上限額を CNY で保存します。Store は、四捨五入した整数の CNY または USD 金額を表示します。
 
+## SQLite でプランを有効にする
+
+SQLite のクォータ Gate を変更する前に、Monoize アプリケーションを停止します。`MONOIZE_DATABASE_DSN` に対象の SQLite データベースを設定します。
+
+合格した演習 manifest を `next` スロットにインポートします。
+
+```bash
+monoize-store-ops quota-gate import --slot next --manifest ./quota-manifest.json
+```
+
+コマンド出力から互換性 fingerprint を確認します。新しいアプリケーションバージョンを起動する前に、インポートした manifest を昇格します。
+
+```bash
+monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
+```
+
+このコマンドは、PostgreSQL、サイズ超過の manifest、不正な JSON、現在の SQLite 環境と一致しない manifest を拒否します。
+
 ## コードを引き換える
 
 **コード引き換え**に未使用のコードを入力します。コードは残高を追加するか、プランを有効にします。引き換えでは支払い Channel を使用せず、注文も作成しません。

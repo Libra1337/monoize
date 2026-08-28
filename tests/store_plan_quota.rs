@@ -583,6 +583,69 @@ async fn gate_uses_current_and_next_manifests_without_binding_app_version() {
 }
 
 #[tokio::test]
+async fn offline_gate_import_requires_the_live_sqlite_environment() {
+    let (db, _, environment) = setup().await;
+    let gate = QuotaGateStore::new(db.clone());
+    let mut stale_environment = environment;
+    stale_environment.sqlite_version.push_str("-stale");
+    let manifest = QuotaManifest::passed(
+        stale_environment,
+        "ordinary-app-v2",
+        "drill-next",
+        Utc.with_ymd_and_hms(2026, 8, 28, 5, 1, 0).unwrap(),
+        "admin-1",
+    )
+    .unwrap();
+
+    assert!(matches!(
+        gate.import_matching_manifest(GateSlot::Next, manifest)
+            .await,
+        Err(monoize::store_billing::quota_gate::QuotaGateError::FingerprintConflict)
+    ));
+    let next = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT state, compatibility_fingerprint FROM store_quota_gates
+             WHERE backend = 'sqlite' AND slot = 'next'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(next.try_get::<String>("", "state").unwrap(), "pending");
+    assert_eq!(
+        next.try_get::<String>("", "compatibility_fingerprint")
+            .unwrap(),
+        ""
+    );
+}
+
+#[test]
+fn quota_manifest_json_rejects_unknown_fields() {
+    let value = serde_json::json!({
+        "environment": {
+            "compatibility_id": "store-plan-quota-v1",
+            "schema_version": 1,
+            "sqlite_version": "3.50.0",
+            "journal_mode": "wal",
+            "busy_timeout_ms": 5000,
+            "page_size": 4096,
+            "synchronous": "normal",
+            "filesystem_id": "unix-dev:1",
+            "quota_manifest_digest": "digest"
+        },
+        "application_version": "1.6.0",
+        "drill_result_digest": "drill",
+        "measured_at": "2026-08-28T05:01:00Z",
+        "imported_by": "admin-1",
+        "compatibility_fingerprint": "fingerprint",
+        "unexpected": true
+    });
+
+    assert!(serde_json::from_value::<QuotaManifest>(value).is_err());
+}
+
+#[tokio::test]
 async fn live_environment_reads_sqlite_and_builtin_manifest_components() {
     let (db, _, environment) = setup().await;
     let sqlite_version: String = db

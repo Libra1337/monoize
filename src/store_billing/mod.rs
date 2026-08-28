@@ -16,6 +16,7 @@ pub mod payment;
 pub mod poll_limit;
 pub mod quota;
 pub mod quota_gate;
+pub mod quota_gate_cli;
 pub mod reauth;
 pub mod reconciliation;
 pub mod recovery;
