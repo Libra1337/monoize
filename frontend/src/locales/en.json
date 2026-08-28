@@ -306,7 +306,34 @@
 				"effectiveState": "Effective availability",
 				"available": "Available",
 				"unavailable": "Unavailable",
-				"unavailableReasons": "Unavailable reasons"
+				"unavailableReasons": "Unavailable reasons",
+				"capabilityReason": "{{capability}}: {{issue}}",
+				"capabilityIssues": {
+					"missing": "not verified",
+					"invalid": "verification record invalid",
+					"not_supported": "not supported",
+					"expired": "verification expired",
+					"credential_mismatch": "credential mismatch"
+				},
+				"reasonLabels": {
+					"channel_not_found": "Channel not found",
+					"channel_disabled": "Channel is disabled",
+					"adapter_milestone_unavailable": "Adapter does not support Store payments yet",
+					"active_credential_missing": "No active payment credential",
+					"active_credential_mismatch": "Active credential does not match the adapter",
+					"compliance_missing": "Payment terms not confirmed",
+					"compliance_terms_outdated": "Payment terms confirmation is outdated",
+					"readiness_profile_missing": "No readiness profile",
+					"readiness_profile_credential_mismatch": "Readiness profile does not match the active credential",
+					"readiness_profile_expired": "Readiness profile expired",
+					"callback_verification_pending": "Callback verification pending",
+					"license_gate_pending": "License evidence pending",
+					"runtime_gate_pending": "Runtime evidence pending",
+					"availability_evidence_pending": "Availability evidence pending",
+					"privacy_gate_pending": "Privacy record pending",
+					"readiness_metadata_invalid": "Readiness metadata is invalid",
+					"checkout_action_incompatible": "Checkout actions incompatible with the adapter"
+				}
 			},
 			"governance": {
 				"invalid": "Check every required field and enter valid values.",
@@ -345,7 +372,7 @@
 				"privacyRecords": {
 					"action": "Privacy records",
 					"title": "Privacy records",
-					"description": "Review accepted records and append a new immutable record.",
+					"description": "Review accepted records and add new ones.",
 					"empty": "No privacy record exists.",
 					"create": "Add privacy record",
 					"immutable": "A saved record cannot be edited.",
@@ -353,19 +380,21 @@
 					"created": "Privacy record added"
 				},
 				"retention": {
-					"action": "Retention",
-					"title": "Store retention",
-					"description": "Review retention runs, checkout pause state, and containment.",
+					"action": "Data retention",
+					"title": "Store data retention",
+					"description": "Review retention runs, the checkout status, and resolved alerts.",
 					"failures": "Consecutive failures",
-					"checkout": "Checkout",
+					"checkout": "Checkout status",
 					"paused": "Paused",
-					"open": "Open",
-					"runs": "Runs",
+					"open": "Accepting orders",
+					"runs": "Retention runs",
 					"holds": "Legal holds",
 					"run": "Run retention",
-					"contain": "Contain alert",
+					"runConsequence": "A retention run permanently deletes records that are past their retention period.",
+					"contain": "Resolve alert",
+					"containConsequence": "Resolving the alert clears it and resumes checkout immediately.",
 					"ran": "Retention run started",
-					"contained": "Retention alert contained",
+					"contained": "Alert resolved, checkout resumed",
 					"reason": "Reason"
 				},
 				"readiness": {
