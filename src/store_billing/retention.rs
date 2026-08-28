@@ -340,80 +340,84 @@ impl StoreRetention {
         }
 
         let tx = self.db.begin_write().await?;
-        if let Some(extended_id) = input.extends_hold_id.as_deref() {
-            let previous = legal_hold_by_id(&self.db, &*tx, extended_id, now)
-                .await?
-                .ok_or(StoreRetentionError::InvalidInput)?;
-            if previous.data_class != input.data_class
-                || previous.identifiers != input.identifiers
-                || input.expires_at <= previous.expires_at
-            {
-                return Err(StoreRetentionError::InvalidInput);
+        let outcome = async {
+            if let Some(extended_id) = input.extends_hold_id.as_deref() {
+                let previous = legal_hold_by_id(&self.db, &*tx, extended_id, now)
+                    .await?
+                    .ok_or(StoreRetentionError::InvalidInput)?;
+                if previous.data_class != input.data_class
+                    || previous.identifiers != input.identifiers
+                    || input.expires_at <= previous.expires_at
+                {
+                    return Err(StoreRetentionError::InvalidInput);
+                }
             }
-        }
-        let id = Uuid::new_v4().to_string();
-        let identifiers_json = serde_json::to_string(&input.identifiers).map_err(storage)?;
-        tx.execute(self.db.stmt(
-            "INSERT INTO store_legal_holds
-                (id, data_class, identifiers_json, reason, requesting_authority,
-                 approver_id, starts_at, expires_at, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7)",
-            vec![
-                id.clone().into(),
-                input.data_class.as_str().into(),
-                identifiers_json.into(),
-                input.reason.clone().into(),
-                input.requesting_authority.clone().into(),
-                approver_id.into(),
-                timestamp(now).into(),
-                timestamp(input.expires_at).into(),
-            ],
-        ))
-        .await?;
-        tx.execute(self.db.stmt(
-            "INSERT INTO store_legal_hold_approvals
-                (hold_id, requester_id, approver_role, extends_hold_id)
-             VALUES ($1, $2, $3, $4)",
-            vec![
-                id.clone().into(),
-                input.requester_id.clone().into(),
-                input.approver_role.clone().into(),
-                input.extends_hold_id.clone().into(),
-            ],
-        ))
-        .await?;
-        for identifier in &input.identifiers {
+            let id = Uuid::new_v4().to_string();
+            let identifiers_json = serde_json::to_string(&input.identifiers).map_err(storage)?;
             tx.execute(self.db.stmt(
-                "INSERT INTO store_legal_hold_items (hold_id, data_class, identifier)
-                 VALUES ($1, $2, $3)",
+                "INSERT INTO store_legal_holds
+                    (id, data_class, identifiers_json, reason, requesting_authority,
+                     approver_id, starts_at, expires_at, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7)",
                 vec![
                     id.clone().into(),
                     input.data_class.as_str().into(),
-                    identifier.clone().into(),
+                    identifiers_json.into(),
+                    input.reason.clone().into(),
+                    input.requesting_authority.clone().into(),
+                    approver_id.into(),
+                    timestamp(now).into(),
+                    timestamp(input.expires_at).into(),
                 ],
             ))
             .await?;
+            tx.execute(self.db.stmt(
+                "INSERT INTO store_legal_hold_approvals
+                    (hold_id, requester_id, approver_role, extends_hold_id)
+                 VALUES ($1, $2, $3, $4)",
+                vec![
+                    id.clone().into(),
+                    input.requester_id.clone().into(),
+                    input.approver_role.clone().into(),
+                    input.extends_hold_id.clone().into(),
+                ],
+            ))
+            .await?;
+            for identifier in &input.identifiers {
+                tx.execute(self.db.stmt(
+                    "INSERT INTO store_legal_hold_items (hold_id, data_class, identifier)
+                     VALUES ($1, $2, $3)",
+                    vec![
+                        id.clone().into(),
+                        input.data_class.as_str().into(),
+                        identifier.clone().into(),
+                    ],
+                ))
+                .await?;
+            }
+            insert_access_audit(
+                &self.db,
+                &*tx,
+                approver_id,
+                &input.approver_role,
+                "legal_hold_create",
+                serde_json::json!({
+                    "hold_id": id,
+                    "data_class": input.data_class,
+                    "identifiers": input.identifiers,
+                    "requester_id": input.requester_id,
+                    "requesting_authority": input.requesting_authority,
+                    "extends_hold_id": input.extends_hold_id,
+                }),
+                &input.reason,
+                "succeeded",
+                now,
+            )
+            .await?;
+            Ok(id)
         }
-        insert_access_audit(
-            &self.db,
-            &*tx,
-            approver_id,
-            &input.approver_role,
-            "legal_hold_create",
-            serde_json::json!({
-                "hold_id": id,
-                "data_class": input.data_class,
-                "identifiers": input.identifiers,
-                "requester_id": input.requester_id,
-                "requesting_authority": input.requesting_authority,
-                "extends_hold_id": input.extends_hold_id,
-            }),
-            &input.reason,
-            "succeeded",
-            now,
-        )
-        .await?;
-        tx.commit().await?;
+        .await;
+        let id = finish_transaction(tx, outcome).await?;
         self.legal_hold(&id, now)
             .await?
             .ok_or_else(|| storage("created legal hold is missing"))
@@ -454,84 +458,87 @@ impl StoreRetention {
             return Err(StoreRetentionError::InvalidInput);
         }
         let tx = self.db.begin_write().await?;
-        let lock = if self.db.is_postgres() {
-            " FOR UPDATE"
-        } else {
-            ""
-        };
-        let state = tx
-            .query_one(self.db.stmt(
-                &format!(
-                    "SELECT checkout_paused, active_alert_id
-                     FROM store_retention_state WHERE singleton_id = 1{lock}"
-                ),
-                vec![],
-            ))
-            .await?
-            .ok_or_else(|| storage("retention state is missing"))?;
-        let paused = boolean(&state, "checkout_paused")?;
-        let alert_id = optional_string(&state, "active_alert_id")?
-            .filter(|_| paused)
-            .ok_or(StoreRetentionError::ContainmentUnavailable)?;
-        let id = Uuid::new_v4().to_string();
-        tx.execute(self.db.stmt(
-            "INSERT INTO store_retention_containments
-                (id, alert_id, actor_id, reason, evidence_digest, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6)",
-            vec![
-                id.clone().into(),
-                alert_id.clone().into(),
-                actor_id.into(),
-                input.reason.clone().into(),
-                input.evidence_digest.clone().into(),
-                timestamp(now).into(),
-            ],
-        ))
-        .await?;
-        let changed = tx
-            .execute(self.db.stmt(
-                "UPDATE store_retention_alerts
-                 SET contained_at = $2, containment_id = $3
-                 WHERE id = $1 AND contained_at IS NULL",
+        let outcome = async {
+            let lock = if self.db.is_postgres() {
+                " FOR UPDATE"
+            } else {
+                ""
+            };
+            let state = tx
+                .query_one(self.db.stmt(
+                    &format!(
+                        "SELECT checkout_paused, active_alert_id
+                         FROM store_retention_state WHERE singleton_id = 1{lock}"
+                    ),
+                    vec![],
+                ))
+                .await?
+                .ok_or_else(|| storage("retention state is missing"))?;
+            let paused = boolean(&state, "checkout_paused")?;
+            let alert_id = optional_string(&state, "active_alert_id")?
+                .filter(|_| paused)
+                .ok_or(StoreRetentionError::ContainmentUnavailable)?;
+            let id = Uuid::new_v4().to_string();
+            tx.execute(self.db.stmt(
+                "INSERT INTO store_retention_containments
+                    (id, alert_id, actor_id, reason, evidence_digest, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
                 vec![
-                    alert_id.clone().into(),
-                    timestamp(now).into(),
                     id.clone().into(),
+                    alert_id.clone().into(),
+                    actor_id.into(),
+                    input.reason.clone().into(),
+                    input.evidence_digest.clone().into(),
+                    timestamp(now).into(),
                 ],
             ))
             .await?;
-        if changed.rows_affected() != 1 {
-            return Err(StoreRetentionError::ContainmentUnavailable);
+            let changed = tx
+                .execute(self.db.stmt(
+                    "UPDATE store_retention_alerts
+                     SET contained_at = $2, containment_id = $3
+                     WHERE id = $1 AND contained_at IS NULL",
+                    vec![
+                        alert_id.clone().into(),
+                        timestamp(now).into(),
+                        id.clone().into(),
+                    ],
+                ))
+                .await?;
+            if changed.rows_affected() != 1 {
+                return Err(StoreRetentionError::ContainmentUnavailable);
+            }
+            tx.execute(self.db.stmt(
+                "UPDATE store_retention_state
+                 SET checkout_paused = 0, active_alert_id = NULL,
+                     latest_containment_id = $1, updated_at = $2
+                 WHERE singleton_id = 1",
+                vec![id.clone().into(), timestamp(now).into()],
+            ))
+            .await?;
+            insert_access_audit(
+                &self.db,
+                &*tx,
+                actor_id,
+                "admin",
+                "retention_containment",
+                serde_json::json!({"alert_id": alert_id, "containment_id": id}),
+                &input.reason,
+                "succeeded",
+                now,
+            )
+            .await?;
+            Ok(StoreRetentionContainment {
+                id,
+                alert_id,
+                actor_id: actor_id.to_string(),
+                reason: input.reason.clone(),
+                evidence_digest: input.evidence_digest.clone(),
+                created_at: now,
+            })
         }
-        tx.execute(self.db.stmt(
-            "UPDATE store_retention_state
-             SET checkout_paused = 0, active_alert_id = NULL,
-                 latest_containment_id = $1, updated_at = $2
-             WHERE singleton_id = 1",
-            vec![id.clone().into(), timestamp(now).into()],
-        ))
-        .await?;
-        insert_access_audit(
-            &self.db,
-            &*tx,
-            actor_id,
-            "admin",
-            "retention_containment",
-            serde_json::json!({"alert_id": alert_id, "containment_id": id}),
-            &input.reason,
-            "succeeded",
-            now,
-        )
-        .await?;
-        tx.commit().await?;
-        Ok(StoreRetentionContainment {
-            id,
-            alert_id,
-            actor_id: actor_id.to_string(),
-            reason: input.reason,
-            evidence_digest: input.evidence_digest,
-            created_at: now,
-        })
+        .await;
+        finish_transaction(tx, outcome).await
     }
 
     async fn current_policy(
