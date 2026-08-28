@@ -149,6 +149,34 @@ describe("Store admin page", () => {
     }
   });
 
+  test("manages compliance and merchant capabilities in resilient dialogs", () => {
+    for (const method of [
+      "getChannelCompliance",
+      "confirmChannelCompliance",
+      "listChannelCapabilities",
+      "putChannelCapability",
+    ]) {
+      expect(apiSource).toContain(method);
+    }
+    expect(apiSource).toContain('"compliance_confirm"');
+    expect(pageSource).toContain("ChannelComplianceDialog");
+    expect(pageSource).toContain("ChannelCapabilitiesDialog");
+    expect(pageSource).toContain("onCompliance={setComplianceChannel}");
+    expect(pageSource).toContain("onCapabilities={setCapabilitiesChannel}");
+    expect(panelsSource).toContain("store.admin.governance.compliance.action");
+    expect(panelsSource).toContain("store.admin.governance.capabilities.action");
+    expect(governanceDialogsSource).toContain("createReauthGrant(currentPassword, \"compliance_confirm\")");
+    expect(governanceDialogsSource).toContain("validateCapabilityInput");
+    expect(governanceDialogsSource).toContain("optimisticCompliance");
+    expect(governanceDialogsSource).toContain("optimisticCapability");
+    expect(governanceDialogsSource).not.toContain("secret_key");
+    for (const locale of ["en", "zh", "zh-TW", "ja"]) {
+      const source = readSource(`../src/locales/${locale}.json`);
+      expect(source).toContain('"compliance"');
+      expect(source).toContain('"capabilities"');
+    }
+  });
+
   test("replaces official credentials through scoped reauthentication without prefilling secrets", () => {
     expect(apiSource).toContain("createReauthGrant");
     expect(apiSource).toContain("replacePaymentCredential");

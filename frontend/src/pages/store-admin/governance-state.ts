@@ -1,9 +1,24 @@
 import type {
   CreateStorePrivacyRecordInput,
+  MerchantCapabilityKind,
   PutStoreChannelReadinessInput,
+  PutStoreMerchantCapabilityInput,
   StoreChannelReadinessView,
+  StoreComplianceView,
+  StoreMerchantCapabilitiesView,
+  StoreMerchantCapability,
   StorePaymentChannel,
 } from "@/lib/store-api";
+
+export const MERCHANT_CAPABILITY_KINDS: MerchantCapabilityKind[] = [
+  "payment_query",
+  "refund",
+  "refund_query",
+  "dispute_event",
+  "dispute_query",
+  "bill_download",
+  "settlement_report",
+];
 
 export interface PrivacyRecordDraft {
   policyVersion: string;
@@ -157,4 +172,78 @@ export function optimisticReadiness(
       availability_evidence_digest: input.availability_evidence_digest,
     },
   };
+}
+
+const NON_WHITESPACE_PATTERN = /^\S+$/;
+
+export function validateCapabilityInput(input: PutStoreMerchantCapabilityInput): boolean {
+  const environment = input.environment.trim();
+  const providerProduct = input.provider_product.trim();
+  const controlledId = input.controlled_transaction_id?.trim() ?? "";
+  return (
+    environment.length >= 1
+    && environment.length <= 128
+    && NON_WHITESPACE_PATTERN.test(environment)
+    && providerProduct.length >= 1
+    && providerProduct.length <= 128
+    && NON_WHITESPACE_PATTERN.test(providerProduct)
+    && DIGEST_PATTERN.test(input.evidence_digest)
+    && (
+      input.controlled_transaction_id === null
+      || (
+        controlledId.length >= 1
+        && controlledId.length <= 256
+        && NON_WHITESPACE_PATTERN.test(controlledId)
+      )
+    )
+  );
+}
+
+export function optimisticCompliance(
+  channelId: string,
+  termsVersion: string,
+  current: StoreComplianceView | undefined,
+): StoreComplianceView {
+  const now = new Date();
+  return {
+    current_terms_version: termsVersion,
+    compliance: {
+      id: `optimistic-${crypto.randomUUID()}`,
+      channel_id: channelId,
+      terms_version: termsVersion,
+      admin_user_id: current?.compliance?.admin_user_id ?? "pending",
+      source_ip: current?.compliance?.source_ip ?? "pending",
+      confirmed_at: now.toISOString(),
+      invalidated_at: null,
+    },
+  };
+}
+
+export function optimisticCapability(
+  channelId: string,
+  capability: MerchantCapabilityKind,
+  input: PutStoreMerchantCapabilityInput,
+  current: StoreMerchantCapabilitiesView | undefined,
+): StoreMerchantCapabilitiesView {
+  const now = new Date();
+  const existing = current?.capabilities.find((item) => item.capability === capability);
+  const record: StoreMerchantCapability = {
+    id: existing?.id ?? `optimistic-${crypto.randomUUID()}`,
+    channel_id: channelId,
+    capability,
+    state: input.state,
+    environment: input.environment.trim(),
+    merchant_account_digest: existing?.merchant_account_digest ?? "pending",
+    provider_product: input.provider_product.trim(),
+    evidence_digest: input.evidence_digest,
+    controlled_transaction_id: input.controlled_transaction_id?.trim() ?? null,
+    verifier_admin_id: existing?.verifier_admin_id ?? "pending",
+    verified_at: now.toISOString(),
+    expires_at: new Date(now.getTime() + 90 * 86_400_000).toISOString(),
+  };
+  const capabilities = [
+    record,
+    ...(current?.capabilities.filter((item) => item.capability !== capability) ?? []),
+  ].sort((left, right) => left.capability.localeCompare(right.capability));
+  return { capabilities };
 }

@@ -41,7 +41,13 @@ import {
 } from "./admin-panels";
 import { ChannelDialog } from "./channel-dialog";
 import { disabledOptimisticChannel } from "./channel-state";
-import { ChannelReadinessDialog, PrivacyRecordsDialog, RetentionDialog } from "./governance-dialogs";
+import {
+  ChannelCapabilitiesDialog,
+  ChannelComplianceDialog,
+  ChannelReadinessDialog,
+  PrivacyRecordsDialog,
+  RetentionDialog,
+} from "./governance-dialogs";
 import { OrderDialog } from "./order-dialog";
 import { ProductDialog } from "./product-dialog";
 import { RedemptionDialog } from "./redemption-dialog";
@@ -153,6 +159,8 @@ export function StoreAdminPage() {
   const [privacyRecordsOpen, setPrivacyRecordsOpen] = useState(false);
   const [retentionOpen, setRetentionOpen] = useState(false);
   const [readinessChannel, setReadinessChannel] = useState<StorePaymentChannel | null>(null);
+  const [complianceChannel, setComplianceChannel] = useState<StorePaymentChannel | null>(null);
+  const [capabilitiesChannel, setCapabilitiesChannel] = useState<StorePaymentChannel | null>(null);
   const [redemptionDialogOpen, setRedemptionDialogOpen] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -380,7 +388,7 @@ export function StoreAdminPage() {
     <StoreAdminTabs activeTab={activeTab} onTabChange={setActiveTab} />
     <div role="tabpanel" className="grid gap-6">
       {activeTab === "products" && <AdminLoadState loading={products.isLoading || settings.isLoading || groups.isLoading} error={products.error || settings.error || groups.error} onRetry={() => { void products.mutate(); void settings.mutate(); void groups.mutate(); }}><ProductsPanel products={products.data ?? []} onCreate={() => { setSelectedProduct(null); setProductDialogOpen(true); }} onEdit={(product) => { setSelectedProduct(product); setProductDialogOpen(true); }} onDelete={(product) => setDeleteTarget({ kind: "product", record: product })} />{settings.data && <SettingsPanel settings={settings.data} saving={saving} onSave={saveSettings} />}</AdminLoadState>}
-      {activeTab === "channels" && <AdminLoadState loading={channels.isLoading} error={channels.error} onRetry={() => void channels.mutate()}><ChannelsPanel channels={channels.data ?? []} onCreate={() => { setSelectedChannel(null); setChannelDialogOpen(true); }} onPrivacyRecords={() => setPrivacyRecordsOpen(true)} onRetention={() => setRetentionOpen(true)} onReadiness={setReadinessChannel} onEdit={(channel) => { setSelectedChannel(channel); setChannelDialogOpen(true); }} onDelete={(channel) => setDeleteTarget({ kind: "channel", record: channel })} /></AdminLoadState>}
+      {activeTab === "channels" && <AdminLoadState loading={channels.isLoading} error={channels.error} onRetry={() => void channels.mutate()}><ChannelsPanel channels={channels.data ?? []} onCreate={() => { setSelectedChannel(null); setChannelDialogOpen(true); }} onPrivacyRecords={() => setPrivacyRecordsOpen(true)} onRetention={() => setRetentionOpen(true)} onCompliance={setComplianceChannel} onCapabilities={setCapabilitiesChannel} onReadiness={setReadinessChannel} onEdit={(channel) => { setSelectedChannel(channel); setChannelDialogOpen(true); }} onDelete={(channel) => setDeleteTarget({ kind: "channel", record: channel })} /></AdminLoadState>}
       {activeTab === "orders" && <AdminLoadState loading={orders.isLoading} error={orders.error} onRetry={() => void orders.mutate()}><OrdersPanel orders={orders.data ?? []} onSelectOrder={setSelectedOrderId} /></AdminLoadState>}
       {activeTab === "redemptions" && <AdminLoadState loading={redemptions.isLoading || products.isLoading} error={redemptions.error || products.error} onRetry={() => { void redemptions.mutate(); void products.mutate(); }}><RedemptionsPanel codes={redemptions.data ?? []} onGenerate={() => setRedemptionDialogOpen(true)} /></AdminLoadState>}
     </div>
@@ -388,6 +396,8 @@ export function StoreAdminPage() {
     <ChannelDialog open={channelDialogOpen} channel={selectedChannel} saving={saving} onOpenChange={setChannelDialogOpen} onSave={saveChannel} onSaveCredential={saveChannelCredential} />
     <PrivacyRecordsDialog open={privacyRecordsOpen} onOpenChange={setPrivacyRecordsOpen} />
     <RetentionDialog open={retentionOpen} onOpenChange={setRetentionOpen} />
+    <ChannelComplianceDialog channel={complianceChannel} open={complianceChannel !== null} onOpenChange={(open) => { if (!open) setComplianceChannel(null); }} onSaved={() => channels.mutate()} />
+    <ChannelCapabilitiesDialog channel={capabilitiesChannel} open={capabilitiesChannel !== null} onOpenChange={(open) => { if (!open) setCapabilitiesChannel(null); }} onSaved={() => channels.mutate()} />
     <ChannelReadinessDialog channel={readinessChannel} open={readinessChannel !== null} onOpenChange={(open) => { if (!open) setReadinessChannel(null); }} onSaved={() => channels.mutate()} />
     <RedemptionDialog open={redemptionDialogOpen} plans={(products.data ?? []).filter((product) => product.kind === "plan" && product.enabled)} generating={saving} onOpenChange={setRedemptionDialogOpen} onGenerate={generateCodes} />
     <OrderDialog

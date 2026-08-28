@@ -100,4 +100,38 @@ describe("Store governance form validation", () => {
     })).toBe(false);
     expect(validate("alipay", readinessInput)).toBe(false);
   });
+
+  test("accepts only canonical capability verification input", () => {
+    const validate = (governanceState as Record<string, unknown>).validateCapabilityInput as ((input: {
+      state: "supported" | "unsupported" | "manual";
+      environment: string;
+      provider_product: string;
+      evidence_digest: string;
+      controlled_transaction_id: string | null;
+    }) => boolean) | undefined;
+    expect(typeof validate).toBe("function");
+    if (!validate) return;
+
+    expect(validate({
+      state: "supported",
+      environment: "sandbox",
+      provider_product: "checkout",
+      evidence_digest: "a".repeat(64),
+      controlled_transaction_id: "controlled-refund",
+    })).toBe(true);
+    expect(validate({
+      state: "supported",
+      environment: "   ",
+      provider_product: "checkout",
+      evidence_digest: "a".repeat(64),
+      controlled_transaction_id: null,
+    })).toBe(false);
+    expect(validate({
+      state: "supported",
+      environment: "sandbox",
+      provider_product: "checkout",
+      evidence_digest: "A".repeat(64),
+      controlled_transaction_id: null,
+    })).toBe(false);
+  });
 });
