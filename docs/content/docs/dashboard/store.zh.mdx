@@ -88,8 +88,8 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 - 在 Milestone 1 中保持 HTTP Channel 停用。
 - 分别查看支付状态和履约状态。不要使用人工完成操作。
 - 一次生成 1 至 20 个单次兑换码。Monoize 显示明文时立即保存。
-- 在**支付渠道**标签页顶部打开**隐私记录**和**保留策略**。
-- 在支付宝、微信支付或 Stripe 的 Channel 行上选择盾形按钮，打开**渠道就绪状态**。HTTP Channel 行不显示该按钮。
+- 在**支付渠道**标签页顶部打开**隐私记录**和**数据保留**。
+- 在支付宝、微信支付或 Stripe 的 Channel 行上打开 **Governance**。选择**支付合规**、**商户能力**或**渠道就绪状态**。HTTP Channel 行不显示该控件。
 
 ## 查看隐私记录
 
@@ -118,22 +118,21 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 
 Monoize 设置复审人、批准时间和下次复审日期。Monoize 还固定三个表单不提供的保留期：回调原文 30 天、网络元数据 90 天、兑换审计 730 天。
 
-## 绑定渠道就绪状态
+## 绑定渠道治理
 
-在就绪配置引用一条当前已接受的隐私记录之前，Channel 保持不可用。
+在支付合规、商户能力和就绪配置完成之前，Channel 保持不可用。就绪配置必须引用一条当前已接受的隐私记录。
 
 ![商店支付渠道](/images/zh/store-governance.webp)
 
-在支付宝、微信支付或 Stripe 的 Channel 行上选择盾形按钮。选择一条**隐私记录**。仅在签名回调测试通过后打开**回调验证已通过**。设置支持的货币、结账动作、每种货币的金额范围，以及许可证、运行和可用性证据摘要，再设置 1 至 90 天的有效期。选择**保存**。
+在支付宝、微信支付或 Stripe 的 Channel 行上打开 **Governance**。
 
-没有任何隐私记录时，保存按钮保持禁用。先在**隐私记录**中新增一条记录。
+1. 选择**支付合规**。审阅当前商店支付条款。用管理员密码确认条款。Monoize 获取一个 scope 为 `compliance_confirm` 的五分钟重认证授权。
+2. 选择**商户能力**。为每项所需商户能力记录状态、环境、渠道商品、证据摘要和到期时间。
+3. 选择**渠道就绪状态**。选择一条**隐私记录**。仅在签名回调测试通过后打开**回调验证已通过**。设置支持的货币、结账动作、每种货币的金额范围，以及许可证、运行和可用性证据摘要，再设置 1 至 90 天的有效期。选择**保存**。
 
-每个 Channel 行显示配置状态和生效状态。不可用的 Channel 会列出原因代码，例如 `privacy_gate_pending`、`readiness_profile_missing`、`readiness_profile_expired`、`callback_verification_pending`、`compliance_missing` 和 `capability_<kind>_missing`。
+没有任何隐私记录时，就绪保存按钮保持禁用。先在**隐私记录**中新增一条记录。
 
-支付条款确认和商户能力记录没有对话框。使用以下管理员端点：
-
-- `PUT /api/dashboard/store/admin/payment-channels/{id}/compliance` 确认当前商店支付条款。它需要一个 scope 为 `compliance_confirm` 的五分钟重认证授权。
-- `PUT /api/dashboard/store/admin/payment-channels/{id}/capabilities/{capability}` 记录一项商户能力，包含状态、环境、渠道商品、证据摘要和到期时间。
+每个 Channel 行显示配置状态和生效状态。不可用的 Channel 会列出可读原因标签和原始原因代码，例如隐私记录待补、就绪配置缺失或过期、回调验证待完成、支付条款未确认，以及能力验证缺口。
 
 ## 了解数据保留
 
@@ -157,32 +156,32 @@ Monoize 每天 03:00 UTC 在 Store Primary 上运行一次有界的保留任务�
 
 支付数据、回调证据、备份、日志和加密密钥保留在隐私记录的允许区域内。每一次证据读取、导出、保留覆盖和法律保留操作都写入一条不可变访问审计，记录操作者、角色、范围、原因、时间和结果。
 
-## 手动运行保留
+## 手动执行保留任务
 
-打开**商店管理**。选择**支付渠道**标签页。选择**保留策略**。
+打开**商店管理**。选择**支付渠道**标签页。选择**数据保留**。
 
 ![商店保留](/images/zh/store-retention.webp)
 
-对话框显示连续失败次数、结账状态（**开放**或**已暂停**）、运行记录数和法律保留数。
+对话框显示连续失败次数、结账状态（**正常接单**或**已暂停**）、保留任务数和法律封存数。它还会说明：执行后将永久删除超出保留期限的记录。
 
-填写**当前密码**和**原因**。选择**运行保留**。Monoize 获取一个 scope 为 `retention_operation` 的五分钟重认证授权，并启动一次有界运行。
+填写**当前密码**和**原因**。任一字段为空时，执行按钮保持禁用。选择**执行保留任务**。Monoize 获取一个 scope 为 `retention_operation` 的五分钟重认证授权，并启动一次有界运行。
 
 已有运行进行中时，请求返回 HTTP `409` 和代码 `retention_run_active`。运行成功把连续失败次数重置为零。运行失败或被中断则递增该计数。
 
-## 应用法律保留
+## 应用法律封存
 
-法律保留在一个数据类中暂停删除指定的标识符。**保留策略**对话框显示法律保留数。它不创建法律保留。
+法律封存在一个数据类中暂停删除指定的标识符。**数据保留**对话框显示法律封存数。它不创建法律封存。
 
-使用 `POST /api/dashboard/store/admin/retention/legal-holds` 创建法律保留。该请求需要管理员会话、Store Primary，以及一个 scope 为 `legal_hold` 的五分钟重认证授权。JSON 请求体必须包含 `data_class`、`identifiers`、`reason`、`requesting_authority`、`requester_id`、`approver_role`、`expires_at` 和 `extends_hold_id`。
+使用 `POST /api/dashboard/store/admin/retention/legal-holds` 创建法律封存。该请求需要管理员会话、Store Primary，以及一个 scope 为 `legal_hold` 的五分钟重认证授权。JSON 请求体必须包含 `data_class`、`identifiers`、`reason`、`requesting_authority`、`requester_id`、`approver_role`、`expires_at` 和 `extends_hold_id`。
 
 - `data_class` 必须是五个保留数据类之一。
 - `identifiers` 必须包含 1 至 100 个互不相同的值。每个值最多 255 字节。
 - `approver_role` 必须是 `privacy` 或 `legal`。
 - `requester_id` 必须不同于已认证的管理员。该管理员是审批人。
 - `expires_at` 必须是未来的 RFC3339 时刻。
-- 初次审批时 `extends_hold_id` 必须为 `null`。延期必须引用数据类和标识符完全相同的法律保留，并使用更晚的到期时间。
+- 初次审批时 `extends_hold_id` 必须为 `null`。延期必须引用数据类和标识符完全相同的法律封存，并使用更晚的到期时间。
 
-法律保留在其开始时间不晚于评估时间、且评估时间早于其到期时间时生效。到期自动结束保留，无需任何操作。法律保留不恢复已删除的数据。任何操作都不更新、删除、重新激活或修改已存储的保留行。延期会插入一条新的法律保留和一条新的审批审计。
+法律封存在其开始时间不晚于评估时间、且评估时间早于其到期时间时生效。到期自动结束封存，无需任何操作。法律封存不恢复已删除的数据。任何操作都不更新、删除、重新激活或修改已存储的封存行。延期会插入一条新的法律封存和一条新的审批审计。
 
 ## 解除结账暂停
 
@@ -192,6 +191,6 @@ Monoize 每天 03:00 UTC 在 Store Primary 上运行一次有界的保留任务�
 
 应用重启保留该计数、告警和暂停状态。仅有一次成功运行不会解除暂停。
 
-打开**保留策略**解除暂停。仅在结账暂停时，对话框才显示**证据 SHA-256 摘要**字段。填写**当前密码**、**原因**和该摘要。选择**遏制告警**。
+打开**数据保留**解除暂停。仅在结账暂停时，对话框才显示**证据 SHA-256 摘要**字段。它还会说明：提交后将清除当前告警并立即恢复结账。填写**当前密码**、**原因**和该摘要。密码与原因为空、或摘要不是恰好 64 个字符时，处理按钮保持禁用。选择**处理告警**。
 
-Monoize 记录遏制、把告警标记为已遏制并恢复结账。遏制不改变连续失败次数。后续再次运行失败可以再次暂停结账。没有活跃且未遏制的告警时，遏制请求返回 HTTP `409` 和代码 `retention_containment_unavailable`。
+Monoize 记录处理结果、把告警标记为已处理并恢复结账。处理告警不改变连续失败次数。后续再次运行失败可以再次暂停结账。没有活跃且未处理的告警时，处理请求返回 HTTP `409` 和代码 `retention_containment_unavailable`。

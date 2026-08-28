@@ -88,8 +88,8 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 - 在 Milestone 1 中保持 HTTP Channel 停用。
 - 分別查看付款狀態和履約狀態。不要使用人工完成操作。
 - 一次產生 1 至 20 個單次兌換碼。Monoize 顯示明文時立即保存。
-- 在**付款管道**分頁頂部開啟**隱私記錄**和**保留策略**。
-- 在支付寶、微信支付或 Stripe 的 Channel 列上選取盾形按鈕，開啟**管道就緒狀態**。HTTP Channel 列不顯示該按鈕。
+- 在**付款管道**分頁頂部開啟**隱私記錄**和**資料保留**。
+- 在支付寶、微信支付或 Stripe 的 Channel 列上開啟 **Governance**。選擇**支付合規**、**商戶能力**或**管道就緒狀態**。HTTP Channel 列不顯示該控制項。
 
 ## 檢視隱私記錄
 
@@ -118,22 +118,21 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 
 Monoize 設定複審人、核准時間和下次複審日期。Monoize 也固定三個表單不提供的保留期：回呼原文 30 天、網路中繼資料 90 天、兌換稽核 730 天。
 
-## 綁定管道就緒狀態
+## 綁定管道治理
 
-在就緒設定引用一筆目前已接受的隱私記錄之前，Channel 保持不可用。
+在支付合規、商戶能力和就緒設定完成之前，Channel 保持不可用。就緒設定必須引用一筆目前已接受的隱私記錄。
 
 ![Store payment Channels](/images/en/store-governance.webp)
 
-在支付寶、微信支付或 Stripe 的 Channel 列上選取盾形按鈕。選取一筆**隱私記錄**。僅在簽章回呼測試通過後開啟**回呼驗證已通過**。設定支援的貨幣、結帳動作、每種貨幣的金額範圍，以及授權、執行和可用性證據摘要，再設定 1 至 90 天的有效期。選取**儲存**。
+在支付寶、微信支付或 Stripe 的 Channel 列上開啟 **Governance**。
 
-沒有任何隱私記錄時，儲存按鈕保持停用。先在**隱私記錄**中新增一筆記錄。
+1. 選取**支付合規**。審閱目前的 Store 付款條款。用管理員密碼確認條款。Monoize 取得一個 scope 為 `compliance_confirm` 的五分鐘重新驗證授權。
+2. 選取**商戶能力**。為每項所需商戶能力記錄狀態、環境、管道商品、證據摘要和到期時間。
+3. 選取**管道就緒狀態**。選取一筆**隱私記錄**。僅在簽章回呼測試通過後開啟**回呼驗證已通過**。設定支援的貨幣、結帳動作、每種貨幣的金額範圍，以及授權、執行和可用性證據摘要，再設定 1 至 90 天的有效期。選取**儲存**。
 
-每個 Channel 列顯示設定狀態和生效狀態。不可用的 Channel 會列出原因代碼，例如 `privacy_gate_pending`、`readiness_profile_missing`、`readiness_profile_expired`、`callback_verification_pending`、`compliance_missing` 和 `capability_<kind>_missing`。
+沒有任何隱私記錄時，就緒儲存按鈕保持停用。先在**隱私記錄**中新增一筆記錄。
 
-付款條款確認和商戶能力記錄沒有對話框。使用下列管理員端點：
-
-- `PUT /api/dashboard/store/admin/payment-channels/{id}/compliance` 確認目前的 Store 付款條款。它需要一個 scope 為 `compliance_confirm` 的五分鐘重新驗證授權。
-- `PUT /api/dashboard/store/admin/payment-channels/{id}/capabilities/{capability}` 記錄一項商戶能力，包含狀態、環境、管道商品、證據摘要和到期時間。
+每個 Channel 列顯示設定狀態和生效狀態。不可用的 Channel 會列出可讀原因標籤和原始原因代碼，例如隱私記錄待補、就緒設定缺失或過期、回呼驗證待完成、付款條款未確認，以及能力驗證缺口。
 
 ## 了解資料保留
 
@@ -157,32 +156,32 @@ Monoize 每天 03:00 UTC 在 Store Primary 上執行一次有界的保留工作�
 
 付款資料、回呼證據、備份、記錄檔和加密金鑰保留在隱私記錄的允許區域內。每一次證據讀取、匯出、保留覆寫和法律保留操作都寫入一筆不可變存取稽核，記錄操作者、角色、範圍、原因、時間和結果。
 
-## 手動執行保留
+## 手動執行保留工作
 
-開啟**商店管理**。選取**付款管道**分頁。選取**保留策略**。
+開啟**商店管理**。選取**付款管道**分頁。選取**資料保留**。
 
 ![Store retention](/images/en/store-retention.webp)
 
-對話框顯示連續失敗次數、結帳狀態（**開放**或**已暫停**）、執行紀錄數和法律保留數。
+對話框顯示連續失敗次數、結帳狀態（**正常接單**或**已暫停**）、保留工作數和法律封存數。它還會說明：執行後將永久刪除超出保留期限的記錄。
 
-填寫**目前密碼**和**原因**。選取**執行保留**。Monoize 取得一個 scope 為 `retention_operation` 的五分鐘重新驗證授權，並啟動一次有界執行。
+填寫**目前密碼**和**原因**。任一欄位為空時，執行按鈕保持停用。選取**執行保留工作**。Monoize 取得一個 scope 為 `retention_operation` 的五分鐘重新驗證授權，並啟動一次有界執行。
 
 已有執行進行中時，請求回傳 HTTP `409` 和代碼 `retention_run_active`。執行成功把連續失敗次數重設為零。執行失敗或被中斷則遞增該計數。
 
-## 套用法律保留
+## 套用法律封存
 
-法律保留在一個資料類別中暫停刪除指定的識別碼。**保留策略**對話框顯示法律保留數。它不建立法律保留。
+法律封存在一個資料類別中暫停刪除指定的識別碼。**資料保留**對話框顯示法律封存數。它不建立法律封存。
 
-使用 `POST /api/dashboard/store/admin/retention/legal-holds` 建立法律保留。該請求需要管理員工作階段、Store Primary，以及一個 scope 為 `legal_hold` 的五分鐘重新驗證授權。JSON 請求主體必須包含 `data_class`、`identifiers`、`reason`、`requesting_authority`、`requester_id`、`approver_role`、`expires_at` 和 `extends_hold_id`。
+使用 `POST /api/dashboard/store/admin/retention/legal-holds` 建立法律封存。該請求需要管理員工作階段、Store Primary，以及一個 scope 為 `legal_hold` 的五分鐘重新驗證授權。JSON 請求主體必須包含 `data_class`、`identifiers`、`reason`、`requesting_authority`、`requester_id`、`approver_role`、`expires_at` 和 `extends_hold_id`。
 
 - `data_class` 必須是五個保留資料類別之一。
 - `identifiers` 必須包含 1 至 100 個互不相同的值。每個值最多 255 位元組。
 - `approver_role` 必須是 `privacy` 或 `legal`。
 - `requester_id` 必須不同於已驗證的管理員。該管理員是核准人。
 - `expires_at` 必須是未來的 RFC3339 時刻。
-- 初次核准時 `extends_hold_id` 必須為 `null`。延期必須引用資料類別和識別碼完全相同的法律保留，並使用更晚的到期時間。
+- 初次核准時 `extends_hold_id` 必須為 `null`。延期必須引用資料類別和識別碼完全相同的法律封存，並使用更晚的到期時間。
 
-法律保留在其開始時間不晚於評估時間、且評估時間早於其到期時間時生效。到期自動結束保留，不需要任何操作。法律保留不還原已刪除的資料。任何操作都不更新、刪除、重新啟用或修改已儲存的保留列。延期會插入一筆新的法律保留和一筆新的核准稽核。
+法律封存在其開始時間不晚於評估時間、且評估時間早於其到期時間時生效。到期自動結束封存，不需要任何操作。法律封存不還原已刪除的資料。任何操作都不更新、刪除、重新啟用或修改已儲存的封存列。延期會插入一筆新的法律封存和一筆新的核准稽核。
 
 ## 解除結帳暫停
 
@@ -192,6 +191,6 @@ Monoize 每天 03:00 UTC 在 Store Primary 上執行一次有界的保留工作�
 
 應用程式重新啟動會保留該計數、警示和暫停狀態。僅有一次成功執行不會解除暫停。
 
-開啟**保留策略**解除暫停。僅在結帳暫停時，對話框才顯示**證據 SHA-256 摘要**欄位。填寫**目前密碼**、**原因**和該摘要。選取**遏制警示**。
+開啟**資料保留**解除暫停。僅在結帳暫停時，對話框才顯示**證據 SHA-256 摘要**欄位。它還會說明：送出後將清除目前警示並立即恢復結帳。填寫**目前密碼**、**原因**和該摘要。密碼與原因為空、或摘要不是恰好 64 個字元時，處理按鈕保持停用。選取**處理警示**。
 
-Monoize 記錄遏制、把警示標記為已遏制並恢復結帳。遏制不改變連續失敗次數。後續再次執行失敗可以再次暫停結帳。沒有作用中且未遏制的警示時，遏制請求回傳 HTTP `409` 和代碼 `retention_containment_unavailable`。
+Monoize 記錄處理結果、把警示標記為已處理並恢復結帳。處理警示不改變連續失敗次數。後續再次執行失敗可以再次暫停結帳。沒有作用中且未處理的警示時，處理請求回傳 HTTP `409` 和代碼 `retention_containment_unavailable`。

@@ -88,8 +88,8 @@ Administrators open `/dashboard/store-admin`. Use its four tabs to manage produc
 - Keep an HTTP Channel disabled in Milestone 1.
 - Review payment state and fulfillment state separately. Do not use a manual completion action.
 - Generate 1 through 20 single-use codes. Copy the plaintext codes when Monoize shows them.
-- Open **Privacy records** and **Retention** from the **Payment Channels** tab header.
-- Select the shield action on an Alipay, WeChat Pay, or Stripe Channel row to open **Channel readiness**. An HTTP Channel row does not show that action.
+- Open **Privacy records** and **Data retention** from the **Payment Channels** tab header.
+- Open **Governance** on an Alipay, WeChat Pay, or Stripe Channel row. Choose **Payment compliance**, **Merchant capabilities**, or **Channel readiness**. An HTTP Channel row does not show that control.
 
 ## Review privacy records
 
@@ -118,22 +118,21 @@ The form opens with `CN` as the jurisdiction and the allowed region, 2557 financ
 
 Monoize sets the reviewer, the approval time, and the next review date. Monoize also fixes three retention periods that the form does not expose: callback bodies 30 days, network metadata 90 days, and redemption audits 730 days.
 
-## Bind Channel readiness
+## Bind Channel governance
 
-A Channel stays unavailable until its readiness profile references a current accepted privacy record.
+A Channel stays unavailable until compliance, merchant capabilities, and readiness are complete. Readiness must reference a current accepted privacy record.
 
 ![Store payment Channels](/images/en/store-governance.webp)
 
-Select the shield action on an Alipay, WeChat Pay, or Stripe Channel row. Select a **Privacy record**. Set **Callback verification passed** only after the signed callback test passes. Set the supported currencies, the checkout actions, the amount range for each currency, the license, runtime, and availability evidence digests, and a validity period of 1 through 90 days. Select **Save**.
+Open **Governance** on an Alipay, WeChat Pay, or Stripe Channel row.
 
-The save action stays disabled while no privacy record exists. Add a record in **Privacy records** first.
+1. Select **Payment compliance**. Review the current Store payment terms. Confirm the terms with your Admin password. Monoize obtains a five-minute reauthentication grant with scope `compliance_confirm`.
+2. Select **Merchant capabilities**. Record each required merchant capability with its state, environment, provider product, evidence digest, and expiry.
+3. Select **Channel readiness**. Select a **Privacy record**. Set **Callback verification passed** only after the signed callback test passes. Set the supported currencies, the checkout actions, the amount range for each currency, the license, runtime, and availability evidence digests, and a validity period of 1 through 90 days. Select **Save**.
 
-Each Channel row shows a configured state and an effective state. An unavailable Channel lists its reason codes, such as `privacy_gate_pending`, `readiness_profile_missing`, `readiness_profile_expired`, `callback_verification_pending`, `compliance_missing`, and `capability_<kind>_missing`.
+The readiness save action stays disabled while no privacy record exists. Add a record in **Privacy records** first.
 
-Payment terms confirmation and merchant capability records have no dialog. Use these Admin endpoints:
-
-- `PUT /api/dashboard/store/admin/payment-channels/{id}/compliance` confirms the current Store payment terms. It requires a five-minute reauthentication grant with scope `compliance_confirm`.
-- `PUT /api/dashboard/store/admin/payment-channels/{id}/capabilities/{capability}` records one merchant capability with a state, an environment, a provider product, an evidence digest, and an expiry.
+Each Channel row shows a configured state and an effective state. An unavailable Channel lists a localized reason label and the raw reason code, such as privacy record pending, readiness profile missing or expired, callback verification pending, payment terms not confirmed, and capability verification gaps.
 
 ## Understand data retention
 
@@ -159,19 +158,19 @@ Payment data, callback evidence, backups, logs, and encryption keys stay inside 
 
 ## Run retention manually
 
-Open **Store Management**. Select the **Payment Channels** tab. Select **Retention**.
+Open **Store Management**. Select the **Payment Channels** tab. Select **Data retention**.
 
 ![Store retention](/images/en/store-retention.webp)
 
-The dialog shows the consecutive failure count, the checkout state (**Open** or **Paused**), the retention run count, and the legal hold count.
+The dialog shows the consecutive failure count, the checkout status (**Accepting orders** or **Paused**), the retention run count, and the legal hold count. It also states that a retention run permanently deletes records past their retention period.
 
-Enter your **Current password** and a **Reason**. Select **Run retention**. Monoize obtains a five-minute reauthentication grant with scope `retention_operation` and starts one bounded run.
+Enter your **Current password** and a **Reason**. The run action stays disabled while either field is empty. Select **Run retention**. Monoize obtains a five-minute reauthentication grant with scope `retention_operation` and starts one bounded run.
 
 A run that is already active returns HTTP `409` with code `retention_run_active`. A succeeded run sets the consecutive failure count to zero. A failed or interrupted run increments that count.
 
 ## Apply legal holds
 
-A legal hold suspends deletion for listed identifiers in one data class. The **Retention** dialog shows the hold count. It does not create holds.
+A legal hold suspends deletion for listed identifiers in one data class. The **Data retention** dialog shows the hold count. It does not create holds.
 
 Create a hold with `POST /api/dashboard/store/admin/retention/legal-holds`. The request requires an Admin session, a Store Primary, and a five-minute reauthentication grant with scope `legal_hold`. The JSON body must contain `data_class`, `identifiers`, `reason`, `requesting_authority`, `requester_id`, `approver_role`, `expires_at`, and `extends_hold_id`.
 
@@ -192,6 +191,6 @@ While checkout is paused, a new order or a new payment attempt returns HTTP `503
 
 An application restart preserves the counter, the alert, and the pause. A succeeded run alone does not clear the pause.
 
-Open **Retention** to clear the pause. The dialog shows the **Evidence SHA-256 digest** field only while checkout is paused. Enter your **Current password**, a **Reason**, and the digest. Select **Contain alert**.
+Open **Data retention** to clear the pause. The dialog shows the **Evidence SHA-256 digest** field only while checkout is paused. It also states that resolving the alert clears it and resumes checkout immediately. Enter your **Current password**, a **Reason**, and the digest. The resolve action stays disabled until the password and reason are nonempty and the digest has exactly 64 characters. Select **Resolve alert**.
 
-Monoize records the containment, marks the alert contained, and resumes checkout. Containment does not change the consecutive failure count. A later failed run can pause checkout again. A containment request with no active uncontained alert returns HTTP `409` with code `retention_containment_unavailable`.
+Monoize records the resolution, marks the alert contained, and resumes checkout. Resolving the alert does not change the consecutive failure count. A later failed run can pause checkout again. A resolve request with no active uncontained alert returns HTTP `409` with code `retention_containment_unavailable`.
