@@ -60,6 +60,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260828_000055_store_refund_reauth::Migration),
             Box::new(m20260828_000056_store_reprocess_reauth::Migration),
             Box::new(m20260828_000057_store_refund_query_retries::Migration),
+            Box::new(m20260828_000058_store_retention_runtime::Migration),
         ]
     }
 }
@@ -249,6 +250,7 @@ mod m20260828_000054_store_channel_readiness;
 mod m20260828_000055_store_refund_reauth;
 mod m20260828_000056_store_reprocess_reauth;
 mod m20260828_000057_store_refund_query_retries;
+mod m20260828_000058_store_retention_runtime;
 
 #[cfg(test)]
 mod tests {
@@ -289,13 +291,10 @@ mod tests {
         )
         .expect("strictly newer history is accepted");
 
-        assert_eq!(
-            decision,
-            StartupMigrationDecision::AcceptNewerApplied {
-                newest_embedded: "m002_current".to_string(),
-                newer_applied: versions(&["m003_future", "m004_future"]),
-            }
-        );
+        assert_eq!(decision, StartupMigrationDecision::AcceptNewerApplied {
+            newest_embedded: "m002_current".to_string(),
+            newer_applied: versions(&["m003_future", "m004_future"]),
+        });
     }
 
     #[test]

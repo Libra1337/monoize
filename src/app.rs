@@ -2246,6 +2246,18 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::create_store_privacy_record_admin),
         )
         .route(
+            "/dashboard/store/admin/retention/runs",
+            post(crate::dashboard_handlers::run_store_retention_admin),
+        )
+        .route(
+            "/dashboard/store/admin/retention/containment",
+            post(crate::dashboard_handlers::contain_store_retention_admin),
+        )
+        .route(
+            "/dashboard/store/admin/retention/legal-holds",
+            post(crate::dashboard_handlers::create_store_legal_hold_admin),
+        )
+        .route(
             "/dashboard/store/admin/payment-channels/{id}/readiness",
             put(crate::dashboard_handlers::put_store_channel_readiness_admin),
         )
@@ -2361,6 +2373,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/store/admin/privacy-records",
             get(crate::dashboard_handlers::list_store_privacy_records_admin),
+        )
+        .route(
+            "/dashboard/store/admin/retention",
+            get(crate::dashboard_handlers::get_store_retention_admin),
         )
         .route(
             "/dashboard/store/admin/payment-channels/{id}/readiness",

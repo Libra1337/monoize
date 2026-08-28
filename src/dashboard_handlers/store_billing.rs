@@ -15,6 +15,10 @@ use crate::store_billing::redemption::{
     RedemptionAccessAction, RedemptionAuditContext, RevealRedemptionInput,
 };
 use crate::store_billing::refund_operations::{RefundOperations, RefundOperationsError};
+use crate::store_billing::retention::{
+    CreateStoreLegalHoldInput, CreateStoreRetentionContainmentInput, RetentionRunActor,
+    RunStoreRetentionInput, StoreRetention, StoreRetentionError,
+};
 use crate::store_billing::{
     ConfirmStoreComplianceInput, CreatePaymentChannelInput, CreateProductInput,
     CreateStorePrivacyRecordInput, Currency, GenerateRedemptionCodesInput, MerchantCapabilityKind,
@@ -210,6 +214,31 @@ async fn require_redemption_access(
         .map_err(map_reauth_error)
 }
 
+async fn require_store_reauth_scope(
+    headers: &HeaderMap,
+    state: &AppState,
+    admin_id: &str,
+    scope: &str,
+) -> AppResult<()> {
+    let session_token = extract_session_token(headers).ok_or_else(|| {
+        AppError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "missing dashboard session",
+        )
+    })?;
+    let grant_token = headers
+        .get("X-Store-Reauth-Token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| map_reauth_error(ReauthError::InvalidGrant))?;
+    ReauthStore::new(state.db_pool.clone())
+        .verify(admin_id, &session_token, grant_token, scope)
+        .await
+        .map_err(map_reauth_error)
+}
+
 fn redemption_audit_context(headers: &HeaderMap, admin_id: &str) -> RedemptionAuditContext {
     RedemptionAuditContext {
         admin_user_id: admin_id.to_string(),
@@ -311,6 +340,37 @@ fn map_reauth_error(error: ReauthError) -> AppError {
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
             "reauthentication failed",
+        )
+        .with_internal_message(detail),
+    }
+}
+
+fn map_retention_error(error: StoreRetentionError) -> AppError {
+    match error {
+        StoreRetentionError::InvalidInput => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_retention_request",
+            "retention request is invalid",
+        ),
+        StoreRetentionError::RunActive => AppError::new(
+            StatusCode::CONFLICT,
+            "retention_run_active",
+            "a retention run is already active",
+        ),
+        StoreRetentionError::ContainmentUnavailable => AppError::new(
+            StatusCode::CONFLICT,
+            "retention_containment_unavailable",
+            "no active retention alert can be contained",
+        ),
+        StoreRetentionError::NotFound => AppError::new(
+            StatusCode::NOT_FOUND,
+            "retention_record_not_found",
+            "retention record was not found",
+        ),
+        StoreRetentionError::Storage(detail) => AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "retention operation failed",
         )
         .with_internal_message(detail),
     }
@@ -493,6 +553,11 @@ fn map_payment_order_error(error: PaymentOrderError) -> AppError {
             StatusCode::LOCKED,
             "payment_hold",
             "payment hold blocks Store purchases",
+        ),
+        PaymentOrderError::RetentionPaused => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_retention_paused",
+            "Store checkout is paused by retention failure",
         ),
         PaymentOrderError::ActiveAttemptExists => (
             StatusCode::CONFLICT,
@@ -1125,6 +1190,79 @@ pub async fn create_store_privacy_record_admin(
         .await
         .map_err(map_store_error)?;
     Ok((StatusCode::CREATED, no_store_headers(), Json(record)))
+}
+
+pub async fn get_store_retention_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let overview = StoreRetention::new(state.db_pool.clone(), "admin-read")
+        .overview()
+        .await
+        .map_err(map_retention_error)?;
+    Ok((no_store_headers(), Json(overview)))
+}
+
+pub async fn run_store_retention_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<RunStoreRetentionInput>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    let input = parse_store_json(body)?;
+    require_store_reauth_scope(&headers, &state, &admin.id, "retention_operation").await?;
+    let owner_id = state
+        .store_primary_lease
+        .as_ref()
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "store_primary_unavailable",
+                "Store Primary is unavailable",
+            )
+        })?
+        .owner_id()
+        .to_string();
+    let run = StoreRetention::new(state.db_pool.clone(), owner_id)
+        .run_now(RetentionRunActor {
+            actor_id: admin.id,
+            actor_role: "admin".to_string(),
+            reason: input.reason,
+        })
+        .await
+        .map_err(map_retention_error)?;
+    Ok((StatusCode::CREATED, no_store_headers(), Json(run)))
+}
+
+pub async fn contain_store_retention_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<CreateStoreRetentionContainmentInput>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    let input = parse_store_json(body)?;
+    require_store_reauth_scope(&headers, &state, &admin.id, "retention_operation").await?;
+    let containment = StoreRetention::new(state.db_pool.clone(), "admin-containment")
+        .contain(input, &admin.id, Utc::now())
+        .await
+        .map_err(map_retention_error)?;
+    Ok((StatusCode::CREATED, no_store_headers(), Json(containment)))
+}
+
+pub async fn create_store_legal_hold_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<CreateStoreLegalHoldInput>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin(&headers, &state).await?;
+    let input = parse_store_json(body)?;
+    require_store_reauth_scope(&headers, &state, &admin.id, "legal_hold").await?;
+    let hold = StoreRetention::new(state.db_pool.clone(), "admin-legal-hold")
+        .create_legal_hold(input, &admin.id, Utc::now())
+        .await
+        .map_err(map_retention_error)?;
+    Ok((StatusCode::CREATED, no_store_headers(), Json(hold)))
 }
 
 pub async fn get_store_channel_readiness_admin(

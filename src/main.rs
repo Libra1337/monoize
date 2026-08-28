@@ -22,6 +22,13 @@ async fn run() -> Result<(), AppError> {
     let state = monoize::app::load_state().await?;
     let is_replica = state.node.is_replica();
     state.user_store.spawn_background_tasks_for_role(is_replica);
+    if let Some(lease) = state.store_primary_lease.clone() {
+        monoize::store_billing::retention::spawn_daily_retention_job(
+            state.db_pool.clone(),
+            lease,
+            state.background_shutdown.clone(),
+        );
+    }
 
     if !is_replica {
         // PRP11: retention/pending-log deletion is a primary responsibility.

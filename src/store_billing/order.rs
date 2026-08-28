@@ -10,6 +10,7 @@ use super::models::{CheckoutActionKind, StoreSettings};
 use super::money::{Currency, ExchangeRateRational, convert_minor_rational, parse_minor};
 use super::payment::CheckoutAction;
 use super::quota_gate::QuotaGateStore;
+use super::retention::retention_checkout_paused;
 use super::state_machine::{FulfillmentState, PaymentState};
 use super::store::StoreBillingStore;
 use crate::db::DbPool;
@@ -145,6 +146,8 @@ pub enum PaymentOrderError {
     OpenOrderLimit,
     #[error("payment hold blocks Store purchases")]
     PaymentHold,
+    #[error("Store checkout is paused by retention failure")]
+    RetentionPaused,
     #[error("an active payment attempt already exists")]
     ActiveAttemptExists,
     #[error("provider state must be queried before another payment attempt")]
@@ -211,6 +214,12 @@ impl PaymentOrderStore {
                 return Ok(existing.0);
             }
             return Err(PaymentOrderError::IdempotencyConflict);
+        }
+        if retention_checkout_paused(&self.db, &*tx)
+            .await
+            .map_err(storage)?
+        {
+            return Err(PaymentOrderError::RetentionPaused);
         }
         if !lock_channel(&self.db, &*tx, &input.payment_channel_id)
             .await
@@ -671,6 +680,12 @@ impl PaymentOrderStore {
                 replayed: true,
             });
         }
+        if retention_checkout_paused(&self.db, &*tx)
+            .await
+            .map_err(storage)?
+        {
+            return Err(PaymentOrderError::RetentionPaused);
+        }
         if !lock_channel(&self.db, &*tx, &order.payment_channel_id)
             .await
             .map_err(storage)?
@@ -1087,10 +1102,11 @@ async fn query_attempt_by_id<C: ConnectionTrait>(
     id: &str,
 ) -> Result<Option<PaymentAttempt>, PaymentOrderError> {
     connection
-        .query_one(db.stmt(
-            &format!("{} WHERE id = $1", attempt_select()),
-            vec![id.into()],
-        ))
+        .query_one(
+            db.stmt(&format!("{} WHERE id = $1", attempt_select()), vec![
+                id.into(),
+            ]),
+        )
         .await
         .map_err(storage)?
         .map(payment_attempt_from_row)

@@ -136,7 +136,13 @@ impl ReauthStore {
 fn validate_scope(scope: &str) -> Result<(), ReauthError> {
     if matches!(
         scope,
-        "credential_update" | "redemption_access" | "compliance_confirm" | "refund" | "reprocess"
+        "credential_update"
+            | "redemption_access"
+            | "compliance_confirm"
+            | "refund"
+            | "reprocess"
+            | "retention_operation"
+            | "legal_hold"
     ) {
         Ok(())
     } else {
