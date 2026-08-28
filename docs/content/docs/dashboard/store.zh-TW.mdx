@@ -88,3 +88,53 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 - 在 Milestone 1 中保持 HTTP Channel 停用。
 - 分別查看付款狀態和履約狀態。不要使用人工完成操作。
 - 一次產生 1 至 20 個單次兌換碼。Monoize 顯示明文時立即保存。
+- 在付款 Channel 分頁開啟**隱私記錄**和**保留策略**。
+
+## 隱私與資料治理
+
+正式環境 checkout 和回呼需要目前已接受的 Store 隱私記錄。複審間隔不得超過 365 天。
+
+在 `/dashboard/store-admin` 開啟**商店管理**。選擇**付款 Channel**分頁。選取**隱私記錄**。
+
+檢視現有記錄。每筆記錄顯示政策版本、司法轄區、允許區域、接受狀態和下次複審日期。
+
+核准策略更新後建立新記錄。輸入政策版本、司法轄區、允許區域、法律依據和證據 SHA-256 摘要。設定財務記錄保留天數、過期授權保留小時數和複審間隔。記錄建立後不可修改。
+
+透過該 Channel 列的 **Readiness** 將隱私記錄關聯到 Channel。readiness profile 未引用目前已接受記錄時，Channel 保持不可用。
+
+以下保留週期適用於每筆記錄：
+
+- 回呼原文：30 天
+- 網路元資料（source IP 和 User-Agent）：90 天
+- 兌換 reveal、copy 和 export 稽核：730 天
+- 過期 reauthentication grant 雜湊：過期後 24 小時內
+
+支付資料、回呼證據、備份、日誌和加密金鑰必須保留在隱私記錄的允許區域內。
+
+每次證據讀取、匯出、保留覆寫和法律保留操作都會寫入不可變的存取稽核。
+
+## 資料保留與刪除
+
+Monoize 每天在 Store Primary 的 03:00 UTC 執行有界保留任務。Replica 不執行此任務。
+
+開啟**商店管理**。選擇**付款 Channel**分頁。選取**保留策略**。
+
+對話方塊顯示連續失敗次數、結帳暫停狀態、執行紀錄和法律保留。
+
+需要立即清理時手動執行保留。輸入 Admin 密碼和原因。Monoize 依資料類別分批刪除或清除過期資料。
+
+每次執行每個資料類別最多處理 500 筆未 hold 的根記錄。刪除財務根記錄時也會刪除關聯子記錄。有效 entitlement 不會被刪除。
+
+執行成功後連續失敗次數重設為零。
+
+## 法律保留與刪除失敗暫停
+
+法律保留會暫停指定資料類別中特定識別碼的刪除。透過 `POST /api/dashboard/store/admin/retention/legal-holds` 建立保留。請求需要 scope 為 `legal_hold` 的五分鐘 reauthentication grant。
+
+每個保留需要不同 approver、原因、請求機構、強制到期時間，以及 1 至 100 個識別碼。資料類別必須是以下之一：`raw_callback_bodies`、`network_metadata`、`financial_records`、`redemption_audits` 或 `expired_reauth_grants`。到期後保留自動停止。保留不會還原已刪除資料。延長保留需要建立新的審批記錄。
+
+**保留策略**對話方塊列出目前和過去的法律保留，但不建立保留。
+
+三次連續保留執行失敗後，Monoize 建立嚴重警示並暫停新結帳。現有訂單和 callback ingestion 繼續運作。新訂單和 payment attempts 回傳 HTTP `503`，code 為 `store_retention_paused`。
+
+透過遏制清除結帳暫停。結帳暫停時開啟**保留策略**對話方塊。輸入 Admin 密碼、原因和證據 SHA-256 摘要。選取**遏制警示**。Monoize 記錄遏制、標記警示為已遏制，並恢復結帳。後續執行再次失敗時結帳可能再次暫停。

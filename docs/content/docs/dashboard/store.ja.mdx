@@ -88,3 +88,53 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 - Milestone 1 では HTTP Channel を無効のままにします。
 - 支払い状態と履行状態を個別に確認します。手動完了操作は使用しません。
 - 1 回に 1 から 20 個の単回使用コードを生成します。Monoize が平文コードを表示したときに保存します。
+- **Payment Channels** タブから **Privacy records** と **Retention** を開きます。
+
+## プライバシーとデータガバナンス
+
+本番 checkout と callback には、現在 accepted な Store privacy record が必要です。レビュー間隔は 365 日を超えてはなりません。
+
+`/dashboard/store-admin` で **Store Management** を開きます。**Payment Channels** タブを選択します。**Privacy records** を選択します。
+
+既存レコードを確認します。各レコードは政策バージョン、司法管轄、許可リージョン、accepted 状態、次回レビュー日を表示します。
+
+ポリシー更新を承認したら新規レコードを作成します。政策バージョン、司法管轄、許可リージョン、法的根拠、evidence SHA-256 digest を入力します。財務記録保持日数、失効 grant 保持時間、レビュー間隔を設定します。作成後のレコードは変更できません。
+
+Channel 行の **Readiness** から privacy record を Channel にリンクします。readiness profile が現在 accepted なレコードを参照しない Channel は利用不可のままです。
+
+次の保持期間はすべてのレコードに適用されます。
+
+- コールバック原文: 30 日
+- ネットワークメタデータ (source IP と User-Agent): 90 日
+- 引き換え reveal、copy、export 監査: 730 日
+- 失効 reauthentication grant ハッシュ: 失効後 24 時間以内
+
+Payment data、callback evidence、backups、logs、encryption keys は privacy record の許可リージョン内に保持する必要があります。
+
+evidence read、export、retention override、legal-hold operation のたびに、不変 access audit が記録されます。
+
+## データ保持と削除
+
+Monoize は Store Primary 上で毎日 03:00 UTC に有界 retention job を実行します。Replica ではこの job は実行しません。
+
+**Store Management** を開きます。**Payment Channels** タブを選択します。**Retention** を選択します。
+
+ダイアログは連続失敗回数、checkout 停止状態、実行履歴、法的保持を表示します。
+
+即時クリーンアップが必要な場合は retention を手動実行します。Admin パスワードと理由を入力します。Monoize は data class ごとに期限切れデータを有界バッチで削除またはクリアします。
+
+1 回の run では、各 data class につき held でない root records を最大 500 件処理します。financial root 削除時は関連 child rows も削除します。active entitlements は削除されません。
+
+run が成功すると連続失敗回数は 0 にリセットされます。
+
+## 法的保持と削除失敗時の停止
+
+法的保持は、1 つの data class 内の特定 identifiers に対する deletion を一時停止します。`POST /api/dashboard/store/admin/retention/legal-holds` で hold を作成します。リクエストには scope `legal_hold` の 5 分間 reauthentication grant が必要です。
+
+各 hold には別 approver、理由、要求機関、強制 expiry、1 から 100 個の identifiers が必要です。data class は `raw_callback_bodies`、`network_metadata`、`financial_records`、`redemption_audits`、`expired_reauth_grants` のいずれかです。expiry 到達後、hold は自動的に停止します。hold は削除済みデータを復元しません。延長には新しい approval record が必要です。
+
+**Retention** ダイアログは active および past holds を一覧表示します。hold の作成は行いません。
+
+retention run が 3 回連続で失敗すると、Monoize は critical alert を作成し、新規 checkout を停止します。既存 orders と callback ingestion は継続します。新規 orders と payment attempts は HTTP `503`、code `store_retention_paused` を返します。
+
+containment で checkout 停止を解除します。checkout 停止中に **Retention** ダイアログを開きます。Admin パスワード、理由、evidence SHA-256 digest を入力します。**Contain** を選択します。Monoize は containment を記録し、alert を contained にして checkout を再開します。その後 run が再び失敗すると checkout は再び停止される場合があります。

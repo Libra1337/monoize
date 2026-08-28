@@ -88,3 +88,53 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 - 在 Milestone 1 中保持 HTTP Channel 停用。
 - 分别查看支付状态和履约状态。不要使用人工完成操作。
 - 一次生成 1 至 20 个单次兑换码。Monoize 显示明文时立即保存。
+- 在支付 Channel 标签页打开**隐私记录**和**保留策略**。
+
+## 隐私与数据治理
+
+生产环境 checkout 和回调需要当前已接受的 Store 隐私记录。复审间隔不得超过 365 天。
+
+在 `/dashboard/store-admin` 打开**商店管理**。选择**支付 Channel**标签页。选择**隐私记录**。
+
+查看现有记录。每条记录显示政策版本、司法辖区、允许区域、接受状态和下次复审日期。
+
+批准策略更新后创建新记录。输入政策版本、司法辖区、允许区域、法律依据和证据 SHA-256 摘要。设置财务记录保留天数、过期授权保留小时数和复审间隔。记录创建后不可修改。
+
+通过该 Channel 行的 **Readiness** 将隐私记录关联到 Channel。readiness profile 未引用当前已接受记录时，Channel 保持不可用。
+
+以下保留周期适用于每条记录：
+
+- 回调原文：30 天
+- 网络元数据（source IP 和 User-Agent）：90 天
+- 兑换 reveal、copy 和 export 审计：730 天
+- 过期 reauthentication grant 哈希：过期后 24 小时内
+
+支付数据、回调证据、备份、日志和加密密钥必须保留在隐私记录的允许区域内。
+
+每次证据读取、导出、保留覆盖和法律保留操作都会写入不可变的访问审计。
+
+## 数据保留与删除
+
+Monoize 每天在 Store Primary 的 03:00 UTC 运行有界保留任务。Replica 不运行此任务。
+
+打开**商店管理**。选择**支付 Channel**标签页。选择**保留策略**。
+
+对话框显示连续失败次数、结账暂停状态、运行记录和法律保留。
+
+需要立即清理时手动运行保留。输入 Admin 密码和原因。Monoize 按数据类别分批删除或清除过期数据。
+
+每次运行每个数据类别最多处理 500 条未 hold 的根记录。删除财务根记录时也会删除关联子记录。有效 entitlement 不会被删除。
+
+运行成功后连续失败次数重置为零。
+
+## 法律保留与删除失败暂停
+
+法律保留会暂停指定数据类别中特定标识符的删除。通过 `POST /api/dashboard/store/admin/retention/legal-holds` 创建保留。请求需要 scope 为 `legal_hold` 的五分钟 reauthentication grant。
+
+每个保留需要不同 approver、原因、请求机构、强制到期时间，以及 1 至 100 个标识符。数据类别必须是以下之一：`raw_callback_bodies`、`network_metadata`、`financial_records`、`redemption_audits` 或 `expired_reauth_grants`。到期后保留自动停止。保留不会恢复已删除数据。延长保留需要创建新的审批记录。
+
+**保留策略**对话框列出当前和过去的法律保留，但不创建保留。
+
+三次连续保留运行失败后，Monoize 创建严重告警并暂停新结账。现有订单和回调 ingestion 继续运行。新订单和 payment attempts 返回 HTTP `503`，code 为 `store_retention_paused`。
+
+通过遏制清除结账暂停。结账暂停时打开**保留策略**对话框。输入 Admin 密码、原因和证据 SHA-256 摘要。选择**遏制告警**。Monoize 记录遏制、标记告警为已遏制，并恢复结账。后续运行再次失败时结账可能再次暂停。
