@@ -9,6 +9,8 @@ use super::callbacks::{
 };
 use super::operations::{PaymentOperationsError, PaymentQueryOperations, PaymentQueryOutcome};
 use super::payment::ProviderPaymentState;
+use super::recovery::RecoveryStore;
+use super::refund_operations::{RefundOperations, RefundOperationsError, RefundQueryProjection};
 use crate::db::DbPool;
 
 const LEASE_NAME: &str = "store_reconciler";
@@ -24,6 +26,9 @@ pub struct ReconciliationOutcome {
     pub payments_applied: usize,
     pub attempts_expired: usize,
     pub query_failures: usize,
+    pub refund_queries: usize,
+    pub refunds_terminal: usize,
+    pub refund_query_failures: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -40,6 +45,14 @@ pub enum ReconciliationError {
 pub struct StoreReconciler {
     db: DbPool,
     payment_queries: Option<PaymentQueryOperations>,
+    refund_operations: Option<RefundOperations>,
+}
+
+#[derive(Debug, Clone)]
+struct RefundReconciliationCandidate {
+    refund_id: String,
+    order_id: String,
+    pending_at: DateTime<Utc>,
 }
 
 impl StoreReconciler {
@@ -47,11 +60,17 @@ impl StoreReconciler {
         Self {
             db,
             payment_queries: None,
+            refund_operations: None,
         }
     }
 
     pub fn with_payment_queries(mut self, payment_queries: PaymentQueryOperations) -> Self {
         self.payment_queries = Some(payment_queries);
+        self
+    }
+
+    pub fn with_refund_operations(mut self, refund_operations: RefundOperations) -> Self {
+        self.refund_operations = Some(refund_operations);
         self
     }
 
@@ -68,17 +87,34 @@ impl StoreReconciler {
         } else {
             Vec::new()
         };
+        let refund_candidates = if self.refund_operations.is_some() {
+            self.refund_query_candidates(now).await?
+        } else {
+            Vec::new()
+        };
+        let refund_alert_candidates = self.refund_alert_candidates(now).await?;
         let candidates = self.fulfillment_candidates(now).await?;
         let mut outcome = ReconciliationOutcome {
-            scanned: payment_candidates.len() + candidates.len(),
+            scanned: payment_candidates.len()
+                + refund_candidates.len()
+                + refund_alert_candidates.len()
+                + candidates.len(),
             fulfilled: 0,
             failed: 0,
             payment_queries: 0,
             payments_applied: 0,
             attempts_expired: 0,
             query_failures: 0,
+            refund_queries: 0,
+            refunds_terminal: 0,
+            refund_query_failures: 0,
         };
         let callbacks = PaymentCallbackStore::new(self.db.clone());
+        for candidate in refund_alert_candidates {
+            let fence_now = reconciliation_now(now, started_at)?;
+            self.open_refund_pending_case_fenced(&candidate, owner_id, epoch, fence_now)
+                .await?;
+        }
         if let Some(payment_queries) = &self.payment_queries {
             for attempt_id in payment_candidates {
                 outcome.payment_queries += 1;
@@ -238,6 +274,59 @@ impl StoreReconciler {
                 }
             }
         }
+        if let Some(refund_operations) = &self.refund_operations {
+            for candidate in refund_candidates {
+                outcome.refund_queries += 1;
+                let result = refund_operations
+                    .query_provider_with_context(&candidate.order_id, &candidate.refund_id)
+                    .await;
+                let fence_now = reconciliation_now(now, started_at)?;
+                match result {
+                    Ok(query) => match query.projection {
+                        projection @ (RefundQueryProjection::AlreadyTerminal
+                        | RefundQueryProjection::Succeeded { .. }
+                        | RefundQueryProjection::Failed { .. }) => {
+                            if self
+                                .complete_refund_query_fenced(
+                                    &candidate, projection, owner_id, epoch, fence_now,
+                                )
+                                .await?
+                            {
+                                outcome.refunds_terminal += 1;
+                            }
+                        }
+                        RefundQueryProjection::Pending { provider_refund_id } => {
+                            self.schedule_refund_query_fenced(
+                                &candidate,
+                                true,
+                                provider_refund_id.as_deref(),
+                                None,
+                                owner_id,
+                                epoch,
+                                fence_now,
+                            )
+                            .await?;
+                        }
+                    },
+                    Err(RefundOperationsError::Storage(error)) => {
+                        return Err(ReconciliationError::Storage(error));
+                    }
+                    Err(error) => {
+                        self.schedule_refund_query_fenced(
+                            &candidate,
+                            false,
+                            None,
+                            Some(refund_operations_error_category(&error)),
+                            owner_id,
+                            epoch,
+                            fence_now,
+                        )
+                        .await?;
+                        outcome.refund_query_failures += 1;
+                    }
+                }
+            }
+        }
         for order_id in candidates {
             let fence_now = reconciliation_now(now, started_at)?;
             match callbacks
@@ -299,6 +388,513 @@ impl StoreReconciler {
             .iter()
             .map(|row| row_string(row, "id"))
             .collect()
+    }
+
+    async fn refund_query_candidates(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<RefundReconciliationCandidate>, ReconciliationError> {
+        let initial_cutoff = now - chrono::Duration::minutes(1);
+        let initial = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT f.id AS refund_id, f.order_id, o.refund_pending_at AS pending_at
+                 FROM store_refunds f
+                 JOIN store_orders o ON o.id = f.order_id
+                 LEFT JOIN store_refund_query_retries r ON r.refund_id = f.id
+                 WHERE f.state = 'pending' AND o.payment_state = 'refund_pending'
+                   AND r.refund_id IS NULL AND o.refund_pending_at <= $1
+                 ORDER BY o.refund_pending_at ASC, f.id ASC
+                 LIMIT $2",
+                vec![timestamp(initial_cutoff).into(), BATCH_SIZE.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        let retry = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT f.id AS refund_id, f.order_id, o.refund_pending_at AS pending_at,
+                        r.next_attempt_at AS due_at
+                 FROM store_refunds f
+                 JOIN store_orders o ON o.id = f.order_id
+                 JOIN store_refund_query_retries r ON r.refund_id = f.id
+                 WHERE f.state = 'pending' AND o.payment_state = 'refund_pending'
+                   AND r.next_attempt_at <= $1
+                 ORDER BY r.next_attempt_at ASC, f.id ASC
+                 LIMIT $2",
+                vec![timestamp(now).into(), BATCH_SIZE.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        let mut candidates = Vec::with_capacity(initial.len() + retry.len());
+        for row in initial {
+            let pending_at = row_timestamp(&row, "pending_at")?;
+            let due_at = pending_at
+                .checked_add_signed(chrono::Duration::minutes(1))
+                .ok_or_else(|| {
+                    ReconciliationError::Storage("refund query due time overflow".to_string())
+                })?;
+            candidates.push((
+                due_at,
+                RefundReconciliationCandidate {
+                    refund_id: row_string(&row, "refund_id")?,
+                    order_id: row_string(&row, "order_id")?,
+                    pending_at,
+                },
+            ));
+        }
+        for row in retry {
+            candidates.push((
+                row_timestamp(&row, "due_at")?,
+                RefundReconciliationCandidate {
+                    refund_id: row_string(&row, "refund_id")?,
+                    order_id: row_string(&row, "order_id")?,
+                    pending_at: row_timestamp(&row, "pending_at")?,
+                },
+            ));
+        }
+        candidates.sort_by(|(left_due, left), (right_due, right)| {
+            left_due
+                .cmp(right_due)
+                .then_with(|| left.refund_id.cmp(&right.refund_id))
+        });
+        candidates.truncate(BATCH_SIZE as usize);
+        Ok(candidates
+            .into_iter()
+            .map(|(_, candidate)| candidate)
+            .collect())
+    }
+
+    async fn refund_alert_candidates(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<RefundReconciliationCandidate>, ReconciliationError> {
+        let cutoff = now - chrono::Duration::minutes(15);
+        self.db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT f.id AS refund_id, f.order_id, o.refund_pending_at AS pending_at
+                 FROM store_refunds f
+                 JOIN store_orders o ON o.id = f.order_id
+                 LEFT JOIN store_refund_query_retries r ON r.refund_id = f.id
+                 LEFT JOIN store_reconciliation_cases c
+                   ON c.id = ('refund-pending:' || f.id) AND c.state = 'open'
+                 WHERE f.state = 'pending' AND o.payment_state = 'refund_pending'
+                   AND o.refund_pending_at <= $1
+                   AND (r.refund_id IS NULL OR r.alerted_at IS NULL)
+                   AND c.id IS NULL
+                 ORDER BY o.refund_pending_at ASC, f.id ASC
+                 LIMIT $2",
+                vec![timestamp(cutoff).into(), BATCH_SIZE.into()],
+            ))
+            .await
+            .map_err(storage)?
+            .iter()
+            .map(|row| {
+                Ok(RefundReconciliationCandidate {
+                    refund_id: row_string(row, "refund_id")?,
+                    order_id: row_string(row, "order_id")?,
+                    pending_at: row_timestamp(row, "pending_at")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn open_refund_pending_case_fenced(
+        &self,
+        candidate: &RefundReconciliationCandidate,
+        owner_id: &str,
+        epoch: i64,
+        now: DateTime<Utc>,
+    ) -> Result<bool, ReconciliationError> {
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let lock = if self.db.is_postgres() {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
+        validate_fence(&self.db, &*tx, owner_id, epoch, now, lock).await?;
+        let refund = tx
+            .query_one(self.db.stmt(
+                &format!(
+                    "SELECT f.order_id, f.state AS refund_state, o.payment_state,
+                            o.refund_pending_at AS pending_at, a.channel_id
+                     FROM store_refunds f
+                     JOIN store_orders o ON o.id = f.order_id
+                     JOIN store_payment_attempts a ON a.id = f.attempt_id
+                     WHERE f.id = $1{lock}"
+                ),
+                vec![candidate.refund_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or_else(|| ReconciliationError::Storage("refund is missing".to_string()))?;
+        let pending_at = row_timestamp(&refund, "pending_at")?;
+        let alert_due_at = pending_at
+            .checked_add_signed(chrono::Duration::minutes(15))
+            .ok_or_else(|| {
+                ReconciliationError::Storage("refund alert time overflow".to_string())
+            })?;
+        if row_string(&refund, "order_id")? != candidate.order_id
+            || pending_at != candidate.pending_at
+            || row_string(&refund, "refund_state")? != "pending"
+            || row_string(&refund, "payment_state")? != "refund_pending"
+            || now < alert_due_at
+        {
+            tx.commit().await.map_err(storage)?;
+            return Ok(false);
+        }
+        let retry = tx
+            .query_one(self.db.stmt(
+                &format!(
+                    "SELECT attempt_count, next_attempt_at, last_error_category, alerted_at
+                     FROM store_refund_query_retries WHERE refund_id = $1{lock}"
+                ),
+                vec![candidate.refund_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?;
+        let case_id = format!("refund-pending:{}", candidate.refund_id);
+        let case = tx
+            .query_one(self.db.stmt(
+                &format!("SELECT state FROM store_reconciliation_cases WHERE id = $1{lock}"),
+                vec![case_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?;
+        if retry
+            .as_ref()
+            .map(|row| row_optional_string(row, "alerted_at"))
+            .transpose()?
+            .flatten()
+            .is_some()
+            || case
+                .as_ref()
+                .map(|row| row_string(row, "state"))
+                .transpose()?
+                .as_deref()
+                == Some("open")
+        {
+            tx.commit().await.map_err(storage)?;
+            return Ok(false);
+        }
+        let last_error_category = retry
+            .as_ref()
+            .map(|row| row_optional_string(row, "last_error_category"))
+            .transpose()?
+            .flatten();
+        if retry.is_some() {
+            let changed = tx
+                .execute(self.db.stmt(
+                    "UPDATE store_refund_query_retries
+                     SET alerted_at = $2, updated_at = $2
+                     WHERE refund_id = $1 AND alerted_at IS NULL",
+                    vec![candidate.refund_id.clone().into(), timestamp(now).into()],
+                ))
+                .await
+                .map_err(storage)?;
+            if changed.rows_affected() != 1 {
+                return Err(ReconciliationError::Storage(
+                    "refund alert state changed concurrently".to_string(),
+                ));
+            }
+        } else {
+            let initial_due_at = pending_at
+                .checked_add_signed(chrono::Duration::minutes(1))
+                .ok_or_else(|| {
+                    ReconciliationError::Storage("refund query due time overflow".to_string())
+                })?;
+            tx.execute(self.db.stmt(
+                "INSERT INTO store_refund_query_retries
+                    (refund_id, attempt_count, next_attempt_at, last_error_category,
+                     alerted_at, updated_at)
+                 VALUES ($1, 0, $2, NULL, $3, $3)",
+                vec![
+                    candidate.refund_id.clone().into(),
+                    timestamp(initial_due_at).into(),
+                    timestamp(now).into(),
+                ],
+            ))
+            .await
+            .map_err(storage)?;
+        }
+        let mut evidence = serde_json::json!({ "refund_id": candidate.refund_id });
+        if let Some(category) = last_error_category {
+            evidence["error_category"] = serde_json::Value::String(category);
+        }
+        tx.execute(self.db.stmt(
+            "INSERT INTO store_reconciliation_cases
+                (id, order_id, channel_id, severity, kind, state, evidence_json,
+                 created_at, updated_at)
+             VALUES ($1, $2, $3, 'high', 'refund_pending', 'open', $4, $5, $5)
+             ON CONFLICT (id) DO UPDATE SET
+                order_id = $2, channel_id = $3, severity = 'high',
+                kind = 'refund_pending', state = 'open', evidence_json = $4,
+                updated_at = $5, closed_at = NULL",
+            vec![
+                case_id.into(),
+                candidate.order_id.clone().into(),
+                row_string(&refund, "channel_id")?.into(),
+                evidence.to_string().into(),
+                timestamp(now).into(),
+            ],
+        ))
+        .await
+        .map_err(storage)?;
+        tx.commit().await.map_err(storage)?;
+        Ok(true)
+    }
+
+    async fn schedule_refund_query_fenced(
+        &self,
+        candidate: &RefundReconciliationCandidate,
+        project_pending: bool,
+        provider_refund_id: Option<&str>,
+        error_category: Option<&str>,
+        owner_id: &str,
+        epoch: i64,
+        now: DateTime<Utc>,
+    ) -> Result<(), ReconciliationError> {
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let lock = if self.db.is_postgres() {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
+        validate_fence(&self.db, &*tx, owner_id, epoch, now, lock).await?;
+        let refund = tx
+            .query_one(self.db.stmt(
+                &format!(
+                    "SELECT f.order_id, f.state AS refund_state, o.payment_state,
+                            a.channel_id
+                     FROM store_refunds f
+                     JOIN store_orders o ON o.id = f.order_id
+                     JOIN store_payment_attempts a ON a.id = f.attempt_id
+                     WHERE f.id = $1{lock}"
+                ),
+                vec![candidate.refund_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or_else(|| ReconciliationError::Storage("refund is missing".to_string()))?;
+        if row_string(&refund, "order_id")? != candidate.order_id
+            || row_string(&refund, "refund_state")? != "pending"
+            || row_string(&refund, "payment_state")? != "refund_pending"
+        {
+            tx.commit().await.map_err(storage)?;
+            return Ok(());
+        }
+        if project_pending {
+            RecoveryStore::new(self.db.clone())
+                .mark_refund_pending_outcome_in(
+                    &*tx,
+                    &candidate.refund_id,
+                    provider_refund_id,
+                    &timestamp(now),
+                )
+                .await
+                .map_err(storage)?;
+        }
+        let retry = tx
+            .query_one(self.db.stmt(
+                &format!(
+                    "SELECT attempt_count, alerted_at
+                     FROM store_refund_query_retries WHERE refund_id = $1{lock}"
+                ),
+                vec![candidate.refund_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?;
+        let attempt_count = retry
+            .as_ref()
+            .map(|row| row_i64(row, "attempt_count"))
+            .transpose()?
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| {
+                ReconciliationError::Storage("refund query count overflow".to_string())
+            })?;
+        let delay = match attempt_count {
+            1 => chrono::Duration::minutes(5),
+            2 => chrono::Duration::minutes(15),
+            _ => chrono::Duration::hours(1),
+        };
+        let next_attempt_at = now.checked_add_signed(delay).ok_or_else(|| {
+            ReconciliationError::Storage("refund query retry time overflow".to_string())
+        })?;
+        let alert_due_at = candidate
+            .pending_at
+            .checked_add_signed(chrono::Duration::minutes(15))
+            .ok_or_else(|| {
+                ReconciliationError::Storage("refund alert time overflow".to_string())
+            })?;
+        let previous_alerted_at = retry
+            .as_ref()
+            .map(|row| row_optional_string(row, "alerted_at"))
+            .transpose()?
+            .flatten();
+        let alerted_at = if now >= alert_due_at {
+            previous_alerted_at.or_else(|| Some(timestamp(now)))
+        } else {
+            previous_alerted_at
+        };
+        tx.execute(self.db.stmt(
+            "INSERT INTO store_refund_query_retries
+                (refund_id, attempt_count, next_attempt_at, last_error_category,
+                 alerted_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (refund_id) DO UPDATE SET
+                attempt_count = $2, next_attempt_at = $3,
+                last_error_category = $4, alerted_at = $5, updated_at = $6",
+            vec![
+                candidate.refund_id.clone().into(),
+                attempt_count.into(),
+                timestamp(next_attempt_at).into(),
+                error_category.map(str::to_string).into(),
+                alerted_at.into(),
+                timestamp(now).into(),
+            ],
+        ))
+        .await
+        .map_err(storage)?;
+        if now >= alert_due_at {
+            let mut evidence = serde_json::json!({ "refund_id": candidate.refund_id });
+            if let Some(category) = error_category {
+                evidence["error_category"] = serde_json::Value::String(category.to_string());
+            }
+            tx.execute(self.db.stmt(
+                "INSERT INTO store_reconciliation_cases
+                    (id, order_id, channel_id, severity, kind, state, evidence_json,
+                     created_at, updated_at)
+                 VALUES ($1, $2, $3, 'high', 'refund_pending', 'open', $4, $5, $5)
+                 ON CONFLICT (id) DO UPDATE SET
+                    order_id = $2, channel_id = $3, severity = 'high',
+                    kind = 'refund_pending', state = 'open', evidence_json = $4,
+                    updated_at = $5, closed_at = NULL",
+                vec![
+                    format!("refund-pending:{}", candidate.refund_id).into(),
+                    candidate.order_id.clone().into(),
+                    row_string(&refund, "channel_id")?.into(),
+                    evidence.to_string().into(),
+                    timestamp(now).into(),
+                ],
+            ))
+            .await
+            .map_err(storage)?;
+        }
+        tx.commit().await.map_err(storage)
+    }
+
+    async fn complete_refund_query_fenced(
+        &self,
+        candidate: &RefundReconciliationCandidate,
+        projection: RefundQueryProjection,
+        owner_id: &str,
+        epoch: i64,
+        now: DateTime<Utc>,
+    ) -> Result<bool, ReconciliationError> {
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let lock = if self.db.is_postgres() {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
+        validate_fence(&self.db, &*tx, owner_id, epoch, now, lock).await?;
+        let refund = tx
+            .query_one(self.db.stmt(
+                &format!(
+                    "SELECT f.order_id, f.state AS refund_state, o.payment_state
+                     FROM store_refunds f
+                     JOIN store_orders o ON o.id = f.order_id
+                     WHERE f.id = $1{lock}"
+                ),
+                vec![candidate.refund_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or_else(|| ReconciliationError::Storage("refund is missing".to_string()))?;
+        if row_string(&refund, "order_id")? != candidate.order_id {
+            return Err(ReconciliationError::Storage(
+                "refund order changed concurrently".to_string(),
+            ));
+        }
+        let refund_state = row_string(&refund, "refund_state")?;
+        if matches!(projection, RefundQueryProjection::AlreadyTerminal) {
+            if !matches!(refund_state.as_str(), "succeeded" | "failed") {
+                tx.commit().await.map_err(storage)?;
+                return Ok(false);
+            }
+        } else if matches!(refund_state.as_str(), "succeeded" | "failed") {
+        } else if refund_state != "pending"
+            || row_string(&refund, "payment_state")? != "refund_pending"
+        {
+            tx.commit().await.map_err(storage)?;
+            return Ok(false);
+        } else {
+            let recovery = RecoveryStore::new(self.db.clone());
+            match projection {
+                RefundQueryProjection::Succeeded { provider_refund_id } => {
+                    if provider_refund_id.is_some() {
+                        recovery
+                            .mark_refund_pending_outcome_in(
+                                &*tx,
+                                &candidate.refund_id,
+                                provider_refund_id.as_deref(),
+                                &timestamp(now),
+                            )
+                            .await
+                            .map_err(storage)?;
+                    }
+                    recovery
+                        .complete_refund_in(&*tx, &candidate.refund_id, &timestamp(now))
+                        .await
+                        .map_err(storage)?;
+                }
+                RefundQueryProjection::Failed { provider_refund_id } => {
+                    if provider_refund_id.is_some() {
+                        recovery
+                            .mark_refund_pending_outcome_in(
+                                &*tx,
+                                &candidate.refund_id,
+                                provider_refund_id.as_deref(),
+                                &timestamp(now),
+                            )
+                            .await
+                            .map_err(storage)?;
+                    }
+                    recovery
+                        .reject_refund_in(&*tx, &candidate.refund_id, &timestamp(now))
+                        .await
+                        .map_err(storage)?;
+                }
+                RefundQueryProjection::AlreadyTerminal | RefundQueryProjection::Pending { .. } => {
+                    return Err(ReconciliationError::Storage(
+                        "refund terminal projection is invalid".to_string(),
+                    ));
+                }
+            }
+        }
+        tx.execute(self.db.stmt(
+            "DELETE FROM store_refund_query_retries WHERE refund_id = $1",
+            vec![candidate.refund_id.clone().into()],
+        ))
+        .await
+        .map_err(storage)?;
+        tx.execute(self.db.stmt(
+            "UPDATE store_reconciliation_cases
+             SET state = 'closed', updated_at = $2, closed_at = $2
+             WHERE id = $1 AND state <> 'closed'",
+            vec![
+                format!("refund-pending:{}", candidate.refund_id).into(),
+                timestamp(now).into(),
+            ],
+        ))
+        .await
+        .map_err(storage)?;
+        tx.commit().await.map_err(storage)?;
+        Ok(true)
     }
 
     async fn release_unpresented_attempt_fenced(
@@ -742,6 +1338,18 @@ fn payment_operations_error_category(error: &PaymentOperationsError) -> &'static
             "provider_query_unsupported"
         }
         PaymentOperationsError::Storage(_) => "storage_error",
+    }
+}
+
+fn refund_operations_error_category(error: &RefundOperationsError) -> &'static str {
+    match error {
+        RefundOperationsError::InvalidInput => "invalid_input",
+        RefundOperationsError::NotFound => "refund_not_found",
+        RefundOperationsError::OrderNotRefundable => "order_not_refundable",
+        RefundOperationsError::IdempotencyConflict => "idempotency_conflict",
+        RefundOperationsError::InsufficientBalance => "insufficient_balance",
+        RefundOperationsError::ConfigurationUnavailable => "payment_configuration_unavailable",
+        RefundOperationsError::Storage(_) => "storage_error",
     }
 }
 

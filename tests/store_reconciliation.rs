@@ -7,6 +7,7 @@ use monoize::migration::Migrator;
 use monoize::store_billing::adapters::alipay::AlipayCredential;
 use monoize::store_billing::adapters::stripe::StripeCredential;
 use monoize::store_billing::adapters::wechat::{WechatCredential, WechatPlatformVerifier};
+use monoize::store_billing::callbacks::PaymentCallbackStore;
 use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
 use monoize::store_billing::money::Currency;
@@ -15,9 +16,13 @@ use monoize::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentOrderStore,
 };
 use monoize::store_billing::payment::{
-    AdapterError, CheckoutAction, PaymentQuery, ProviderPaymentState,
+    AdapterError, CheckoutAction, PaymentQuery, ProviderPaymentState, ProviderRefundState,
 };
 use monoize::store_billing::reconciliation::{ReconciliationError, StoreReconciler};
+use monoize::store_billing::recovery::{BeginRefundInput, RecoveryStore};
+use monoize::store_billing::refund_operations::{
+    RefundOperations, RefundProvider, RefundProviderContract, RefundProviderOutcome,
+};
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
 use sha2::{Digest, Sha256};
@@ -67,11 +72,160 @@ impl PaymentQueryProvider for FixedPaymentQueryProvider {
     }
 }
 
+#[derive(Clone)]
+struct FixedRefundProvider {
+    result: Result<RefundProviderOutcome, AdapterError>,
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl FixedRefundProvider {
+    fn returning(state: ProviderRefundState, provider_refund_id: Option<&str>) -> Self {
+        Self {
+            result: Ok(RefundProviderOutcome {
+                state,
+                provider_refund_id: provider_refund_id.map(str::to_string),
+                not_found_is_definitive: false,
+            }),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn failing(error: AdapterError) -> Self {
+        Self {
+            result: Err(error),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl RefundProvider for FixedRefundProvider {
+    async fn create_refund(
+        &self,
+        _contract: &RefundProviderContract,
+    ) -> Result<RefundProviderOutcome, AdapterError> {
+        panic!("refund reconciliation must not create a Provider refund")
+    }
+
+    async fn query_refund(
+        &self,
+        contract: &RefundProviderContract,
+    ) -> Result<RefundProviderOutcome, AdapterError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(contract.request.idempotency_key.clone());
+        self.result.clone()
+    }
+}
+
+#[derive(Clone)]
+struct LeaseStealingRefundProvider {
+    db: DbPool,
+}
+
+#[async_trait]
+impl RefundProvider for LeaseStealingRefundProvider {
+    async fn create_refund(
+        &self,
+        _contract: &RefundProviderContract,
+    ) -> Result<RefundProviderOutcome, AdapterError> {
+        panic!("refund reconciliation must not create a Provider refund")
+    }
+
+    async fn query_refund(
+        &self,
+        _contract: &RefundProviderContract,
+    ) -> Result<RefundProviderOutcome, AdapterError> {
+        self.db
+            .write()
+            .await
+            .execute_unprepared(
+                "UPDATE store_reconciliation_leases
+                 SET owner_id = 'refund-lease-thief', epoch = epoch + 1,
+                     expires_at = '2099-01-01T00:00:00Z'
+                 WHERE name = 'store_reconciler'",
+            )
+            .await
+            .unwrap();
+        Ok(RefundProviderOutcome {
+            state: ProviderRefundState::Succeeded,
+            provider_refund_id: Some("re_stolen_lease".to_string()),
+            not_found_is_definitive: false,
+        })
+    }
+}
+
 struct PresentedFixture {
     db: DbPool,
     key_ring: Arc<PaymentKeyRing>,
     order_id: String,
     attempt_id: String,
+}
+
+async fn seed_reconciliation_governance(db: &DbPool, account_digest: &str) {
+    let write = db.write().await;
+    write
+        .execute_unprepared(
+            "INSERT INTO store_payment_compliance
+                (id, channel_id, terms_version, admin_user_id, source_ip, confirmed_at)
+             VALUES ('reconciliation-compliance', 'store-channel-stripe', '2026-08-28',
+                     'reconciliation-admin', '127.0.0.1', '2026-08-27T00:00:00Z');
+             INSERT INTO store_privacy_records
+                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+             VALUES ('reconciliation-privacy', 'v1', 'CN', '[]', '{}', 'contract',
+                     'reconciliation-admin',
+                     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                     '2026-08-27T00:00:00Z', '2099-01-01T00:00:00Z', 1)",
+        )
+        .await
+        .unwrap();
+    for capability in [
+        "payment_query",
+        "refund",
+        "refund_query",
+        "settlement_report",
+    ] {
+        write
+            .execute(db.stmt(
+                "INSERT INTO store_merchant_capabilities
+                    (id, channel_id, capability, state, environment, merchant_account_digest,
+                     provider_product, evidence_digest, verifier_admin_id, verified_at, expires_at)
+                 VALUES ($1, 'store-channel-stripe', $2, 'supported', 'sandbox', $3,
+                         'reconciliation',
+                         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                         'reconciliation-admin', '2026-08-27T00:00:00Z',
+                         '2099-01-01T00:00:00Z')",
+                vec![
+                    format!("reconciliation-capability-{capability}").into(),
+                    capability.into(),
+                    account_digest.into(),
+                ],
+            ))
+            .await
+            .unwrap();
+    }
+    write
+        .execute(db.stmt(
+            "INSERT INTO store_channel_readiness_profiles
+                (channel_id, active_credential_digest, privacy_record_id,
+                 callback_verification_passed, supported_currencies_json, amount_limits_json,
+                 checkout_action_kinds_json, license_evidence_digest, runtime_evidence_digest,
+                 availability_evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES ('store-channel-stripe', $1, 'reconciliation-privacy', 1,
+                     '[\"CNY\",\"USD\"]',
+                     '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"},\"USD\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
+                     '[\"redirect\"]',
+                     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                     'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                     'reconciliation-admin', '2026-08-27T00:00:00Z',
+                     '2099-01-01T00:00:00Z')",
+            vec![account_digest.into()],
+        ))
+        .await
+        .unwrap();
 }
 
 async fn expired_presented_order(suffix: &str) -> PresentedFixture {
@@ -159,11 +313,12 @@ async fn expired_presented_order(suffix: &str) -> PresentedFixture {
                 encrypted.key_id.into(),
                 encrypted.nonce_base64.into(),
                 encrypted.ciphertext_base64.into(),
-                account_digest.into(),
+                account_digest.clone().into(),
             ],
         ))
         .await
         .unwrap();
+    seed_reconciliation_governance(&db, &account_digest).await;
 
     let orders = PaymentOrderStore::new(db.clone());
     let order = orders
@@ -341,6 +496,11 @@ async fn paid_pending_order() -> (DbPool, String) {
             .await
             .expect("insert credential");
     }
+    seed_reconciliation_governance(
+        &db,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .await;
     let orders = PaymentOrderStore::new(db.clone());
     let order = orders
         .create_order(
@@ -396,6 +556,453 @@ async fn paid_pending_order() -> (DbPool, String) {
         .unwrap();
     drop(write);
     (db, order.id)
+}
+
+struct RefundPendingFixture {
+    db: DbPool,
+    key_ring: Arc<PaymentKeyRing>,
+    order_id: String,
+    refund_id: String,
+    pending_at: chrono::DateTime<Utc>,
+    reserved_nano_usd: String,
+}
+
+async fn refund_pending_order(suffix: &str) -> RefundPendingFixture {
+    let fixture = expired_presented_order(suffix).await;
+    let pending_at = Utc.with_ymd_and_hms(2026, 8, 27, 1, 0, 0).unwrap();
+    {
+        let write = fixture.db.write().await;
+        write
+            .execute(fixture.db.stmt(
+                "UPDATE store_payment_attempts
+                 SET state = 'paid', provider_transaction_id = $2,
+                     paid_at = $3, updated_at = $3
+                 WHERE id = $1",
+                vec![
+                    fixture.attempt_id.clone().into(),
+                    format!("pi_refund_{suffix}").into(),
+                    "2026-08-27T00:30:00Z".into(),
+                ],
+            ))
+            .await
+            .unwrap();
+        write
+            .execute(fixture.db.stmt(
+                "UPDATE store_orders
+                 SET payment_state = 'paid', paid_at = $2, updated_at = $2,
+                     state_revision = state_revision + 1
+                 WHERE id = $1",
+                vec![
+                    fixture.order_id.clone().into(),
+                    "2026-08-27T00:30:00Z".into(),
+                ],
+            ))
+            .await
+            .unwrap();
+    }
+    PaymentCallbackStore::new(fixture.db.clone())
+        .fulfill_paid_order(&fixture.order_id)
+        .await
+        .unwrap();
+    let recovery = RecoveryStore::new(fixture.db.clone());
+    let refund = recovery
+        .begin_refund(BeginRefundInput {
+            order_id: fixture.order_id.clone(),
+            requested_by_admin_id: "refund-reconcile-admin".to_string(),
+            idempotency_key: format!("refund-reconcile-{suffix}"),
+        })
+        .await
+        .unwrap();
+    let refund = recovery
+        .mark_refund_pending_outcome(&refund.id, Some(&format!("re_{suffix}")))
+        .await
+        .unwrap();
+    fixture
+        .db
+        .write()
+        .await
+        .execute(fixture.db.stmt(
+            "UPDATE store_orders SET refund_pending_at = $2 WHERE id = $1",
+            vec![
+                fixture.order_id.clone().into(),
+                pending_at.to_rfc3339().into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    let reserve = fixture
+        .db
+        .read()
+        .query_one(fixture.db.stmt(
+            "SELECT reserved_nano_usd FROM store_order_reward_recoveries WHERE order_id = $1",
+            vec![fixture.order_id.clone().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<String>("", "reserved_nano_usd")
+        .unwrap();
+    assert_ne!(reserve, "0");
+    RefundPendingFixture {
+        db: fixture.db,
+        key_ring: fixture.key_ring,
+        order_id: fixture.order_id,
+        refund_id: refund.id,
+        pending_at,
+        reserved_nano_usd: reserve,
+    }
+}
+
+fn refund_reconciler(
+    fixture: &RefundPendingFixture,
+    provider: FixedRefundProvider,
+) -> StoreReconciler {
+    StoreReconciler::new(fixture.db.clone()).with_refund_operations(RefundOperations::new(
+        fixture.db.clone(),
+        fixture.key_ring.clone(),
+        Arc::new(provider),
+    ))
+}
+
+#[tokio::test]
+async fn refund_reconciliation_queries_after_one_minute_and_uses_documented_backoff() {
+    let fixture = refund_pending_order("backoff").await;
+    let provider = FixedRefundProvider::returning(ProviderRefundState::Pending, Some("re_backoff"));
+    let calls = provider.calls.clone();
+    let reconciler = refund_reconciler(&fixture, provider);
+
+    let early = reconciler
+        .run_once(
+            "refund-owner",
+            fixture.pending_at + chrono::Duration::seconds(59),
+        )
+        .await
+        .unwrap();
+    assert_eq!(early.refund_queries, 0);
+    assert!(calls.lock().unwrap().is_empty());
+
+    let schedule = [
+        (
+            1,
+            chrono::Duration::minutes(1),
+            chrono::Duration::minutes(5),
+        ),
+        (
+            2,
+            chrono::Duration::minutes(6),
+            chrono::Duration::minutes(15),
+        ),
+        (3, chrono::Duration::minutes(21), chrono::Duration::hours(1)),
+        (4, chrono::Duration::minutes(81), chrono::Duration::hours(1)),
+    ];
+    for (attempt_count, offset, delay) in schedule {
+        let now = fixture.pending_at + offset;
+        let outcome = reconciler.run_once("refund-owner", now).await.unwrap();
+        assert_eq!(outcome.refund_queries, 1);
+        let retry = fixture
+            .db
+            .read()
+            .query_one(fixture.db.stmt(
+                "SELECT attempt_count, next_attempt_at, last_error_category
+                 FROM store_refund_query_retries WHERE refund_id = $1",
+                vec![fixture.refund_id.clone().into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            retry.try_get::<i64>("", "attempt_count").unwrap(),
+            attempt_count
+        );
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(
+                &retry.try_get::<String>("", "next_attempt_at").unwrap()
+            )
+            .unwrap()
+            .with_timezone(&Utc),
+            now + delay
+        );
+        assert_eq!(
+            retry
+                .try_get::<Option<String>>("", "last_error_category")
+                .unwrap(),
+            None
+        );
+    }
+    assert_eq!(calls.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn refund_reconciliation_alerts_at_fifteen_minutes_without_changing_query_backoff() {
+    let fixture = refund_pending_order("alert-only").await;
+    let provider =
+        FixedRefundProvider::returning(ProviderRefundState::Pending, Some("re_alert-only"));
+    let calls = provider.calls.clone();
+    let reconciler = refund_reconciler(&fixture, provider);
+
+    for offset in [chrono::Duration::minutes(1), chrono::Duration::minutes(6)] {
+        let outcome = reconciler
+            .run_once("refund-alert-owner", fixture.pending_at + offset)
+            .await
+            .unwrap();
+        assert_eq!(outcome.refund_queries, 1);
+    }
+
+    let alert_at = fixture.pending_at + chrono::Duration::minutes(15);
+    for now in [alert_at, alert_at + chrono::Duration::seconds(1)] {
+        let outcome = reconciler
+            .run_once("refund-alert-owner", now)
+            .await
+            .unwrap();
+        assert_eq!(outcome.refund_queries, 0);
+    }
+    assert_eq!(calls.lock().unwrap().len(), 2);
+
+    let state = fixture
+        .db
+        .read()
+        .query_one(fixture.db.stmt(
+            "SELECT q.attempt_count, q.next_attempt_at, q.last_error_category, q.alerted_at,
+                    f.state AS refund_state, o.payment_state,
+                    (SELECT COUNT(*) FROM store_reconciliation_cases c
+                     WHERE c.id = $2 AND c.state = 'open') AS case_count
+             FROM store_refund_query_retries q
+             JOIN store_refunds f ON f.id = q.refund_id
+             JOIN store_orders o ON o.id = f.order_id
+             WHERE q.refund_id = $1",
+            vec![
+                fixture.refund_id.clone().into(),
+                format!("refund-pending:{}", fixture.refund_id).into(),
+            ],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.try_get::<i64>("", "attempt_count").unwrap(), 2);
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(
+            &state.try_get::<String>("", "next_attempt_at").unwrap()
+        )
+        .unwrap()
+        .with_timezone(&Utc),
+        fixture.pending_at + chrono::Duration::minutes(21)
+    );
+    assert_eq!(
+        state
+            .try_get::<Option<String>>("", "last_error_category")
+            .unwrap(),
+        None
+    );
+    assert!(
+        state
+            .try_get::<Option<String>>("", "alerted_at")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(state.try_get::<i64>("", "case_count").unwrap(), 1);
+    assert_eq!(
+        state.try_get::<String>("", "refund_state").unwrap(),
+        "pending"
+    );
+    assert_eq!(
+        state.try_get::<String>("", "payment_state").unwrap(),
+        "refund_pending"
+    );
+}
+
+#[tokio::test]
+async fn successful_refund_reconciliation_closes_case_and_deletes_retry() {
+    let fixture = refund_pending_order("terminal").await;
+    let due = fixture.pending_at + chrono::Duration::minutes(16);
+    fixture
+        .db
+        .write()
+        .await
+        .execute(fixture.db.stmt(
+            "INSERT INTO store_refund_query_retries
+                (refund_id, attempt_count, next_attempt_at, last_error_category,
+                 alerted_at, updated_at)
+             VALUES ($1, 2, $2, NULL, $2, $2)",
+            vec![fixture.refund_id.clone().into(), due.to_rfc3339().into()],
+        ))
+        .await
+        .unwrap();
+    fixture
+        .db
+        .write()
+        .await
+        .execute(fixture.db.stmt(
+            "INSERT INTO store_reconciliation_cases
+                (id, order_id, channel_id, severity, kind, state, evidence_json,
+                 created_at, updated_at)
+             VALUES ($1, $2, 'store-channel-stripe', 'high', 'refund_pending',
+                     'open', '{}', $3, $3)",
+            vec![
+                format!("refund-pending:{}", fixture.refund_id).into(),
+                fixture.order_id.clone().into(),
+                due.to_rfc3339().into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    let provider =
+        FixedRefundProvider::returning(ProviderRefundState::Succeeded, Some("re_terminal"));
+
+    let outcome = refund_reconciler(&fixture, provider)
+        .run_once("refund-terminal-owner", due)
+        .await
+        .unwrap();
+    assert_eq!(outcome.refunds_terminal, 1);
+    let state = fixture
+        .db
+        .read()
+        .query_one(fixture.db.stmt(
+            "SELECT f.state AS refund_state, o.payment_state, r.reserved_nano_usd,
+                    r.recovered_nano_usd,
+                    (SELECT COUNT(*) FROM store_refund_query_retries q
+                     WHERE q.refund_id = f.id) AS retry_count,
+                    (SELECT state FROM store_reconciliation_cases c
+                     WHERE c.id = $2) AS case_state
+             FROM store_refunds f
+             JOIN store_orders o ON o.id = f.order_id
+             JOIN store_order_reward_recoveries r ON r.order_id = o.id
+             WHERE f.id = $1",
+            vec![
+                fixture.refund_id.clone().into(),
+                format!("refund-pending:{}", fixture.refund_id).into(),
+            ],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        state.try_get::<String>("", "refund_state").unwrap(),
+        "succeeded"
+    );
+    assert_eq!(
+        state.try_get::<String>("", "payment_state").unwrap(),
+        "refunded"
+    );
+    assert_eq!(state.try_get::<i64>("", "retry_count").unwrap(), 0);
+    assert_eq!(state.try_get::<String>("", "case_state").unwrap(), "closed");
+    assert_eq!(
+        state.try_get::<String>("", "recovered_nano_usd").unwrap(),
+        fixture.reserved_nano_usd
+    );
+}
+
+#[tokio::test]
+async fn refund_query_error_keeps_reserve_and_opens_one_case_after_fifteen_minutes() {
+    let fixture = refund_pending_order("error").await;
+    let provider = FixedRefundProvider::failing(AdapterError::Unsupported);
+    let now = fixture.pending_at + chrono::Duration::minutes(16);
+    let outcome = refund_reconciler(&fixture, provider)
+        .run_once("refund-error-owner", now)
+        .await
+        .unwrap();
+    assert_eq!(outcome.refund_query_failures, 1);
+
+    let state = fixture
+        .db
+        .read()
+        .query_one(fixture.db.stmt(
+            "SELECT f.state AS refund_state, o.payment_state, r.reserved_nano_usd,
+                    q.attempt_count, q.last_error_category, q.alerted_at,
+                    (SELECT COUNT(*) FROM store_reconciliation_cases c
+                     WHERE c.id = $2 AND c.state = 'open') AS case_count
+             FROM store_refunds f
+             JOIN store_orders o ON o.id = f.order_id
+             JOIN store_order_reward_recoveries r ON r.order_id = o.id
+             JOIN store_refund_query_retries q ON q.refund_id = f.id
+             WHERE f.id = $1",
+            vec![
+                fixture.refund_id.clone().into(),
+                format!("refund-pending:{}", fixture.refund_id).into(),
+            ],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        state.try_get::<String>("", "refund_state").unwrap(),
+        "pending"
+    );
+    assert_eq!(
+        state.try_get::<String>("", "payment_state").unwrap(),
+        "refund_pending"
+    );
+    assert_eq!(
+        state.try_get::<String>("", "reserved_nano_usd").unwrap(),
+        fixture.reserved_nano_usd
+    );
+    assert_eq!(state.try_get::<i64>("", "attempt_count").unwrap(), 1);
+    assert_eq!(
+        state.try_get::<String>("", "last_error_category").unwrap(),
+        "payment_configuration_unavailable"
+    );
+    assert!(
+        state
+            .try_get::<Option<String>>("", "alerted_at")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(state.try_get::<i64>("", "case_count").unwrap(), 1);
+}
+
+#[tokio::test]
+async fn refund_provider_success_after_lease_loss_does_not_mutate_economic_state() {
+    let fixture = refund_pending_order("lost-lease").await;
+    let reconciler =
+        StoreReconciler::new(fixture.db.clone()).with_refund_operations(RefundOperations::new(
+            fixture.db.clone(),
+            fixture.key_ring.clone(),
+            Arc::new(LeaseStealingRefundProvider {
+                db: fixture.db.clone(),
+            }),
+        ));
+
+    let result = reconciler
+        .run_once(
+            "refund-original-owner",
+            fixture.pending_at + chrono::Duration::minutes(1),
+        )
+        .await;
+    assert_eq!(result, Err(ReconciliationError::LeaseLost));
+
+    let state = fixture
+        .db
+        .read()
+        .query_one(fixture.db.stmt(
+            "SELECT f.state AS refund_state, o.payment_state,
+                    r.reserved_nano_usd, r.recovered_nano_usd,
+                    (SELECT COUNT(*) FROM store_refund_query_retries q
+                     WHERE q.refund_id = f.id) AS retry_count
+             FROM store_refunds f
+             JOIN store_orders o ON o.id = f.order_id
+             JOIN store_order_reward_recoveries r ON r.order_id = o.id
+             WHERE f.id = $1",
+            vec![fixture.refund_id.clone().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        state.try_get::<String>("", "refund_state").unwrap(),
+        "pending"
+    );
+    assert_eq!(
+        state.try_get::<String>("", "payment_state").unwrap(),
+        "refund_pending"
+    );
+    assert_eq!(
+        state.try_get::<String>("", "reserved_nano_usd").unwrap(),
+        fixture.reserved_nano_usd
+    );
+    assert_eq!(
+        state.try_get::<String>("", "recovered_nano_usd").unwrap(),
+        "0"
+    );
+    assert_eq!(state.try_get::<i64>("", "retry_count").unwrap(), 0);
 }
 
 #[tokio::test]

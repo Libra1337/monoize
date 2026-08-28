@@ -41,6 +41,20 @@ pub struct RefundProviderOutcome {
     pub not_found_is_definitive: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RefundQueryProjection {
+    AlreadyTerminal,
+    Pending { provider_refund_id: Option<String> },
+    Succeeded { provider_refund_id: Option<String> },
+    Failed { provider_refund_id: Option<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RefundQueryOutcome {
+    pub refund: RefundRecord,
+    pub projection: RefundQueryProjection,
+}
+
 #[async_trait]
 pub trait RefundProvider: Send + Sync {
     async fn create_refund(
@@ -225,28 +239,43 @@ impl RefundOperations {
         order_id: &str,
         refund_id: &str,
     ) -> Result<RefundRecord, RefundOperationsError> {
+        let outcome = self
+            .query_provider_with_context(order_id, refund_id)
+            .await?;
+        project_query_projection(
+            &RecoveryStore::new(self.db.clone()),
+            &outcome.refund,
+            outcome.projection,
+        )
+        .await
+    }
+
+    pub(crate) async fn query_provider_with_context(
+        &self,
+        order_id: &str,
+        refund_id: &str,
+    ) -> Result<RefundQueryOutcome, RefundOperationsError> {
         if !valid_identifier(order_id) || !valid_identifier(refund_id) {
             return Err(RefundOperationsError::InvalidInput);
         }
-        let recovery = RecoveryStore::new(self.db.clone());
-        let refund = recovery
+        let refund = RecoveryStore::new(self.db.clone())
             .get_refund(refund_id)
             .await
             .map_err(map_projection_error)?
             .filter(|refund| refund.order_id == order_id)
             .ok_or(RefundOperationsError::NotFound)?;
         if matches!(refund.state.as_str(), "succeeded" | "failed") {
-            return Ok(refund);
+            return Ok(RefundQueryOutcome {
+                refund,
+                projection: RefundQueryProjection::AlreadyTerminal,
+            });
         }
         let contract = load_contract(&self.db, &self.key_ring, &refund).await?;
         let provider_outcome = self.provider.query_refund(&contract).await;
-        project_provider_result(
-            &recovery,
-            &refund,
-            ProviderCallKind::Query,
-            provider_outcome,
-        )
-        .await
+        Ok(RefundQueryOutcome {
+            refund,
+            projection: query_projection(provider_outcome)?,
+        })
     }
 }
 
@@ -564,6 +593,72 @@ async fn project_provider_result(
             reload_refund(recovery, &refund.id).await
         }
         ProviderRefundState::NotFound => mark_pending(recovery, refund, None).await,
+    }
+}
+
+fn query_projection(
+    provider_result: Result<RefundProviderOutcome, AdapterError>,
+) -> Result<RefundQueryProjection, RefundOperationsError> {
+    let outcome = match provider_result {
+        Ok(outcome) if valid_optional_provider_id(outcome.provider_refund_id.as_deref()) => outcome,
+        Ok(_)
+        | Err(AdapterError::Ambiguous | AdapterError::Verification | AdapterError::Rejected) => {
+            return Ok(RefundQueryProjection::Pending {
+                provider_refund_id: None,
+            });
+        }
+        Err(
+            AdapterError::InvalidConfiguration
+            | AdapterError::InvalidRequest
+            | AdapterError::Unsupported,
+        ) => return Err(RefundOperationsError::ConfigurationUnavailable),
+    };
+    let provider_refund_id = outcome.provider_refund_id;
+    Ok(match outcome.state {
+        ProviderRefundState::Pending | ProviderRefundState::Ambiguous => {
+            RefundQueryProjection::Pending { provider_refund_id }
+        }
+        ProviderRefundState::Succeeded => RefundQueryProjection::Succeeded { provider_refund_id },
+        ProviderRefundState::Failed => RefundQueryProjection::Failed { provider_refund_id },
+        ProviderRefundState::NotFound if outcome.not_found_is_definitive => {
+            RefundQueryProjection::Failed { provider_refund_id }
+        }
+        ProviderRefundState::NotFound => RefundQueryProjection::Pending {
+            provider_refund_id: None,
+        },
+    })
+}
+
+async fn project_query_projection(
+    recovery: &RecoveryStore,
+    refund: &RefundRecord,
+    projection: RefundQueryProjection,
+) -> Result<RefundRecord, RefundOperationsError> {
+    match projection {
+        RefundQueryProjection::AlreadyTerminal => Ok(refund.clone()),
+        RefundQueryProjection::Pending { provider_refund_id } => {
+            mark_pending(recovery, refund, provider_refund_id.as_deref()).await
+        }
+        RefundQueryProjection::Succeeded { provider_refund_id } => {
+            if provider_refund_id.is_some() {
+                mark_pending(recovery, refund, provider_refund_id.as_deref()).await?;
+            }
+            recovery
+                .complete_refund(&refund.id)
+                .await
+                .map_err(map_projection_error)?;
+            reload_refund(recovery, &refund.id).await
+        }
+        RefundQueryProjection::Failed { provider_refund_id } => {
+            if provider_refund_id.is_some() {
+                mark_pending(recovery, refund, provider_refund_id.as_deref()).await?;
+            }
+            recovery
+                .reject_refund(&refund.id)
+                .await
+                .map_err(map_projection_error)?;
+            reload_refund(recovery, &refund.id).await
+        }
     }
 }
 

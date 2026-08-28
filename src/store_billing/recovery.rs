@@ -328,7 +328,21 @@ impl RecoveryStore {
             return Err(RecoveryError::InvalidInput);
         }
         let tx = self.db.begin_write().await.map_err(storage)?;
-        let existing = load_refund_by_id(&self.db, &*tx, refund_id)
+        let result = self
+            .mark_refund_pending_outcome_in(&*tx, refund_id, provider_refund_id, &timestamp())
+            .await?;
+        tx.commit().await.map_err(storage)?;
+        Ok(result)
+    }
+
+    pub(crate) async fn mark_refund_pending_outcome_in<C: ConnectionTrait>(
+        &self,
+        connection: &C,
+        refund_id: &str,
+        provider_refund_id: Option<&str>,
+        now: &str,
+    ) -> Result<RefundRecord, RecoveryError> {
+        let existing = load_refund_by_id(&self.db, connection, refund_id)
             .await?
             .ok_or(RecoveryError::NotFound)?;
         if existing.state == "pending" {
@@ -337,16 +351,16 @@ impl RecoveryStore {
                     return Err(RecoveryError::Conflict);
                 }
                 (None, Some(received)) => {
-                    let changed = tx
+                    let changed = connection
                         .execute(self.db.stmt(
                             "UPDATE store_refunds
                              SET provider_refund_id = $2, updated_at = $3
                              WHERE id = $1 AND state = 'pending' AND provider_refund_id IS NULL",
-                            vec![refund_id.into(), received.into(), timestamp().into()],
+                            vec![refund_id.into(), received.into(), now.into()],
                         ))
                         .await
                         .map_err(storage)?;
-                    let result = load_refund_by_id(&self.db, &*tx, refund_id)
+                    let result = load_refund_by_id(&self.db, connection, refund_id)
                         .await?
                         .ok_or(RecoveryError::NotFound)?;
                     if changed.rows_affected() != 1
@@ -354,18 +368,16 @@ impl RecoveryStore {
                     {
                         return Err(RecoveryError::Conflict);
                     }
-                    tx.commit().await.map_err(storage)?;
                     return Ok(result);
                 }
                 _ => {}
             }
-            tx.commit().await.map_err(storage)?;
             return Ok(existing);
         }
         if existing.state != "created" {
             return Err(RecoveryError::Conflict);
         }
-        let changed = tx
+        let changed = connection
             .execute(self.db.stmt(
                 "UPDATE store_refunds
                  SET state = 'pending', provider_refund_id = $2, updated_at = $3
@@ -373,12 +385,12 @@ impl RecoveryStore {
                 vec![
                     refund_id.into(),
                     provider_refund_id.map(str::to_string).into(),
-                    timestamp().into(),
+                    now.into(),
                 ],
             ))
             .await
             .map_err(storage)?;
-        let result = load_refund_by_id(&self.db, &*tx, refund_id)
+        let result = load_refund_by_id(&self.db, connection, refund_id)
             .await?
             .ok_or(RecoveryError::NotFound)?;
         if changed.rows_affected() != 1
@@ -387,17 +399,25 @@ impl RecoveryStore {
         {
             return Err(RecoveryError::Conflict);
         }
-        tx.commit().await.map_err(storage)?;
         Ok(result)
     }
 
     pub async fn reject_refund(&self, refund_id: &str) -> Result<(), RecoveryError> {
         let tx = self.db.begin_write().await.map_err(storage)?;
+        self.reject_refund_in(&*tx, refund_id, &timestamp()).await?;
+        tx.commit().await.map_err(storage)
+    }
+
+    pub(crate) async fn reject_refund_in<C: ConnectionTrait>(
+        &self,
+        connection: &C,
+        refund_id: &str,
+        now: &str,
+    ) -> Result<(), RecoveryError> {
         let lock = lock_clause(&self.db);
-        let row = load_refund_mutation(&self.db, &*tx, refund_id, lock).await?;
+        let row = load_refund_mutation(&self.db, connection, refund_id, lock).await?;
         let refund_state = row_string(&row, "refund_state")?;
         if refund_state == "failed" {
-            tx.commit().await.map_err(storage)?;
             return Ok(());
         }
         if refund_state == "succeeded" {
@@ -405,34 +425,35 @@ impl RecoveryStore {
         }
         let recovery_id = row_string(&row, "recovery_id")?;
         let claim_id = row_string(&row, "claim_id")?;
-        let now = timestamp();
-        tx.execute(self.db.stmt(
-            "UPDATE store_order_recovery_claims
+        connection
+            .execute(self.db.stmt(
+                "UPDATE store_order_recovery_claims
              SET state = 'resolved', resolved_at = $2
              WHERE id = $1 AND state = 'open'",
-            vec![claim_id.clone().into(), now.clone().into()],
-        ))
-        .await
-        .map_err(storage)?;
-        let other_open = count_value(
-            tx.query_one(self.db.stmt(
-                "SELECT COUNT(*) AS value FROM store_order_recovery_claims
-                 WHERE recovery_id = $1 AND id <> $2 AND state = 'open'",
-                vec![recovery_id.clone().into(), claim_id.into()],
+                vec![claim_id.clone().into(), now.into()],
             ))
             .await
-            .map_err(storage)?,
+            .map_err(storage)?;
+        let other_open = count_value(
+            connection
+                .query_one(self.db.stmt(
+                    "SELECT COUNT(*) AS value FROM store_order_recovery_claims
+                 WHERE recovery_id = $1 AND id <> $2 AND state = 'open'",
+                    vec![recovery_id.clone().into(), claim_id.into()],
+                ))
+                .await
+                .map_err(storage)?,
         )?;
         let reserved = parse_nonnegative(&row_string(&row, "reserved_nano_usd")?)?;
         let recovered = parse_nonnegative(&row_string(&row, "recovered_nano_usd")?)?;
         if other_open == 0 && recovered == 0 && reserved != 0 {
             let user_id = row_string(&row, "user_id")?;
-            let balance = lock_user_balance(&self.db, &*tx, &user_id, lock).await?;
+            let balance = lock_user_balance(&self.db, connection, &user_id, lock).await?;
             let reserved_delta = checked_i128(reserved)?;
             let release_key = format!("store:recovery:{recovery_id}:release");
             apply_balance_delta(
                 &self.db,
-                &*tx,
+                connection,
                 &user_id,
                 balance,
                 reserved_delta,
@@ -440,45 +461,59 @@ impl RecoveryStore {
                 &release_key,
                 &row_string(&row, "order_id")?,
                 &recovery_id,
-                &now,
+                now,
             )
             .await?;
-            tx.execute(self.db.stmt(
-                "UPDATE store_order_reward_recoveries
+            connection
+                .execute(self.db.stmt(
+                    "UPDATE store_order_reward_recoveries
                  SET reserved_nano_usd = '0', release_ledger_key = $2,
                      state = 'released', updated_at = $3
                  WHERE id = $1 AND recovered_nano_usd = '0'",
-                vec![recovery_id.into(), release_key.into(), now.clone().into()],
+                    vec![recovery_id.into(), release_key.into(), now.into()],
+                ))
+                .await
+                .map_err(storage)?;
+        }
+        connection
+            .execute(self.db.stmt(
+                "UPDATE store_refunds
+             SET state = 'failed', resolved_at = $2, updated_at = $2
+             WHERE id = $1 AND state IN ('created', 'pending')",
+                vec![refund_id.into(), now.into()],
             ))
             .await
             .map_err(storage)?;
-        }
-        tx.execute(self.db.stmt(
-            "UPDATE store_refunds
-             SET state = 'failed', resolved_at = $2, updated_at = $2
-             WHERE id = $1 AND state IN ('created', 'pending')",
-            vec![refund_id.into(), now.clone().into()],
-        ))
-        .await
-        .map_err(storage)?;
-        tx.execute(self.db.stmt(
-            "UPDATE store_orders
+        connection
+            .execute(self.db.stmt(
+                "UPDATE store_orders
              SET payment_state = 'paid', updated_at = $2,
                  state_revision = state_revision + 1
              WHERE id = $1 AND payment_state = 'refund_pending'",
-            vec![row_string(&row, "order_id")?.into(), now.into()],
-        ))
-        .await
-        .map_err(storage)?;
-        tx.commit().await.map_err(storage)
+                vec![row_string(&row, "order_id")?.into(), now.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        Ok(())
     }
 
     pub async fn complete_refund(&self, refund_id: &str) -> Result<(), RecoveryError> {
         let tx = self.db.begin_write().await.map_err(storage)?;
-        let row = load_refund_mutation(&self.db, &*tx, refund_id, lock_clause(&self.db)).await?;
+        self.complete_refund_in(&*tx, refund_id, &timestamp())
+            .await?;
+        tx.commit().await.map_err(storage)
+    }
+
+    pub(crate) async fn complete_refund_in<C: ConnectionTrait>(
+        &self,
+        connection: &C,
+        refund_id: &str,
+        now: &str,
+    ) -> Result<(), RecoveryError> {
+        let row =
+            load_refund_mutation(&self.db, connection, refund_id, lock_clause(&self.db)).await?;
         let state = row_string(&row, "refund_state")?;
         if state == "succeeded" {
-            tx.commit().await.map_err(storage)?;
             return Ok(());
         }
         if state == "failed" {
@@ -489,33 +524,35 @@ impl RecoveryStore {
         if original != 0 && reserved != original {
             return Err(RecoveryError::Conflict);
         }
-        let now = timestamp();
-        tx.execute(self.db.stmt(
-            "UPDATE store_order_reward_recoveries
+        connection
+            .execute(self.db.stmt(
+                "UPDATE store_order_reward_recoveries
              SET reserved_nano_usd = '0', recovered_nano_usd = original_nano_usd,
                  state = 'recovered', updated_at = $2
              WHERE id = $1 AND recovered_nano_usd = '0'",
-            vec![row_string(&row, "recovery_id")?.into(), now.clone().into()],
-        ))
-        .await
-        .map_err(storage)?;
-        tx.execute(self.db.stmt(
-            "UPDATE store_order_recovery_claims
+                vec![row_string(&row, "recovery_id")?.into(), now.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        connection
+            .execute(self.db.stmt(
+                "UPDATE store_order_recovery_claims
              SET state = 'consumed', resolved_at = $2
              WHERE id = $1 AND state = 'open'",
-            vec![row_string(&row, "claim_id")?.into(), now.clone().into()],
-        ))
-        .await
-        .map_err(storage)?;
-        tx.execute(self.db.stmt(
-            "UPDATE store_refunds
+                vec![row_string(&row, "claim_id")?.into(), now.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        connection
+            .execute(self.db.stmt(
+                "UPDATE store_refunds
              SET state = 'succeeded', resolved_at = $2, updated_at = $2
              WHERE id = $1 AND state IN ('created', 'pending')",
-            vec![refund_id.into(), now.clone().into()],
-        ))
-        .await
-        .map_err(storage)?;
-        let changed = tx
+                vec![refund_id.into(), now.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        let changed = connection
             .execute(self.db.stmt(
                 "UPDATE store_orders
                  SET payment_state = 'refunded', refunded_at = $2, updated_at = $2,
@@ -528,7 +565,7 @@ impl RecoveryStore {
         if changed.rows_affected() != 1 {
             return Err(RecoveryError::Conflict);
         }
-        tx.commit().await.map_err(storage)
+        Ok(())
     }
 
     pub async fn open_claim(

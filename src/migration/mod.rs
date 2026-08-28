@@ -59,6 +59,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260828_000054_store_channel_readiness::Migration),
             Box::new(m20260828_000055_store_refund_reauth::Migration),
             Box::new(m20260828_000056_store_reprocess_reauth::Migration),
+            Box::new(m20260828_000057_store_refund_query_retries::Migration),
         ]
     }
 }
@@ -247,6 +248,7 @@ mod m20260827_000053_store_fulfillment_retries;
 mod m20260828_000054_store_channel_readiness;
 mod m20260828_000055_store_refund_reauth;
 mod m20260828_000056_store_reprocess_reauth;
+mod m20260828_000057_store_refund_query_retries;
 
 #[cfg(test)]
 mod tests {
