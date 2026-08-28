@@ -1439,6 +1439,85 @@ async fn bounded_clearing_caps_raw_and_network_classes_at_batch_size() {
 }
 
 #[tokio::test]
+async fn run_failure_after_partial_clearing_rolls_back_cleared_data() {
+    let db = setup().await;
+    insert_privacy(&db, "v1", &retention_json(2557, 24)).await;
+    // Eligible for both raw-callback and network-metadata clearing at instant().
+    insert_provider_event(&db, "evt-rollback", "2026-05-01T00:00:00.000000Z", true, true).await;
+    // Expired grant that the run deletes inside its write transaction.
+    insert_reauth_grant(&db, "grant-expired", "2026-01-02T00:00:00.000000Z").await;
+    // The corrupt expiry sorts lexically after every RFC3339 timestamp, so the
+    // deletion candidate query (expires_at <= cutoff) skips it. Once the run has
+    // deleted grant-expired, this row is the only grant left, so oldest_remaining
+    // reads it after the clearing already happened and parse_time fails. This
+    // forces the SB-PR-11B failure path through execute_success/finish_transaction.
+    insert_reauth_grant(&db, "grant-corrupt", "invalid-expiry").await;
+
+    let retention = StoreRetention::new(db.clone(), "owner-a");
+    let run = retention
+        .run_at(instant(), actor("rollback-run"))
+        .await
+        .expect("failed run is recorded");
+
+    assert_eq!(run.state, StoreRetentionRunState::Failed);
+    assert_eq!(run.error_category.as_deref(), Some("storage"));
+    assert_eq!(run.counts.raw_callback_bodies, 0);
+    assert_eq!(run.counts.network_metadata, 0);
+    assert_eq!(run.counts.expired_reauth_grants, 0);
+    assert_eq!(run.oldest_remaining_at, None);
+
+    // The rollback must restore the cleared event fields and the deleted grant.
+    assert!(event_raw_present(&db, "evt-rollback").await);
+    assert!(event_network_present(&db, "evt-rollback").await);
+    assert_eq!(
+        count_rows(&db, "SELECT COUNT(*) AS value FROM store_reauth_grants").await,
+        2
+    );
+    let status = retention.status().await.expect("status");
+    assert_eq!(status.consecutive_failures, 1);
+    assert!(!status.checkout_paused);
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_access_audits
+             WHERE action = 'retention_run' AND result = $1",
+            "failed",
+        )
+        .await,
+        1
+    );
+
+    // With the corrupt grant removed, the same data set clears successfully,
+    // proving the first run failed only after the clearing statements ran.
+    db.write()
+        .await
+        .execute(db.stmt(
+            "DELETE FROM store_reauth_grants WHERE id = $1",
+            vec!["grant-corrupt".into()],
+        ))
+        .await
+        .expect("remove corrupt grant");
+    let second = retention
+        .run_at(instant() + Duration::seconds(1), actor("rollback-run-2"))
+        .await
+        .expect("second run");
+    assert_eq!(second.state, StoreRetentionRunState::Succeeded);
+    assert_eq!(second.counts.raw_callback_bodies, 1);
+    assert_eq!(second.counts.network_metadata, 1);
+    assert_eq!(second.counts.expired_reauth_grants, 1);
+    assert_eq!(
+        second.oldest_remaining_at,
+        Some(Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap())
+    );
+    assert!(!event_raw_present(&db, "evt-rollback").await);
+    assert!(!event_network_present(&db, "evt-rollback").await);
+    assert_eq!(
+        count_rows(&db, "SELECT COUNT(*) AS value FROM store_reauth_grants").await,
+        0
+    );
+}
+
+#[tokio::test]
 async fn malformed_privacy_retention_json_fails_run() {
     let db = setup().await;
     db.write()
