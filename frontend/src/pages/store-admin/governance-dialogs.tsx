@@ -164,6 +164,9 @@ export function PrivacyRecordsDialog({
     setDraft((current) => ({ ...current, [key]: value }));
   };
 
+  // Every SB-C-34 append field is required, so an empty field always means an invalid request.
+  const requiredFieldMissing = Object.values(draft).some((value) => value.trim().length === 0);
+
   const submit = async () => {
     const input = buildPrivacyRecordInput(draft);
     if (!input) {
@@ -269,7 +272,7 @@ export function PrivacyRecordsDialog({
         )}
         <DialogFooter>
           <Button type="button" variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)}>{t("common.close")}</Button>
-          <Button type="button" className="rounded-xl" disabled={saving || records.isLoading || Boolean(records.error)} onClick={() => void submit()}><Plus className="size-4" />{saving ? t("common.loading") : t("store.admin.governance.privacyRecords.create")}</Button>
+          <Button type="button" className="rounded-xl" disabled={saving || records.isLoading || Boolean(records.error) || requiredFieldMissing} onClick={() => void submit()}><Plus className="size-4" />{saving ? t("common.loading") : t("store.admin.governance.privacyRecords.create")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -479,6 +482,9 @@ export function RetentionDialog({
     return action(grant.token);
   }
 
+  const runReady = password.trim().length > 0 && reason.trim().length > 0;
+  const containReady = runReady && evidenceDigest.trim().length === 64;
+
   async function runRetention() {
     if (!reason.trim()) {
       toast.error(t("store.admin.governance.invalid"));
@@ -602,13 +608,17 @@ export function RetentionDialog({
                   />
                 </div>
               )}
+              <p className="text-xs text-muted-foreground text-pretty">
+                {t("store.admin.governance.retention.runConsequence")}
+                {data.status.checkout_paused && <> {t("store.admin.governance.retention.containConsequence")}</>}
+              </p>
             </div>
             <DialogFooter className="gap-2 sm:justify-between">
-              <Button type="button" variant="outline" className="rounded-xl" disabled={busy} onClick={() => void runRetention()}>
+              <Button type="button" variant="outline" className="rounded-xl" disabled={busy || !runReady} onClick={() => void runRetention()}>
                 {t("store.admin.governance.retention.run")}
               </Button>
               {data.status.checkout_paused && (
-                <Button type="button" className="rounded-xl" disabled={busy} onClick={() => void containRetention()}>
+                <Button type="button" className="rounded-xl" disabled={busy || !containReady} onClick={() => void containRetention()}>
                   {t("store.admin.governance.retention.contain")}
                 </Button>
               )}

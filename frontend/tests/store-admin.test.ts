@@ -115,11 +115,15 @@ describe("Store admin page", () => {
     expect(panelsSource).toContain("store.admin.channelAvailability.configuredState");
     expect(panelsSource).toContain("store.admin.channelAvailability.effectiveState");
     expect(panelsSource).toContain("store.admin.channelAvailability.unavailableReasons");
+    expect(panelsSource).toContain("UnavailableReasonChip");
+    expect(panelsSource).toContain("CAPABILITY_REASON_PATTERN");
     for (const locale of ["en", "zh", "zh-TW", "ja"]) {
       const source = readSource(`../src/locales/${locale}.json`);
       expect(source).toContain('"configuredState"');
       expect(source).toContain('"effectiveState"');
       expect(source).toContain('"unavailableReasons"');
+      expect(source).toContain('"reasonLabels"');
+      expect(source).toContain('"active_credential_missing"');
     }
   });
 
@@ -200,12 +204,16 @@ describe("Store admin page", () => {
     expect(governanceDialogsSource).toContain("optimisticContainment");
     expect(governanceDialogsSource).toContain("rollbackOnError: true");
     expect(governanceDialogsSource).toContain("evidenceDigest.trim().length !== 64");
+    expect(governanceDialogsSource).toContain("disabled={busy || !runReady}");
+    expect(governanceDialogsSource).toContain("disabled={busy || !containReady}");
+    expect(governanceDialogsSource).toContain("runConsequence");
+    expect(governanceDialogsSource).toContain("containConsequence");
   });
 
   test("keeps governance locale keys for retention, compliance, and capabilities", () => {
     const retentionKeys = [
-      "action", "checkout", "contain", "contained", "description", "failures",
-      "holds", "open", "paused", "ran", "reason", "run", "runs", "title",
+      "action", "checkout", "contain", "containConsequence", "contained", "description", "failures",
+      "holds", "open", "paused", "ran", "reason", "run", "runConsequence", "runs", "title",
     ];
     const complianceKeys = ["action", "confirm", "currentTerms", "description", "saved", "termsAcknowledgment", "title"];
     const capabilityKeys = ["action", "description", "kinds", "saved", "select", "states", "title"];
