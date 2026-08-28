@@ -97,6 +97,8 @@ Production checkout and callbacks require a current accepted Store privacy recor
 
 Open **Store Management** at `/dashboard/store-admin`. Select the **Payment Channels** tab. Select **Privacy records**.
 
+![Store privacy records](/images/en/store-privacy-records.webp)
+
 Each listed record shows policy version, jurisdiction, allowed regions, acceptance state, and next review date. A saved record cannot be edited.
 
 Append a record when you approve a policy update. Enter these values, then select **Add privacy record**:
@@ -117,6 +119,8 @@ Monoize sets the reviewer, the approval time, and the next review date. Monoize 
 ## Bind Channel readiness
 
 A Channel stays unavailable until its readiness profile references a current accepted privacy record.
+
+![Store payment Channels](/images/en/store-governance.webp)
 
 Select the shield action on an Alipay, WeChat Pay, or Stripe Channel row. Select a **Privacy record**. Set **Callback verification passed** only after the signed callback test passes. Set the supported currencies, the checkout actions, the amount range for each currency, the license, runtime, and availability evidence digests, and a validity period of 1 through 90 days. Select **Save**.
 
@@ -150,6 +154,8 @@ Payment data, callback evidence, backups, logs, and encryption keys stay inside 
 ## Run retention manually
 
 Open **Store Management**. Select the **Payment Channels** tab. Select **Retention**.
+
+![Store retention](/images/en/store-retention.webp)
 
 The dialog shows the consecutive failure count, the checkout state (**Open** or **Paused**), the retention run count, and the legal hold count.
 

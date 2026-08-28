@@ -108,6 +108,11 @@ DOC-25. The Dashboard Store page MUST document the Store governance surfaces tha
 The page MUST NOT document a Store Management child page, menu, or dialog that
 `frontend/src/pages/store-admin/` does not render.
 
+DOC-26. The Dashboard Store page MUST embed three Store Management screenshots:
+`store-governance.webp` (the Payment Channels tab), `store-privacy-records.webp` (the
+Privacy records dialog), and `store-retention.webp` (the Retention dialog). Each file MUST
+exist in both screenshot sets named by DOC-61 and MUST be referenced under DOC-62.
+
 ## 4. Writing style
 
 DOC-30. All prose MUST follow Simplified Technical English conventions:
