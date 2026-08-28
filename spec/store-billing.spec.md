@@ -190,7 +190,7 @@ SB-O-5. The service MUST commit the local order and attempt before it sends prov
 
 SB-O-6. Order creation MUST require a user-scoped `Idempotency-Key`. Reuse with the same canonical request MUST return the same order. Reuse with different input MUST return HTTP `409`.
 
-SB-O-7. A user MUST create at most five orders per minute and have at most ten unpaid unexpired orders. Excess creation MUST return HTTP `429`.
+SB-O-7. A user MUST create at most five orders per minute and have at most ten unpaid unexpired orders. Excess creation MUST return HTTP `429`. The service MUST perform the transactional idempotency recheck, both limit counts, and the order insert in one write transaction. SQLite MUST serialize that transaction with the `DbPool` write lock. PostgreSQL MUST execute `SELECT id FROM users WHERE id = $1 FOR UPDATE` before the transactional idempotency recheck and both limit counts. A concurrent request with the same user and `Idempotency-Key` MUST wait for this lock and MUST return the committed order after the wait. A missing user row MUST NOT change the existing order-creation result.
 
 SB-O-8. A user MUST poll one order at most 30 times per minute across that user's order-detail requests on the single Store Primary. The order MUST belong to that user.
 

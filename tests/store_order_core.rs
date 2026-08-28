@@ -9,6 +9,8 @@ use monoize::store_billing::order::{
 use monoize::store_billing::payment::CheckoutAction;
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
+use std::sync::Arc;
+use tokio::sync::Barrier;
 
 async fn setup() -> (DbPool, PaymentOrderStore) {
     let db = DbPool::connect("sqlite::memory:")
@@ -77,6 +79,204 @@ fn order_input(key: &str) -> CreatePaymentOrderInput {
         payment_currency: Currency::CNY,
         custom_recharge_minor: None,
     }
+}
+
+async fn age_orders_past_creation_window(db: &DbPool, user_id: &str) {
+    let created_at = (Utc::now() - chrono::Duration::minutes(2)).to_rfc3339();
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_orders SET created_at = $1 WHERE user_id = $2",
+            vec![created_at.into(), user_id.into()],
+        ))
+        .await
+        .expect("age order fixtures");
+}
+
+#[test]
+fn postgres_order_creation_locks_user_before_limit_counts() {
+    let source = include_str!("../src/store_billing/order.rs").replace("\r\n", "\n");
+    let function_start = source
+        .find("pub async fn create_order(")
+        .expect("create_order must exist");
+    let function_end = source[function_start..]
+        .find("pub async fn list_orders_for_user(")
+        .map(|offset| function_start + offset)
+        .expect("create_order must end before list_orders_for_user");
+    let body = &source[function_start..function_end];
+    let transaction = body
+        .find("let tx = self.db.begin_write().await.map_err(storage)?")
+        .expect("create_order must start a write transaction");
+    let transactional_body = &body[transaction..];
+    let lock = transactional_body
+        .find("lock_order_creation_user(&self.db, &*tx, user_id).await?")
+        .expect("create_order must lock its PostgreSQL user row");
+    let idempotency_recheck = transactional_body
+        .find("query_order_by_creation_key(&self.db, &*tx, user_id, &input.idempotency_key).await?")
+        .expect("create_order must recheck idempotency inside the transaction");
+    let recent_count = transactional_body
+        .find("let recent_count =")
+        .expect("recent order count must exist");
+    let open_count = transactional_body
+        .find("let open_count =")
+        .expect("open order count must exist");
+
+    assert!(lock < idempotency_recheck);
+    assert!(idempotency_recheck < recent_count);
+    assert!(idempotency_recheck < open_count);
+    assert!(lock < recent_count);
+    assert!(lock < open_count);
+    assert!(source.contains(
+        "const POSTGRES_ORDER_CREATION_USER_LOCK_SQL: &str = \"SELECT id FROM users WHERE id = $1 FOR UPDATE\";"
+    ));
+}
+
+#[tokio::test]
+async fn concurrent_order_creation_enforces_per_minute_limit() {
+    let (_db, store) = setup().await;
+    let barrier = Arc::new(Barrier::new(7));
+    let mut tasks = Vec::new();
+    for index in 0..6 {
+        let store = store.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            store
+                .create_order(
+                    "minute-limit-user",
+                    order_input(&format!("minute-limit-{index}")),
+                    &rate(),
+                )
+                .await
+        }));
+    }
+    barrier.wait().await;
+
+    let mut created = 0;
+    let mut rate_limited = 0;
+    for task in tasks {
+        match task.await.expect("order creation task") {
+            Ok(_) => created += 1,
+            Err(PaymentOrderError::CreationRateLimited) => rate_limited += 1,
+            Err(error) => panic!("unexpected order creation error: {error}"),
+        }
+    }
+
+    assert_eq!(created, 5);
+    assert_eq!(rate_limited, 1);
+    assert_eq!(
+        store
+            .list_orders_for_user("minute-limit-user", 100)
+            .await
+            .unwrap()
+            .len(),
+        5
+    );
+}
+
+#[tokio::test]
+async fn concurrent_same_idempotency_key_replays_one_order() {
+    let (_db, store) = setup().await;
+    let barrier = Arc::new(Barrier::new(3));
+    let mut tasks = Vec::new();
+    for _ in 0..2 {
+        let store = store.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            store
+                .create_order("same-key-user", order_input("same-key-concurrent"), &rate())
+                .await
+        }));
+    }
+    barrier.wait().await;
+
+    let first = tasks
+        .remove(0)
+        .await
+        .expect("first order creation task")
+        .expect("first order creation");
+    let second = tasks
+        .remove(0)
+        .await
+        .expect("second order creation task")
+        .expect("second order creation");
+
+    assert_eq!(first.id, second.id);
+    assert_eq!(
+        store
+            .list_orders_for_user("same-key-user", 100)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn concurrent_order_creation_enforces_open_order_limit() {
+    let (db, store) = setup().await;
+    for index in 0..5 {
+        store
+            .create_order(
+                "open-limit-user",
+                order_input(&format!("open-fixture-{index}")),
+                &rate(),
+            )
+            .await
+            .unwrap();
+    }
+    age_orders_past_creation_window(&db, "open-limit-user").await;
+    for index in 5..9 {
+        store
+            .create_order(
+                "open-limit-user",
+                order_input(&format!("open-fixture-{index}")),
+                &rate(),
+            )
+            .await
+            .unwrap();
+    }
+    age_orders_past_creation_window(&db, "open-limit-user").await;
+
+    let barrier = Arc::new(Barrier::new(12));
+    let mut tasks = Vec::new();
+    for index in 0..11 {
+        let store = store.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            store
+                .create_order(
+                    "open-limit-user",
+                    order_input(&format!("open-contender-{index}")),
+                    &rate(),
+                )
+                .await
+        }));
+    }
+    barrier.wait().await;
+
+    let mut created = 0;
+    let mut open_limited = 0;
+    for task in tasks {
+        match task.await.expect("order creation task") {
+            Ok(_) => created += 1,
+            Err(PaymentOrderError::OpenOrderLimit) => open_limited += 1,
+            Err(error) => panic!("unexpected order creation error: {error}"),
+        }
+    }
+
+    assert_eq!(created, 1);
+    assert_eq!(open_limited, 10);
+    assert_eq!(
+        store
+            .list_orders_for_user("open-limit-user", 100)
+            .await
+            .unwrap()
+            .len(),
+        10
+    );
 }
 
 #[tokio::test]

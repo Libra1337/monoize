@@ -16,6 +16,7 @@ use crate::db::DbPool;
 const ORDER_LIFETIME_MINUTES: i64 = 30;
 const ORDER_CREATION_LIMIT_PER_MINUTE: i64 = 5;
 const OPEN_ORDER_LIMIT: i64 = 10;
+const POSTGRES_ORDER_CREATION_USER_LOCK_SQL: &str = "SELECT id FROM users WHERE id = $1 FOR UPDATE";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreatePaymentOrderInput {
@@ -200,6 +201,7 @@ impl PaymentOrderStore {
         let recent_text = timestamp(now - Duration::minutes(1));
         let tx = self.db.begin_write().await.map_err(storage)?;
 
+        lock_order_creation_user(&self.db, &*tx, user_id).await?;
         if let Some(existing) =
             query_order_by_creation_key(&self.db, &*tx, user_id, &input.idempotency_key).await?
         {
@@ -787,6 +789,20 @@ fn quote_balance(
             "actual_received_minor": actual.to_string(),
         })),
     ))
+}
+
+async fn lock_order_creation_user<C: ConnectionTrait>(
+    db: &DbPool,
+    connection: &C,
+    user_id: &str,
+) -> Result<(), PaymentOrderError> {
+    if db.is_postgres() {
+        let _ = connection
+            .query_one(db.stmt(POSTGRES_ORDER_CREATION_USER_LOCK_SQL, vec![user_id.into()]))
+            .await
+            .map_err(storage)?;
+    }
+    Ok(())
 }
 
 async fn query_order_by_creation_key<C: ConnectionTrait>(
