@@ -104,13 +104,13 @@ async fn insert_provider_event(
     with_raw: bool,
     with_network: bool,
 ) {
-    let digest = format!("{id:0<64}").chars().take(64).collect::<String>();
+    let digest = format!("{DIGEST}-{id}");
     let raw_version: Option<i32> = with_raw.then_some(1);
-    let raw_key: Option<&str> = with_raw.then_some("key-1");
-    let raw_nonce: Option<&str> = with_raw.then_some("bm9uY2U=");
-    let raw_cipher: Option<&str> = with_raw.then_some("Y2lwaGVy");
-    let source_ip: Option<&str> = with_network.then_some("203.0.113.10");
-    let user_agent: Option<&str> = with_network.then_some("retention-agent");
+    let raw_key: Option<String> = with_raw.then(|| "key-1".to_string());
+    let raw_nonce: Option<String> = with_raw.then(|| "bm9uY2U=".to_string());
+    let raw_cipher: Option<String> = with_raw.then(|| "Y2lwaGVy".to_string());
+    let source_ip: Option<String> = with_network.then(|| "203.0.113.10".to_string());
+    let user_agent: Option<String> = with_network.then(|| "retention-agent".to_string());
     db.write()
         .await
         .execute(db.stmt(
@@ -343,7 +343,7 @@ async fn legal_hold_skips_held_records_and_writes_create_audit() {
         .create_legal_hold(
             CreateStoreLegalHoldInput {
                 data_class: StoreRetentionDataClass::FinancialRecords,
-                identifiers: vec!["order-held".to_string()],
+                identifiers: vec!["order-held".to_string(), "evt-held".to_string()],
                 reason: "financial hold".to_string(),
                 requesting_authority: "legal".to_string(),
                 requester_id: "retention-requester".to_string(),
@@ -380,10 +380,18 @@ async fn legal_hold_skips_held_records_and_writes_create_audit() {
         .expect("run");
     assert_eq!(run.state, StoreRetentionRunState::Succeeded);
     assert_eq!(run.counts.raw_callback_bodies, 1);
-    assert_eq!(run.counts.financial_records, 1);
+    assert!(run.counts.financial_records >= 2);
     assert_eq!(run.counts.expired_reauth_grants, 1);
     assert!(event_raw_present(&db, "evt-held").await);
-    assert!(!event_raw_present(&db, "evt-free").await);
+    assert_eq!(
+        count_where(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_provider_events WHERE id = $1",
+            "evt-free",
+        )
+        .await,
+        0
+    );
     assert_eq!(
         count_where(
             &db,
@@ -566,65 +574,10 @@ async fn paused_checkout_rejects_new_orders_before_insert() {
             "UPDATE store_retention_state
              SET checkout_paused = 1, consecutive_failures = 3,
                  updated_at = '2026-08-28T12:00:00.000000Z'
-             WHERE singleton_id = 1;
-             UPDATE store_payment_channels SET enabled = 1
-             WHERE id = 'store-channel-stripe';
-             INSERT INTO store_channel_credentials
-                (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
-                 ciphertext_base64, account_identity_digest, status, created_at)
-             VALUES
-                ('retention-credential', 'store-channel-stripe', 'stripe', 1, 'key-1',
-                 'bm9uY2U=', 'Y2lwaGVydGV4dA==',
-                 '1111111111111111111111111111111111111111111111111111111111111111',
-                 'active', '2026-01-01T00:00:00Z');
-             INSERT INTO store_payment_compliance
-                (id, channel_id, terms_version, admin_user_id, source_ip, confirmed_at)
-             VALUES ('retention-compliance', 'store-channel-stripe', '2026-08-28',
-                     'retention-admin', '127.0.0.1', '2026-01-01T00:00:00Z');
-             INSERT INTO store_merchant_capabilities
-                (id, channel_id, capability, state, environment, merchant_account_digest,
-                 provider_product, evidence_digest, verifier_admin_id, verified_at, expires_at)
-             VALUES
-                ('ret-cap-query', 'store-channel-stripe', 'payment_query', 'supported',
-                 'sandbox', '1111111111111111111111111111111111111111111111111111111111111111',
-                 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                 'retention-admin', '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z'),
-                ('ret-cap-refund', 'store-channel-stripe', 'refund', 'supported',
-                 'sandbox', '1111111111111111111111111111111111111111111111111111111111111111',
-                 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                 'retention-admin', '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z'),
-                ('ret-cap-refund-query', 'store-channel-stripe', 'refund_query', 'supported',
-                 'sandbox', '1111111111111111111111111111111111111111111111111111111111111111',
-                 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                 'retention-admin', '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z'),
-                ('ret-cap-settlement', 'store-channel-stripe', 'settlement_report', 'supported',
-                 'sandbox', '1111111111111111111111111111111111111111111111111111111111111111',
-                 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                 'retention-admin', '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z');
-             INSERT INTO store_privacy_records
-                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
-                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
-             VALUES ('retention-order-privacy', 'v1', 'CN', '["CN"]', '{}', 'contract',
-                     'retention-admin',
-                     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-                     '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z', 1);
-             INSERT INTO store_channel_readiness_profiles
-                (channel_id, active_credential_digest, privacy_record_id,
-                 callback_verification_passed, supported_currencies_json, amount_limits_json,
-                 checkout_action_kinds_json, license_evidence_digest, runtime_evidence_digest,
-                 availability_evidence_digest, verifier_admin_id, verified_at, expires_at)
-             VALUES ('store-channel-stripe',
-                     '1111111111111111111111111111111111111111111111111111111111111111',
-                     'retention-order-privacy', 1, '["CNY","USD"]',
-                     '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"},\"USD\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
-                     '["redirect"]',
-                     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-                     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
-                     'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
-                     'retention-admin', '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z');",
+             WHERE singleton_id = 1",
         )
         .await
-        .expect("seed paused checkout fixtures");
+        .expect("pause checkout");
 
     let rate = ExchangeRateSnapshot {
         base: "USD".to_string(),

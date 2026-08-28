@@ -135,6 +135,7 @@ export function ChannelsPanel({
   channels,
   onCreate,
   onPrivacyRecords,
+  onRetention,
   onReadiness,
   onEdit,
   onDelete,
@@ -142,6 +143,7 @@ export function ChannelsPanel({
   channels: StorePaymentChannel[];
   onCreate: () => void;
   onPrivacyRecords: () => void;
+  onRetention: () => void;
   onReadiness: (channel: StorePaymentChannel) => void;
   onEdit: (channel: StorePaymentChannel) => void;
   onDelete: (channel: StorePaymentChannel) => void;
@@ -160,6 +162,10 @@ export function ChannelsPanel({
           <Button type="button" variant="outline" className="min-h-11 rounded-xl" onClick={onPrivacyRecords}>
             <FileCheck2 className="size-4" />
             {t("store.admin.governance.privacyRecords.action")}
+          </Button>
+          <Button type="button" variant="outline" className="min-h-11 rounded-xl" onClick={onRetention}>
+            <ShieldCheck className="size-4" />
+            {t("store.admin.governance.retention.action")}
           </Button>
           <Button type="button" className="min-h-11 rounded-xl" onClick={onCreate}>
             <Plus className="size-4" />
