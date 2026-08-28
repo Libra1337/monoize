@@ -363,6 +363,7 @@
 					"callbackHelp": "仅在签名回调测试通过后启用。",
 					"amountRange": "{{currency}} 金额范围",
 					"saved": "渠道就绪状态已保存",
+					"privacyRequiredTitle": "需要隐私记录",
 					"noPrivacyRecords": "保存渠道就绪状态前，请先创建隐私记录。",
 					"openPrivacyRecords": "打开隐私记录"
 				},
@@ -381,9 +382,11 @@
 					"confirm": "确认当前条款",
 					"saved": "合规确认已保存",
 					"passwordRequired": "请输入当前 Admin 密码。",
+					"termsSummaryTitle": "Store 支付条款确认",
 					"termsSummary": "你确认你控制商户账户、已注册回调、所售产品、退款流程、争议流程以及适用的客户通知。这是运营确认，不能替代法律审查。",
 					"termsAcknowledgment": "我已阅读上述 Store 支付条款。",
 					"adminPassword": "Admin 密码",
+					"reauthHelp": "记录合规确认需要重新认证。",
 					"acknowledgmentRequired": "请先阅读条款并勾选确认复选框。"
 				},
 				"capabilities": {
