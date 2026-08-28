@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { SiAlipay, SiStripe, SiWechat } from "@icons-pack/react-simple-icons";
-import { CreditCard, Eye, Package, Pencil, Plus, ReceiptText, TicketCheck, Trash2 } from "lucide-react";
+import { CreditCard, Eye, FileCheck2, Package, Pencil, Plus, ReceiptText, ShieldCheck, TicketCheck, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -134,11 +134,15 @@ function ChannelIcon({ channel }: { channel: StorePaymentChannel }) {
 export function ChannelsPanel({
   channels,
   onCreate,
+  onPrivacyRecords,
+  onReadiness,
   onEdit,
   onDelete,
 }: {
   channels: StorePaymentChannel[];
   onCreate: () => void;
+  onPrivacyRecords: () => void;
+  onReadiness: (channel: StorePaymentChannel) => void;
   onEdit: (channel: StorePaymentChannel) => void;
   onDelete: (channel: StorePaymentChannel) => void;
 }) {
@@ -152,10 +156,16 @@ export function ChannelsPanel({
           </h2>
           <p className="text-sm text-muted-foreground">{t("store.admin.channels.descriptionText")}</p>
         </div>
-        <Button type="button" className="min-h-11 rounded-xl" onClick={onCreate}>
-          <Plus className="size-4" />
-          {t("store.admin.channels.create")}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" className="min-h-11 rounded-xl" onClick={onPrivacyRecords}>
+            <FileCheck2 className="size-4" />
+            {t("store.admin.governance.privacyRecords.action")}
+          </Button>
+          <Button type="button" className="min-h-11 rounded-xl" onClick={onCreate}>
+            <Plus className="size-4" />
+            {t("store.admin.channels.create")}
+          </Button>
+        </div>
       </div>
       {channels.length === 0 ? (
         <EmptyPanel icon={<CreditCard className="size-8" />} title={t("store.admin.channels.empty")} />
@@ -201,6 +211,11 @@ export function ChannelsPanel({
                 )}
               </div>
               <div className="flex items-center gap-1">
+                {channel.adapter_kind !== "http" && (
+                  <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("store.admin.governance.readiness.action")} onClick={() => onReadiness(channel)}>
+                    <ShieldCheck className="size-4" />
+                  </Button>
+                )}
                 <Button type="button" variant="ghost" size="icon" className="size-11 rounded-xl" aria-label={t("common.edit")} onClick={() => onEdit(channel)}>
                   <Pencil className="size-4" />
                 </Button>

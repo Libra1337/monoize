@@ -43,6 +43,7 @@ const channelSource = readSource("../src/pages/store-admin/channel-dialog.tsx");
 const redemptionSource = readSource("../src/pages/store-admin/redemption-dialog.tsx");
 const panelsSource = readSource("../src/pages/store-admin/admin-panels.tsx");
 const orderDialogSource = readSource("../src/pages/store-admin/order-dialog.tsx");
+const governanceDialogsSource = readSource("../src/pages/store-admin/governance-dialogs.tsx");
 const apiSource = readSource("../src/lib/store-api.ts");
 
 describe("Store admin page", () => {
@@ -119,6 +120,32 @@ describe("Store admin page", () => {
       expect(source).toContain('"configuredState"');
       expect(source).toContain('"effectiveState"');
       expect(source).toContain('"unavailableReasons"');
+    }
+  });
+
+  test("manages privacy records and official Channel readiness in resilient dialogs", () => {
+    for (const method of [
+      "listPrivacyRecords",
+      "createPrivacyRecord",
+      "getChannelReadiness",
+      "putChannelReadiness",
+    ]) {
+      expect(apiSource).toContain(method);
+    }
+    expect(pageSource).toContain("PrivacyRecordsDialog");
+    expect(pageSource).toContain("ChannelReadinessDialog");
+    expect(panelsSource).toContain('channel.adapter_kind !== "http"');
+    expect(governanceDialogsSource).toContain("useSWR");
+    expect(governanceDialogsSource).toContain("Skeleton");
+    expect(governanceDialogsSource).toContain("optimisticData");
+    expect(governanceDialogsSource).toContain("rollbackOnError: true");
+    expect(governanceDialogsSource).toContain("supported_currencies");
+    expect(governanceDialogsSource).toContain("checkout_action_kinds");
+    expect(governanceDialogsSource).not.toContain("active_credential_digest:");
+    for (const locale of ["en", "zh", "zh-TW", "ja"]) {
+      const source = readSource(`../src/locales/${locale}.json`);
+      expect(source).toContain('"privacyRecords"');
+      expect(source).toContain('"readiness"');
     }
   });
 

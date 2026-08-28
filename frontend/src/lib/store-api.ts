@@ -97,6 +97,61 @@ export interface StorePaymentChannel {
   updated_at: string;
 }
 
+export interface StorePrivacyRetention {
+  raw_callback_days: 30;
+  network_metadata_days: 90;
+  financial_records_days: number;
+  redemption_audit_days: 730;
+  expired_reauth_grant_hours: number;
+}
+
+export interface CreateStorePrivacyRecordInput {
+  policy_version: string;
+  jurisdiction: string;
+  allowed_regions: string[];
+  retention: StorePrivacyRetention;
+  legal_basis: string;
+  evidence_digest: string;
+  accepted: true;
+  review_after_days: number;
+}
+
+export interface StorePrivacyRecord extends Omit<CreateStorePrivacyRecordInput, "review_after_days"> {
+  id: string;
+  reviewer_id: string;
+  approved_at: string;
+  next_review_at: string;
+}
+
+export interface StorePrivacyRecordsView {
+  records: StorePrivacyRecord[];
+}
+
+export interface PutStoreChannelReadinessInput {
+  privacy_record_id: string;
+  callback_verification_passed: boolean;
+  supported_currencies: StoreCurrency[];
+  amount_limits: Partial<Record<StoreCurrency, StoreAmountLimit>>;
+  checkout_action_kinds: StoreCheckoutActionKind[];
+  license_evidence_digest: string;
+  runtime_evidence_digest: string;
+  availability_evidence_digest: string;
+  valid_for_days: number;
+}
+
+export interface StoreChannelReadinessProfile
+  extends Omit<PutStoreChannelReadinessInput, "valid_for_days"> {
+  channel_id: string;
+  active_credential_digest: string;
+  verifier_admin_id: string;
+  verified_at: string;
+  expires_at: string;
+}
+
+export interface StoreChannelReadinessView {
+  readiness: StoreChannelReadinessProfile | null;
+}
+
 export type PaymentCredentialInput =
   | {
       adapter_kind: "stripe";
@@ -442,6 +497,20 @@ export const storeApi = {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({}),
         },
+      ),
+    listPrivacyRecords: () =>
+      storeRequest<StorePrivacyRecordsView>("/admin/privacy-records"),
+    createPrivacyRecord: (input: CreateStorePrivacyRecordInput) =>
+      jsonMutation<StorePrivacyRecord>("/admin/privacy-records", "POST", input),
+    getChannelReadiness: (id: string) =>
+      storeRequest<StoreChannelReadinessView>(
+        `/admin/payment-channels/${encodeURIComponent(id)}/readiness`,
+      ),
+    putChannelReadiness: (id: string, input: PutStoreChannelReadinessInput) =>
+      jsonMutation<StoreChannelReadinessProfile>(
+        `/admin/payment-channels/${encodeURIComponent(id)}/readiness`,
+        "PUT",
+        input,
       ),
     createReauthGrant: (
       currentPassword: string,
