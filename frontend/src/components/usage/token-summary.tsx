@@ -42,7 +42,7 @@ export function AnimatedTokenValue({ value, showDelta = false }: { value: bigint
     setDeltaVisible(netDelta !== 0n);
     const start = visibleRef.current;
     const controls = animate(0, 1, {
-      duration: 4.8,
+      duration: 7.2,
       ease: "easeInOut",
       onUpdate: (progress) => {
         const step = BigInt(Math.round(progress * 1_000));

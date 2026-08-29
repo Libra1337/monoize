@@ -62,7 +62,7 @@ UTF-8 byte order. Each row MUST contain `model`, `call_count`, `input_tokens`,
 UR-7c. The usage page MUST display user and model rankings in equal-width columns
 on desktop and stacked sections on narrow screens. The total, user-ranking, and
 model-ranking token counters MUST animate from the currently displayed value to the
-latest target over 4.8 seconds. Changing the selected time range MUST preserve the
+latest target over 7.2 seconds. Changing the selected time range MUST preserve the
 currently displayed value as the animation start value.
 
 UR-7d. The usage page MUST display each ranked user's call count, token count,
@@ -112,4 +112,4 @@ change. The delta MUST fade in, remain visible while the counter is moving, and
 start fading out when the displayed value reaches the latest target. If the new
 value equals the latest target, no new animation or delta MUST start. Reduced-motion
 mode MUST update the value without number interpolation. Every interpolation MUST
-last 4.8 seconds and MUST use an ease-in-out timing function.
+last 7.2 seconds and MUST use an ease-in-out timing function.

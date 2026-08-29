@@ -105,4 +105,9 @@ Token count-up and chart drawing MUST run for 800 through 1200 milliseconds so t
 remains readable. A refresh MUST animate from the last displayed value rather than zero.
 Reduced-motion mode MUST render final values immediately and remove nonessential movement.
 
+UA-22a. When the selected range or metric changes, the trend chart MUST animate
+the previous view out and the new view in. The transition MUST last 650
+milliseconds and MUST preserve the chart container dimensions. Polling updates
+for an unchanged selection MUST NOT restart this view transition.
+
 UA-23. Every visible string MUST use an i18n key present in `en`, `zh`, `zh-TW`, and `ja`.

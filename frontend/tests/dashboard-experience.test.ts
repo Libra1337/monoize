@@ -133,8 +133,10 @@ describe("Dashboard page boundaries", () => {
   test("animates explicit trend selections without interpolating polled paths", () => {
     expect(usageTrendSource).toContain("transitionKey");
     expect(usageTrendSource).toContain("<motion.div");
+    expect(usageTrendSource).toContain("<AnimatePresence");
+    expect(usageTrendSource).toContain("mode=\"wait\"");
     expect(usageTrendSource).toContain("opacity: 0.45, y: 6");
-    expect(usageTrendSource).toContain("duration: 0.45");
+    expect(usageTrendSource).toContain("duration: 0.65");
     expect(usageTrendSource).toContain("isAnimationActive={false}");
     expect(usageTrendSource).toContain("if (loading)");
     expect(usageTrendSource).not.toContain("isAnimationActive={!reduceMotion}");
@@ -143,7 +145,7 @@ describe("Dashboard page boundaries", () => {
   });
 
   test("uses slow token interpolation for live totals and rankings", () => {
-    expect(tokenSummarySource).toContain("duration: 4.8");
+    expect(tokenSummarySource).toContain("duration: 7.2");
     expect(tokenSummarySource).toContain('ease: "easeInOut"');
   });
 
