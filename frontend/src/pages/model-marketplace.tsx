@@ -145,6 +145,12 @@ export function ModelMarketplacePage() {
   const [pages, setPages] = useState<MarketplaceResponse[]>([]);
   const [loadCursor, setLoadCursor] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const rememberGroups = (page: MarketplaceResponse) => {
+    setKnownGroups((current) => [...new Set([
+      ...current,
+      ...page.items.map((item) => item.public_group_name),
+    ])]);
+  };
 
   const query = new URLSearchParams({ limit: LIST_LIMIT });
   if (deferredSearch) query.set("q", deferredSearch);
@@ -154,10 +160,7 @@ export function ModelMarketplacePage() {
     keepPreviousData: true,
     onSuccess: (page) => {
       setPages([page]);
-      setKnownGroups((current) => [...new Set([
-        ...current,
-        ...page.items.map((item) => item.public_group_name),
-      ])]);
+      rememberGroups(page);
       setLoadCursor(null);
     },
   });
@@ -171,6 +174,7 @@ export function ModelMarketplacePage() {
     {
       onSuccess: (page) => {
         setPages((current) => [...current, page].slice(-3));
+        rememberGroups(page);
         setLoadCursor(null);
       },
     },

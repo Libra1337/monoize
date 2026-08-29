@@ -45,6 +45,7 @@ describe("authenticated Model Marketplace", () => {
     expect(marketplaceSource).toContain("capabilities");
     expect(marketplaceSource).toContain("selected?.capabilities.map");
     expect(marketplaceSource).toContain("exchangeRate.mutate()");
+    expect(marketplaceSource.match(/rememberGroups\(page\);/g)?.length).toBe(2);
   });
 
   test("uses naturally expanding rows and does not expose private catalog values", () => {
