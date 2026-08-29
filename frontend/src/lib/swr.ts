@@ -262,10 +262,16 @@ export function useRequestCapture(
   );
 }
 
-export function useDashboardAnalytics(buckets = 8, rangeHours = 24, config?: SWRConfiguration) {
+export function useDashboardAnalytics(
+  buckets = 8,
+  rangeHours = 24,
+  scope?: "self",
+  config?: SWRConfiguration,
+) {
+  const scopeQuery = scope ? `&scope=${scope}` : "";
   return useSWR<DashboardAnalytics>(
-    `${SWR_KEYS.ANALYTICS}?buckets=${buckets}&range_hours=${rangeHours}`,
-    () => api.getDashboardAnalytics(buckets, rangeHours),
+    `${SWR_KEYS.ANALYTICS}?buckets=${buckets}&range_hours=${rangeHours}${scopeQuery}`,
+    () => api.getDashboardAnalytics(buckets, rangeHours, scope),
     { ...defaultConfig, ...config }
   );
 }

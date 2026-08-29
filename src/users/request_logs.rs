@@ -301,8 +301,23 @@ fn analytics_model_bucket_sql(is_sqlite: bool, user_scoped: bool) -> String {
     } else {
         ""
     };
+    let token_columns = if is_sqlite {
+        "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
+         CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS TEXT) AS cache_read_tokens, \
+         CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS TEXT) AS output_tokens, \
+         SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END) AS input_tokens_negative, \
+         SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END) AS cache_read_tokens_negative, \
+         SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END) AS output_tokens_negative"
+    } else {
+        "COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0)::TEXT AS input_tokens, \
+         COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0)::TEXT AS cache_read_tokens, \
+         COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0)::TEXT AS output_tokens, \
+         SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS input_tokens_negative, \
+         SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS cache_read_tokens_negative, \
+         SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
+    };
     format!(
-        "SELECT {bucket_expr} AS bucket_idx, rl.model, {charge_columns}, COUNT(*) AS call_count \
+        "SELECT {bucket_expr} AS bucket_idx, rl.model, {charge_columns}, {token_columns}, COUNT(*) AS call_count \
          FROM request_logs rl \
          WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter} \
          GROUP BY bucket_idx, rl.model \
@@ -310,11 +325,25 @@ fn analytics_model_bucket_sql(is_sqlite: bool, user_scoped: bool) -> String {
     )
 }
 
+fn decode_token_aggregate(row: &sea_orm::QueryResult, column: &str) -> Result<i128, String> {
+    let negative_count: i64 = row
+        .try_get("", &format!("{column}_negative"))
+        .map_err(|e| e.to_string())?;
+    if negative_count != 0 {
+        return Err(format!("request log {column} contains a negative value"));
+    }
+    row.try_get::<String>("", column)
+        .map_err(|e| e.to_string())?
+        .parse::<i128>()
+        .map_err(|_| format!("request log {column} aggregate overflow"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         analytics_bucket_expr, analytics_model_bucket_sql, append_request_log_filters,
         ascii_folded_like_pattern, charge_aggregate_select, decode_charge_aggregate,
+        decode_token_aggregate,
         enrich_tried_providers_names, escape_like_literal,
         request_log_model_filter_max_terms_from_raw, tried_providers_need_name_enrichment,
         validate_request_log_model_filter_with_limit,
@@ -548,43 +577,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_analytics_model_buckets_group_and_decode_exact_charges() {
+    async fn dashboard_analytics_sqlite_model_buckets_group_exact_cost_and_tokens() {
         let db = DbPool::connect("sqlite::memory:").await.unwrap();
         db.write()
             .await
             .execute_unprepared(
-                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT)",
+                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER)",
             )
             .await
             .unwrap();
-        for (created_at_unix_ms, model, charge, user_id) in [
-            (100_i64, "exact", "9223372036854775807", "u1"),
-            (200_i64, "exact", "1", "u1"),
-            (300_i64, "exact", "+9", "u1"),
+        for (
+            created_at_unix_ms,
+            model,
+            charge,
+            user_id,
+            input_tokens,
+            cache_read_tokens,
+            output_tokens,
+        ) in [
+            (
+                100_i64,
+                "exact",
+                "9223372036854775807",
+                "u1",
+                9_007_199_254_740_993_i64,
+                4_i64,
+                7_i64,
+            ),
+            (200_i64, "exact", "1", "u1", 1_i64, 5_i64, 8_i64),
+            (300_i64, "exact", "+9", "u1", 0_i64, 6_i64, 9_i64),
             (
                 400_i64,
                 "out-of-range",
                 "170141183460469231731687303715884105728",
                 "u1",
+                10_i64,
+                11_i64,
+                12_i64,
             ),
             (
                 600_i64,
                 "overflow",
                 "170141183460469231731687303715884105727",
                 "u1",
+                13_i64,
+                14_i64,
+                15_i64,
             ),
-            (700_i64, "overflow", "1", "u1"),
-            (100_i64, "excluded", "99", "u2"),
+            (700_i64, "overflow", "1", "u1", 16_i64, 17_i64, 18_i64),
+            (
+                100_i64,
+                "excluded",
+                "99",
+                "u2",
+                1_000_000_i64,
+                1_000_000_i64,
+                1_000_000_i64,
+            ),
         ] {
             db.write()
                 .await
                 .execute(db.stmt(
-                    "INSERT INTO request_logs (created_at_unix_ms, model, charge_nano_usd, user_id) VALUES ($1, $2, $3, $4)",
+                    "INSERT INTO request_logs (created_at_unix_ms, model, charge_nano_usd, user_id, input_tokens, cache_read_tokens, output_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7)",
                     vec![
                         created_at_unix_ms.into(),
                         model.into(),
                         charge.into(),
                         user_id.into(),
+                        input_tokens.into(),
+                        cache_read_tokens.into(),
+                        output_tokens.into(),
                     ],
                 ))
                 .await
@@ -616,15 +678,34 @@ mod tests {
             let model: String = row.try_get("", "model").unwrap();
             let bucket_idx: i64 = row.try_get("", "bucket_idx").unwrap();
             let call_count: i64 = row.try_get("", "call_count").unwrap();
+            let input_tokens = decode_token_aggregate(&row, "input_tokens")
+                .unwrap()
+                .to_string();
+            let cache_read_tokens = decode_token_aggregate(&row, "cache_read_tokens")
+                .unwrap()
+                .to_string();
+            let output_tokens = decode_token_aggregate(&row, "output_tokens")
+                .unwrap()
+                .to_string();
             groups.insert(
                 model,
-                (bucket_idx, call_count, decode_charge_aggregate(&row, false)),
+                (
+                    bucket_idx,
+                    call_count,
+                    decode_charge_aggregate(&row, false),
+                    input_tokens,
+                    cache_read_tokens,
+                    output_tokens,
+                ),
             );
         }
 
         assert_eq!(groups["exact"].0, 0);
         assert_eq!(groups["exact"].1, 3);
         assert_eq!(groups["exact"].2.as_deref().unwrap(), "9223372036854775808");
+        assert_eq!(groups["exact"].3, "9007199254740994");
+        assert_eq!(groups["exact"].4, "15");
+        assert_eq!(groups["exact"].5, "24");
         assert_eq!(
             groups["out-of-range"].2.as_ref().unwrap_err(),
             "request log charge is outside the signed i128 domain"
@@ -1735,11 +1816,17 @@ impl UserStore {
                     .parse::<i128>()
                     .map_err(|_| "request log charge aggregate overflow".to_string())?;
                 let call_count = row.try_get("", "call_count").map_err(|e| e.to_string())?;
+                let input_tokens = decode_token_aggregate(&row, "input_tokens")?;
+                let cache_read_tokens = decode_token_aggregate(&row, "cache_read_tokens")?;
+                let output_tokens = decode_token_aggregate(&row, "output_tokens")?;
                 Ok(AnalyticsModelBucketRow {
                     bucket_idx: bucket_idx.clamp(0, bucket_count - 1),
                     model,
                     cost_nano,
                     call_count,
+                    input_tokens,
+                    cache_read_tokens,
+                    output_tokens,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -1796,18 +1883,37 @@ impl UserStore {
             })
             .collect::<Result<Vec<_>, String>>()?;
 
-        let (total_cost_nano_usd, total_calls) = model_buckets.iter().try_fold(
-            (0i128, 0i64),
-            |(cost, calls), row| -> Result<(i128, i64), String> {
+        let (
+            total_cost_nano_usd,
+            total_calls,
+            total_input_tokens,
+            total_cache_read_tokens,
+            total_output_tokens,
+        ) = model_buckets.iter().try_fold(
+            (0i128, 0i64, 0i128, 0i128, 0i128),
+            |(cost, calls, input, cache_read, output), row| -> Result<_, String> {
                 Ok((
                     cost.checked_add(row.cost_nano)
                         .ok_or_else(|| "analytics cost aggregate overflow".to_string())?,
                     calls
                         .checked_add(row.call_count)
                         .ok_or_else(|| "analytics call count overflow".to_string())?,
+                    input
+                        .checked_add(row.input_tokens)
+                        .ok_or_else(|| "analytics input token aggregate overflow".to_string())?,
+                    cache_read.checked_add(row.cache_read_tokens).ok_or_else(|| {
+                        "analytics cache-read token aggregate overflow".to_string()
+                    })?,
+                    output
+                        .checked_add(row.output_tokens)
+                        .ok_or_else(|| "analytics output token aggregate overflow".to_string())?,
                 ))
             },
         )?;
+        let total_tokens = total_input_tokens
+            .checked_add(total_cache_read_tokens)
+            .and_then(|value| value.checked_add(total_output_tokens))
+            .ok_or_else(|| "analytics total token aggregate overflow".to_string())?;
 
         let mut today_sql = format!(
             "{}, COUNT(*) AS call_count FROM request_logs rl WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms IS NOT NULL",
@@ -1843,6 +1949,10 @@ impl UserStore {
             total_calls,
             today_cost_nano_usd,
             today_calls,
+            total_input_tokens,
+            total_cache_read_tokens,
+            total_output_tokens,
+            total_tokens,
         })
     }
 

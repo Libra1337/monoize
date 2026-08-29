@@ -719,6 +719,9 @@ pub struct AnalyticsModelBucketRow {
     pub model: String,
     pub cost_nano: i128,
     pub call_count: i64,
+    pub input_tokens: i128,
+    pub cache_read_tokens: i128,
+    pub output_tokens: i128,
 }
 
 pub struct AnalyticsProviderBucketRow {
@@ -734,6 +737,10 @@ pub struct DashboardAnalyticsRaw {
     pub total_calls: i64,
     pub today_cost_nano_usd: i128,
     pub today_calls: i64,
+    pub total_input_tokens: i128,
+    pub total_cache_read_tokens: i128,
+    pub total_output_tokens: i128,
+    pub total_tokens: i128,
 }
 
 #[derive(Debug, Clone)]

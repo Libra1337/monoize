@@ -774,6 +774,9 @@ export interface DashboardAnalyticsBucket {
   cost_by_model: Record<string, string>;
   calls_by_model: Record<string, number>;
   calls_by_provider: Record<string, number>;
+  input_tokens_by_model: Record<string, string>;
+  cache_read_tokens_by_model: Record<string, string>;
+  output_tokens_by_model: Record<string, string>;
 }
 
 export interface DashboardAnalytics {
@@ -784,6 +787,10 @@ export interface DashboardAnalytics {
   total_calls: number;
   today_cost_nano_usd: string;
   today_calls: number;
+  total_input_tokens: string;
+  total_cache_read_tokens: string;
+  total_output_tokens: string;
+  total_tokens: string;
 }
 
 // Rolling 60-second own-usage aggregate (user-live-usage.spec.md LU-6).
@@ -1237,10 +1244,15 @@ class ApiClient {
     );
   }
 
-  async getDashboardAnalytics(buckets = 8, rangeHours = 24): Promise<DashboardAnalytics> {
+  async getDashboardAnalytics(
+    buckets = 8,
+    rangeHours = 24,
+    scope?: "self",
+  ): Promise<DashboardAnalytics> {
     const params = new URLSearchParams();
     params.set("buckets", String(buckets));
     params.set("range_hours", String(rangeHours));
+    if (scope) params.set("scope", scope);
     return this.request(`/analytics?${params.toString()}`);
   }
 

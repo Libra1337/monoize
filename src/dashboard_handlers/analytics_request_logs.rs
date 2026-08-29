@@ -265,6 +265,7 @@ pub struct AnalyticsQuery {
     pub buckets: i64,
     #[serde(default = "default_analytics_range_hours")]
     pub range_hours: i64,
+    pub scope: Option<String>,
 }
 
 fn default_analytics_buckets() -> i64 {
@@ -273,6 +274,55 @@ fn default_analytics_buckets() -> i64 {
 
 fn default_analytics_range_hours() -> i64 {
     24
+}
+
+fn analytics_user_id_filter(
+    can_manage_users: bool,
+    user_id: &str,
+    scope: Option<&str>,
+) -> Result<Option<String>, &'static str> {
+    match scope {
+        Some("self") => Ok(Some(user_id.to_string())),
+        Some(_) => Err("scope must equal self"),
+        None if can_manage_users => Ok(None),
+        None => Ok(Some(user_id.to_string())),
+    }
+}
+
+fn exact_integer_json(value: i128) -> Value {
+    Value::String(value.to_string())
+}
+
+#[cfg(test)]
+mod dashboard_analytics_tests {
+    use super::{analytics_user_id_filter, exact_integer_json};
+    use serde_json::Value;
+
+    #[test]
+    fn dashboard_analytics_self_scope_filters_admin_to_current_user() {
+        assert_eq!(
+            analytics_user_id_filter(true, "admin-user", Some("self")).unwrap(),
+            Some("admin-user".to_string())
+        );
+        assert_eq!(
+            analytics_user_id_filter(true, "admin-user", None).unwrap(),
+            None
+        );
+        assert_eq!(
+            analytics_user_id_filter(false, "member-user", None).unwrap(),
+            Some("member-user".to_string())
+        );
+        assert_eq!(
+            analytics_user_id_filter(false, "member-user", Some("all")).unwrap_err(),
+            "scope must equal self"
+        );
+    }
+
+    #[test]
+    fn dashboard_analytics_serializes_exact_token_totals_as_strings() {
+        let value = exact_integer_json(9_007_199_254_740_993_i128);
+        assert_eq!(value, Value::String("9007199254740993".to_string()));
+    }
 }
 
 pub async fn get_dashboard_analytics(
@@ -293,11 +343,12 @@ pub async fn get_dashboard_analytics(
         .and_utc()
         .to_rfc3339();
 
-    let user_id_filter: Option<String> = if user.role.can_manage_users() {
-        None
-    } else {
-        Some(user.id.clone())
-    };
+    let user_id_filter = analytics_user_id_filter(
+        user.role.can_manage_users(),
+        &user.id,
+        query.scope.as_deref(),
+    )
+    .map_err(|message| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message))?;
 
     let raw = state
         .user_store
@@ -330,6 +381,12 @@ pub async fn get_dashboard_analytics(
         (0..buckets).map(|_| BTreeMap::new()).collect();
     let mut calls_by_provider_buckets: Vec<BTreeMap<String, i64>> =
         (0..buckets).map(|_| BTreeMap::new()).collect();
+    let mut input_tokens_by_model_buckets: Vec<BTreeMap<String, i128>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
+    let mut cache_read_tokens_by_model_buckets: Vec<BTreeMap<String, i128>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
+    let mut output_tokens_by_model_buckets: Vec<BTreeMap<String, i128>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
 
     for row in &raw.model_buckets {
         let idx = row.bucket_idx.clamp(0, buckets - 1) as usize;
@@ -353,6 +410,32 @@ pub async fn get_dashboard_analytics(
                 "analytics call count overflow",
             )
         })?;
+        for (target, value, label) in [
+            (
+                &mut input_tokens_by_model_buckets,
+                row.input_tokens,
+                "input",
+            ),
+            (
+                &mut cache_read_tokens_by_model_buckets,
+                row.cache_read_tokens,
+                "cache-read",
+            ),
+            (
+                &mut output_tokens_by_model_buckets,
+                row.output_tokens,
+                "output",
+            ),
+        ] {
+            let total = target[idx].entry(row.model.clone()).or_insert(0);
+            *total = total.checked_add(value).ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("analytics {label} token aggregate overflow"),
+                )
+            })?;
+        }
     }
 
     for row in &raw.provider_buckets {
@@ -379,6 +462,18 @@ pub async fn get_dashboard_analytics(
                     .collect::<serde_json::Map<String, Value>>(),
                 "calls_by_model": calls_by_model_buckets[i],
                 "calls_by_provider": calls_by_provider_buckets[i],
+                "input_tokens_by_model": input_tokens_by_model_buckets[i]
+                    .iter()
+                    .map(|(model, value)| (model.clone(), exact_integer_json(*value)))
+                    .collect::<serde_json::Map<String, Value>>(),
+                "cache_read_tokens_by_model": cache_read_tokens_by_model_buckets[i]
+                    .iter()
+                    .map(|(model, value)| (model.clone(), exact_integer_json(*value)))
+                    .collect::<serde_json::Map<String, Value>>(),
+                "output_tokens_by_model": output_tokens_by_model_buckets[i]
+                    .iter()
+                    .map(|(model, value)| (model.clone(), exact_integer_json(*value)))
+                    .collect::<serde_json::Map<String, Value>>(),
             })
         })
         .collect();
@@ -391,6 +486,10 @@ pub async fn get_dashboard_analytics(
         "total_calls": raw.total_calls,
         "today_cost_nano_usd": raw.today_cost_nano_usd.to_string(),
         "today_calls": raw.today_calls,
+        "total_input_tokens": exact_integer_json(raw.total_input_tokens),
+        "total_cache_read_tokens": exact_integer_json(raw.total_cache_read_tokens),
+        "total_output_tokens": exact_integer_json(raw.total_output_tokens),
+        "total_tokens": exact_integer_json(raw.total_tokens),
     })))
 }
 
