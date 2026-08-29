@@ -62,6 +62,14 @@ Alias:
 
 AP1. For every endpoint above, Monoize MUST also accept the same request at `/api` + endpoint path, with identical semantics.
 
+AP2. Monoize MUST also accept the forwarding endpoints without the `/v1` path
+prefix. The supported root aliases are `/models`, `/responses`,
+`/responses/compact`, `/chat/completions`, `/messages`, `/embeddings`,
+`/images/generations`, and `/images/edits`. Each root alias MUST have identical
+authentication, request validation, routing, billing, response, and error
+semantics to its corresponding `/v1` endpoint. The same root aliases MUST be
+available below the `/api` prefix.
+
 ### 2.2.1 Responses WebSocket downstream
 
 WS1. Monoize MUST accept a WebSocket upgrade at `GET /v1/responses` and `GET /api/v1/responses`. The upgrade request MUST use the same API-key authentication and IP-whitelist checks as `POST /v1/responses`. An unauthenticated or unauthorized upgrade MUST fail as an HTTP response before status `101` is sent.

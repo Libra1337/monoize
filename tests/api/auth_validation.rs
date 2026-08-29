@@ -24,6 +24,29 @@ async fn auth_required_for_forwarding_endpoints() {
 }
 
 #[tokio::test]
+async fn auth_required_for_root_forwarding_aliases() {
+    let ctx = setup().await;
+    for (method, uri) in [
+        ("POST", "/responses"),
+        ("GET", "/models"),
+        ("POST", "/chat/completions"),
+        ("POST", "/messages"),
+        ("POST", "/embeddings"),
+    ] {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({"model":"gpt-5-mini","input":"hi"}).to_string(),
+            ))
+            .unwrap();
+        let resp = ctx.router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{method} {uri}");
+    }
+}
+
+#[tokio::test]
 async fn dashboard_auth_requires_a_valid_cap_token() {
     let ctx = setup().await;
 

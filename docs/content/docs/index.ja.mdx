@@ -31,7 +31,7 @@ Monoize はフィールド名ではなく、プロトコルの意味論を変換
 | `POST` | `/v1/images/generations` | 画像生成 |
 | `POST` | `/v1/images/edits` | マルチパート画像編集 |
 
-すべての転送エンドポイントには `/api/v1/...` のエイリアスがあります。
+すべての転送エンドポイントには `/api/v1/...` のエイリアスがあります。サイトのルートを API Base URL に設定したクライアントは `/v1` を省略でき、`/responses` や `/chat/completions` を使用できます。
 
 ## 上流 Channel タイプ
 

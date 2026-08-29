@@ -31,7 +31,7 @@ Monoize 轉換的是協議語意，而不是欄位名稱。它先把每個請求
 | `POST` | `/v1/images/generations` | 圖像生成 |
 | `POST` | `/v1/images/edits` | Multipart 圖像編輯 |
 
-每個轉發端點都另有 `/api/v1/...` 別名。
+每個轉發端點都另有 `/api/v1/...` 別名。將網站根網址作為 API Base URL 的用戶端可以省略 `/v1`，例如 `/responses` 和 `/chat/completions`。
 
 ## 上游 Channel 類型
 

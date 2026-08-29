@@ -13,7 +13,7 @@ Authorization: Bearer sk-...
 x-api-key: sk-...
 ```
 
-以下の各エンドポイントには `/api` プレフィックスの別名があります。例: `/api/v1/chat/completions`。クライアントが `/api` パスを固定している場合に別名を使います。
+以下の各エンドポイントには `/api` プレフィックスの別名があります。例: `/api/v1/chat/completions`。クライアントが `/api` パスを固定している場合に別名を使います。サイトのルートを API Base URL に設定したクライアントは `/v1` を省略でき、`/responses` などを使用できます。
 
 どのエンドポイントも任意の上流タイプに到達できます。たとえば、クライアントが `/v1/messages` を呼び出し、ルートが `chat_completion` タイプの Channel でそのモデルを提供する構成が可能です。Monoize は双方向でプロトコルを変換します。
 

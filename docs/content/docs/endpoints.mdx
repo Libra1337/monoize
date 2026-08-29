@@ -13,7 +13,7 @@ Authorization: Bearer sk-...
 x-api-key: sk-...
 ```
 
-Every endpoint below also exists under the `/api` prefix, for example `/api/v1/chat/completions`. Use the alias when a client hardcodes `/api` paths.
+Every endpoint below also exists under the `/api` prefix, for example `/api/v1/chat/completions`. Use the alias when a client hardcodes `/api` paths. Clients that use this site root as their API base URL can omit `/v1`, for example `/responses`.
 
 Any endpoint can reach any upstream type. For example, a client can call `/v1/messages` while the route serves the model through a `chat_completion` Channel. Monoize converts the protocol in both directions.
 

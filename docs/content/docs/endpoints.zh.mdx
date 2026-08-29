@@ -13,7 +13,7 @@ Authorization: Bearer sk-...
 x-api-key: sk-...
 ```
 
-下列每个端点都有 `/api` 前缀别名，例如 `/api/v1/chat/completions`。当客户端硬编码了 `/api` 路径时使用别名。
+下列每个端点都有 `/api` 前缀别名，例如 `/api/v1/chat/completions`。当客户端硬编码了 `/api` 路径时使用别名。将站点根地址作为 API Base URL 的客户端可以省略 `/v1`，例如 `/responses`。
 
 任何端点都可以到达任何上游类型。例如，客户端调用 `/v1/messages`，而路由通过 `chat_completion` 类型的 Channel 服务该模型。Monoize 在两个方向上转换协议。
 

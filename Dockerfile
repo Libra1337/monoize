@@ -23,7 +23,8 @@ RUN apt-get update \
     && useradd --system --user-group --home-dir /app --shell /usr/sbin/nologin monoize \
     && install --directory --owner monoize --group monoize /app/data
 
-COPY --chown=monoize:monoize --chmod=0755 monoize /usr/local/bin/monoize
+COPY --chown=monoize:monoize monoize /usr/local/bin/monoize
+RUN chmod 0755 /usr/local/bin/monoize
 
 USER monoize
 WORKDIR /app

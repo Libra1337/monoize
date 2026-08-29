@@ -31,7 +31,9 @@ Monoize converts protocol semantics, not field names. It decodes each request in
 | `POST` | `/v1/images/generations` | Image generation |
 | `POST` | `/v1/images/edits` | Multipart image edits |
 
-Every forwarding endpoint also has an `/api/v1/...` alias.
+Every forwarding endpoint also has an `/api/v1/...` alias. Clients that use
+the site root as their API base URL can omit `/v1`, for example
+`/responses` and `/chat/completions`.
 
 ## Upstream Channel types
 

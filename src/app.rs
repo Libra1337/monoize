@@ -2137,8 +2137,13 @@ async fn content_security_policy_middleware(
 fn build_v1_router() -> Router<AppState> {
     Router::new()
         .route("/v1/models", get(crate::handlers::list_models))
+        .route("/models", get(crate::handlers::list_models))
         .route(
             "/v1/responses",
+            get(crate::handlers::responses_websocket).post(crate::handlers::create_response),
+        )
+        .route(
+            "/responses",
             get(crate::handlers::responses_websocket).post(crate::handlers::create_response),
         )
         .route(
@@ -2146,17 +2151,35 @@ fn build_v1_router() -> Router<AppState> {
             post(crate::handlers::compact_response),
         )
         .route(
+            "/responses/compact",
+            post(crate::handlers::compact_response),
+        )
+        .route(
             "/v1/chat/completions",
             post(crate::handlers::create_chat_completions),
         )
+        .route(
+            "/chat/completions",
+            post(crate::handlers::create_chat_completions),
+        )
         .route("/v1/embeddings", post(crate::handlers::create_embeddings))
+        .route("/embeddings", post(crate::handlers::create_embeddings))
         .route("/v1/messages", post(crate::handlers::create_messages))
+        .route("/messages", post(crate::handlers::create_messages))
         .route(
             "/v1/images/generations",
             post(crate::handlers::image_api::create_image_generation),
         )
         .route(
+            "/images/generations",
+            post(crate::handlers::image_api::create_image_generation),
+        )
+        .route(
             "/v1/images/edits",
+            post(crate::handlers::image_api::create_image_edit),
+        )
+        .route(
+            "/images/edits",
             post(crate::handlers::image_api::create_image_edit),
         )
         .layer(CorsLayer::very_permissive())

@@ -31,7 +31,7 @@ Monoize 转换的是协议语义，而不是字段名。它先把每个请求解
 | `POST` | `/v1/images/generations` | 图像生成 |
 | `POST` | `/v1/images/edits` | Multipart 图像编辑 |
 
-每个转发端点都另有 `/api/v1/...` 别名。
+每个转发端点都另有 `/api/v1/...` 别名。将站点根地址作为 API Base URL 的客户端可以省略 `/v1`，例如 `/responses` 和 `/chat/completions`。
 
 ## 上游 Channel 类型
 
