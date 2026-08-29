@@ -19,8 +19,12 @@ import { PageHeader } from "@/components/ui/page-header";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatNanoUsd } from "@/lib/exact-decimal";
+import { useAuth } from "@/hooks/use-auth";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
+import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import type { AdminUsageUserRow } from "@/lib/api";
 import { useAdminUsageRanking } from "@/lib/swr";
+import { formatNanoUsd as formatDisplayNanoUsd } from "@/lib/store-money";
 import { cn } from "@/lib/utils";
 
 function integer(value: string): bigint {
@@ -55,6 +59,10 @@ function UsageSkeleton() {
 
 export function AdminUsagePage() {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "super_admin" || user?.role === "admin";
+  const { currency } = useStoreCurrency();
+  const exchangeRate = useStoreExchangeRate(currency === "CNY" && isAdmin);
   const { data, error, isLoading, isValidating, mutate } = useAdminUsageRanking();
   const [selected, setSelected] = useState<AdminUsageUserRow | null>(null);
 
@@ -85,6 +93,15 @@ export function AdminUsagePage() {
     );
   }
   if (!data) return null;
+
+  const cnyPerUsd = exchangeRate.data?.cny_per_usd;
+  const moneyLoading = isAdmin && currency === "CNY" && !cnyPerUsd && exchangeRate.isLoading;
+  const formatCost = (nanoUsd: string | null | undefined) => {
+    if (currency === "CNY") {
+      return cnyPerUsd ? formatDisplayNanoUsd(nanoUsd ?? "0", "CNY", cnyPerUsd) : "—";
+    }
+    return formatNanoUsd(nanoUsd, 4);
+  };
 
   const segments = [
     { key: "input", label: t("adminUsage.inputTokens"), value: totals.input, className: "bg-primary" },
@@ -132,9 +149,11 @@ export function AdminUsagePage() {
         </div>
       </motion.section>
 
-      <div className="grid rounded-xl border bg-card sm:grid-cols-3 sm:divide-x">
+      <div className={cn("grid rounded-xl border bg-card sm:divide-x", isAdmin ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
         <div className="flex items-center gap-3 p-4"><MousePointerClick className="size-5 text-primary" /><div><p className="text-xs text-muted-foreground">{t("adminUsage.calls")}</p><p className="font-mono text-lg font-semibold">{data.total_calls.toLocaleString("en-US")}</p></div></div>
-        <div className="flex items-center gap-3 border-t p-4 sm:border-t-0"><Coins className="size-5 text-warning" /><div><p className="text-xs text-muted-foreground">{t("adminUsage.cost")}</p><p className="font-mono text-lg font-semibold">{formatNanoUsd(data.total_cost_nano_usd, 4)}</p></div></div>
+        {isAdmin ? (
+          <div className="flex items-center gap-3 border-t p-4 sm:border-t-0"><Coins className="size-5 text-warning" /><div><p className="text-xs text-muted-foreground">{t("adminUsage.cost")}</p>{moneyLoading ? <Skeleton className="mt-1 h-6 w-20" /> : <p className="font-mono text-lg font-semibold">{formatCost(data.total_cost_nano_usd)}</p>}</div></div>
+        ) : null}
         <div className="flex items-center gap-3 border-t p-4 sm:border-t-0"><ArrowUpRight className="size-5 text-success" /><div><p className="text-xs text-muted-foreground">{t("adminUsage.activeUsers")}</p><p className="font-mono text-lg font-semibold">{data.users.length}</p></div></div>
       </div>
 
@@ -147,12 +166,17 @@ export function AdminUsagePage() {
               <table className="w-full min-w-[520px] text-sm">
                 <thead><tr className="border-b bg-muted/35 text-left text-xs text-muted-foreground"><th className="px-5 py-3 font-medium">#</th><th className="px-3 py-3 font-medium">{t("adminUsage.user")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-5 py-3 text-right font-medium">{t("adminUsage.calls")}</th></tr></thead>
                 <tbody>{data.users.map((row, index) => (
-                  <tr key={row.user_id ?? `anonymous-${index}`} className="border-b transition-colors duration-200 last:border-b-0 hover:bg-accent/45">
+                  <motion.tr
+                    layout="position"
+                    key={row.user_id ?? row.rank_key ?? `anonymous-${index}`}
+                    transition={{ layout: { duration: 1.1, ease: [0.22, 1, 0.36, 1] } }}
+                    className="border-b transition-colors duration-200 last:border-b-0 hover:bg-accent/45"
+                  >
                     <td className="px-5 py-3 font-mono text-muted-foreground">{String(index + 1).padStart(2, "0")}</td>
-                    <td className="px-3 py-3"><button type="button" disabled={!row.models?.length} onClick={() => setSelected(row)} className="w-full text-left focus-visible:outline-none"><span className="block truncate font-medium">{row.username || row.user_id || `Anonymous ${index + 1}`}</span>{row.username && row.user_id && <span className="block max-w-64 truncate font-mono text-xs text-muted-foreground">{row.user_id}</span>}</button></td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums"><AnimatedTokenValue value={totalTokens(row)} /></td>
+                    <td className="px-3 py-3"><button type="button" disabled={!row.models?.length} onClick={() => setSelected(row)} className="w-full text-left focus-visible:outline-none"><span className="block truncate font-medium">{row.username || row.user_id || `${t("adminUsage.anonymousUser")} ${index + 1}`}</span>{row.username && row.user_id && <span className="block max-w-64 truncate font-mono text-xs text-muted-foreground">{row.user_id}</span>}</button></td>
+                    <td className="px-3 py-3 text-right font-mono tabular-nums"><AnimatedTokenValue value={totalTokens(row)} showDelta /></td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">{row.call_count.toLocaleString("en-US")}</td>
-                  </tr>
+                  </motion.tr>
                 ))}</tbody>
               </table>
             </div>
@@ -162,7 +186,7 @@ export function AdminUsagePage() {
       <Card className="min-w-0 overflow-hidden rounded-xl">
         <CardContent className="p-0">
           <div className="border-b px-5 py-4"><h2 className="font-display text-base font-semibold">{t("adminUsage.modelRanking")}</h2><p className="mt-1 text-sm text-muted-foreground">{t("adminUsage.modelRankingHint")}</p></div>
-          {data.models.length === 0 ? <EmptyState title={t("adminUsage.empty")} className="py-14" /> : <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="border-b bg-muted/35 text-left text-xs text-muted-foreground"><th className="px-5 py-3 font-medium">#</th><th className="px-3 py-3 font-medium">{t("adminUsage.model")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-5 py-3 text-right font-medium">{t("adminUsage.calls")}</th></tr></thead><tbody>{data.models.map((model, index) => <tr key={model.model} className="border-b last:border-b-0"><td className="px-5 py-3 font-mono text-muted-foreground">{String(index + 1).padStart(2, "0")}</td><td className="max-w-48 truncate px-3 py-3 font-mono">{model.model}</td><td className="px-3 py-3 text-right font-mono tabular-nums"><AnimatedTokenValue value={totalTokens(model)} /></td><td className="px-5 py-3 text-right font-mono tabular-nums">{model.call_count.toLocaleString("en-US")}</td></tr>)}</tbody></table></div>}
+          {data.models.length === 0 ? <EmptyState title={t("adminUsage.empty")} className="py-14" /> : <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="border-b bg-muted/35 text-left text-xs text-muted-foreground"><th className="px-5 py-3 font-medium">#</th><th className="px-3 py-3 font-medium">{t("adminUsage.model")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-5 py-3 text-right font-medium">{t("adminUsage.calls")}</th></tr></thead><tbody>{data.models.map((model, index) => <motion.tr layout="position" key={model.model} transition={{ layout: { duration: 1.1, ease: [0.22, 1, 0.36, 1] } }} className="border-b last:border-b-0"><td className="px-5 py-3 font-mono text-muted-foreground">{String(index + 1).padStart(2, "0")}</td><td className="max-w-48 truncate px-3 py-3 font-mono">{model.model}</td><td className="px-3 py-3 text-right font-mono tabular-nums"><AnimatedTokenValue value={totalTokens(model)} showDelta /></td><td className="px-5 py-3 text-right font-mono tabular-nums">{model.call_count.toLocaleString("en-US")}</td></motion.tr>)}</tbody></table></div>}
         </CardContent>
       </Card>
       </div>
@@ -172,9 +196,9 @@ export function AdminUsagePage() {
           <DialogHeader className="pr-10"><DialogTitle>{selected?.username || selected?.user_id || t("adminUsage.anonymousUser")}</DialogTitle><DialogDescription>{t("adminUsage.modelDetails")}</DialogDescription></DialogHeader>
           <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
             <table className="w-full min-w-[620px] text-sm">
-              <thead className="sticky top-0 bg-background"><tr className="border-b text-left text-xs text-muted-foreground"><th className="px-4 py-3 font-medium">{t("adminUsage.model")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-3 py-3 text-right font-medium">{t("adminUsage.calls")}</th><th className="px-4 py-3 text-right font-medium">{t("adminUsage.cost")}</th></tr></thead>
+              <thead className="sticky top-0 bg-background"><tr className="border-b text-left text-xs text-muted-foreground"><th className="px-4 py-3 font-medium">{t("adminUsage.model")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-3 py-3 text-right font-medium">{t("adminUsage.calls")}</th>{isAdmin ? <th className="px-4 py-3 text-right font-medium">{t("adminUsage.cost")}</th> : null}</tr></thead>
               <tbody>{selected?.models?.map((model) => (
-                <tr key={model.model} className="border-b last:border-b-0"><td className="max-w-72 truncate px-4 py-3 font-mono">{model.model}</td><td className="px-3 py-3 text-right font-mono">{formatInteger(totalTokens(model))}</td><td className="px-3 py-3 text-right font-mono">{model.call_count.toLocaleString("en-US")}</td><td className="px-4 py-3 text-right font-mono">{formatNanoUsd(model.cost_nano_usd, 4)}</td></tr>
+                <tr key={model.model} className="border-b last:border-b-0"><td className="max-w-72 truncate px-4 py-3 font-mono">{model.model}</td><td className="px-3 py-3 text-right font-mono">{formatInteger(totalTokens(model))}</td><td className="px-3 py-3 text-right font-mono">{model.call_count.toLocaleString("en-US")}</td>{isAdmin ? <td className="px-4 py-3 text-right font-mono">{moneyLoading ? <Skeleton className="ml-auto h-4 w-20" /> : formatCost(model.cost_nano_usd)}</td> : null}</tr>
               ))}</tbody>
             </table>
           </div>

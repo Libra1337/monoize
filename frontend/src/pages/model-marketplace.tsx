@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
+import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import {
   marketplaceRequest,
   type MarketplaceItem,
@@ -40,12 +41,10 @@ import {
   resolveMarketplacePages,
   type MarketplacePageState,
 } from "@/lib/marketplace-pages";
-import { storeApi, type StoreExchangeRate } from "@/lib/store-api";
 import { cn } from "@/lib/utils";
 
 const ALL = "__all";
 const LIST_LIMIT = "50";
-const EXCHANGE_RATE_KEY = "/api/dashboard/store/exchange-rate";
 
 type SelectedModel = MarketplaceItem & { revision: string };
 
@@ -194,9 +193,7 @@ export function ModelMarketplacePage() {
       },
     },
   );
-  const exchangeRate = useSWR<StoreExchangeRate>(EXCHANGE_RATE_KEY, storeApi.getExchangeRate, {
-    keepPreviousData: true,
-  });
+  const exchangeRate = useStoreExchangeRate();
   const offerListKey = selected
     ? JSON.stringify([selected.revision, selected.public_group_name, selected.model])
     : null;

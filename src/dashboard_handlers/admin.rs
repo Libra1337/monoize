@@ -7,7 +7,21 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use chrono::{NaiveTime, Utc};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::sync::OnceLock;
+
+fn anonymous_usage_rank_key(user_id: &str) -> String {
+    static SALT: OnceLock<[u8; 16]> = OnceLock::new();
+    let salt = SALT.get_or_init(|| *uuid::Uuid::new_v4().as_bytes());
+    let mut hasher = Sha256::new();
+    hasher.update(salt);
+    hasher.update(user_id.as_bytes());
+    hasher.finalize()[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 
 pub(crate) fn sort_usage_models(rows: &mut [crate::users::UserModelUsageRankingRow]) {
     rows.sort_by(|left, right| {
@@ -24,6 +38,26 @@ pub(crate) fn sort_usage_models(rows: &mut [crate::users::UserModelUsageRankingR
             .then_with(|| right.call_count.cmp(&left.call_count))
             .then_with(|| left.model.as_bytes().cmp(right.model.as_bytes()))
     });
+}
+
+fn usage_model_json(model: crate::users::UserModelUsageRankingRow, include_cost: bool) -> Value {
+    let mut value = json!({
+        "model": model.model,
+        "call_count": model.call_count,
+        "input_tokens": model.input_tokens.to_string(),
+        "cache_read_tokens": model.cache_read_tokens.to_string(),
+        "output_tokens": model.output_tokens.to_string(),
+    });
+    if include_cost {
+        value["cost_nano_usd"] = json!(model.cost_nano_usd.to_string());
+    }
+    value
+}
+
+fn insert_admin_usage_cost(value: &mut Value, cost_nano_usd: i128, is_admin: bool) {
+    if is_admin {
+        value["total_cost_nano_usd"] = json!(cost_nano_usd.to_string());
+    }
 }
 
 /// security-access-control.spec.md SAC-1..SAC-5: metrics expose runtime topology
@@ -376,16 +410,7 @@ pub async fn get_admin_usage_ranking(
             let models = user
                 .models
                 .into_iter()
-                .map(|model| {
-                    json!({
-                        "model": model.model,
-                        "call_count": model.call_count,
-                        "cost_nano_usd": model.cost_nano_usd.to_string(),
-                        "input_tokens": model.input_tokens.to_string(),
-                        "cache_read_tokens": model.cache_read_tokens.to_string(),
-                        "output_tokens": model.output_tokens.to_string(),
-                    })
-                })
+                .map(|model| usage_model_json(model, true))
                 .collect::<Vec<_>>();
             if is_admin {
                 json!({
@@ -400,6 +425,7 @@ pub async fn get_admin_usage_ranking(
                 })
             } else {
                 json!({
+                    "rank_key": anonymous_usage_rank_key(&user.user_id),
                     "call_count": user.call_count,
                     "input_tokens": user.input_tokens.to_string(),
                     "cache_read_tokens": user.cache_read_tokens.to_string(),
@@ -410,16 +436,7 @@ pub async fn get_admin_usage_ranking(
         .collect::<Vec<_>>();
     let models = global_models
         .into_iter()
-        .map(|model| {
-            json!({
-                "model": model.model,
-                "call_count": model.call_count,
-                "cost_nano_usd": model.cost_nano_usd.to_string(),
-                "input_tokens": model.input_tokens.to_string(),
-                "cache_read_tokens": model.cache_read_tokens.to_string(),
-                "output_tokens": model.output_tokens.to_string(),
-            })
-        })
+        .map(|model| usage_model_json(model, is_admin))
         .collect::<Vec<_>>();
     let total_tokens = totals
         .input_tokens
@@ -427,7 +444,7 @@ pub async fn get_admin_usage_ranking(
         .and_then(|value| value.checked_add(totals.output_tokens))
         .ok_or_else(|| aggregate_error("usage total token aggregate overflow"))?;
 
-    Ok(Json(json!({
+    let mut response = json!({
         "time_from": time_from,
         "time_to": time_to,
         "total_tokens": total_tokens.to_string(),
@@ -435,15 +452,17 @@ pub async fn get_admin_usage_ranking(
         "total_cache_read_tokens": totals.cache_read_tokens.to_string(),
         "total_output_tokens": totals.output_tokens.to_string(),
         "total_calls": totals.call_count,
-        "total_cost_nano_usd": totals.cost_nano_usd.to_string(),
         "users": users,
         "models": models,
-    })))
+    });
+    insert_admin_usage_cost(&mut response, totals.cost_nano_usd, is_admin);
+    Ok(Json(response))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::sort_usage_models;
+    use super::{insert_admin_usage_cost, sort_usage_models, usage_model_json};
+    use serde_json::json;
     use crate::users::UserModelUsageRankingRow;
 
     #[test]
@@ -487,5 +506,28 @@ mod tests {
             rows.into_iter().map(|row| row.model).collect::<Vec<_>>(),
             ["alpha", "zeta", "busy"]
         );
+    }
+
+    #[test]
+    fn public_usage_json_omits_charge_fields() {
+        let row = UserModelUsageRankingRow {
+            user_id: "u".into(),
+            username: None,
+            model: "model".into(),
+            call_count: 1,
+            cost_nano_usd: 42,
+            input_tokens: 2,
+            cache_read_tokens: 3,
+            output_tokens: 5,
+        };
+        assert!(usage_model_json(row.clone(), false).get("cost_nano_usd").is_none());
+        assert_eq!(usage_model_json(row, true)["cost_nano_usd"], "42");
+
+        let mut ordinary = json!({});
+        insert_admin_usage_cost(&mut ordinary, 42, false);
+        assert!(ordinary.get("total_cost_nano_usd").is_none());
+        let mut admin = json!({});
+        insert_admin_usage_cost(&mut admin, 42, true);
+        assert_eq!(admin["total_cost_nano_usd"], "42");
     }
 }

@@ -200,6 +200,7 @@
 		"admin": "管理",
 		"logs": "日誌",
 		"usage": "用量分析",
+		"usageRanking": "用量排行",
 		"runtimeStatus": "執行狀態",
 		"apiDocs": "API 文件",
 		"models": "模型資料庫",
@@ -1380,7 +1381,10 @@
 		"rpm": "RPM",
 		"tpm": "TPM",
 		"cacheHit": "快取命中",
-		"liveUsageError": "即時用量載入失敗"
+		"liveUsageError": "即時用量載入失敗",
+		"displayCurrency": "顯示貨幣",
+		"cny": "人民幣",
+		"usd": "美元"
 	},
 	"userSettings": {
 		"title": "設定",

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,11 +24,13 @@ const chartConfig = {
 export function UsageTrendChart({
   buckets,
   metric,
+  transitionKey,
   loading = false,
   compact = false,
 }: {
   buckets?: TokenAnalyticsBucket[];
   metric: TokenMetric;
+  transitionKey: string;
   loading?: boolean;
   compact?: boolean;
 }) {
@@ -46,8 +48,9 @@ export function UsageTrendChart({
       usage: maximum === 0n ? 0 : Number((row.exact * 10_000n) / maximum) / 100,
     }));
   }, [buckets, metric]);
+  const hasSeries = rows.some((row) => row.exact !== "0");
 
-  if (loading && !buckets) {
+  if (loading) {
     return (
       <Card className="rounded-lg">
         <CardHeader><Skeleton className="h-5 w-40" /></CardHeader>
@@ -63,42 +66,49 @@ export function UsageTrendChart({
         <p className="text-xs text-muted-foreground">{t(`usageAnalysis.metricOptions.${metric}`)}</p>
       </CardHeader>
       <CardContent>
-        {rows.some((row) => row.exact !== "0") ? (
-          <ChartContainer
-            config={chartConfig}
-            className={compact ? "h-48 w-full !aspect-auto" : "h-72 w-full !aspect-auto"}
-            aria-label={t("usageAnalysis.trend")}
+        {hasSeries ? (
+          <motion.div
+            key={transitionKey}
+            initial={reduceMotion ? false : { opacity: 0.45, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={reduceMotion ? { duration: 0 } : { duration: 0.45 }}
+            className="w-full"
           >
-            <LineChart data={rows} margin={{ top: 8, right: 12, left: -20, bottom: 0 }}>
-              <CartesianGrid vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} />
-              <YAxis tickLine={false} axisLine={false} domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
-              <ChartTooltip
-                content={(
-                  <ChartTooltipContent
-                    formatter={(_value, _name, item) => (
-                      <div className="flex min-w-40 items-center justify-between gap-4">
-                        <span className="text-muted-foreground">{t("usageAnalysis.tokens")}</span>
-                        <span className="font-mono tabular-nums">
-                          {formatTokenCount(BigInt(String(item.payload.exact)), i18n.language)}
-                        </span>
-                      </div>
-                    )}
-                  />
-                )}
-              />
-              <Line
-                type="monotone"
-                dataKey="usage"
-                stroke="var(--color-usage)"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4 }}
-                isAnimationActive={!reduceMotion}
-                animationDuration={900}
-              />
-            </LineChart>
-          </ChartContainer>
+            <ChartContainer
+              config={chartConfig}
+              className={compact ? "h-48 w-full !aspect-auto" : "h-72 w-full !aspect-auto"}
+              aria-label={t("usageAnalysis.trend")}
+            >
+              <LineChart data={rows} margin={{ top: 8, right: 12, left: -20, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} />
+                <YAxis tickLine={false} axisLine={false} domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+                <ChartTooltip
+                  content={(
+                    <ChartTooltipContent
+                      formatter={(_value, _name, item) => (
+                        <div className="flex min-w-40 items-center justify-between gap-4">
+                          <span className="text-muted-foreground">{t("usageAnalysis.tokens")}</span>
+                          <span className="font-mono tabular-nums">
+                            {formatTokenCount(BigInt(String(item.payload.exact)), i18n.language)}
+                          </span>
+                        </div>
+                      )}
+                    />
+                  )}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="usage"
+                  stroke="var(--color-usage)"
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                  isAnimationActive={false}
+                />
+              </LineChart>
+            </ChartContainer>
+          </motion.div>
         ) : (
           <div className={compact ? "grid h-48 place-items-center" : "grid h-72 place-items-center"}>
             <p className="text-sm text-muted-foreground">{t("usageAnalysis.empty")}</p>

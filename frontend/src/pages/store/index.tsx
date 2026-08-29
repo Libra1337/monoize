@@ -17,6 +17,7 @@ import {
 import { PageHeader } from "@/components/ui/page-header";
 import { useAuth } from "@/hooks/use-auth";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
+import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { api } from "@/lib/api";
 import {
   storeApi,
@@ -58,7 +59,6 @@ import {
 } from "./checkout-state";
 
 const CATALOG_KEY = "/api/dashboard/store/catalog";
-const EXCHANGE_RATE_KEY = "/api/dashboard/store/exchange-rate";
 const ENTITLEMENT_KEY = "/api/dashboard/store/entitlement";
 const ORDERS_KEY = "/api/dashboard/store/orders";
 const REDEMPTION_STATUS_KEY = "/api/dashboard/store/redemption-status";
@@ -348,7 +348,7 @@ export function StorePage() {
   const monthStart = useMemo(monthStartIso, []);
 
   const catalog = useSWR(CATALOG_KEY, storeApi.getCatalog);
-  const exchangeRate = useSWR(EXCHANGE_RATE_KEY, storeApi.getExchangeRate);
+  const exchangeRate = useStoreExchangeRate();
   const entitlement = useSWR(ENTITLEMENT_KEY, storeApi.getEntitlement);
   const mutateEntitlement = entitlement.mutate;
   const redemptionStatus = useSWR<RedemptionStatus>(REDEMPTION_STATUS_KEY, null, {

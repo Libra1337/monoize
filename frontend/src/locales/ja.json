@@ -200,6 +200,7 @@
 		"admin": "管理",
 		"logs": "ログ",
 		"usage": "使用量分析",
+		"usageRanking": "使用量ランキング",
 		"runtimeStatus": "稼働状態",
 		"apiDocs": "API ドキュメント",
 		"models": "モデルデータベース",
@@ -1380,7 +1381,10 @@
 		"rpm": "RPM",
 		"tpm": "TPM",
 		"cacheHit": "キャッシュ命中",
-		"liveUsageError": "リアルタイム使用量の取得に失敗しました"
+		"liveUsageError": "リアルタイム使用量の取得に失敗しました",
+		"displayCurrency": "表示通貨",
+		"cny": "中国人民元",
+		"usd": "米ドル"
 	},
 	"userSettings": {
 		"title": "設定",

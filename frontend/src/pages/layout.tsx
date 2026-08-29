@@ -131,6 +131,7 @@ function Sidebar({
   const navItems = [
     { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard"), exact: true },
     { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
+    { to: "/dashboard/usage-ranking", icon: ChartSpline, label: t("nav.usageRanking") },
     { to: "/dashboard/status", icon: Activity, label: t("nav.runtimeStatus") },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
@@ -143,7 +144,6 @@ function Sidebar({
 
   const adminNavItems = [
     { to: "/dashboard/admin", icon: Gauge, label: t("nav.adminDashboard"), exact: true },
-    { to: "/dashboard/admin/usage", icon: ChartSpline, label: t("nav.adminUsage") },
     { to: "/dashboard/admin/runtime", icon: HeartPulse, label: t("nav.adminRuntime") },
     { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
     { to: "/dashboard/models", icon: Database, label: t("nav.models") },

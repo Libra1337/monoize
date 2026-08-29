@@ -3,10 +3,12 @@ import { useTranslation } from "react-i18next";
 import { Activity, Cog, LogOut, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
+import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { useTheme } from "@/hooks/use-theme";
 import { useLiveUsage } from "@/lib/swr";
-import { formatUsdDecimal } from "@/lib/exact-decimal";
 import { formatCacheHitRate, planRemainingFraction } from "@/lib/live-usage";
+import { formatNanoUsd } from "@/lib/store-money";
 import { cn, getGravatarUrl } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -63,6 +65,50 @@ function ThemeToggle() {
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function CurrencyToggle() {
+  const { currency, setCurrency } = useStoreCurrency();
+  const { t } = useTranslation();
+  const currencies = ["CNY", "USD"] as const;
+
+  return (
+    <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+      <span className="text-sm text-muted-foreground">{t("userMenu.displayCurrency")}</span>
+      <div
+        className="relative flex h-8 items-center rounded-full bg-muted p-1"
+        role="group"
+        aria-label={t("userMenu.displayCurrency")}
+      >
+        {currencies.map((item) => (
+          <button
+            key={item}
+            type="button"
+            aria-pressed={currency === item}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setCurrency(item);
+            }}
+            className={cn(
+              "relative z-10 flex h-6 min-w-16 cursor-pointer items-center justify-center rounded-full px-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              currency === item ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+            title={t(`userMenu.${item.toLowerCase()}`)}
+          >
+            {currency === item ? (
+              <motion.span
+                layoutId="currency-toggle-indicator"
+                className="absolute inset-0 rounded-full bg-background shadow-sm"
+                transition={springs.snappy}
+              />
+            ) : null}
+            <span className="relative z-10">{item === "CNY" ? "¥ CNY" : "$ USD"}</span>
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -163,11 +209,26 @@ export function UserCenterMenu({
   const { user, logout } = useAuth();
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { currency } = useStoreCurrency();
+  const exchangeRate = useStoreExchangeRate(currency === "CNY");
+  const cnyPerUsd = exchangeRate.data?.cny_per_usd;
+  const moneyLoading = currency === "CNY" && !cnyPerUsd && exchangeRate.isLoading;
+  const moneyUnavailable = currency === "CNY" && !cnyPerUsd && !moneyLoading;
+  const formatMoney = (nanoUsd: string) => {
+    if (currency === "CNY") {
+      return cnyPerUsd ? formatNanoUsd(nanoUsd, "CNY", cnyPerUsd) : "—";
+    }
+    return formatNanoUsd(nanoUsd, "USD", "1");
+  };
 
   const roleLabel = t(`roles.${user?.role || "user"}`);
   const balanceLabel = user?.balance_unlimited
     ? t("users.unlimited")
-    : formatUsdDecimal(user?.balance_usd, 2);
+    : moneyLoading
+      ? "…"
+      : moneyUnavailable
+        ? "—"
+        : formatMoney(user?.balance_nano_usd ?? "0");
   const accountSummary = user?.billing_plan?.name
     ? `${user.billing_plan.name} · ${balanceLabel}`
     : balanceLabel;
@@ -249,7 +310,9 @@ export function UserCenterMenu({
           {user ? (
             <>
               <QuotaRow label={t("userMenu.balance", "Balance")}>
-                <span className="font-mono text-xs font-medium tabular-nums">{balanceLabel}</span>
+                {moneyLoading ? <Skeleton className="h-4 w-16" /> : (
+                  <span className="font-mono text-xs font-medium tabular-nums">{balanceLabel}</span>
+                )}
               </QuotaRow>
               {user.billing_plan ? (
                 <>
@@ -257,13 +320,15 @@ export function UserCenterMenu({
                     <span className="truncate text-xs font-medium">{user.billing_plan.name}</span>
                   </QuotaRow>
                   <QuotaRow label={t("userMenu.grant", "Grant")}>
-                    <span className="truncate font-mono text-xs tabular-nums">
-                      {formatUsdDecimal(user.billing_plan.grant_amount_usd, 2)}
-                      <span className="text-muted-foreground">
-                        {" · "}
-                        {user.billing_plan.schedule}
+                    {moneyLoading ? <Skeleton className="h-4 w-24" /> : (
+                      <span className="truncate font-mono text-xs tabular-nums">
+                        {moneyUnavailable ? "—" : formatMoney(user.billing_plan.grant_amount_nano_usd)}
+                        <span className="text-muted-foreground">
+                          {" · "}
+                          {user.billing_plan.schedule}
+                        </span>
                       </span>
-                    </span>
+                    )}
                   </QuotaRow>
                   {user.next_grant_at && (
                     <QuotaRow label={t("userMenu.nextReset", "Next reset")}>
@@ -317,6 +382,10 @@ export function UserCenterMenu({
           <Cog className="mr-2 h-4 w-4" />
           {t("userSettings.title")}
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="p-0 font-normal">
+          <CurrencyToggle />
+        </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="p-0 font-normal">
           <ThemeToggle />

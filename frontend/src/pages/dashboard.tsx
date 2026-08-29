@@ -11,8 +11,10 @@ import { PageWrapper, SharedTabIndicator, motion } from "@/components/ui/motion"
 import { TokenSummary } from "@/components/usage/token-summary";
 import { UsageTrendChart } from "@/components/usage/usage-trend-chart";
 import { useAuth } from "@/hooks/use-auth";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
+import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { useDashboardAnalytics } from "@/lib/swr";
-import { formatNanoUsd, formatUsdDecimal } from "@/lib/exact-decimal";
+import { formatNanoUsd } from "@/lib/store-money";
 import { aggregateTokenTotals, formatCacheHitRate } from "@/lib/usage-analytics";
 import { cn } from "@/lib/utils";
 
@@ -89,6 +91,8 @@ function RangeControl({
 export function DashboardPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
+  const { currency } = useStoreCurrency();
+  const exchangeRate = useStoreExchangeRate(currency === "CNY");
   const [range, setRange] = useState<DashboardRange>("24h");
   const rangeConfig = DASHBOARD_RANGES[range];
   const summary = useDashboardAnalytics(8, 720, "self", {
@@ -105,6 +109,14 @@ export function DashboardPage() {
   );
 
   const plan = user?.billing_plan;
+  const cnyPerUsd = exchangeRate.data?.cny_per_usd;
+  const moneyLoading = currency === "CNY" && !cnyPerUsd && exchangeRate.isLoading;
+  const displayMoney = (nanoUsd: string | null | undefined) => {
+    if (currency === "CNY") {
+      return cnyPerUsd ? formatNanoUsd(nanoUsd ?? "0", "CNY", cnyPerUsd) : "—";
+    }
+    return formatNanoUsd(nanoUsd ?? "0", "USD", "1");
+  };
   const summaryTotals = summary.data ? aggregateTokenTotals(summary.data.buckets) : undefined;
   const overview = [
     {
@@ -112,11 +124,11 @@ export function DashboardPage() {
       rows: [
         {
           label: t("dashboard.cards.currentBalance"),
-          value: user?.balance_unlimited ? t("users.unlimited") : formatUsdDecimal(user?.balance_usd, 2),
+          value: user?.balance_unlimited ? t("users.unlimited") : displayMoney(user?.balance_nano_usd),
         },
         {
           label: t("dashboard.cards.subscription"),
-          value: plan ? `${plan.name} · ${formatUsdDecimal(plan.grant_amount_usd, 2)}/${plan.schedule}` : t("dashboard.cards.noPlan"),
+          value: plan ? `${plan.name} · ${displayMoney(plan.grant_amount_nano_usd)}/${plan.schedule}` : t("dashboard.cards.noPlan"),
         },
       ],
     },
@@ -130,8 +142,8 @@ export function DashboardPage() {
     {
       title: t("dashboard.cards.costOverview"),
       rows: [
-        { label: t("dashboard.cards.totalSpend"), value: formatNanoUsd(summary.data?.total_cost_nano_usd, 2) },
-        { label: t("dashboard.cards.todaySpend"), value: formatNanoUsd(summary.data?.today_cost_nano_usd, 2) },
+        { label: t("dashboard.cards.totalSpend"), value: displayMoney(summary.data?.total_cost_nano_usd) },
+        { label: t("dashboard.cards.todaySpend"), value: displayMoney(summary.data?.today_cost_nano_usd) },
       ],
     },
     {
@@ -153,7 +165,7 @@ export function DashboardPage() {
         description={t("dashboard.subtitle")}
       />
 
-      {summary.isLoading && !summary.data ? (
+      {(summary.isLoading && !summary.data) || moneyLoading ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-40 rounded-lg" />)}
         </div>
@@ -186,7 +198,13 @@ export function DashboardPage() {
         ) : (
           <>
             <TokenSummary totals={totals} loading={usage.isLoading} />
-            <UsageTrendChart buckets={usage.data?.buckets} metric="total" loading={usage.isLoading} compact />
+            <UsageTrendChart
+              buckets={usage.data?.buckets}
+              metric="total"
+              transitionKey={range}
+              loading={usage.isLoading}
+              compact
+            />
           </>
         )}
       </section>

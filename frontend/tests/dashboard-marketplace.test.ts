@@ -68,7 +68,7 @@ describe("authenticated Model Marketplace", () => {
     expect(appSource).toContain('<Route path="marketplace" element={<ModelMarketplacePage />} />');
     expect(marketplaceSource).toContain("/api/public/marketplace?");
     expect(marketplaceSource).toContain("/api/public/marketplace/offers?");
-    expect(marketplaceSource).toContain("storeApi.getExchangeRate");
+    expect(marketplaceSource).toContain("useStoreExchangeRate()");
     expect(marketplaceSource).toContain("useStoreCurrency");
     expect(marketplaceSource).toContain("keepPreviousData: true");
     expect(marketplaceSource).toContain("<Dialog");

@@ -85,7 +85,7 @@ The page provides:
 
 Each model row displays the model ID, capabilities, context limit, input price range, output price range, and offer count. Prices display as `¥x.xx / 1M tokens` in CNY or `$x.xx / 1M tokens` in USD. The UI never exposes nano-USD as a user-facing unit.
 
-The Marketplace and Store share one currency preference and one current exchange-rate snapshot. The preference is in-memory application state and a user action updates both pages without a reload. The rate source, freshness, fallback, exact rational conversion, and rounding follow `store-billing.spec.md`. An unavailable or expired CNY rate disables CNY display and explains the reason; it does not invent a rate.
+The Dashboard account menu, Dashboard overview, usage ranking, Marketplace, and Store share one currency preference and one current exchange-rate snapshot. The preference persists under `monoize-display-currency-v1`; invalid or unavailable storage defaults to CNY. A user action updates mounted consumers without a reload. The rate source, freshness, fallback, exact rational conversion, and rounding follow `store-billing.spec.md`. An unavailable or expired CNY rate disables CNY display and explains the reason; it does not invent a rate.
 
 Selecting a model opens a modal. The modal lists Provider public name, Channel public name, API family, and formatted rate rows. It never exposes internal IDs, Base URLs, credentials, multipliers, or private names.
 

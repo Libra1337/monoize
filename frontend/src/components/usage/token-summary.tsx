@@ -15,27 +15,48 @@ export function AnimatedTokenValue({ value, showDelta = false }: { value: bigint
   const [visible, setVisible] = useState(value);
   const visibleRef = useRef(value);
   const targetRef = useRef(value);
+  const cycleStartRef = useRef(value);
+  const cycleActiveRef = useRef(false);
   const [delta, setDelta] = useState<bigint>(0n);
+  const [deltaVisible, setDeltaVisible] = useState(false);
 
   useEffect(() => {
-    const start = visibleRef.current;
     const previousTarget = targetRef.current;
-    targetRef.current = value;
-    setDelta(value - previousTarget);
     if (value === previousTarget) return;
+    targetRef.current = value;
     if (reduceMotion) {
       setVisible(value);
       visibleRef.current = value;
+      cycleStartRef.current = value;
+      cycleActiveRef.current = false;
+      setDelta(0n);
+      setDeltaVisible(false);
       return;
     }
+    if (!cycleActiveRef.current) {
+      cycleStartRef.current = visibleRef.current;
+      cycleActiveRef.current = true;
+    }
+    const netDelta = value - cycleStartRef.current;
+    setDelta(netDelta);
+    setDeltaVisible(netDelta !== 0n);
+    const start = visibleRef.current;
     const controls = animate(0, 1, {
-      duration: 1.35,
-      ease: "easeOut",
+      duration: 4.8,
+      ease: "easeInOut",
       onUpdate: (progress) => {
         const step = BigInt(Math.round(progress * 1_000));
         const next = start + ((value - start) * step) / 1_000n;
         visibleRef.current = next;
         setVisible(next);
+      },
+      onComplete: () => {
+        if (targetRef.current !== value) return;
+        visibleRef.current = value;
+        setVisible(value);
+        cycleStartRef.current = value;
+        cycleActiveRef.current = false;
+        setDeltaVisible(false);
       },
     });
     return () => controls.stop();
@@ -48,11 +69,18 @@ export function AnimatedTokenValue({ value, showDelta = false }: { value: bigint
       transition={{ duration: reduceMotion ? 0 : 0.25 }}
       className="font-display tabular-nums"
     >{formatTokenCount(visible, i18n.language)}</motion.span>
+    <span className="mt-1 min-h-4 text-xs">
     {showDelta && delta !== 0n ? (
-      <span className={`mt-1 text-xs font-medium tabular-nums ${delta > 0n ? "text-success" : "text-destructive"}`}>
+      <motion.span
+        initial={false}
+        animate={{ opacity: deltaVisible ? 1 : 0, y: deltaVisible ? 0 : 2 }}
+        transition={{ duration: reduceMotion ? 0 : 0.35 }}
+        className={`font-medium tabular-nums ${delta > 0n ? "text-success" : "text-destructive"}`}
+      >
         {delta > 0n ? "+" : "-"}{formatTokenCount(delta < 0n ? -delta : delta, i18n.language)}
-      </span>
+      </motion.span>
     ) : null}
+    </span>
   </span>;
 }
 

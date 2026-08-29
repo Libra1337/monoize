@@ -20,6 +20,11 @@ administrator endpoint for those sessions.
 UR-2a. The frontend route `/dashboard/admin` MUST satisfy UR-2. The dashboard
 navigation MUST omit all three administrator routes for a non-admin session.
 
+UR-2b. The frontend route `/dashboard/usage-ranking` MUST render the usage ranking
+for every enabled authenticated role. The ordinary-user navigation MUST contain a
+link to this route. `/dashboard/admin/usage` MAY remain as an administrator-only
+compatibility route, but it MUST NOT be the only usage-ranking entry point.
+
 ## 3. Usage ranking endpoint
 
 UR-3. The endpoint MUST aggregate request logs from the preceding 24 hours ending
@@ -55,14 +60,20 @@ UTF-8 byte order. Each row MUST contain `model`, `call_count`, `input_tokens`,
 `cache_read_tokens`, `output_tokens`, and `cost_nano_usd`.
 
 UR-7c. The usage page MUST display user and model rankings in equal-width columns
-on desktop and stacked sections on narrow screens. Token values MUST animate from
-the previous snapshot over at least 1.2 seconds. A small signed delta MUST appear
-under each changing total; zero deltas MUST remain hidden. Changing the selected
-time range MUST preserve the previous value as the animation start value.
+on desktop and stacked sections on narrow screens. The total, user-ranking, and
+model-ranking token counters MUST animate from the currently displayed value to the
+latest target over 4.8 seconds. Changing the selected time range MUST preserve the
+currently displayed value as the animation start value.
 
 UR-7d. The usage page MUST display each ranked user's call count, token count,
 and charge. Selecting a user MUST open a modal that displays that user's model
 rows. The modal MUST keep its dimensions stable while it is open.
+
+UR-7e. When two user or model rows exchange rank, both rows MUST animate to their
+new positions instead of replacing content at fixed positions. A non-administrator
+user row MAY contain `rank_key`. `rank_key` MUST be generated from the internal
+user ID and a process-local random salt. The salt MUST NOT leave process memory.
+The key MUST change after process restart and MUST NOT be rendered as text.
 
 ## 4. Runtime status page
 
@@ -92,8 +103,13 @@ passwords, raw request prompts, or request bodies.
 UR-11. Non-administrator responses MUST NOT expose user IDs, usernames, charges,
 or per-user model rows.
 
-UR-12. Token counters MUST animate between snapshots over 1.2 seconds. The
-animation MUST use the currently displayed value as its start value when a range
-changes. If the new value equals the displayed value, no animation MUST run. A
-signed delta below each counter MUST show the change since the previous snapshot;
-zero deltas MUST be omitted.
+UR-12. One counter animation cycle starts when an idle counter receives a changed
+target. Its signed delta MUST equal the latest target minus the cycle start value.
+If another target arrives before completion, the counter MUST retarget from its
+currently displayed value and the signed delta MUST update to the net cycle change.
+The delta MUST NOT show each intermediate update as a separate positive or negative
+change. The delta MUST fade in, remain visible while the counter is moving, and
+start fading out when the displayed value reaches the latest target. If the new
+value equals the latest target, no new animation or delta MUST start. Reduced-motion
+mode MUST update the value without number interpolation. Every interpolation MUST
+last 4.8 seconds and MUST use an ease-in-out timing function.

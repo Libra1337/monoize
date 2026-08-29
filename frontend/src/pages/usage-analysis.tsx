@@ -111,6 +111,7 @@ export function UsageAnalysisPage() {
             <UsageTrendChart
               buckets={analytics.data?.buckets}
               metric={metric}
+              transitionKey={`${range}:${metric}`}
               loading={analytics.isLoading}
             />
             <ModelDistribution

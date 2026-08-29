@@ -16,6 +16,13 @@ const usageTrendSource = source("../src/components/usage/usage-trend-chart.tsx")
 const modelDistributionSource = source("../src/components/usage/model-distribution.tsx");
 const publicStatusSource = source("../src/pages/public-status.tsx");
 const apiKeysSource = source("../src/pages/api-keys.tsx");
+const adminUsageSource = source("../src/pages/admin-usage.tsx");
+const apiSource = source("../src/lib/api.ts");
+const userCenterSource = source("../src/components/user-center-menu.tsx");
+const currencySource = source("../src/hooks/use-store-currency.tsx");
+const locales = ["en", "zh", "zh-TW", "ja"].map((locale) =>
+  JSON.parse(source(`../src/locales/${locale}.json`)),
+);
 
 describe("authenticated Dashboard route ownership", () => {
   test("mounts usage, Marketplace, and API Docs under DashboardLayout", () => {
@@ -51,6 +58,41 @@ describe("Dashboard navigation", () => {
     expect(layoutSource).toContain('to: "/dashboard/marketplace"');
     expect(layoutSource).toContain('to: "/dashboard/api-docs"');
   });
+
+  test("exposes usage ranking to ordinary authenticated users", () => {
+    expect(appSource).toContain('path="usage-ranking" element={<AdminUsagePage />}');
+    expect(appSource).toContain('path="admin/usage" element={<AdminRoute><AdminUsagePage /></AdminRoute>}');
+    const ordinaryNavigation = layoutSource.slice(
+      layoutSource.indexOf("const navItems"),
+      layoutSource.indexOf("const adminNavItems"),
+    );
+    expect(ordinaryNavigation).toContain('to: "/dashboard/usage-ranking"');
+  });
+
+  test("keeps ranking charge fields and exchange-rate reads administrator-only", () => {
+    expect(apiSource).toContain("cost_nano_usd?: string");
+    expect(apiSource).toContain("total_cost_nano_usd?: string");
+    expect(adminUsageSource).toContain('const isAdmin = user?.role === "super_admin" || user?.role === "admin"');
+    expect(adminUsageSource).toContain('useStoreExchangeRate(currency === "CNY" && isAdmin)');
+    expect(adminUsageSource).toContain("{isAdmin ? (");
+  });
+
+  test("adds one persisted CNY and USD display control to the account menu", () => {
+    expect(userCenterSource).toContain("useStoreCurrency()");
+    expect(userCenterSource).toContain('layoutId="currency-toggle-indicator"');
+    expect(userCenterSource).toContain("aria-pressed={currency === item}");
+    expect(userCenterSource).toContain('["CNY", "USD"]');
+    expect(currencySource).toContain('STORE_CURRENCY_STORAGE_KEY = "monoize-display-currency-v1"');
+    expect(currencySource).toContain("localStorage.getItem");
+    expect(currencySource).toContain("localStorage.setItem");
+    expect(userCenterSource).not.toContain('cnyPerUsd ?? "1"');
+    expect(dashboardSource).not.toContain('cnyPerUsd ?? "1"');
+    for (const locale of locales) {
+      expect(locale.userMenu.displayCurrency).toBeString();
+      expect(locale.userMenu.cny).toBeString();
+      expect(locale.userMenu.usd).toBeString();
+    }
+  });
 });
 
 describe("API key routing controls", () => {
@@ -81,11 +123,28 @@ describe("Dashboard page boundaries", () => {
     expect(tokenSummarySource).toContain("useReducedMotion");
     expect(tokenSummarySource).toContain("motion");
     expect(usageTrendSource).toContain("ChartContainer");
-    expect(usageTrendSource).toContain("isAnimationActive={!reduceMotion}");
+    expect(usageTrendSource).toContain("useReducedMotion");
     expect(modelDistributionSource).toContain("rankModelsByTokens");
     expect(modelDistributionSource).toContain("Skeleton");
     expect(tokenSummarySource).toContain("divide-x");
     expect(tokenSummarySource.match(/<Card(?:\s|>)/g)?.length).toBe(2);
+  });
+
+  test("animates explicit trend selections without interpolating polled paths", () => {
+    expect(usageTrendSource).toContain("transitionKey");
+    expect(usageTrendSource).toContain("<motion.div");
+    expect(usageTrendSource).toContain("opacity: 0.45, y: 6");
+    expect(usageTrendSource).toContain("duration: 0.45");
+    expect(usageTrendSource).toContain("isAnimationActive={false}");
+    expect(usageTrendSource).toContain("if (loading)");
+    expect(usageTrendSource).not.toContain("isAnimationActive={!reduceMotion}");
+    expect(dashboardSource).toContain("transitionKey={range}");
+    expect(usageSource).toContain('transitionKey={`${range}:${metric}`}');
+  });
+
+  test("uses slow token interpolation for live totals and rankings", () => {
+    expect(tokenSummarySource).toContain("duration: 4.8");
+    expect(tokenSummarySource).toContain('ease: "easeInOut"');
   });
 
   test("keeps every model label visible without legend overflow", () => {

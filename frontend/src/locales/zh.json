@@ -200,6 +200,7 @@
 		"admin": "管理",
 		"logs": "日志",
 		"usage": "用量分析",
+		"usageRanking": "用量排行",
 		"runtimeStatus": "运行状态",
 		"apiDocs": "API 文档",
 		"models": "模型数据库",
@@ -1383,7 +1384,10 @@
 		"rpm": "RPM",
 		"tpm": "TPM",
 		"cacheHit": "缓存命中",
-		"liveUsageError": "实时用量加载失败"
+		"liveUsageError": "实时用量加载失败",
+		"displayCurrency": "显示货币",
+		"cny": "人民币",
+		"usd": "美元"
 	},
 	"userSettings": {
 		"title": "设置",

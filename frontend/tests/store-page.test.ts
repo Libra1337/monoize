@@ -60,7 +60,9 @@ describe("Store user pages", () => {
     expect(storeSource).toContain("currency={currency}");
     expect(storeSource).toContain("onCurrencyChange={setCurrency}");
     expect(currencySource).toContain("StoreCurrencyProvider");
-    expect(currencySource).not.toContain("localStorage");
+    expect(currencySource).toContain('STORE_CURRENCY_STORAGE_KEY = "monoize-display-currency-v1"');
+    expect(currencySource).toContain("localStorage.getItem");
+    expect(currencySource).toContain("localStorage.setItem");
     expect(appSource).toContain("<StoreCurrencyProvider>");
     expect(moneySource).toContain("formatNanoUsd");
     expect(moneySource).toContain("formatPlanQuota");

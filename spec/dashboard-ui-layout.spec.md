@@ -66,7 +66,7 @@ exactly these sections in order, separated by menu separators:
 1. identity header,
 2. quota/plan block,
 3. live-usage block,
-4. actions (settings, theme toggle, sign out).
+4. actions (settings, display-currency toggle, theme toggle, sign out).
 
 The dropdown MUST use the shared DropdownMenu (Radix) component so keyboard and
 dismissal contracts are unchanged, and lucide icons only (no emoji glyphs).
@@ -105,11 +105,31 @@ fetch fails, the block MUST render a compact localized error message with a retr
 that revalidates the SWR key; the failure MUST NOT unmount or break the rest of the menu.
 
 DL3f. The actions section MUST keep exactly: a settings item navigating to `/settings`,
-the theme toggle, and a sign-out item, with the same behavior as before the dropdown
-expansion.
+the display-currency toggle, the theme toggle, and a sign-out item. The display-currency
+toggle MUST be one horizontal segmented control with exactly `CNY` and `USD`. Its label
+MUST be localized. Each option MUST be a native button with `aria-pressed`. The selected
+option MUST use one shared `framer-motion` layout indicator and MUST respect the global
+reduced-motion configuration.
 
 DL3g. The mobile sheet sidebar (DL4) MUST render the same account dropdown component,
 so DL3b through DL3f hold on both desktop and mobile.
+
+DL3h. `StoreCurrencyProvider` MUST own one Console-wide display-currency preference.
+The storage key MUST be `monoize-display-currency-v1`. The initial value MUST equal the
+stored value when it is exactly `CNY` or `USD`; otherwise it MUST equal `CNY`. A successful
+selection MUST update mounted consumers immediately and MUST attempt to persist the value
+to browser `localStorage`. A denied or failed storage read or write MUST NOT break rendering
+or prevent the in-memory selection from changing. The preference MUST NOT change stored
+balances, prices, orders, ledger entries, or API billing units.
+
+DL3i. The account menu, Dashboard overview, Store, authenticated Marketplace, and usage
+ranking MUST read the preference from `StoreCurrencyProvider`. CNY display of nano-USD
+amounts MUST use the current Store `cny_per_usd` snapshot and exact integer or rational
+arithmetic. These consumers MUST share the same SWR exchange-rate key so one cached snapshot
+is reused. While a required CNY rate has no cached value and is loading, the affected amount
+surface MUST render a Skeleton. If the CNY rate request fails without cached data, the
+affected amount MUST render an unavailable marker and MUST NOT invent a rate. USD display
+MUST remain available without an exchange-rate snapshot.
 
 DL4. Mobile (`< lg`) MUST render sidebar via left sheet menu.
 
@@ -531,6 +551,16 @@ DH6. `/dashboard` motion contract MUST use `framer-motion` and include:
 - page entry fade/slide for row A and row C panels;
 - staggered card entry for row B;
 - hover lift effect for overview cards.
+
+DH6a. The shared Usage Trend line MUST disable Recharts path interpolation. Selecting a
+different metric or time range MUST remount one motion wrapper keyed only by the explicit
+selection and MUST animate the new chart from opacity `0.45` and vertical offset `6px` to
+opacity `1` and offset `0` over 450 ms. Poll refreshes MUST keep the same selection key and
+MUST NOT restart this transition. A rapid sequence of selections MUST replace the prior
+wrapper instead of retargeting one path animation. This rule applies to both `/dashboard`
+and `/dashboard/usage`. Reduced-motion mode MUST disable the wrapper transition.
+While the selected range has no loaded response, the trend region MUST render its Skeleton
+instead of animating retained data from the prior selection.
 
 DH7. `/dashboard` MUST be resilient to config schema variance from `GET /api/dashboard/config`:
 

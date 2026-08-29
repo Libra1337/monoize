@@ -200,6 +200,7 @@
 		"admin": "Admin",
 		"logs": "Logs",
 		"usage": "Usage Analysis",
+		"usageRanking": "Usage ranking",
 		"runtimeStatus": "Runtime status",
 		"apiDocs": "API Docs",
 		"models": "Models",
@@ -1383,7 +1384,10 @@
 		"rpm": "RPM",
 		"tpm": "TPM",
 		"cacheHit": "Cache hit",
-		"liveUsageError": "Failed to load live usage"
+		"liveUsageError": "Failed to load live usage",
+		"displayCurrency": "Display currency",
+		"cny": "Chinese yuan",
+		"usd": "US dollar"
 	},
 	"userSettings": {
 		"title": "Settings",

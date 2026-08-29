@@ -789,7 +789,7 @@ export interface AdminOverview {
 export interface AdminUsageModelRow {
   model: string;
   call_count: number;
-  cost_nano_usd: string;
+  cost_nano_usd?: string;
   input_tokens: string;
   cache_read_tokens: string;
   output_tokens: string;
@@ -797,6 +797,7 @@ export interface AdminUsageModelRow {
 
 export interface AdminUsageUserRow {
   user_id?: string;
+  rank_key?: string;
   username?: string | null;
   call_count: number;
   cost_nano_usd?: string;
@@ -814,7 +815,7 @@ export interface AdminUsageRanking {
   total_cache_read_tokens: string;
   total_output_tokens: string;
   total_calls: number;
-  total_cost_nano_usd: string;
+  total_cost_nano_usd?: string;
   users: AdminUsageUserRow[];
   models: AdminUsageModelRow[];
 }
