@@ -103,6 +103,8 @@ export function DashboardPage() {
     keepPreviousData: true,
     refreshInterval: 2000,
   });
+  const usageSelectionLoading = usage.isLoading
+    || usage.data?.buckets.length !== rangeConfig.buckets;
   const totals = useMemo(
     () => usage.data ? aggregateTokenTotals(usage.data.buckets) : undefined,
     [usage.data],
@@ -201,8 +203,8 @@ export function DashboardPage() {
             <UsageTrendChart
               buckets={usage.data?.buckets}
               metric="total"
-              transitionKey={range}
-              loading={usage.isLoading}
+              selectionKey={range}
+              loading={usageSelectionLoading}
               compact
             />
           </>

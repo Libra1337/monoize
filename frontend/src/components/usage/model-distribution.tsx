@@ -5,27 +5,38 @@ import { Cell, Pie, PieChart } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, type ChartConfig } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useSelectionDataset } from "@/hooks/use-selection-dataset";
 import {
   formatTokenCount,
   rankModelsByTokens,
   type TokenAnalyticsBucket,
   type TokenMetric,
 } from "@/lib/usage-analytics";
+import { cn } from "@/lib/utils";
 
 const COLORS = Array.from({ length: 5 }, (_, index) => `hsl(var(--chart-${index + 1}))`);
 
 export function ModelDistribution({
   buckets,
   metric,
+  selectionKey,
   loading = false,
 }: {
   buckets?: TokenAnalyticsBucket[];
   metric: TokenMetric;
+  selectionKey: string;
   loading?: boolean;
 }) {
   const reduceMotion = useReducedMotion();
   const { t, i18n } = useTranslation();
-  const ranked = useMemo(() => rankModelsByTokens(buckets ?? [], metric), [buckets, metric]);
+  const nextRanked = useMemo(() => rankModelsByTokens(buckets ?? [], metric), [buckets, metric]);
+  const { dataset: ranked, animate } = useSelectionDataset({
+    selectionKey,
+    loading,
+    dataset: nextRanked,
+    animationDurationMs: 1000,
+    enabled: !reduceMotion,
+  });
   const total = ranked.reduce((sum, row) => sum + row.value, 0n);
   const chartRows = ranked.slice(0, 5).map((row, index) => ({
     ...row,
@@ -70,8 +81,9 @@ export function ModelDistribution({
                   innerRadius={58}
                   outerRadius={88}
                   strokeWidth={3}
-                  isAnimationActive={!reduceMotion}
+                  isAnimationActive={animate}
                   animationDuration={1000}
+                  animationEasing="ease-in-out"
                 >
                   {chartRows.map((row) => <Cell key={row.model} fill={row.fill} />)}
                 </Pie>
@@ -94,7 +106,10 @@ export function ModelDistribution({
                     </div>
                     <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                       <div
-                        className="h-full rounded-full bg-primary transition-[width] duration-[1000ms]"
+                        className={cn(
+                          "h-full rounded-full bg-primary",
+                          animate && "transition-[width] duration-[1000ms] ease-in-out",
+                        )}
                         style={{ width: `${Number(basisPoints) / 100}%` }}
                       />
                     </div>

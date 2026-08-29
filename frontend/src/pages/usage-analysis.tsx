@@ -66,6 +66,8 @@ export function UsageAnalysisPage() {
     keepPreviousData: true,
     refreshInterval: 2000,
   });
+  const selectionLoading = analytics.isLoading
+    || analytics.data?.buckets.length !== config.buckets;
   const totals = useMemo(
     () => analytics.data ? aggregateTokenTotals(analytics.data.buckets) : undefined,
     [analytics.data],
@@ -111,13 +113,14 @@ export function UsageAnalysisPage() {
             <UsageTrendChart
               buckets={analytics.data?.buckets}
               metric={metric}
-              transitionKey={`${range}:${metric}`}
-              loading={analytics.isLoading}
+              selectionKey={`${range}:${metric}`}
+              loading={selectionLoading}
             />
             <ModelDistribution
               buckets={analytics.data?.buckets}
               metric={metric}
-              loading={analytics.isLoading}
+              selectionKey={`${range}:${metric}`}
+              loading={selectionLoading}
             />
           </div>
         </>

@@ -105,9 +105,21 @@ Token count-up and chart drawing MUST run for 800 through 1200 milliseconds so t
 remains readable. A refresh MUST animate from the last displayed value rather than zero.
 Reduced-motion mode MUST render final values immediately and remove nonessential movement.
 
-UA-22a. When the selected range or metric changes, the trend chart MUST animate
-the previous view out and the new view in. The transition MUST last 650
-milliseconds and MUST preserve the chart container dimensions. Polling updates
-for an unchanged selection MUST NOT restart this view transition.
+UA-22a. When the selected range or metric changes, the trend chart MUST keep its
+Card, axes, grid, tooltip, and dimensions mounted. Only the Line path MUST
+interpolate from the last resolved series to the selected series. The Line
+animation MUST last 1,200 milliseconds and use ease-in-out timing. The trend
+chart MUST NOT fade or translate as one block.
+
+UA-22b. When the selected range or metric changes, the model-distribution donut
+sectors and ranked-row progress bars MUST transition to the selected values over
+1,000 milliseconds. Model labels and exact Token values MUST remain visible
+during the transition.
+
+UA-22c. A selection animation MUST start after data for the selected query
+resolves. While that query is pending, the last resolved chart data MUST remain
+visible. A polling response for an unchanged selection MUST update the chart
+without starting a selection animation. Reduced-motion mode MUST render the
+selected chart data without Line, sector, or progress-bar interpolation.
 
 UA-23. Every visible string MUST use an i18n key present in `en`, `zh`, `zh-TW`, and `ja`.

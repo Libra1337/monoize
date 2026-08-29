@@ -14,6 +14,7 @@ const dashboardApiDocsSource = source("../src/pages/dashboard-api-docs.tsx");
 const tokenSummarySource = source("../src/components/usage/token-summary.tsx");
 const usageTrendSource = source("../src/components/usage/usage-trend-chart.tsx");
 const modelDistributionSource = source("../src/components/usage/model-distribution.tsx");
+const selectionDatasetSource = source("../src/hooks/use-selection-dataset.ts");
 const publicStatusSource = source("../src/pages/public-status.tsx");
 const apiKeysSource = source("../src/pages/api-keys.tsx");
 const adminUsageSource = source("../src/pages/admin-usage.tsx");
@@ -130,18 +131,26 @@ describe("Dashboard page boundaries", () => {
     expect(tokenSummarySource.match(/<Card(?:\s|>)/g)?.length).toBe(2);
   });
 
-  test("animates explicit trend selections without interpolating polled paths", () => {
-    expect(usageTrendSource).toContain("transitionKey");
-    expect(usageTrendSource).toContain("<motion.div");
-    expect(usageTrendSource).toContain("<AnimatePresence");
-    expect(usageTrendSource).toContain("mode=\"wait\"");
-    expect(usageTrendSource).toContain("opacity: 0.45, y: 6");
-    expect(usageTrendSource).toContain("duration: 0.65");
-    expect(usageTrendSource).toContain("isAnimationActive={false}");
-    expect(usageTrendSource).toContain("if (loading)");
-    expect(usageTrendSource).not.toContain("isAnimationActive={!reduceMotion}");
-    expect(dashboardSource).toContain("transitionKey={range}");
-    expect(usageSource).toContain('transitionKey={`${range}:${metric}`}');
+  test("animates chart geometry only for explicit selections", () => {
+    expect(selectionDatasetSource).toContain("useSelectionDataset");
+    expect(selectionDatasetSource).toContain("selectionKey");
+    expect(selectionDatasetSource).toContain("pendingSelectionRef");
+    expect(usageTrendSource).toContain("selectionKey");
+    expect(usageTrendSource).toContain("useSelectionDataset");
+    expect(usageTrendSource).toContain("isAnimationActive={animate}");
+    expect(usageTrendSource).toContain("animationDuration={1200}");
+    expect(usageTrendSource).toContain('animationEasing="ease-in-out"');
+    expect(usageTrendSource).not.toContain("AnimatePresence");
+    expect(usageTrendSource).not.toContain("opacity: 0.45, y: 6");
+    expect(usageTrendSource).toContain("if (loading && !buckets)");
+    expect(modelDistributionSource).toContain("selectionKey");
+    expect(modelDistributionSource).toContain("useSelectionDataset");
+    expect(modelDistributionSource).toContain("isAnimationActive={animate}");
+    expect(modelDistributionSource).toContain("animationDuration={1000}");
+    expect(dashboardSource).toContain("selectionKey={range}");
+    expect(dashboardSource).toContain("usage.data?.buckets.length !== rangeConfig.buckets");
+    expect(usageSource).toContain("analytics.data?.buckets.length !== config.buckets");
+    expect(usageSource.match(/selectionKey=\{`\$\{range\}:\$\{metric\}`\}/g)?.length).toBe(2);
   });
 
   test("uses slow token interpolation for live totals and rankings", () => {
