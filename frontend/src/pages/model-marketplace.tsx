@@ -45,12 +45,6 @@ const EXCHANGE_RATE_KEY = "/api/dashboard/store/exchange-rate";
 function MarketplaceSkeleton() {
   return (
     <div className="flex flex-col gap-6" aria-hidden="true">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(14rem,1fr)_12rem_12rem_auto]">
-        <Skeleton className="h-11" />
-        <Skeleton className="h-11" />
-        <Skeleton className="h-11" />
-        <Skeleton className="h-11" />
-      </div>
       {[0, 1].map((group) => (
         <div key={group} className="flex flex-col gap-3">
           <Skeleton className="h-7 w-36" />
@@ -146,6 +140,7 @@ export function ModelMarketplacePage() {
   const deferredSearch = useDeferredValue(search.trim());
   const [group, setGroup] = useState(ALL);
   const [capability, setCapability] = useState(ALL);
+  const [knownGroups, setKnownGroups] = useState<string[]>([]);
   const [selected, setSelected] = useState<MarketplaceItem | null>(null);
   const [pages, setPages] = useState<MarketplaceResponse[]>([]);
   const [loadCursor, setLoadCursor] = useState<string | null>(null);
@@ -153,16 +148,22 @@ export function ModelMarketplacePage() {
 
   const query = new URLSearchParams({ limit: LIST_LIMIT });
   if (deferredSearch) query.set("q", deferredSearch);
+  if (group !== ALL) query.set("group", group);
   const listKey = `/api/public/marketplace?${query}`;
   const list = useSWR<MarketplaceResponse>(listKey, marketplaceRequest, {
     keepPreviousData: true,
     onSuccess: (page) => {
       setPages([page]);
+      setKnownGroups((current) => [...new Set([
+        ...current,
+        ...page.items.map((item) => item.public_group_name),
+      ])]);
       setLoadCursor(null);
     },
   });
   const loadQuery = new URLSearchParams({ limit: LIST_LIMIT });
   if (deferredSearch) loadQuery.set("q", deferredSearch);
+  if (group !== ALL) loadQuery.set("group", group);
   if (loadCursor) loadQuery.set("cursor", loadCursor);
   const loadMore = useSWR<MarketplaceResponse>(
     loadCursor ? `/api/public/marketplace?${loadQuery}` : null,
@@ -186,7 +187,6 @@ export function ModelMarketplacePage() {
 
   const resolvedPages = resolveMarketplacePages(pages, list.data);
   const items = resolvedPages.flatMap((page) => page.items);
-  const groups = useMemo(() => [...new Set(items.map((item) => item.public_group_name))], [items]);
   const capabilities = useMemo(() => [...new Set(items.flatMap((item) => item.capabilities))], [items]);
   const filtered = items.filter((item) => (
     (group === ALL || item.public_group_name === group)
@@ -217,7 +217,7 @@ export function ModelMarketplacePage() {
           </label>
           <Select value={group} onValueChange={setGroup}>
             <SelectTrigger className="h-11" aria-label={t("modelMarketplace.groupFilter")}><SelectValue /></SelectTrigger>
-            <SelectContent><SelectItem value={ALL}>{t("modelMarketplace.allGroups")}</SelectItem>{groups.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent>
+            <SelectContent><SelectItem value={ALL}>{t("modelMarketplace.allGroups")}</SelectItem>{knownGroups.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent>
           </Select>
           <Select value={capability} onValueChange={setCapability}>
             <SelectTrigger className="h-11" aria-label={t("modelMarketplace.capabilityFilter")}><SelectValue /></SelectTrigger>
@@ -227,9 +227,14 @@ export function ModelMarketplacePage() {
         </div>
 
         {currency === "CNY" && cnyUnavailable ? (
-          <div className="flex items-center gap-2 rounded-lg border border-warning/45 bg-warning/10 px-4 py-3 text-sm text-foreground">
-            <CircleDollarSign className="size-4 shrink-0 text-warning" />
-            {t("modelMarketplace.currencyUnavailable")}
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-warning/45 bg-warning/10 px-4 py-3 text-sm text-foreground">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <CircleDollarSign className="size-4 shrink-0 text-warning" />
+              <span>{t("modelMarketplace.currencyUnavailable")}</span>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => exchangeRate.mutate()}>
+              <RefreshCw className="size-4" />{t("modelMarketplace.retry")}
+            </Button>
           </div>
         ) : null}
 
@@ -289,6 +294,9 @@ export function ModelMarketplacePage() {
             <DialogTitle ref={headingRef} tabIndex={-1} className="pr-10 font-mono text-xl outline-none">{selected?.model}</DialogTitle>
             <DialogDescription>{selected?.public_group_name} · {t("modelMarketplace.detailsDescription")}</DialogDescription>
           </DialogHeader>
+          <div className="flex flex-wrap gap-1.5" aria-label={t("modelMarketplace.capabilities")}>
+            {selected?.capabilities.map((item) => <Badge key={item} variant="outline">{item}</Badge>)}
+          </div>
           {offers.isLoading ? (
             <div className="flex flex-col gap-3"><Skeleton className="h-28" /><Skeleton className="h-28" /></div>
           ) : offers.error ? (

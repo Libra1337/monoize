@@ -43,6 +43,8 @@ describe("authenticated Model Marketplace", () => {
     expect(marketplaceSource).toContain("<Dialog");
     expect(marketplaceSource).toContain("public_group_name");
     expect(marketplaceSource).toContain("capabilities");
+    expect(marketplaceSource).toContain("selected?.capabilities.map");
+    expect(marketplaceSource).toContain("exchangeRate.mutate()");
   });
 
   test("uses naturally expanding rows and does not expose private catalog values", () => {
@@ -53,6 +55,11 @@ describe("authenticated Model Marketplace", () => {
     expect(marketplaceSource).not.toContain("output_cost_per_token_nano");
     expect(marketplaceSource).not.toContain("models_dev_provider");
     expect(marketplaceSource).not.toContain("nano-USD /");
+    const skeletonSource = marketplaceSource.slice(
+      marketplaceSource.indexOf("function MarketplaceSkeleton"),
+      marketplaceSource.indexOf("function CurrencyControl"),
+    );
+    expect(skeletonSource).not.toContain("lg:grid-cols");
   });
 
   test("defines the complete Console Marketplace copy in every locale", () => {

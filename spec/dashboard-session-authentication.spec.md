@@ -2,15 +2,15 @@
 
 ## 0A. Public-route exception
 
-DSA-P1. `/`, `/login`, `/apidocs`, `/status`, and `/dashboard/marketplace` require no
+DSA-P1. `/`, `/login`, `/apidocs`, `/status`, and `/marketplace` require no
 dashboard session. The browser MUST NOT redirect an unauthenticated visitor from any of
 these paths to `/login`.
 
 DSA-P2. The four `/api/public/**` endpoints in `public-site.spec.md` PS-A1 require no
 dashboard session. They MUST ignore dashboard authentication state when deciding access.
 
-DSA-P3. `/dashboard/marketplace` MUST NOT inherit the protected `/dashboard` route guard.
-Every other `/dashboard` browser route retains DSA6 through DSA9.
+DSA-P3. `/dashboard/marketplace` MUST inherit the protected `/dashboard` route guard.
+It MUST apply DSA6 through DSA9. `/marketplace` MUST remain outside the guard.
 
 ## 0. Scope
 
