@@ -786,6 +786,38 @@ export interface AdminOverview {
   channel_health: AdminOverviewChannelHealth[];
 }
 
+export interface AdminUsageModelRow {
+  model: string;
+  call_count: number;
+  cost_nano_usd: string;
+  input_tokens: string;
+  cache_read_tokens: string;
+  output_tokens: string;
+}
+
+export interface AdminUsageUserRow {
+  user_id: string;
+  username?: string | null;
+  call_count: number;
+  cost_nano_usd: string;
+  input_tokens: string;
+  cache_read_tokens: string;
+  output_tokens: string;
+  models: AdminUsageModelRow[];
+}
+
+export interface AdminUsageRanking {
+  time_from: string;
+  time_to: string;
+  total_tokens: string;
+  total_input_tokens: string;
+  total_cache_read_tokens: string;
+  total_output_tokens: string;
+  total_calls: number;
+  total_cost_nano_usd: string;
+  users: AdminUsageUserRow[];
+}
+
 export interface DashboardAnalyticsBucket {
   label: string;
   cost_by_model: Record<string, string>;
@@ -1283,6 +1315,10 @@ class ApiClient {
 
   async getAdminOverview(): Promise<AdminOverview> {
     return this.request("/admin/overview");
+  }
+
+  async getAdminUsageRanking(): Promise<AdminUsageRanking> {
+    return this.request("/admin/usage-ranking");
   }
 
   async testChannel(

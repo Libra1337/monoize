@@ -799,6 +799,17 @@ PR5d. For a streamed Responses reasoning item, `response.reasoning_text.delta` a
 
 PR5c. When parsing upstream Responses SSE, Monoize MAY receive official image-generation tool events outside the `response.*` namespace.
 
+PR5e. An upstream Responses SSE event normally contains exactly one JSON object
+in its joined `data` field. If one joined `data` field contains two or more
+consecutive complete JSON values, the decoder MUST parse each value in source
+order as a separate Responses event. Each value MUST be a JSON object with a
+non-empty string `type`. The decoder MUST use that `type` as the effective event
+name for that value. The joined field MAY end with one `[DONE]` sentinel after
+the final complete object. The decoder MUST reject incomplete JSON, non-object
+values, missing or empty `type`, non-whitespace text between values, more than 64
+JSON values, or a joined field larger than 8 MiB. A rejected field MUST fail with
+`responses_invalid_sse_json` and MUST NOT emit a partial value from that field.
+
 - For `image_generation.completed`, if the payload carries non-empty `b64_json` or non-empty `result`, Monoize MUST decode that payload as one assistant `Image` node with `Image.source = Base64`.
 - Monoize MUST treat `response.image_generation.completed` as an alias of `image_generation.completed`.
 - The decoded media type MUST be derived from `output_format` using the same mapping as PR2b, defaulting to `image/png`.

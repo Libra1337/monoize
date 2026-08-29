@@ -185,3 +185,60 @@ mod reserved_wire_extra_tests {
             && data == &canonical));
     }
 }
+
+#[cfg(test)]
+mod joined_sse_data_tests {
+    use super::*;
+
+    #[test]
+    fn splits_multiple_complete_typed_objects_in_source_order() {
+        let parsed = parse_responses_sse_data(
+            "{\"type\":\"response.created\",\"sequence_number\":0}\n{\"type\":\"response.in_progress\",\"sequence_number\":1}",
+        )
+        .expect("joined event is valid");
+
+        assert!(!parsed.done);
+        assert_eq!(parsed.events.len(), 2);
+        assert_eq!(parsed.events[0].0, "response.created");
+        assert_eq!(parsed.events[1].0, "response.in_progress");
+    }
+
+    #[test]
+    fn accepts_done_after_complete_objects() {
+        let parsed = parse_responses_sse_data(
+            "{\"type\":\"response.completed\",\"response\":{}}\n[DONE]",
+        )
+        .expect("terminal joined event is valid");
+
+        assert!(parsed.done);
+        assert_eq!(parsed.events.len(), 1);
+        assert_eq!(parsed.events[0].0, "response.completed");
+    }
+
+    #[test]
+    fn rejects_any_invalid_value_without_partial_output() {
+        for data in [
+            "{\"type\":\"response.created\"}\ntrailing",
+            "{\"sequence_number\":0}",
+            "[]",
+            "{\"type\":\"\"}",
+        ] {
+            assert!(parse_responses_sse_data(data).is_err(), "accepted {data:?}");
+        }
+    }
+
+    #[test]
+    fn enforces_joined_event_bounds() {
+        let too_many = (0..65)
+            .map(|index| format!("{{\"type\":\"response.vendor.{index}\"}}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(parse_responses_sse_data(&too_many).is_err());
+
+        let oversized = format!(
+            "{{\"type\":\"response.vendor\",\"padding\":\"{}\"}}",
+            "x".repeat(8 * 1024 * 1024)
+        );
+        assert!(parse_responses_sse_data(&oversized).is_err());
+    }
+}

@@ -2081,6 +2081,169 @@ impl UserStore {
             .collect()
     }
 
+    /// Administrator usage ranking model rows (`admin-usage-runtime.spec.md`
+    /// UR-3 through UR-7). The CTE limits users before the second aggregate so
+    /// model cardinality from users outside the ranking cannot reach the app.
+    pub async fn get_users_model_usage_ranking(
+        &self,
+        time_from: &str,
+        time_to: &str,
+    ) -> Result<Vec<super::UserModelUsageRankingRow>, String> {
+        let is_sqlite = self.db.is_sqlite();
+        let time_from_unix_ms = chrono::DateTime::parse_from_rfc3339(time_from)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
+        let time_to_unix_ms = chrono::DateTime::parse_from_rfc3339(time_to)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
+        if time_from_unix_ms >= time_to_unix_ms {
+            return Err("usage ranking time range must be positive".to_string());
+        }
+
+        let charge_columns = charge_aggregate_columns(!is_sqlite);
+        let charge_order = charge_aggregate_order_expr(!is_sqlite, "ranked");
+        let token_columns = if is_sqlite {
+            "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
+             CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS TEXT) AS cache_read_tokens, \
+             CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS TEXT) AS output_tokens, \
+             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END) AS input_tokens_negative, \
+             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END) AS cache_read_tokens_negative, \
+             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END) AS output_tokens_negative"
+        } else {
+            "COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0)::TEXT AS input_tokens, \
+             COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0)::TEXT AS cache_read_tokens, \
+             COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0)::TEXT AS output_tokens, \
+             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS input_tokens_negative, \
+             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS cache_read_tokens_negative, \
+             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
+        };
+        let model_expr =
+            "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')";
+        let sql = format!(
+            "WITH top_users AS ( \
+                SELECT ranked.user_id FROM ( \
+                    SELECT rl.user_id, {charge_columns}, COUNT(*) AS call_count \
+                    FROM request_logs rl \
+                    WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms < $2 \
+                      AND rl.created_at_unix_ms IS NOT NULL AND rl.user_id IS NOT NULL \
+                    GROUP BY rl.user_id \
+                ) ranked \
+                ORDER BY {charge_order}, ranked.call_count DESC, ranked.user_id ASC \
+                LIMIT 20 \
+             ) \
+             SELECT rl.user_id, u.username AS username, {model_expr} AS model, \
+                    {charge_columns}, {token_columns}, COUNT(*) AS call_count \
+             FROM request_logs rl \
+             JOIN top_users ranked_user ON ranked_user.user_id = rl.user_id \
+             LEFT JOIN users u ON u.id = rl.user_id \
+             WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms < $2 \
+               AND rl.created_at_unix_ms IS NOT NULL \
+             GROUP BY rl.user_id, u.username, {model_expr}"
+        );
+        let rows = self
+            .db
+            .read()
+            .query_all(
+                self.db
+                    .stmt(&sql, vec![time_from_unix_ms.into(), time_to_unix_ms.into()]),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut decoded = rows
+            .into_iter()
+            .map(|row| {
+                let cost_nano_usd = decode_charge_aggregate(&row, !is_sqlite)?
+                    .parse::<i128>()
+                    .map_err(|_| "request log charge aggregate overflow".to_string())?;
+                if cost_nano_usd < 0 {
+                    return Err("request log charge aggregate is negative".to_string());
+                }
+                Ok(super::UserModelUsageRankingRow {
+                    user_id: row.try_get("", "user_id").map_err(|e| e.to_string())?,
+                    username: row.try_get("", "username").ok(),
+                    model: row.try_get("", "model").map_err(|e| e.to_string())?,
+                    call_count: row.try_get("", "call_count").map_err(|e| e.to_string())?,
+                    cost_nano_usd,
+                    input_tokens: decode_token_aggregate(&row, "input_tokens")?,
+                    cache_read_tokens: decode_token_aggregate(&row, "cache_read_tokens")?,
+                    output_tokens: decode_token_aggregate(&row, "output_tokens")?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        decoded.sort_by(|left, right| {
+            right
+                .cost_nano_usd
+                .cmp(&left.cost_nano_usd)
+                .then_with(|| right.call_count.cmp(&left.call_count))
+                .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
+                .then_with(|| left.model.as_bytes().cmp(right.model.as_bytes()))
+        });
+        Ok(decoded)
+    }
+
+    pub async fn get_admin_usage_totals(
+        &self,
+        time_from: &str,
+        time_to: &str,
+    ) -> Result<super::AdminUsageTotals, String> {
+        let is_sqlite = self.db.is_sqlite();
+        let time_from_unix_ms = chrono::DateTime::parse_from_rfc3339(time_from)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
+        let time_to_unix_ms = chrono::DateTime::parse_from_rfc3339(time_to)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
+        if time_from_unix_ms >= time_to_unix_ms {
+            return Err("usage totals time range must be positive".to_string());
+        }
+        let token_columns = if is_sqlite {
+            "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
+             CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS TEXT) AS cache_read_tokens, \
+             CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS TEXT) AS output_tokens, \
+             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END) AS input_tokens_negative, \
+             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END) AS cache_read_tokens_negative, \
+             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END) AS output_tokens_negative"
+        } else {
+            "COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0)::TEXT AS input_tokens, \
+             COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0)::TEXT AS cache_read_tokens, \
+             COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0)::TEXT AS output_tokens, \
+             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS input_tokens_negative, \
+             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS cache_read_tokens_negative, \
+             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
+        };
+        let sql = format!(
+            "SELECT {}, {token_columns}, COUNT(*) AS call_count \
+             FROM request_logs rl \
+             WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms < $2 \
+               AND rl.created_at_unix_ms IS NOT NULL AND rl.user_id IS NOT NULL",
+            charge_aggregate_columns(!is_sqlite)
+        );
+        let row = self
+            .db
+            .read()
+            .query_one(
+                self.db
+                    .stmt(&sql, vec![time_from_unix_ms.into(), time_to_unix_ms.into()]),
+            )
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "no admin usage aggregate row".to_string())?;
+        let cost_nano_usd = decode_charge_aggregate(&row, !is_sqlite)?
+            .parse::<i128>()
+            .map_err(|_| "request log charge aggregate overflow".to_string())?;
+        if cost_nano_usd < 0 {
+            return Err("request log charge aggregate is negative".to_string());
+        }
+        Ok(super::AdminUsageTotals {
+            call_count: row.try_get("", "call_count").map_err(|e| e.to_string())?,
+            cost_nano_usd,
+            input_tokens: decode_token_aggregate(&row, "input_tokens")?,
+            cache_read_tokens: decode_token_aggregate(&row, "cache_read_tokens")?,
+            output_tokens: decode_token_aggregate(&row, "output_tokens")?,
+        })
+    }
+
     pub async fn get_channels_today_usage(
         &self,
         today_start: &str,
@@ -2402,5 +2565,135 @@ mod today_usage_tests {
         assert_eq!(rows[1].user_id, alice.id);
         assert_eq!(rows[1].call_count, 2);
         assert_eq!(rows[1].cost_nano_usd, 3500);
+    }
+
+    #[tokio::test]
+    async fn aggregates_admin_usage_by_user_and_model_inside_window() {
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let (log_tx, _) = tokio::sync::broadcast::channel(1);
+        let store = UserStore::new(db.clone(), log_tx)
+            .await
+            .expect("store creates");
+        let alice = store
+            .create_user("alice_models", "password12", UserRole::User, None)
+            .await
+            .expect("alice created");
+        let bob = store
+            .create_user("bob_models", "password12", UserRole::User, None)
+            .await
+            .expect("bob created");
+        let now = Utc::now();
+        let from = now - chrono::Duration::hours(24);
+
+        for (id, user_id, model, charge, input, cache, output, created_ms) in [
+            (
+                "model-a1",
+                alice.id.as_str(),
+                "gpt-a",
+                "250",
+                100,
+                20,
+                30,
+                now.timestamp_millis() - 1_000,
+            ),
+            (
+                "model-a2",
+                alice.id.as_str(),
+                "gpt-a",
+                "350",
+                50,
+                10,
+                40,
+                now.timestamp_millis() - 900,
+            ),
+            (
+                "model-a3",
+                alice.id.as_str(),
+                "gpt-b",
+                "100",
+                10,
+                0,
+                5,
+                now.timestamp_millis() - 800,
+            ),
+            (
+                "model-b1",
+                bob.id.as_str(),
+                "gpt-c",
+                "900",
+                200,
+                30,
+                70,
+                now.timestamp_millis() - 700,
+            ),
+            (
+                "model-old",
+                bob.id.as_str(),
+                "gpt-old",
+                "9999",
+                999,
+                999,
+                999,
+                from.timestamp_millis() - 1,
+            ),
+        ] {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO request_logs (id, user_id, model, is_stream, status, created_at, created_at_unix_ms, charge_nano_usd, input_tokens, cache_read_tokens, output_tokens) VALUES ($1, $2, $3, 0, 'success', $4, $5, $6, $7, $8, $9)",
+                    vec![id.into(), user_id.into(), model.into(), now.to_rfc3339().into(), created_ms.into(), charge.into(), input.into(), cache.into(), output.into()],
+                ))
+                .await
+                .expect("log inserted");
+        }
+
+        let rows = store
+            .get_users_model_usage_ranking(&from.to_rfc3339(), &now.to_rfc3339())
+            .await
+            .expect("model ranking query succeeds");
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            (&rows[0].user_id, rows[0].model.as_str()),
+            (&bob.id, "gpt-c")
+        );
+        assert_eq!(rows[0].cost_nano_usd, 900);
+        assert_eq!(rows[0].input_tokens, 200);
+        let alice_a = rows
+            .iter()
+            .find(|row| row.user_id == alice.id && row.model == "gpt-a")
+            .expect("alice gpt-a row");
+        assert_eq!(alice_a.call_count, 2);
+        assert_eq!(alice_a.cost_nano_usd, 600);
+        assert_eq!(
+            (
+                alice_a.input_tokens,
+                alice_a.cache_read_tokens,
+                alice_a.output_tokens
+            ),
+            (150, 30, 70)
+        );
+        assert!(rows.iter().all(|row| row.model != "gpt-old"));
+
+        let totals = store
+            .get_admin_usage_totals(&from.to_rfc3339(), &now.to_rfc3339())
+            .await
+            .expect("usage totals query succeeds");
+        assert_eq!(totals.call_count, 4);
+        assert_eq!(totals.cost_nano_usd, 1600);
+        assert_eq!(
+            (
+                totals.input_tokens,
+                totals.cache_read_tokens,
+                totals.output_tokens
+            ),
+            (360, 60, 145)
+        );
     }
 }

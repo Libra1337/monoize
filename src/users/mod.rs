@@ -790,6 +790,27 @@ pub struct UserUsageRankingRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct UserModelUsageRankingRow {
+    pub user_id: String,
+    pub username: Option<String>,
+    pub model: String,
+    pub call_count: i64,
+    pub cost_nano_usd: i128,
+    pub input_tokens: i128,
+    pub cache_read_tokens: i128,
+    pub output_tokens: i128,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdminUsageTotals {
+    pub call_count: i64,
+    pub cost_nano_usd: i128,
+    pub input_tokens: i128,
+    pub cache_read_tokens: i128,
+    pub output_tokens: i128,
+}
+
+#[derive(Debug, Clone)]
 pub struct ChannelTodayUsage {
     pub channel_id: String,
     pub today_calls: i64,

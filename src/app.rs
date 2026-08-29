@@ -2673,5 +2673,9 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             "/dashboard/admin/overview",
             get(crate::dashboard_handlers::get_admin_overview),
         )
+        .route(
+            "/dashboard/admin/usage-ranking",
+            get(crate::dashboard_handlers::get_admin_usage_ranking),
+        )
         .merge(build_store_mutation_router(state))
 }

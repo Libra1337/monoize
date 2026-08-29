@@ -7,6 +7,7 @@ import type {
   DashboardStats,
   DashboardAnalytics,
   AdminOverview,
+  AdminUsageRanking,
   ConfigOverview,
   SystemSettings,
   PublicSystemSettings,
@@ -77,6 +78,7 @@ export const SWR_KEYS = {
   REQUEST_LOGS: "/dashboard/request-logs",
   ANALYTICS: "/dashboard/analytics",
   ADMIN_OVERVIEW: "/dashboard/admin/overview",
+  ADMIN_USAGE: "/dashboard/admin/usage-ranking",
   LIVE_USAGE: "/dashboard/me/live-usage",
 } as const;
 
@@ -304,6 +306,14 @@ export function useAdminOverview(config?: SWRConfiguration) {
     ...defaultConfig,
     refreshInterval: 10000,
     ...config
+  });
+}
+
+export function useAdminUsageRanking(config?: SWRConfiguration) {
+  return useSWR<AdminUsageRanking>(SWR_KEYS.ADMIN_USAGE, () => api.getAdminUsageRanking(), {
+    ...defaultConfig,
+    refreshInterval: 2000,
+    ...config,
   });
 }
 

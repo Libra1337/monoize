@@ -26,6 +26,66 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
+const RESPONSES_SSE_MAX_DATA_BYTES: usize = 8 * 1024 * 1024;
+const RESPONSES_SSE_MAX_JOINED_VALUES: usize = 64;
+
+struct ParsedResponsesSseData {
+    events: Vec<(String, Value)>,
+    done: bool,
+}
+
+fn parse_responses_sse_data(data: &str) -> Result<ParsedResponsesSseData, String> {
+    if data.len() > RESPONSES_SSE_MAX_DATA_BYTES {
+        return Err(format!(
+            "upstream Responses event data exceeds {RESPONSES_SSE_MAX_DATA_BYTES} bytes"
+        ));
+    }
+
+    let trimmed = data.trim();
+    let (json_data, done) = if trimmed == "[DONE]" {
+        ("", true)
+    } else if let Some(prefix) = trimmed.strip_suffix("[DONE]") {
+        (prefix.trim_end(), true)
+    } else {
+        (trimmed, false)
+    };
+    if json_data.is_empty() {
+        return if done {
+            Ok(ParsedResponsesSseData {
+                events: Vec::new(),
+                done,
+            })
+        } else {
+            Err("upstream Responses event data is empty".to_string())
+        };
+    }
+
+    let mut events = Vec::new();
+    for value in serde_json::Deserializer::from_str(json_data).into_iter::<Value>() {
+        let value = value.map_err(|error| error.to_string())?;
+        if events.len() == RESPONSES_SSE_MAX_JOINED_VALUES {
+            return Err(format!(
+                "upstream Responses event contains more than {RESPONSES_SSE_MAX_JOINED_VALUES} JSON values"
+            ));
+        }
+        let event_name = value
+            .as_object()
+            .and_then(|object| object.get("type"))
+            .and_then(Value::as_str)
+            .filter(|event_name| !event_name.is_empty())
+            .ok_or_else(|| {
+                "upstream Responses event value must be an object with a non-empty string type"
+                    .to_string()
+            })?;
+        events.push((event_name.to_string(), value));
+    }
+    if events.is_empty() {
+        return Err("upstream Responses event contains no JSON value".to_string());
+    }
+
+    Ok(ParsedResponsesSseData { events, done })
+}
+
 include!("openai_responses/image_helpers.inc.rs");
 include!("openai_responses/stream_loop_part1.inc.rs");
 include!("openai_responses/stream_loop_part2.inc.rs");

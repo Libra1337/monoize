@@ -9,6 +9,23 @@ use chrono::{NaiveTime, Utc};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
+pub(crate) fn sort_usage_models(rows: &mut [crate::users::UserModelUsageRankingRow]) {
+    rows.sort_by(|left, right| {
+        let left_tokens = left
+            .input_tokens
+            .saturating_add(left.cache_read_tokens)
+            .saturating_add(left.output_tokens);
+        let right_tokens = right
+            .input_tokens
+            .saturating_add(right.cache_read_tokens)
+            .saturating_add(right.output_tokens);
+        right_tokens
+            .cmp(&left_tokens)
+            .then_with(|| right.call_count.cmp(&left.call_count))
+            .then_with(|| left.model.as_bytes().cmp(right.model.as_bytes()))
+    });
+}
+
 /// security-access-control.spec.md SAC-1..SAC-5: metrics expose runtime topology
 /// and therefore use the same authorization boundary as the admin dashboard.
 pub async fn get_metrics(
@@ -250,4 +267,194 @@ fn redact_dsn(dsn: &str) -> String {
         return dsn.to_string();
     }
     "***".to_string()
+}
+
+/// Admin usage ranking with per-user and per-model token totals.
+pub async fn get_admin_usage_ranking(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<Value>> {
+    require_admin(&headers, &state).await?;
+    let now = Utc::now();
+    let time_to = now.to_rfc3339();
+    let time_from = (now - chrono::Duration::hours(24)).to_rfc3339();
+    let rows = state
+        .user_store
+        .get_users_model_usage_ranking(&time_from, &time_to)
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
+    let totals = state
+        .user_store
+        .get_admin_usage_totals(&time_from, &time_to)
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
+
+    struct UserAccumulator {
+        user_id: String,
+        username: Option<String>,
+        call_count: i64,
+        cost_nano_usd: i128,
+        input_tokens: i128,
+        cache_read_tokens: i128,
+        output_tokens: i128,
+        models: Vec<crate::users::UserModelUsageRankingRow>,
+    }
+
+    let aggregate_error = |message: &'static str| {
+        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+    };
+    let mut users = Vec::<UserAccumulator>::new();
+    let mut user_indices = HashMap::<String, usize>::new();
+    for row in rows {
+        if row.call_count < 0 {
+            return Err(aggregate_error("usage call aggregate is negative"));
+        }
+        let index = if let Some(index) = user_indices.get(&row.user_id).copied() {
+            index
+        } else {
+            let index = users.len();
+            user_indices.insert(row.user_id.clone(), index);
+            users.push(UserAccumulator {
+                user_id: row.user_id.clone(),
+                username: row.username.clone(),
+                call_count: 0,
+                cost_nano_usd: 0,
+                input_tokens: 0,
+                cache_read_tokens: 0,
+                output_tokens: 0,
+                models: Vec::new(),
+            });
+            index
+        };
+        let user = &mut users[index];
+        user.call_count = user
+            .call_count
+            .checked_add(row.call_count)
+            .ok_or_else(|| aggregate_error("usage call aggregate overflow"))?;
+        user.cost_nano_usd = user
+            .cost_nano_usd
+            .checked_add(row.cost_nano_usd)
+            .ok_or_else(|| aggregate_error("usage charge aggregate overflow"))?;
+        user.input_tokens = user
+            .input_tokens
+            .checked_add(row.input_tokens)
+            .ok_or_else(|| aggregate_error("usage input token aggregate overflow"))?;
+        user.cache_read_tokens = user
+            .cache_read_tokens
+            .checked_add(row.cache_read_tokens)
+            .ok_or_else(|| aggregate_error("usage cache-read token aggregate overflow"))?;
+        user.output_tokens = user
+            .output_tokens
+            .checked_add(row.output_tokens)
+            .ok_or_else(|| aggregate_error("usage output token aggregate overflow"))?;
+        user.models.push(row);
+    }
+    users.sort_by(|left, right| {
+        right
+            .cost_nano_usd
+            .cmp(&left.cost_nano_usd)
+            .then_with(|| right.call_count.cmp(&left.call_count))
+            .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
+    });
+    users.truncate(20);
+    let users = users
+        .into_iter()
+        .map(|mut user| {
+            sort_usage_models(&mut user.models);
+            let models = user
+                .models
+                .into_iter()
+                .map(|model| {
+                    json!({
+                        "model": model.model,
+                        "call_count": model.call_count,
+                        "cost_nano_usd": model.cost_nano_usd.to_string(),
+                        "input_tokens": model.input_tokens.to_string(),
+                        "cache_read_tokens": model.cache_read_tokens.to_string(),
+                        "output_tokens": model.output_tokens.to_string(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "user_id": user.user_id,
+                "username": user.username,
+                "call_count": user.call_count,
+                "cost_nano_usd": user.cost_nano_usd.to_string(),
+                "input_tokens": user.input_tokens.to_string(),
+                "cache_read_tokens": user.cache_read_tokens.to_string(),
+                "output_tokens": user.output_tokens.to_string(),
+                "models": models,
+            })
+        })
+        .collect::<Vec<_>>();
+    let total_tokens = totals
+        .input_tokens
+        .checked_add(totals.cache_read_tokens)
+        .and_then(|value| value.checked_add(totals.output_tokens))
+        .ok_or_else(|| aggregate_error("usage total token aggregate overflow"))?;
+
+    Ok(Json(json!({
+        "time_from": time_from,
+        "time_to": time_to,
+        "total_tokens": total_tokens.to_string(),
+        "total_input_tokens": totals.input_tokens.to_string(),
+        "total_cache_read_tokens": totals.cache_read_tokens.to_string(),
+        "total_output_tokens": totals.output_tokens.to_string(),
+        "total_calls": totals.call_count,
+        "total_cost_nano_usd": totals.cost_nano_usd.to_string(),
+        "users": users,
+    })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sort_usage_models;
+    use crate::users::UserModelUsageRankingRow;
+
+    #[test]
+    fn usage_models_sort_by_total_tokens_then_calls_then_utf8_name() {
+        let mut rows = vec![
+            UserModelUsageRankingRow {
+                user_id: "u".into(),
+                username: None,
+                model: "zeta".into(),
+                call_count: 4,
+                cost_nano_usd: 0,
+                input_tokens: 10,
+                cache_read_tokens: 0,
+                output_tokens: 0,
+            },
+            UserModelUsageRankingRow {
+                user_id: "u".into(),
+                username: None,
+                model: "alpha".into(),
+                call_count: 4,
+                cost_nano_usd: 0,
+                input_tokens: 10,
+                cache_read_tokens: 0,
+                output_tokens: 0,
+            },
+            UserModelUsageRankingRow {
+                user_id: "u".into(),
+                username: None,
+                model: "busy".into(),
+                call_count: 9,
+                cost_nano_usd: 0,
+                input_tokens: 9,
+                cache_read_tokens: 0,
+                output_tokens: 0,
+            },
+        ];
+
+        sort_usage_models(&mut rows);
+
+        assert_eq!(
+            rows.into_iter().map(|row| row.model).collect::<Vec<_>>(),
+            ["alpha", "zeta", "busy"]
+        );
+    }
 }

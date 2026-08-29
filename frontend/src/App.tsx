@@ -8,6 +8,8 @@ import { LoginPage } from "@/pages/login";
 import { DashboardLayout } from "@/pages/layout";
 import { DashboardPage } from "@/pages/dashboard";
 import { AdminDashboardPage } from "@/pages/admin-dashboard";
+import { AdminUsagePage } from "@/pages/admin-usage";
+import { AdminRuntimePage } from "@/pages/admin-runtime";
 import { ProvidersPage } from "@/pages/providers";
 import { ApiKeysPage } from "@/pages/api-keys";
 import { UsersPage } from "@/pages/users";
@@ -32,7 +34,25 @@ import { ModelMarketplacePage } from "@/pages/model-marketplace";
 import { DashboardApiDocsPage } from "@/pages/dashboard-api-docs";
 import { useAuth } from "@/hooks/use-auth";
 import { StoreCurrencyProvider } from "@/hooks/use-store-currency";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageWrapper } from "@/components/ui/motion";
+import { useTranslation } from "react-i18next";
 import "@/i18n";
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const { t } = useTranslation();
+  const isAdmin = user?.role === "super_admin" || user?.role === "admin";
+  return isAdmin ? children : (
+    <PageWrapper className="h-full min-h-0">
+      <EmptyState
+        title={t("auth.accessDenied")}
+        description={t("auth.needAdminPrivileges")}
+        className="h-full py-0"
+      />
+    </PageWrapper>
+  );
+}
 
 function StoreAdminRoute() {
   const { user } = useAuth();
@@ -65,7 +85,9 @@ function App() {
           <Route path="/dashboard" element={<DashboardLayout />}>
             <Route index element={<DashboardPage />} />
             <Route path="usage" element={<UsageAnalysisPage />} />
-            <Route path="admin" element={<AdminDashboardPage />} />
+            <Route path="admin" element={<AdminRoute><AdminDashboardPage /></AdminRoute>} />
+            <Route path="admin/usage" element={<AdminRoute><AdminUsagePage /></AdminRoute>} />
+            <Route path="admin/runtime" element={<AdminRoute><AdminRuntimePage /></AdminRoute>} />
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="tokens" element={<ApiKeysPage />} />
             <Route path="logs" element={<RequestLogsPage />} />
