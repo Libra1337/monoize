@@ -35,6 +35,11 @@ PS-R4. `/`, `/apidocs`, `/status`, and `/dashboard/marketplace` MUST use one
 PS-R5. `PublicLayout` MUST render Home, Model Marketplace, API Docs, Status, Console, and
 Login actions. Console MUST target `/dashboard`. Login MUST target `/login`.
 
+PS-R6. The public gateway MUST return HTTP `308` for every request to
+`https://www.lynshen.org`. The `Location` value MUST use `https://lynshen.org` and MUST
+preserve the request path and query. The gateway MUST proxy `https://lynshen.org` to the
+single public application process.
+
 ## 2. Public site settings
 
 PS-S1. `GET /api/public/site` MUST require no dashboard session and MUST return exactly:

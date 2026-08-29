@@ -321,6 +321,244 @@ async fn payment_migration_preserves_legacy_orders_with_foreign_keys_enabled() {
 }
 
 #[tokio::test]
+async fn migration_059_repairs_released_entitlements_and_order_expiry() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.execute_unprepared("PRAGMA foreign_keys = ON")
+        .await
+        .unwrap();
+    Migrator::up(&db, Some(46)).await.unwrap();
+
+    db.execute_unprepared(
+        "DROP TRIGGER trg_store_plan_entitlement_generation_no_update;
+         DROP TRIGGER trg_store_plan_entitlement_generation_no_delete;
+         DROP TABLE store_plan_entitlement_current;
+         DROP TABLE store_plan_entitlement_lifecycle;
+         DROP TABLE store_plan_entitlement_generations;
+         CREATE TABLE store_plan_entitlements (
+            id TEXT NOT NULL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            starts_at TEXT NOT NULL,
+            ends_at TEXT NOT NULL,
+            cny_per_usd TEXT NOT NULL,
+            group_ids TEXT NOT NULL,
+            quota_json TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            UNIQUE (user_id),
+            UNIQUE (source_kind, source_id)
+         )",
+    )
+    .await
+    .unwrap();
+
+    let group = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT id FROM monoize_groups WHERE is_default = 1".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let group_id = String::try_get(&group, "", "id").unwrap();
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "INSERT INTO users
+            (id, username, password_hash, role, created_at, updated_at, enabled,
+             balance_nano_usd, balance_unlimited, group_id)
+         VALUES ('released-user', 'released-user', 'hash', 'user',
+                 '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z', 1, '0', 0, ?)",
+        [group_id.into()],
+    ))
+    .await
+    .unwrap();
+    db.execute_unprepared(
+        "INSERT INTO store_products
+            (id, kind, name, description, price_currency, price_minor, duration_seconds,
+             group_ids, sort_order, enabled, created_at, updated_at)
+         VALUES ('released-plan', 'plan', 'Released plan', '', 'CNY', '1000', 86400,
+                 '[\"group-a\"]', 0, 1, '2026-08-27T00:00:00Z',
+                 '2026-08-27T00:00:00Z');
+         INSERT INTO store_plan_entitlements
+            (id, user_id, product_id, product_name, starts_at, ends_at, cny_per_usd,
+             group_ids, quota_json, source_kind, source_id)
+         VALUES ('released-entitlement', 'released-user', 'released-plan', 'Released plan',
+                 '2026-08-27T00:00:00Z', '2026-08-28T00:00:00Z', '6.737816',
+                 '[\"group-a\"]', '[]', 'order', 'released-order');
+         INSERT INTO store_orders
+            (id, order_number, user_id, product_id, product_kind, status,
+             payment_channel_id, payment_currency, payment_minor, cny_per_usd,
+             rate_source_updated_at, quote_json, created_at, updated_at,
+             completed_at, cancelled_at)
+         VALUES ('released-order', 'LS-RELEASED', 'released-user', 'released-plan', 'plan',
+                 'pending', 'store-channel-alipay', 'CNY', '1000', '6.737816',
+                 '2026-08-27T00:00:00Z', '{}', '2026-08-27T00:00:00Z',
+                 '2026-08-27T00:00:00Z', NULL, NULL)",
+    )
+    .await
+    .unwrap();
+
+    Migrator::up(&db, None)
+        .await
+        .expect("repair released Store schema");
+
+    assert!(
+        sqlite_columns(&db, "store_plan_entitlements")
+            .await
+            .is_empty()
+    );
+    let generation = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT id, user_id, generation, product_id, product_name, starts_at, ends_at,
+                    rate_numerator, rate_denominator, group_ids, quota_json, source_kind,
+                    source_id
+             FROM store_plan_entitlement_generations".to_string(),
+        ))
+        .await
+        .unwrap()
+        .expect("migrated entitlement generation");
+    assert_eq!(String::try_get(&generation, "", "id").unwrap(), "released-entitlement");
+    assert_eq!(String::try_get(&generation, "", "user_id").unwrap(), "released-user");
+    assert_eq!(i64::try_get(&generation, "", "generation").unwrap(), 1);
+    assert_eq!(String::try_get(&generation, "", "product_id").unwrap(), "released-plan");
+    assert_eq!(String::try_get(&generation, "", "rate_numerator").unwrap(), "842227");
+    assert_eq!(String::try_get(&generation, "", "rate_denominator").unwrap(), "125000");
+    assert_eq!(String::try_get(&generation, "", "group_ids").unwrap(), "[\"group-a\"]");
+    assert_eq!(String::try_get(&generation, "", "source_id").unwrap(), "released-order");
+
+    let current_count = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT COUNT(*) AS value FROM store_plan_entitlement_current
+             WHERE user_id = 'released-user' AND entitlement_id = 'released-entitlement'
+               AND generation = 1".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(i64::try_get(&current_count, "", "value").unwrap(), 1);
+    let lifecycle_count = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT COUNT(*) AS value FROM store_plan_entitlement_lifecycle
+             WHERE entitlement_id = 'released-entitlement' AND suspended_at IS NULL
+               AND revoked_at IS NULL".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(i64::try_get(&lifecycle_count, "", "value").unwrap(), 1);
+
+    let order = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT expires_at FROM store_orders WHERE id = 'released-order'".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        String::try_get(&order, "", "expires_at").unwrap(),
+        "2026-08-27T00:30:00Z"
+    );
+    assert!(
+        db.query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "PRAGMA foreign_key_check".to_string(),
+        ))
+        .await
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn migration_059_preserves_complete_current_entitlement_schema() {
+    let db = migrated_database().await;
+    Migrator::down(&db, Some(1)).await.unwrap();
+
+    let group = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT id FROM monoize_groups WHERE is_default = 1".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let group_id = String::try_get(&group, "", "id").unwrap();
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "INSERT INTO users
+            (id, username, password_hash, role, created_at, updated_at, enabled,
+             balance_nano_usd, balance_unlimited, group_id)
+         VALUES ('current-user', 'current-user', 'hash', 'user',
+                 '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z', 1, '0', 0, ?)",
+        [group_id.into()],
+    ))
+    .await
+    .unwrap();
+    db.execute_unprepared(
+        "INSERT INTO store_products
+            (id, kind, name, description, price_currency, price_minor, duration_seconds,
+             group_ids, sort_order, enabled, created_at, updated_at)
+         VALUES ('current-plan', 'plan', 'Current plan', '', 'CNY', '1000', 86400,
+                 '[\"group-a\"]', 0, 1, '2026-08-29T00:00:00Z',
+                 '2026-08-29T00:00:00Z');
+         INSERT INTO store_plan_entitlement_generations
+            (id, user_id, generation, product_id, product_name, starts_at, ends_at,
+             rate_numerator, rate_denominator, group_ids, quota_json, source_kind,
+             source_id, created_at)
+         VALUES ('current-entitlement', 'current-user', 1, 'current-plan', 'Current plan',
+                 '2026-08-29T00:00:00Z', '2026-08-30T00:00:00Z', '842227', '125000',
+                 '[\"group-a\"]', '[]', 'order', 'current-order',
+                 '2026-08-29T00:00:00Z');
+         INSERT INTO store_plan_entitlement_current
+            (user_id, entitlement_id, generation, updated_at)
+         VALUES ('current-user', 'current-entitlement', 1, '2026-08-29T00:00:00Z');
+         INSERT INTO store_plan_entitlement_lifecycle
+            (entitlement_id, suspended_at, suspension_reason, revoked_at,
+             revocation_reason, updated_at)
+         VALUES ('current-entitlement', NULL, NULL, NULL, NULL,
+                 '2026-08-29T00:00:00Z')",
+    )
+    .await
+    .unwrap();
+
+    Migrator::up(&db, None).await.unwrap();
+
+    let count = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT COUNT(*) AS value FROM store_plan_entitlement_generations
+             WHERE id = 'current-entitlement' AND user_id = 'current-user' AND generation = 1"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(i64::try_get(&count, "", "value").unwrap(), 1);
+}
+
+#[tokio::test]
+async fn migration_059_rejects_partial_or_mixed_entitlement_schema() {
+    let db = migrated_database().await;
+    Migrator::down(&db, Some(1)).await.unwrap();
+    db.execute_unprepared("DROP TABLE store_plan_entitlement_current")
+        .await
+        .unwrap();
+
+    let error = Migrator::up(&db, None).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("store_entitlement_schema_is_partial_or_mixed"),
+        "unexpected migration error: {error}"
+    );
+}
+
+#[tokio::test]
 async fn payment_migration_installs_transition_and_recovery_guards() {
     let db = migrated_database().await;
     let triggers = sqlite_names(&db, "trigger").await;
