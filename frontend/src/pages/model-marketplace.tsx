@@ -34,13 +34,20 @@ import {
   formatMarketplaceRate,
   formatMarketplaceRateRange,
 } from "@/lib/marketplace-pricing";
-import { resolveMarketplacePages } from "@/lib/marketplace-pages";
+import {
+  appendMarketplacePage,
+  replaceMarketplaceFirstPage,
+  resolveMarketplacePages,
+  type MarketplacePageState,
+} from "@/lib/marketplace-pages";
 import { storeApi, type StoreExchangeRate } from "@/lib/store-api";
 import { cn } from "@/lib/utils";
 
 const ALL = "__all";
 const LIST_LIMIT = "50";
 const EXCHANGE_RATE_KEY = "/api/dashboard/store/exchange-rate";
+
+type SelectedModel = MarketplaceItem & { revision: string };
 
 function MarketplaceSkeleton() {
   return (
@@ -141,9 +148,17 @@ export function ModelMarketplacePage() {
   const [group, setGroup] = useState(ALL);
   const [capability, setCapability] = useState(ALL);
   const [knownGroups, setKnownGroups] = useState<string[]>([]);
-  const [selected, setSelected] = useState<MarketplaceItem | null>(null);
-  const [pages, setPages] = useState<MarketplaceResponse[]>([]);
+  const [selected, setSelected] = useState<SelectedModel | null>(null);
+  const [pageState, setPageState] = useState<MarketplacePageState<MarketplaceResponse>>({
+    key: null,
+    pages: [],
+  });
   const [loadCursor, setLoadCursor] = useState<string | null>(null);
+  const [offerPageState, setOfferPageState] = useState<MarketplacePageState<MarketplaceOffersResponse>>({
+    key: null,
+    pages: [],
+  });
+  const [offerLoadCursor, setOfferLoadCursor] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const rememberGroups = (page: MarketplaceResponse) => {
     setKnownGroups((current) => [...new Set([
@@ -159,7 +174,7 @@ export function ModelMarketplacePage() {
   const list = useSWR<MarketplaceResponse>(listKey, marketplaceRequest, {
     keepPreviousData: true,
     onSuccess: (page) => {
-      setPages([page]);
+      setPageState((current) => replaceMarketplaceFirstPage(current, listKey, page));
       rememberGroups(page);
       setLoadCursor(null);
     },
@@ -173,7 +188,7 @@ export function ModelMarketplacePage() {
     marketplaceRequest,
     {
       onSuccess: (page) => {
-        setPages((current) => [...current, page].slice(-3));
+        setPageState((current) => appendMarketplacePage(current, listKey, page, 3));
         rememberGroups(page);
         setLoadCursor(null);
       },
@@ -182,22 +197,59 @@ export function ModelMarketplacePage() {
   const exchangeRate = useSWR<StoreExchangeRate>(EXCHANGE_RATE_KEY, storeApi.getExchangeRate, {
     keepPreviousData: true,
   });
-  const offersKey = selected
+  const offerListKey = selected
+    ? `${selected.revision}:${selected.public_group_name}:${selected.model}`
+    : null;
+  const offersUrl = selected
     ? `/api/public/marketplace/offers?group=${encodeURIComponent(selected.public_group_name)}&model=${encodeURIComponent(selected.model)}&limit=50`
     : null;
-  const offers = useSWR<MarketplaceOffersResponse>(offersKey, marketplaceRequest, {
-    keepPreviousData: false,
-  });
+  const offersKey = offersUrl && selected ? [offersUrl, selected.revision] as const : null;
+  const offers = useSWR<MarketplaceOffersResponse>(
+    offersKey,
+    ([url]) => marketplaceRequest<MarketplaceOffersResponse>(url),
+    {
+      keepPreviousData: false,
+      onSuccess: (page) => {
+        if (!offerListKey) return;
+        setOfferPageState((current) => replaceMarketplaceFirstPage(current, offerListKey, page));
+        setOfferLoadCursor(null);
+      },
+    },
+  );
+  const offerLoadUrl = selected && offerLoadCursor
+    ? `/api/public/marketplace/offers?group=${encodeURIComponent(selected.public_group_name)}&model=${encodeURIComponent(selected.model)}&limit=50&cursor=${encodeURIComponent(offerLoadCursor)}`
+    : null;
+  const offerLoadKey = offerLoadUrl && selected ? [offerLoadUrl, selected.revision] as const : null;
+  const offerLoadMore = useSWR<MarketplaceOffersResponse>(
+    offerLoadKey,
+    ([url]) => marketplaceRequest<MarketplaceOffersResponse>(url),
+    {
+      onSuccess: (page) => {
+        if (!offerListKey) return;
+        setOfferPageState((current) => appendMarketplacePage(current, offerListKey, page));
+        setOfferLoadCursor(null);
+      },
+    },
+  );
 
-  const resolvedPages = resolveMarketplacePages(pages, list.data);
+  const resolvedPages = resolveMarketplacePages(
+    pageState.pages,
+    pageState.key === listKey ? list.data : undefined,
+  );
   const items = resolvedPages.flatMap((page) => page.items);
   const capabilities = useMemo(() => [...new Set(items.flatMap((item) => item.capabilities))], [items]);
   const filtered = items.filter((item) => (
-    (group === ALL || item.public_group_name === group)
+    (pageState.key !== listKey || group === ALL || item.public_group_name === group)
     && (capability === ALL || item.capabilities.includes(capability))
   ));
   const grouped = Map.groupBy(filtered, (item) => item.public_group_name);
   const nextCursor = resolvedPages.at(-1)?.next_cursor ?? null;
+  const catalogRevision = resolvedPages[0]?.revision ?? "";
+  const resolvedOfferPages = offerListKey && offerPageState.key === offerListKey
+    ? resolveMarketplacePages(offerPageState.pages, offers.data)
+    : [];
+  const visibleOffers = resolvedOfferPages.flatMap((page) => page.offers);
+  const nextOfferCursor = resolvedOfferPages.at(-1)?.next_cursor ?? null;
   const cnyRate = exchangeRate.data?.cny_per_usd ?? null;
   const cnyUnavailable = !exchangeRate.isLoading && (!cnyRate || Boolean(exchangeRate.error));
 
@@ -267,7 +319,15 @@ export function ModelMarketplacePage() {
                 </div>
                 <div className="overflow-hidden rounded-lg border bg-card">
                   {groupItems.map((item) => (
-                    <ModelRow key={`${item.public_group_name}:${item.model}`} item={item} currencyRate={cnyRate} onOpen={() => setSelected(item)} />
+                    <ModelRow
+                      key={`${item.public_group_name}:${item.model}`}
+                      item={item}
+                      currencyRate={cnyRate}
+                      onOpen={() => {
+                        setSelected({ ...item, revision: catalogRevision });
+                        setOfferLoadCursor(null);
+                      }}
+                    />
                   ))}
                 </div>
               </motion.section>
@@ -285,7 +345,15 @@ export function ModelMarketplacePage() {
         ) : null}
       </motion.div>
 
-      <Dialog open={selected !== null} onOpenChange={(open) => { if (!open) setSelected(null); }}>
+      <Dialog
+        open={selected !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelected(null);
+            setOfferLoadCursor(null);
+          }
+        }}
+      >
         <DialogContent
           className="max-h-[85dvh] max-w-3xl rounded-xl"
           closeLabel={t("common.close")}
@@ -301,16 +369,16 @@ export function ModelMarketplacePage() {
           <div className="flex flex-wrap gap-1.5" aria-label={t("modelMarketplace.capabilities")}>
             {selected?.capabilities.map((item) => <Badge key={item} variant="outline">{item}</Badge>)}
           </div>
-          {offers.isLoading ? (
+          {offers.isLoading && resolvedOfferPages.length === 0 ? (
             <div className="flex flex-col gap-3"><Skeleton className="h-28" /><Skeleton className="h-28" /></div>
-          ) : offers.error ? (
+          ) : offers.error && resolvedOfferPages.length === 0 ? (
             <div className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 p-4">
               <p className="text-sm text-destructive">{t("modelMarketplace.offersError")}</p>
               <Button variant="outline" onClick={() => offers.mutate()}><RefreshCw className="size-4" />{t("modelMarketplace.retry")}</Button>
             </div>
           ) : (
             <div className="flex flex-col gap-4">
-              {offers.data?.offers.map((offer) => (
+              {visibleOffers.map((offer) => (
                 <section key={`${offer.public_provider_name}:${offer.public_channel_name}`} className="overflow-hidden rounded-lg border">
                   <div className="flex flex-wrap items-start justify-between gap-3 border-b bg-muted/35 px-4 py-3">
                     <div>
@@ -334,6 +402,26 @@ export function ModelMarketplacePage() {
                   </dl>
                 </section>
               ))}
+              {(nextOfferCursor || offerLoadMore.error || offerLoadMore.isLoading) ? (
+                <div className="flex flex-col items-center gap-2">
+                  <Button
+                    variant="outline"
+                    disabled={!nextOfferCursor || offerLoadMore.isLoading}
+                    onClick={() => nextOfferCursor && setOfferLoadCursor(nextOfferCursor)}
+                  >
+                    {offerLoadMore.isLoading ? t("modelMarketplace.loadingMore") : t("modelMarketplace.loadMore")}
+                  </Button>
+                  {offerLoadMore.error ? (
+                    <button
+                      type="button"
+                      className="min-h-11 text-sm text-destructive underline underline-offset-4"
+                      onClick={() => offerLoadMore.mutate()}
+                    >
+                      {t("modelMarketplace.retry")}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           )}
         </DialogContent>

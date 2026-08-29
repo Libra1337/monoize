@@ -4,6 +4,10 @@ import {
   formatMarketplaceRate,
   formatMarketplaceRateRange,
 } from "../src/lib/marketplace-pricing";
+import {
+  appendMarketplacePage,
+  replaceMarketplaceFirstPage,
+} from "../src/lib/marketplace-pages";
 
 const marketplaceSource = readFileSync(
   new URL("../src/pages/model-marketplace.tsx", import.meta.url),
@@ -12,6 +16,27 @@ const marketplaceSource = readFileSync(
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
 describe("authenticated Model Marketplace", () => {
+  test("retains pages on revalidation and rejects stale pagination", () => {
+    const first = { revision: "1", items: ["first"] };
+    const second = { revision: "1", items: ["second"] };
+    const refreshed = { revision: "1", items: ["refreshed"] };
+    const state = { key: "all", pages: [first, second] };
+
+    expect(replaceMarketplaceFirstPage(state, "all", refreshed)).toEqual({
+      key: "all",
+      pages: [refreshed, second],
+    });
+    expect(replaceMarketplaceFirstPage(state, "group-a", refreshed)).toEqual({
+      key: "group-a",
+      pages: [refreshed],
+    });
+    expect(appendMarketplacePage(state, "stale-key", refreshed, 3)).toBe(state);
+    expect(appendMarketplacePage(state, "all", refreshed, 2)).toEqual({
+      key: "all",
+      pages: [second, refreshed],
+    });
+  });
+
   test("renders human per-million prices with exact final rounding", () => {
     expect(formatMarketplaceRate("2505", "token", "USD", "7.200000")).toBe(
       "$2.51 / 1M tokens",
@@ -46,6 +71,9 @@ describe("authenticated Model Marketplace", () => {
     expect(marketplaceSource).toContain("selected?.capabilities.map");
     expect(marketplaceSource).toContain("exchangeRate.mutate()");
     expect(marketplaceSource.match(/rememberGroups\(page\);/g)?.length).toBe(2);
+    expect(marketplaceSource).toContain("offerLoadCursor");
+    expect(marketplaceSource).toContain("selected.revision");
+    expect(marketplaceSource).toContain("appendMarketplacePage");
   });
 
   test("uses naturally expanding rows and does not expose private catalog values", () => {
