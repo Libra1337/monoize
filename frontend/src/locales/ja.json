@@ -174,6 +174,8 @@
 		"settings": "設定",
 		"admin": "管理",
 		"logs": "ログ",
+		"usage": "使用量分析",
+		"apiDocs": "API ドキュメント",
 		"models": "モデルデータベース",
 		"marketplace": "モデルマーケット",
 		"billingPlans": "プラン",
@@ -724,6 +726,9 @@
 		"apiBaseUrl": "API ベース URL",
 		"syncMetadata": "Models.dev メタデータを同期",
 		"syncing": "同期中...",
+		"tokenUsage": "Token 使用量",
+		"tokenUsageDescription": "自分の入力、キャッシュ読み取り、出力 Token を確認します。",
+		"openUsageAnalysis": "分析を表示",
 		"cards": {
 			"accountData": "アカウントデータ",
 			"currentBalance": "現在の残高",
@@ -739,6 +744,7 @@
 			"usageStats": "使用統計",
 			"resourceUsage": "リソース使用量",
 			"performance": "パフォーマンス指標",
+			"tokenOverview": "Token 概要",
 			"avgTtfb": "平均TTFB",
 			"successRate": "成功率",
 			"totalModels": "モデル総数",
@@ -749,6 +755,39 @@
 			"spendTrend": "消費トレンド",
 			"callDistribution": "呼び出し分布",
 			"callRank": "呼び出しランキング"
+		}
+	},
+	"usageAnalysis": {
+		"title": "使用量分析",
+		"description": "時間とモデル別に Token 消費量を分析します。",
+		"summary": "Token 概要",
+		"tokens": "Token",
+		"trend": "使用量の推移",
+		"modelDistribution": "モデル別使用量",
+		"cacheHitRate": "キャッシュヒット率",
+		"rangeLabel": "使用量の期間",
+		"metricLabel": "Token 指標",
+		"empty": "この期間には Token 使用量がありません。",
+		"loadFailed": "使用量データを読み込めませんでした",
+		"loadFailedDescription": "分析リクエストを再試行してください。",
+		"ranges": {
+			"24h": "24 時間",
+			"week": "今週",
+			"month": "今月",
+			"7d": "7 日",
+			"30d": "30 日"
+		},
+		"metrics": {
+			"input": "入力 Token",
+			"cacheRead": "キャッシュ読み取り Token",
+			"output": "出力 Token",
+			"total": "合計 Token"
+		},
+		"metricOptions": {
+			"total": "合計",
+			"input": "入力",
+			"cache_read": "キャッシュ読み取り",
+			"output": "出力"
 		}
 	},
 	"users": {

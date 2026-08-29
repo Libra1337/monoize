@@ -17,6 +17,8 @@ import {
   ShoppingBag,
   ReceiptText,
   BadgeDollarSign,
+  ChartNoAxesCombined,
+  BookOpenText,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -125,10 +127,12 @@ function Sidebar({
 
   const navItems = [
     { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard"), exact: true },
+    { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
+    { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
     { to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") },
     { to: "/dashboard/orders", icon: ReceiptText, label: t("nav.orders") },
   ];
@@ -153,7 +157,8 @@ function Sidebar({
         className={cn("flex h-full flex-col p-3", collapsed ? "items-center" : "")}
       >
         <Link
-          to="/dashboard"
+          to="/"
+          onClick={onNavigate}
           className={cn(
             "group flex items-center rounded-lg transition-colors hover:bg-accent/50",
             collapsed ? "justify-center p-2" : "gap-3 px-2.5 py-2.5"

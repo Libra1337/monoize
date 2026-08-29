@@ -174,6 +174,8 @@
 		"settings": "系統設定",
 		"admin": "管理",
 		"logs": "日誌",
+		"usage": "用量分析",
+		"apiDocs": "API 文件",
 		"models": "模型資料庫",
 		"marketplace": "模型廣場",
 		"billingPlans": "訂閱方案",
@@ -724,6 +726,9 @@
 		"apiBaseUrl": "API 基底 URL",
 		"syncMetadata": "同步 Models.dev 中繼資料",
 		"syncing": "同步中...",
+		"tokenUsage": "Token 用量",
+		"tokenUsageDescription": "查看您自己的輸入、快取讀取和輸出 Token。",
+		"openUsageAnalysis": "查看分析",
 		"cards": {
 			"accountData": "帳戶資料",
 			"currentBalance": "目前餘額",
@@ -739,6 +744,7 @@
 			"usageStats": "使用統計",
 			"resourceUsage": "資源消耗",
 			"performance": "效能指標",
+			"tokenOverview": "Token 概覽",
 			"avgTtfb": "平均首字延遲",
 			"successRate": "成功率",
 			"totalModels": "模型總數",
@@ -749,6 +755,39 @@
 			"spendTrend": "消耗趨勢",
 			"callDistribution": "呼叫次數分佈",
 			"callRank": "呼叫次數排行"
+		}
+	},
+	"usageAnalysis": {
+		"title": "用量分析",
+		"description": "依時間和模型分析您的 Token 消耗。",
+		"summary": "Token 摘要",
+		"tokens": "Token",
+		"trend": "用量趨勢",
+		"modelDistribution": "模型用量分佈",
+		"cacheHitRate": "快取命中率",
+		"rangeLabel": "用量範圍",
+		"metricLabel": "Token 指標",
+		"empty": "此時間範圍內沒有 Token 用量。",
+		"loadFailed": "無法載入用量資料",
+		"loadFailedDescription": "請重試分析請求。",
+		"ranges": {
+			"24h": "24 小時",
+			"week": "本週",
+			"month": "本月",
+			"7d": "7 天",
+			"30d": "30 天"
+		},
+		"metrics": {
+			"input": "輸入 Token",
+			"cacheRead": "快取讀取 Token",
+			"output": "輸出 Token",
+			"total": "總 Token"
+		},
+		"metricOptions": {
+			"total": "總量",
+			"input": "輸入",
+			"cache_read": "快取讀取",
+			"output": "輸出"
 		}
 	},
 	"users": {

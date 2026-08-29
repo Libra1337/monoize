@@ -174,6 +174,8 @@
 		"settings": "Settings",
 		"admin": "Admin",
 		"logs": "Logs",
+		"usage": "Usage Analysis",
+		"apiDocs": "API Docs",
 		"models": "Models",
 		"marketplace": "Models",
 		"billingPlans": "Plans",
@@ -724,6 +726,9 @@
 		"apiBaseUrl": "API Base URL",
 		"syncMetadata": "Sync Models.dev metadata",
 		"syncing": "Syncing...",
+		"tokenUsage": "Token Usage",
+		"tokenUsageDescription": "Review your own input, cache-read, and output Tokens.",
+		"openUsageAnalysis": "Open analysis",
 		"cards": {
 			"accountData": "Account Data",
 			"currentBalance": "Current Balance",
@@ -739,6 +744,7 @@
 			"usageStats": "Usage Stats",
 			"resourceUsage": "Resource Usage",
 			"performance": "Performance Metrics",
+			"tokenOverview": "Token Overview",
 			"avgTtfb": "Average TTFB",
 			"successRate": "Success Rate",
 			"totalModels": "Total Models",
@@ -749,6 +755,39 @@
 			"spendTrend": "Spend Trend",
 			"callDistribution": "Call Distribution",
 			"callRank": "Call Ranking"
+		}
+	},
+	"usageAnalysis": {
+		"title": "Usage Analysis",
+		"description": "Analyze your Token consumption by time and model.",
+		"summary": "Token summary",
+		"tokens": "Tokens",
+		"trend": "Usage trend",
+		"modelDistribution": "Model distribution",
+		"cacheHitRate": "Cache hit rate",
+		"rangeLabel": "Usage range",
+		"metricLabel": "Token metric",
+		"empty": "No Token usage is available for this range.",
+		"loadFailed": "Usage data could not be loaded",
+		"loadFailedDescription": "Retry the analytics request.",
+		"ranges": {
+			"24h": "24h",
+			"week": "This week",
+			"month": "This month",
+			"7d": "7d",
+			"30d": "30d"
+		},
+		"metrics": {
+			"input": "Input Tokens",
+			"cacheRead": "Cache-read Tokens",
+			"output": "Output Tokens",
+			"total": "Total Tokens"
+		},
+		"metricOptions": {
+			"total": "Total",
+			"input": "Input",
+			"cache_read": "Cache read",
+			"output": "Output"
 		}
 	},
 	"users": {

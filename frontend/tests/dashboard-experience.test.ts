@@ -11,6 +11,9 @@ const layoutSource = source("../src/pages/layout.tsx");
 const dashboardSource = source("../src/pages/dashboard.tsx");
 const usageSource = source("../src/pages/usage-analysis.tsx");
 const dashboardApiDocsSource = source("../src/pages/dashboard-api-docs.tsx");
+const tokenSummarySource = source("../src/components/usage/token-summary.tsx");
+const usageTrendSource = source("../src/components/usage/usage-trend-chart.tsx");
+const modelDistributionSource = source("../src/components/usage/model-distribution.tsx");
 
 describe("authenticated Dashboard route ownership", () => {
   test("mounts usage, Marketplace, and API Docs under DashboardLayout", () => {
@@ -44,6 +47,27 @@ describe("Dashboard page boundaries", () => {
     expect(dashboardSource).toContain("UsageTrendChart");
     expect(dashboardSource).not.toContain('"Model Data"');
     expect(dashboardSource).not.toContain('"API Information"');
+  });
+
+  test("uses focused animated usage components with loading and reduced-motion states", () => {
+    expect(tokenSummarySource).toContain("Skeleton");
+    expect(tokenSummarySource).toContain("useReducedMotion");
+    expect(tokenSummarySource).toContain("motion");
+    expect(usageTrendSource).toContain("ChartContainer");
+    expect(usageTrendSource).toContain("isAnimationActive={!reduceMotion}");
+    expect(modelDistributionSource).toContain("rankModelsByTokens");
+    expect(modelDistributionSource).toContain("Skeleton");
+  });
+
+  test("supports the approved Dashboard and Usage Analysis ranges", () => {
+    expect(dashboardSource).toContain('"24h"');
+    expect(dashboardSource).toContain('"week"');
+    expect(dashboardSource).toContain('"month"');
+    expect(usageSource).toContain('"24h"');
+    expect(usageSource).toContain('"7d"');
+    expect(usageSource).toContain('"30d"');
+    expect(usageSource).toContain("useDashboardAnalytics(");
+    expect(usageSource).toContain('"self"');
   });
 
   test("provides separate Usage Analysis and Dashboard API Docs pages", () => {

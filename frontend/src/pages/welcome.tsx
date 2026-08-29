@@ -37,7 +37,7 @@ export function WelcomePage() {
               </>
             )}
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Button asChild size="lg" variant="primary" className="min-h-11"><Link to="/dashboard/marketplace">{t("publicSite.welcome.exploreModels")}<ArrowRight /></Link></Button>
+              <Button asChild size="lg" variant="primary" className="min-h-11"><Link to="/marketplace">{t("publicSite.welcome.exploreModels")}<ArrowRight /></Link></Button>
               <Button asChild size="lg" variant="outline" className="min-h-11"><Link to="/apidocs">{t("publicSite.welcome.readDocs")}</Link></Button>
             </div>
           </div>

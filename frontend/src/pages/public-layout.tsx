@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 
 const links = [
   ["/", "home"],
-  ["/dashboard/marketplace", "marketplace"],
+  ["/marketplace", "marketplace"],
   ["/apidocs", "apiDocs"],
   ["/status", "status"],
 ] as const;

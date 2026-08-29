@@ -27,6 +27,9 @@ import { PUBLIC_PATHS } from "@/public-routes";
 import { StorePage } from "@/pages/store";
 import { OrdersPage } from "@/pages/orders";
 import { StoreAdminPage } from "@/pages/store-admin";
+import { UsageAnalysisPage } from "@/pages/usage-analysis";
+import { ModelMarketplacePage } from "@/pages/model-marketplace";
+import { DashboardApiDocsPage } from "@/pages/dashboard-api-docs";
 import { useAuth } from "@/hooks/use-auth";
 import { StoreCurrencyProvider } from "@/hooks/use-store-currency";
 import "@/i18n";
@@ -61,11 +64,14 @@ function App() {
           {/* Dashboard routes - admin panel */}
           <Route path="/dashboard" element={<DashboardLayout />}>
             <Route index element={<DashboardPage />} />
+            <Route path="usage" element={<UsageAnalysisPage />} />
             <Route path="admin" element={<AdminDashboardPage />} />
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="tokens" element={<ApiKeysPage />} />
             <Route path="logs" element={<RequestLogsPage />} />
             <Route path="playground" element={<PlaygroundPage />} />
+            <Route path="marketplace" element={<ModelMarketplacePage />} />
+            <Route path="api-docs" element={<DashboardApiDocsPage />} />
             <Route path="models" element={<ModelMetadataPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="groups" element={<GroupsPage />} />
