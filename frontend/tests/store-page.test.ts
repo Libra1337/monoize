@@ -16,6 +16,8 @@ const checkoutStateSource = readSource("../src/pages/store/checkout-state.ts");
 const ordersSource = readSource("../src/pages/orders.tsx");
 const moneySource = readSource("../src/lib/store-money.ts");
 const zhSource = readSource("../src/locales/zh.json");
+const currencySource = readSource("../src/hooks/use-store-currency.tsx");
+const appSource = readSource("../src/App.tsx");
 
 describe("Store user pages", () => {
   test("renders three Store tabs with one animated shared indicator", () => {
@@ -53,9 +55,13 @@ describe("Store user pages", () => {
   });
 
   test("uses one CNY or USD state for balance and plan presentation", () => {
-    expect(storeSource).toContain('useState<StoreCurrency>("CNY")');
+    expect(storeSource).toContain("useStoreCurrency()");
+    expect(storeSource).not.toContain('useState<StoreCurrency>("CNY")');
     expect(storeSource).toContain("currency={currency}");
     expect(storeSource).toContain("onCurrencyChange={setCurrency}");
+    expect(currencySource).toContain("StoreCurrencyProvider");
+    expect(currencySource).not.toContain("localStorage");
+    expect(appSource).toContain("<StoreCurrencyProvider>");
     expect(moneySource).toContain("formatNanoUsd");
     expect(moneySource).toContain("formatPlanQuota");
   });

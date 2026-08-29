@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/ui/page-header";
 import { useAuth } from "@/hooks/use-auth";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { api } from "@/lib/api";
 import {
   storeApi,
@@ -328,8 +329,8 @@ function ProductPicker({
 export function StorePage() {
   const { t } = useTranslation();
   const { user, refreshUser } = useAuth();
+  const { currency, setCurrency } = useStoreCurrency();
   const [activeTab, setActiveTab] = useState<StoreTab>("balance");
-  const [currency, setCurrency] = useState<StoreCurrency>("CNY");
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [customAmount, setCustomAmount] = useState("");

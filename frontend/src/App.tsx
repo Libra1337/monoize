@@ -28,6 +28,7 @@ import { StorePage } from "@/pages/store";
 import { OrdersPage } from "@/pages/orders";
 import { StoreAdminPage } from "@/pages/store-admin";
 import { useAuth } from "@/hooks/use-auth";
+import { StoreCurrencyProvider } from "@/hooks/use-store-currency";
 import "@/i18n";
 
 function StoreAdminRoute() {
@@ -40,6 +41,7 @@ function App() {
   return (
     <ThemeProvider>
       <MotionConfig reducedMotion="user">
+      <StoreCurrencyProvider>
       <SWRConfig
         value={{
           revalidateOnFocus: true,
@@ -81,6 +83,7 @@ function App() {
         </Routes>
         </AuthProvider>
       </SWRConfig>
+      </StoreCurrencyProvider>
       <Toaster />
       </MotionConfig>
     </ThemeProvider>

@@ -3,6 +3,7 @@ import {
   addMinor,
   convertMinor,
   formatMinor,
+  formatPerMillionTokenRate,
   formatPlanQuota,
   minorToDecimal,
 } from "../src/lib/store-money";
@@ -43,5 +44,11 @@ describe("Store money helpers", () => {
     expect(minorToDecimal("0")).toBe("0.00");
     expect(minorToDecimal("5")).toBe("0.05");
     expect(minorToDecimal("1250")).toBe("12.50");
+  });
+
+  test("formats per-token nano USD rates as human prices per one million tokens", () => {
+    expect(formatPerMillionTokenRate("1500", "USD", "7")).toBe("$1.50 / 1M tokens");
+    expect(formatPerMillionTokenRate("1500", "CNY", "7")).toBe("¥10.50 / 1M tokens");
+    expect(formatPerMillionTokenRate("0.5", "USD", "7")).toBe("$0.00 / 1M tokens");
   });
 });

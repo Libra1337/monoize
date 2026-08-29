@@ -3,6 +3,18 @@ export type StoreCurrency = "CNY" | "USD";
 const CANONICAL_MINOR = /^(0|[1-9][0-9]*)$/;
 const POSITIVE_DECIMAL = /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/;
 
+function parseNonnegativeDecimal(value: string): { numerator: bigint; denominator: bigint } {
+  if (!POSITIVE_DECIMAL.test(value)) {
+    throw new Error("value must be a non-negative decimal string");
+  }
+  const [whole, fractional = ""] = value.split(".");
+  const denominator = 10n ** BigInt(fractional.length);
+  return {
+    numerator: BigInt(whole) * denominator + BigInt(fractional || "0"),
+    denominator,
+  };
+}
+
 function parseMinor(value: string): bigint {
   if (!CANONICAL_MINOR.test(value)) {
     throw new Error("amount must be a canonical minor-unit string");
@@ -123,4 +135,27 @@ export function formatNanoUsd(
     nanoPerMinor * rate.denominator,
   );
   return formatMinor(cnyMinor.toString(), "CNY");
+}
+
+export function formatPerMillionTokenRate(
+  nanoUsdPerToken: string,
+  currency: StoreCurrency,
+  cnyPerUsd: string,
+): string {
+  const ratePerToken = parseNonnegativeDecimal(nanoUsdPerToken);
+  const millionNanoNumerator = ratePerToken.numerator * 1_000_000n;
+  let minor: bigint;
+  if (currency === "USD") {
+    minor = divideRoundHalfAwayFromZero(
+      millionNanoNumerator,
+      ratePerToken.denominator * 10_000_000n,
+    );
+  } else {
+    const exchange = parseRate(cnyPerUsd);
+    minor = divideRoundHalfAwayFromZero(
+      millionNanoNumerator * exchange.numerator,
+      ratePerToken.denominator * 10_000_000n * exchange.denominator,
+    );
+  }
+  return `${formatMinor(minor.toString(), currency)} / 1M tokens`;
 }
