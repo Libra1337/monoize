@@ -7,8 +7,8 @@ use monoize::store_billing::redemption::{
     RedemptionAccessAction, RedemptionAuditContext, RevealRedemptionInput,
 };
 use monoize::store_billing::{
-    GenerateRedemptionCodesInput, RedemptionCodeStatus, RedemptionRewardInput, StoreBillingError,
-    StoreBillingStore,
+    GenerateRedemptionCodesInput, RedemptionCodeStatus, RedemptionRevealUnavailableReason,
+    RedemptionRewardInput, StoreBillingError, StoreBillingStore,
 };
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
@@ -117,6 +117,14 @@ async fn generated_v2_codes_are_returned_once_and_stored_as_bound_ciphertext() {
                 .all(|item| !ciphertext.contains(&item.code))
         );
     }
+    let listed = store.list_redemption_codes_admin(10).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().all(|record| record.can_reveal));
+    assert!(
+        listed
+            .iter()
+            .all(|record| record.reveal_unavailable_reason.is_none())
+    );
 }
 
 #[tokio::test]
@@ -419,5 +427,16 @@ async fn legacy_v1_digest_codes_remain_redeemable_but_never_recoverable() {
             .await
             .unwrap_err(),
         StoreBillingError::InvalidRedemptionCode
+    );
+
+    let listed = store.list_redemption_codes_admin(10).await.unwrap();
+    let legacy = listed
+        .iter()
+        .find(|record| record.id == "legacy-v1-code")
+        .unwrap();
+    assert!(!legacy.can_reveal);
+    assert_eq!(
+        legacy.reveal_unavailable_reason,
+        Some(RedemptionRevealUnavailableReason::LegacyDigestOnly)
     );
 }

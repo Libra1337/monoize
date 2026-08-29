@@ -78,6 +78,10 @@ string_enum!(RedemptionCodeStatus {
     Used => "used",
     Revoked => "revoked",
 });
+string_enum!(RedemptionRevealUnavailableReason {
+    LegacyDigestOnly => "legacy_digest_only",
+    CiphertextDestroyed => "ciphertext_destroyed",
+});
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BalanceProductInput {
@@ -464,6 +468,8 @@ pub struct RedemptionCodeRecord {
     pub redeemed_at: Option<DateTime<Utc>>,
     pub created_by_user_id: String,
     pub created_at: DateTime<Utc>,
+    pub can_reveal: bool,
+    pub reveal_unavailable_reason: Option<RedemptionRevealUnavailableReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

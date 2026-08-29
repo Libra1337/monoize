@@ -994,6 +994,21 @@ async fn redemption_reveal_export_and_revocation_use_scoped_reauth_and_no_store_
     assert_eq!(first_code.len(), 19);
     assert_eq!(second_code.len(), 19);
 
+    let (status, listed, _) = json_request_with_reauth(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/store/admin/redemption-codes?limit=10",
+        &admin,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(listed.as_array().unwrap().iter().all(|record| {
+        record["can_reveal"] == json!(true)
+            && record["reveal_unavailable_reason"] == Value::Null
+    }));
+
     let (status, error, _) = json_request_with_reauth(
         &ctx,
         Method::POST,
@@ -1077,6 +1092,101 @@ async fn redemption_reveal_export_and_revocation_use_scoped_reauth_and_no_store_
         row.try_get::<Option<String>>("", "encrypted_ciphertext_base64")
             .unwrap(),
         None
+    );
+}
+
+#[tokio::test]
+async fn redemption_sensitive_operations_share_the_missing_key_error() {
+    let mut ctx = setup().await;
+    let admin = dashboard_session(&ctx, "redemption_key_admin", UserRole::Admin).await;
+    ctx.state.payment_keys = Some(Arc::new(
+        PaymentKeyRing::new(
+            PaymentKey::new("api-redemption-readiness", [81_u8; 32]).unwrap(),
+            vec![],
+        )
+        .unwrap(),
+    ));
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+
+    let (status, generated, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/redemption-codes",
+        &admin,
+        None,
+        json!({
+            "reward":{"kind":"balance","currency":"USD","amount_minor":"100"},
+            "count":1,
+            "validity_days":30
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{generated}");
+    let code_id = generated[0]["record"]["id"].as_str().unwrap();
+
+    let (status, grant, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        &admin,
+        None,
+        json!({"current_password":"test-password","scope":"redemption_access"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{grant}");
+    let token = grant["token"].as_str().unwrap();
+
+    ctx.state.payment_keys = None;
+    ctx.router = monoize::app::build_app(ctx.state.clone());
+
+    let (status, generated_error, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/redemption-codes",
+        &admin,
+        None,
+        json!({
+            "reward":{"kind":"balance","currency":"USD","amount_minor":"100"},
+            "count":1,
+            "validity_days":30
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{generated_error}");
+    assert_eq!(
+        generated_error["error"]["code"],
+        "store_redemption_encryption_unavailable"
+    );
+
+    let (status, reveal_error, _) = json_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/redemption-codes/reveal",
+        &admin,
+        Some(token),
+        json!({"code_ids":[code_id],"action":"reveal"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{reveal_error}");
+    assert_eq!(
+        reveal_error["error"]["code"],
+        "store_redemption_encryption_unavailable"
+    );
+
+    let (status, _, export_bytes) = raw_request_with_reauth(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/redemption-codes/export",
+        &admin,
+        Some(token),
+        json!({"code_ids":[code_id]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let export_error: Value = serde_json::from_slice(&export_bytes).unwrap();
+    assert_eq!(
+        export_error["error"]["code"],
+        "store_redemption_encryption_unavailable"
     );
 }
 

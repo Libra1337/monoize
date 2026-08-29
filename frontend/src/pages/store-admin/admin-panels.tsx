@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { SiAlipay, SiStripe, SiWechat } from "@icons-pack/react-simple-icons";
-import { CreditCard, ClipboardCheck, ChevronDown, Eye, FileCheck2, Layers3, Package, Pencil, Plus, ReceiptText, ShieldCheck, TicketCheck, Trash2 } from "lucide-react";
+import { Copy, CreditCard, ClipboardCheck, ChevronDown, Eye, FileCheck2, Layers3, Package, Pencil, Plus, ReceiptText, ShieldCheck, TicketCheck, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -377,7 +377,7 @@ function rewardLabel(code: RedemptionCodeRecord, t: (key: string) => string): st
   return reward?.product_name || t(`store.admin.redemptions.rewardKinds.${code.reward_kind}`);
 }
 
-export function RedemptionsPanel({ codes, onGenerate }: { codes: RedemptionCodeRecord[]; onGenerate: () => void }) {
+export function RedemptionsPanel({ codes, onGenerate, onReveal, onCopy }: { codes: RedemptionCodeRecord[]; onGenerate: () => void; onReveal: (code: RedemptionCodeRecord) => void; onCopy: (code: RedemptionCodeRecord) => void }) {
   const { t, i18n } = useTranslation();
   return (
     <section className="grid gap-4" aria-labelledby="store-admin-redemptions-title">
@@ -404,6 +404,7 @@ export function RedemptionsPanel({ codes, onGenerate }: { codes: RedemptionCodeR
                 <th className="px-4 py-3 font-medium">{t("store.admin.redemptions.reward")}</th>
                 <th className="px-4 py-3 font-medium">{t("store.admin.redemptions.status")}</th>
                 <th className="px-4 py-3 font-medium">{t("store.admin.redemptions.expires")}</th>
+                <th className="px-4 py-3 font-medium">{t("store.admin.redemptions.actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -418,6 +419,18 @@ export function RedemptionsPanel({ codes, onGenerate }: { codes: RedemptionCodeR
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(new Date(code.expires_at))}
+                  </td>
+                  <td className="px-4 py-3">
+                    {code.can_reveal ? (
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" className="min-h-11 rounded-xl" onClick={() => onReveal(code)}><Eye className="size-4" />{t("store.admin.redemptions.revealCode")}</Button>
+                        <Button type="button" variant="ghost" className="min-h-11 rounded-xl" onClick={() => onCopy(code)}><Copy className="size-4" />{t("store.admin.redemptions.copyCode")}</Button>
+                      </div>
+                    ) : code.reveal_unavailable_reason === "legacy_digest_only" ? (
+                      <span className="text-xs text-muted-foreground">{t("store.admin.redemptions.legacyDigestOnly")}</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">{t("store.admin.redemptions.unavailable")}</span>
+                    )}
                   </td>
                 </tr>
               ))}

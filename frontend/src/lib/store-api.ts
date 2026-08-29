@@ -541,6 +541,8 @@ export interface RedemptionCodeRecord {
   redeemed_at: string | null;
   created_by_user_id: string;
   created_at: string;
+  can_reveal: boolean;
+  reveal_unavailable_reason: "legacy_digest_only" | "ciphertext_destroyed" | null;
 }
 
 export interface GeneratedRedemptionCode {

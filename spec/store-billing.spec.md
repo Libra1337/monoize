@@ -531,10 +531,15 @@ SB-R-9. Successful redemption and revocation MUST delete encrypted full code in 
 
 SB-R-10. Legacy v1 codes MUST remain redeemable through their existing digest and alphabet. They MUST NOT become recoverable.
 
-SB-R-10A. An Admin list record MUST contain `can_reveal`. It MAY contain the fixed
-`reveal_unavailable_reason` value `legacy_digest_only` or `ciphertext_destroyed`. It MUST
-NOT contain encrypted value fields. A v1 row MUST return `can_reveal = false` and
-`reveal_unavailable_reason = legacy_digest_only`.
+SB-R-10A. An Admin list record MUST contain `can_reveal` and nullable
+`reveal_unavailable_reason`. The reason MUST be `legacy_digest_only` or
+`ciphertext_destroyed`. It MUST NOT contain encrypted value fields. A v1 row MUST return
+`can_reveal = false` and `reveal_unavailable_reason = legacy_digest_only`. A v2 row MUST
+return `can_reveal = true` only when its state is `unused`, its expiry is later than response
+generation time, and every encrypted value field is present. A v2 row with any missing
+encrypted value field MUST return `can_reveal = false` and
+`reveal_unavailable_reason = ciphertext_destroyed`. Every other v2 row MUST return
+`can_reveal = false` and MAY return a null reason.
 
 SB-R-11. Redemption normalization MUST uppercase ASCII letters and remove ASCII hyphens. It MUST NOT map look-alike characters.
 
@@ -860,6 +865,15 @@ SB-UI-13. Generated redemption codes MUST remain fully visible in the generation
 until the Admin closes it. The result MUST render every complete code, one Copy action per
 code, and one Copy All action. Closing the result MUST clear plaintext component state.
 List rows MUST remain masked until scoped reveal.
+
+SB-UI-14. Each unused Admin list row with `can_reveal = true` MUST expose Reveal and Copy
+actions. Either action MUST open a dialog that requires the current Admin password before it
+requests a `redemption_access` grant. Reveal MUST call the reveal endpoint with action
+`reveal`. Copy MUST call it with action `copy` before it writes the returned code to the
+clipboard. The dialog MUST show the complete returned code until it closes. Closing the
+dialog MUST clear the password, grant token, and plaintext code from component state. A row
+with `reveal_unavailable_reason = legacy_digest_only` MUST show a localized legacy digest-only
+label and MUST NOT expose Reveal, Copy, or Export. An unused row MAY expose Revoke.
 
 SB-UI-13A. An unused revealable v2 list row MUST expose a labeled reveal or copy action.
 The action MUST obtain a five-minute `redemption_access` reauthentication grant from the

@@ -1026,6 +1026,8 @@ impl StoreBillingStore {
                     redeemed_at: None,
                     created_by_user_id: created_by_user_id.to_string(),
                     created_at,
+                    can_reveal: true,
+                    reveal_unavailable_reason: None,
                 },
             });
         }
@@ -1349,6 +1351,9 @@ impl StoreBillingStore {
         record.status = RedemptionCodeStatus::Used;
         record.redeemed_by_user_id = Some(user_id.to_string());
         record.redeemed_at = Some(redeemed_at);
+        record.can_reveal = false;
+        record.reveal_unavailable_reason =
+            Some(RedemptionRevealUnavailableReason::CiphertextDestroyed);
         Ok(record)
     }
 
@@ -1601,27 +1606,52 @@ fn product_snapshot(product: &StoreProduct) -> ProductSnapshot {
 }
 
 fn redemption_select() -> &'static str {
-    "SELECT id, code_hint, reward_kind, reward_json, status, expires_at,
-            redeemed_by_user_id, redeemed_at, created_by_user_id, created_at
+    "SELECT id, code_format_version, code_hint, reward_kind, reward_json, status, expires_at,
+            encrypted_format_version, encrypted_key_id, encrypted_nonce_base64,
+            encrypted_ciphertext_base64, redeemed_by_user_id, redeemed_at,
+            created_by_user_id, created_at
      FROM store_redemption_codes"
 }
 
 fn redemption_record_from_row(row: QueryResult) -> Result<RedemptionCodeRecord, StoreBillingError> {
+    let code_format_version = row_i32(&row, "code_format_version")?;
+    let status = RedemptionCodeStatus::from_str(&row_string(&row, "status")?)
+        .ok_or_else(|| storage("stored redemption status is invalid"))?;
+    let expires_at = parse_timestamp(&row_string(&row, "expires_at")?)?;
+    let encrypted_value_present = row
+        .try_get::<Option<i32>>("", "encrypted_format_version")
+        .map_err(storage)?
+        .is_some()
+        && row_optional_string(&row, "encrypted_key_id")?.is_some()
+        && row_optional_string(&row, "encrypted_nonce_base64")?.is_some()
+        && row_optional_string(&row, "encrypted_ciphertext_base64")?.is_some();
+    let can_reveal = code_format_version == 2
+        && status == RedemptionCodeStatus::Unused
+        && expires_at > Utc::now()
+        && encrypted_value_present;
+    let reveal_unavailable_reason = if code_format_version == 1 {
+        Some(RedemptionRevealUnavailableReason::LegacyDigestOnly)
+    } else if code_format_version == 2 && !encrypted_value_present {
+        Some(RedemptionRevealUnavailableReason::CiphertextDestroyed)
+    } else {
+        None
+    };
     Ok(RedemptionCodeRecord {
         id: row_string(&row, "id")?,
         code_hint: row_string(&row, "code_hint")?,
         reward_kind: ProductKind::from_str(&row_string(&row, "reward_kind")?)
             .ok_or_else(|| storage("stored redemption reward kind is invalid"))?,
         reward: parse_json(&row_string(&row, "reward_json")?)?,
-        status: RedemptionCodeStatus::from_str(&row_string(&row, "status")?)
-            .ok_or_else(|| storage("stored redemption status is invalid"))?,
-        expires_at: parse_timestamp(&row_string(&row, "expires_at")?)?,
+        status,
+        expires_at,
         redeemed_by_user_id: row_optional_string(&row, "redeemed_by_user_id")?,
         redeemed_at: row_optional_string(&row, "redeemed_at")?
             .map(|value| parse_timestamp(&value))
             .transpose()?,
         created_by_user_id: row_string(&row, "created_by_user_id")?,
         created_at: parse_timestamp(&row_string(&row, "created_at")?)?,
+        can_reveal,
+        reveal_unavailable_reason,
     })
 }
 

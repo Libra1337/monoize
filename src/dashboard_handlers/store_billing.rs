@@ -461,8 +461,8 @@ fn map_store_error(error: StoreBillingError) -> AppError {
         ),
         StoreBillingError::EncryptionUnavailable => (
             StatusCode::SERVICE_UNAVAILABLE,
-            "payment_configuration_unavailable",
-            "redemption-code encryption is unavailable",
+            "store_redemption_encryption_unavailable",
+            "redemption code encryption is unavailable",
         ),
         StoreBillingError::RedemptionRateLimited => (
             StatusCode::TOO_MANY_REQUESTS,

@@ -47,6 +47,11 @@ export function RedemptionDialog({ open, plans, generating, onOpenChange, onGene
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const clearGeneratedCodes = () => {
+    setGeneratedCodes([]);
+    setCopied(false);
+  };
+
   useEffect(() => {
     if (!open) return;
     setRewardKind("balance");
@@ -55,8 +60,7 @@ export function RedemptionDialog({ open, plans, generating, onOpenChange, onGene
     setPlanId(plans[0]?.id ?? "");
     setCount("1");
     setValidityDays("30");
-    setGeneratedCodes([]);
-    setCopied(false);
+    clearGeneratedCodes();
     setError(null);
   }, [open, plans]);
 
@@ -93,8 +97,18 @@ export function RedemptionDialog({ open, plans, generating, onOpenChange, onGene
     toast.success(t("common.copied"));
   };
 
+  const copyCode = async (code: string) => {
+    await navigator.clipboard.writeText(code);
+    toast.success(t("common.copied"));
+  };
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) clearGeneratedCodes();
+    onOpenChange(nextOpen);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto rounded-2xl sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{t("store.admin.redemptions.generate")}</DialogTitle>
@@ -104,7 +118,15 @@ export function RedemptionDialog({ open, plans, generating, onOpenChange, onGene
         {generatedCodes.length ? (
           <div className="grid gap-4">
             <div className="max-h-72 overflow-y-auto rounded-xl border bg-muted/30 p-3 font-mono text-sm">
-              {generatedCodes.map((item) => <div key={item.record.id} className="border-b py-2 last:border-0">{item.code}</div>)}
+              {generatedCodes.map((item) => (
+                <div key={item.record.id} className="flex items-center justify-between gap-3 border-b py-2 last:border-0">
+                  <code className="min-w-0 break-all">{item.code}</code>
+                  <Button type="button" variant="ghost" className="min-h-11 shrink-0 rounded-xl px-3" onClick={() => void copyCode(item.code)} aria-label={`${t("store.admin.redemptions.copyCode")} ${item.code}`}>
+                    <Copy className="h-4 w-4" />
+                    <span className="sr-only sm:not-sr-only">{t("store.admin.redemptions.copyCode")}</span>
+                  </Button>
+                </div>
+              ))}
             </div>
             <Button type="button" variant="outline" className="min-h-11 rounded-xl" onClick={() => void copyAll()}>{copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}{t("store.admin.redemptions.copyAll")}</Button>
           </div>

@@ -23,6 +23,7 @@ import {
   type AdminOrderOperationResult,
   type AdminStoreOrderDetail,
   type GenerateRedemptionCodesInput,
+  type RedemptionCodeRecord,
   type PaymentChannelInput,
   type PaymentCredentialPayload,
   type StorePaymentChannel,
@@ -51,6 +52,7 @@ import {
 import { OrderDialog } from "./order-dialog";
 import { ProductDialog } from "./product-dialog";
 import { RedemptionDialog } from "./redemption-dialog";
+import { RedemptionAccessDialog } from "./redemption-access-dialog";
 import { StoreAdminTabs, type StoreAdminTab } from "./store-admin-tabs";
 
 const PRODUCTS_KEY = "/api/dashboard/store/admin/products";
@@ -162,6 +164,7 @@ export function StoreAdminPage() {
   const [complianceChannel, setComplianceChannel] = useState<StorePaymentChannel | null>(null);
   const [capabilitiesChannel, setCapabilitiesChannel] = useState<StorePaymentChannel | null>(null);
   const [redemptionDialogOpen, setRedemptionDialogOpen] = useState(false);
+  const [redemptionAccess, setRedemptionAccess] = useState<{ record: RedemptionCodeRecord; action: "reveal" | "copy" } | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
@@ -277,6 +280,8 @@ export function StoreAdminPage() {
         redeemed_at: null,
         created_by_user_id: "",
         created_at: now.toISOString(),
+        can_reveal: true,
+        reveal_unavailable_reason: null,
       }));
       await redemptions.mutate(async (current = []) => {
         generated = await storeApi.admin.generateRedemptionCodes(input);
@@ -288,6 +293,12 @@ export function StoreAdminPage() {
       toast.error(cause instanceof Error ? cause.message : t("common.error"));
       throw cause;
     } finally { setSaving(false); }
+  };
+
+  const accessRedemption = async (record: RedemptionCodeRecord, action: "reveal" | "copy", currentPassword: string) => {
+    const grant = await storeApi.admin.createReauthGrant(currentPassword, "redemption_access");
+    const revealed = await storeApi.admin.revealRedemptionCodes([record.id], action, grant.token);
+    return revealed[0]?.code ?? "";
   };
 
   const refreshSelectedOrder = async () => {
@@ -390,7 +401,7 @@ export function StoreAdminPage() {
       {activeTab === "products" && <AdminLoadState loading={products.isLoading || settings.isLoading || groups.isLoading} error={products.error || settings.error || groups.error} onRetry={() => { void products.mutate(); void settings.mutate(); void groups.mutate(); }}><ProductsPanel products={products.data ?? []} onCreate={() => { setSelectedProduct(null); setProductDialogOpen(true); }} onEdit={(product) => { setSelectedProduct(product); setProductDialogOpen(true); }} onDelete={(product) => setDeleteTarget({ kind: "product", record: product })} />{settings.data && <SettingsPanel settings={settings.data} saving={saving} onSave={saveSettings} />}</AdminLoadState>}
       {activeTab === "channels" && <AdminLoadState loading={channels.isLoading} error={channels.error} onRetry={() => void channels.mutate()}><ChannelsPanel channels={channels.data ?? []} onCreate={() => { setSelectedChannel(null); setChannelDialogOpen(true); }} onPrivacyRecords={() => setPrivacyRecordsOpen(true)} onRetention={() => setRetentionOpen(true)} onCompliance={setComplianceChannel} onCapabilities={setCapabilitiesChannel} onReadiness={setReadinessChannel} onEdit={(channel) => { setSelectedChannel(channel); setChannelDialogOpen(true); }} onDelete={(channel) => setDeleteTarget({ kind: "channel", record: channel })} /></AdminLoadState>}
       {activeTab === "orders" && <AdminLoadState loading={orders.isLoading} error={orders.error} onRetry={() => void orders.mutate()}><OrdersPanel orders={orders.data ?? []} onSelectOrder={setSelectedOrderId} /></AdminLoadState>}
-      {activeTab === "redemptions" && <AdminLoadState loading={redemptions.isLoading || products.isLoading} error={redemptions.error || products.error} onRetry={() => { void redemptions.mutate(); void products.mutate(); }}><RedemptionsPanel codes={redemptions.data ?? []} onGenerate={() => setRedemptionDialogOpen(true)} /></AdminLoadState>}
+      {activeTab === "redemptions" && <AdminLoadState loading={redemptions.isLoading || products.isLoading} error={redemptions.error || products.error} onRetry={() => { void redemptions.mutate(); void products.mutate(); }}><RedemptionsPanel codes={redemptions.data ?? []} onGenerate={() => setRedemptionDialogOpen(true)} onReveal={(record) => setRedemptionAccess({ record, action: "reveal" })} onCopy={(record) => setRedemptionAccess({ record, action: "copy" })} /></AdminLoadState>}
     </div>
     <ProductDialog open={productDialogOpen} product={selectedProduct} groups={groups.data?.groups ?? []} saving={saving} onOpenChange={setProductDialogOpen} onSave={saveProduct} />
     <ChannelDialog open={channelDialogOpen} channel={selectedChannel} saving={saving} onOpenChange={setChannelDialogOpen} onSave={saveChannel} onSaveCredential={saveChannelCredential} />
@@ -400,6 +411,7 @@ export function StoreAdminPage() {
     <ChannelCapabilitiesDialog channel={capabilitiesChannel} open={capabilitiesChannel !== null} onOpenChange={(open) => { if (!open) setCapabilitiesChannel(null); }} onSaved={() => channels.mutate()} />
     <ChannelReadinessDialog channel={readinessChannel} open={readinessChannel !== null} onOpenChange={(open) => { if (!open) setReadinessChannel(null); }} onSaved={() => channels.mutate()} onOpenPrivacyRecords={() => setPrivacyRecordsOpen(true)} />
     <RedemptionDialog open={redemptionDialogOpen} plans={(products.data ?? []).filter((product) => product.kind === "plan" && product.enabled)} generating={saving} onOpenChange={setRedemptionDialogOpen} onGenerate={generateCodes} />
+    <RedemptionAccessDialog open={redemptionAccess !== null} record={redemptionAccess?.record ?? null} action={redemptionAccess?.action ?? "reveal"} onOpenChange={(open) => { if (!open) setRedemptionAccess(null); }} onSubmit={accessRedemption} />
     <OrderDialog
       open={selectedOrderId !== null}
       detail={orderDetail.data}

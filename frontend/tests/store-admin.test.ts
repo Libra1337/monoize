@@ -41,6 +41,7 @@ const tabsSource = readSource("../src/pages/store-admin/store-admin-tabs.tsx");
 const productSource = readSource("../src/pages/store-admin/product-dialog.tsx");
 const channelSource = readSource("../src/pages/store-admin/channel-dialog.tsx");
 const redemptionSource = readSource("../src/pages/store-admin/redemption-dialog.tsx");
+const redemptionAccessSource = readSource("../src/pages/store-admin/redemption-access-dialog.tsx");
 const panelsSource = readSource("../src/pages/store-admin/admin-panels.tsx");
 const orderDialogSource = readSource("../src/pages/store-admin/order-dialog.tsx");
 const governanceDialogsSource = readSource("../src/pages/store-admin/governance-dialogs.tsx");
@@ -372,6 +373,8 @@ describe("Store admin page", () => {
     expect(redemptionSource).toContain('max={20}');
     expect(redemptionSource).toContain('max={365}');
     expect(redemptionSource).toContain("generatedCodes");
+    expect(redemptionSource).toContain("copyCode");
+    expect(redemptionSource).toContain("clearGeneratedCodes");
     expect(panelsSource).toContain("code_hint");
     expect(pageSource).not.toContain("redemption.code_plaintext");
   });
@@ -383,6 +386,16 @@ describe("Store admin page", () => {
     expect(apiSource).toContain("exportRedemptionCodes");
     expect(apiSource).toContain("revokeRedemptionCode");
     expect(apiSource).toContain('"unused" | "used" | "revoked"');
+    expect(apiSource).toContain("can_reveal: boolean");
+    expect(apiSource).toContain('"legacy_digest_only" | "ciphertext_destroyed"');
+    expect(panelsSource).toContain("onReveal");
+    expect(panelsSource).toContain("onCopy");
+    expect(panelsSource).toContain("reveal_unavailable_reason");
+    expect(pageSource).toContain('createReauthGrant(currentPassword, "redemption_access")');
+    expect(pageSource).toContain("RedemptionAccessDialog");
+    expect(redemptionAccessSource).toContain("current-password");
+    expect(redemptionAccessSource).toContain("clearSensitiveState");
+    expect(redemptionAccessSource).toContain("navigator.clipboard.writeText");
   });
 
   test("edits four exact custom amount bounds", () => {
