@@ -1473,6 +1473,10 @@ impl ApiKeyCache {
 
     pub fn get(&self, key: &str) -> Option<(ApiKey, User, Option<Vec<String>>)> {
         let entry = self.cache.get(key)?;
+        let generation = self.current_generation();
+        if entry.generation != generation {
+            return None;
+        }
         if entry.cached_at.elapsed() > self.ttl {
             drop(entry);
             let _guard = self
@@ -1488,11 +1492,15 @@ impl ApiKeyCache {
             }
             return None;
         }
-        Some((
+        let value = (
             entry.api_key.clone(),
             entry.user.clone(),
             entry.plan_group_ids.clone(),
-        ))
+        );
+        if self.current_generation() != generation {
+            return None;
+        }
+        Some(value)
     }
 
     pub(crate) fn current_generation(&self) -> u64 {
@@ -1722,6 +1730,10 @@ impl BalanceCache {
 
     pub fn get(&self, user_id: &str) -> Option<UserBalance> {
         let entry = self.cache.get(user_id)?;
+        let generation = self.current_generation();
+        if entry.generation != generation {
+            return None;
+        }
         if entry.cached_at.elapsed() > self.ttl {
             drop(entry);
             let _guard = self
@@ -1732,7 +1744,11 @@ impl BalanceCache {
                 .remove_if(user_id, |_, v| v.cached_at.elapsed() > self.ttl);
             return None;
         }
-        Some(entry.balance.clone())
+        let balance = entry.balance.clone();
+        if self.current_generation() != generation {
+            return None;
+        }
+        Some(balance)
     }
 
     pub(crate) fn current_generation(&self) -> u64 {
@@ -2309,6 +2325,22 @@ mod tests {
     }
 
     #[test]
+    fn api_key_cache_reads_reject_entries_from_an_older_generation() {
+        let cache = ApiKeyCache::with_capacity(Duration::from_secs(60), 4);
+        assert!(cache.insert_if_current(
+            "token-1".to_string(),
+            0,
+            cached_api_key("key-1", "user-1", "token-1"),
+            cached_user("user-1"),
+            None,
+        ));
+
+        cache.begin_invalidation();
+
+        assert!(cache.get("token-1").is_none());
+    }
+
+    #[test]
     fn balance_cache_evicts_before_capacity_is_exceeded() {
         let cache = BalanceCache::with_capacity(Duration::from_secs(60), 1);
         assert!(cache.insert_if_current(
@@ -2331,6 +2363,24 @@ mod tests {
         ));
         assert_eq!(cache.len(), 1);
         assert!(cache.get("user-2").is_some());
+    }
+
+    #[test]
+    fn balance_cache_reads_reject_entries_from_an_older_generation() {
+        let cache = BalanceCache::with_capacity(Duration::from_secs(60), 4);
+        assert!(cache.insert_if_current(
+            "user-1".to_string(),
+            0,
+            UserBalance {
+                user_id: "user-1".to_string(),
+                balance_nano_usd: 7,
+                balance_unlimited: false,
+            },
+        ));
+
+        cache.generation.fetch_add(1, Ordering::AcqRel);
+
+        assert!(cache.get("user-1").is_none());
     }
 
     #[test]

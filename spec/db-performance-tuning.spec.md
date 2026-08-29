@@ -116,7 +116,8 @@ DPT-AK3a. Entry capacity MUST be configurable. The default is `10000`, selected 
 
 DPT-AK4. `get(key)` MUST return `Some((ApiKey, User))` if and only if:
 1. An entry exists for the complete key, AND
-2. `cached_at.elapsed() <= ttl`.
+2. `cached_at.elapsed() <= ttl`, AND
+3. The entry generation equals the current invalidation generation.
 
 DPT-AK5. If an entry exists but `cached_at.elapsed() > ttl`, the cache MUST remove the entry only if the currently stored entry is still expired at removal time (conditional remove), and then return `None`.
 
@@ -184,7 +185,8 @@ DPT-BC3a. Entry capacity MUST be configurable. The default is `10000`, selected 
 
 DPT-BC4. `get(user_id)` MUST return `Some(UserBalance)` if and only if:
 1. An entry exists for the given user_id, AND
-2. `cached_at.elapsed() <= ttl`.
+2. `cached_at.elapsed() <= ttl`, AND
+3. The entry generation equals the current invalidation generation.
 
 DPT-BC5. If an entry exists but `cached_at.elapsed() > ttl`, the cache MUST remove the entry only if the currently stored entry is still expired at removal time (conditional remove), and then return `None`.
 

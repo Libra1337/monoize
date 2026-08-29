@@ -55,6 +55,11 @@ AKP3. If database validation fails or is skipped, Monoize MUST return:
 - HTTP `401`
 - error code `unauthorized`
 
+AKP4. An authentication-cache hit MUST be accepted only when the cached entry's
+generation equals the cache's current invalidation generation. If the generations
+differ, Monoize MUST treat the entry as a miss and continue with database validation.
+This check MUST occur before returning the cached authorization policy to the caller.
+
 ## 4. Effective group resolution
 
 Groups are first-class registry rows (`groups-registry.spec.md`). All group values in this
