@@ -59,6 +59,14 @@ sort by model name in ascending byte order.
 UA-13. Each ranked row MUST show the model name, exact Token value, and percentage of the
 selected metric total. It MUST remain readable without the chart.
 
+UA-13a. Each ranked row MUST reserve one wrapping line for the complete model name. The
+Token value and percentage MUST render on a separate wrapping line. A numeric value MUST
+NOT reduce the model-name line to zero width. Neither line may overflow the Card.
+
+UA-13b. The distribution chart and ranked rows MUST stack vertically inside the Card. The
+ranked rows MUST use the full Card content width. A viewport breakpoint MUST NOT place the
+ranked rows in a narrow column beside the chart.
+
 UA-14. The chart and ranked rows MUST use only logical model names. They MUST NOT expose an
 internal Provider ID, Channel ID, database ID, Base URL, credential, or header.
 

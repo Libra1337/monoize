@@ -88,6 +88,18 @@ describe("Dashboard page boundaries", () => {
     expect(tokenSummarySource.match(/<Card(?:\s|>)/g)?.length).toBe(2);
   });
 
+  test("keeps every model label visible without legend overflow", () => {
+    expect(modelDistributionSource).toContain("grid-cols-[auto_minmax(0,1fr)]");
+    expect(modelDistributionSource).toContain("[overflow-wrap:anywhere]");
+    expect(modelDistributionSource).toContain("flex-wrap");
+    expect(modelDistributionSource).toContain('className="grid items-center gap-6"');
+    expect(modelDistributionSource).not.toContain("md:grid-cols");
+    expect(modelDistributionSource).toContain("animationDuration={1000}");
+    expect(modelDistributionSource).toContain("duration-[1000ms]");
+    expect(modelDistributionSource).not.toContain("justify-between gap-4");
+    expect(modelDistributionSource).not.toContain("truncate font-medium");
+  });
+
   test("supports the approved Dashboard and Usage Analysis ranges", () => {
     expect(dashboardSource).toContain('"24h"');
     expect(dashboardSource).toContain('"week"');

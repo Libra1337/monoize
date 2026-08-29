@@ -598,6 +598,9 @@ pub async fn list_marketplace(
     let mut items: BTreeMap<(String, String), Vec<(String, String, Vec<PublicRate>)>> =
         BTreeMap::new();
     for provider in providers {
+        if !provider.enabled {
+            continue;
+        }
         let public_names = public_names_for_provider(&public_provider_names, &provider)
             .ok_or_else(|| marketplace_source_error("Provider public name missing"))?;
         let group_names = provider_group_names(&provider, &groups);
@@ -727,6 +730,9 @@ pub async fn marketplace_offers(
         .map_err(marketplace_source_error)?;
     let mut offers = Vec::new();
     for provider in providers {
+        if !provider.enabled {
+            continue;
+        }
         let public_names = public_names_for_provider(&public_provider_names, &provider)
             .ok_or_else(|| marketplace_source_error("Provider public name missing"))?;
         if !provider_group_names(&provider, &groups)
@@ -1035,13 +1041,14 @@ pub async fn public_status(
 #[cfg(test)]
 mod tests {
     use super::{
-        StatusCounts, ascii_search_key, canonical_text, exact_marketplace_model,
-        marketplace_group_filter, public_status, select_complete_marketplace_rates,
+        MarketplaceQuery, StatusCounts, ascii_search_key, canonical_text, exact_marketplace_model,
+        list_marketplace, marketplace_group_filter, marketplace_offers, public_status,
+        select_complete_marketplace_rates,
     };
     use crate::app::{AppState, RuntimeConfig, load_state_with_runtime};
-    use crate::billing_rate_store::DbBillingRateRecord;
-    use axum::extract::State;
-    use axum::http::HeaderMap;
+    use crate::billing_rate_store::{DbBillingRateRecord, UpsertBillingRateInput};
+    use axum::extract::{Query, State};
+    use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
     use chrono::Utc;
     use http_body_util::BodyExt;
@@ -1080,6 +1087,28 @@ mod tests {
             raw_json: serde_json::json!({}),
             updated_at: chrono::Utc::now(),
         }
+    }
+
+    async fn add_marketplace_rate(state: &AppState, id: &str, usage_class: &str) {
+        state
+            .billing_rate_store
+            .upsert_billing_rate(
+                id,
+                serde_json::from_value::<UpsertBillingRateInput>(serde_json::json!({
+                    "source": "test",
+                    "pricing_profile": "disabled-provider-profile",
+                    "model_pattern": "disabled-provider-model",
+                    "provider_type": "responses",
+                    "rate_kind": "token",
+                    "usage_class": usage_class,
+                    "unit": "token",
+                    "unit_price_nano_usd": "1",
+                    "enabled": true
+                }))
+                .expect("rate input deserializes"),
+            )
+            .await
+            .expect("rate inserts");
     }
 
     #[test]
@@ -1125,6 +1154,96 @@ mod tests {
 
         assert_eq!(selected.len(), 2);
         assert!(selected.iter().all(|rate| rate.id.starts_with("logical-")));
+    }
+
+    #[tokio::test]
+    async fn disabled_provider_is_absent_from_marketplace_list_and_offers() {
+        let state = make_state().await;
+        let group_id = state
+            .user_store
+            .default_group_id()
+            .await
+            .expect("default group exists");
+        let provider = state
+            .monoize_store
+            .create_provider(
+                serde_json::from_value(serde_json::json!({
+                    "name": "Disabled Internal Provider",
+                    "confirm_public_exposure": true,
+                    "group_id": group_id,
+                    "enabled": false,
+                    "pricing_profile": "disabled-provider-profile",
+                    "channel": {
+                        "name": "Enabled Internal Channel",
+                        "provider_type": "responses",
+                        "base_url": "https://example.invalid",
+                        "api_key": "secret",
+                        "enabled": true,
+                        "models": {
+                            "disabled-provider-model": { "redirect": null }
+                        }
+                    }
+                }))
+                .expect("provider payload deserializes"),
+            )
+            .await
+            .expect("provider creates");
+        add_marketplace_rate(&state, "disabled-provider-input", "input_uncached").await;
+        add_marketplace_rate(&state, "disabled-provider-output", "output").await;
+        let group_public_name: String = state
+            .db_pool
+            .read()
+            .query_one(state.db_pool.stmt(
+                "SELECT public_name FROM monoize_groups WHERE id = $1",
+                vec![provider.group_id.into()],
+            ))
+            .await
+            .expect("Group query succeeds")
+            .expect("Group exists")
+            .try_get("", "public_name")
+            .expect("public name decodes");
+
+        let list_response = list_marketplace(
+            State(state.clone()),
+            HeaderMap::new(),
+            Query(MarketplaceQuery {
+                q: None,
+                group: None,
+                model: None,
+                limit: Some(50),
+                cursor: None,
+            }),
+        )
+        .await
+        .expect("Marketplace list succeeds")
+        .into_response();
+        let list_body = list_response
+            .into_body()
+            .collect()
+            .await
+            .expect("list body reads")
+            .to_bytes();
+        let list_json: serde_json::Value =
+            serde_json::from_slice(&list_body).expect("list body is JSON");
+        assert_eq!(list_json["items"], serde_json::json!([]));
+
+        let offers = marketplace_offers(
+            State(state),
+            HeaderMap::new(),
+            Query(MarketplaceQuery {
+                q: None,
+                group: Some(group_public_name),
+                model: Some("disabled-provider-model".to_string()),
+                limit: Some(50),
+                cursor: None,
+            }),
+        )
+        .await;
+        let error = match offers {
+            Ok(_) => panic!("disabled Provider returned a public offer"),
+            Err(error) => error,
+        };
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

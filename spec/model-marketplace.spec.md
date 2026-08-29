@@ -235,6 +235,10 @@ bind chunks, not by returned row count.
 MM-P1. Only an enabled Provider with enabled embedded Channel and a priced mapping may
 contribute an offer. Process-local breaker state MUST NOT exclude a configured offer.
 
+MM-P1a. A disabled Provider contributes zero items to `GET /api/public/marketplace` and
+zero offers to `GET /api/public/marketplace/offers`, even when its embedded Channel and
+priced model mapping remain enabled.
+
 MM-P2. For one integer nano-USD base rate `r` and exact decimal effective multiplier `m`,
 the displayed rate is exact decimal `r * m` without per-unit truncation.
 

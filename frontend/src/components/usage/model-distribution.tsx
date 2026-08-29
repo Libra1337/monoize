@@ -41,7 +41,7 @@ export function ModelDistribution({
     return (
       <Card className="rounded-lg">
         <CardHeader><Skeleton className="h-5 w-44" /></CardHeader>
-        <CardContent className="grid gap-6 md:grid-cols-[220px_1fr]">
+        <CardContent className="grid gap-6">
           <Skeleton className="mx-auto size-48 rounded-full" />
           <Skeleton className="h-48 w-full" />
         </CardContent>
@@ -60,7 +60,7 @@ export function ModelDistribution({
             <p className="text-sm text-muted-foreground">{t("usageAnalysis.empty")}</p>
           </div>
         ) : (
-          <div className="grid items-center gap-6 md:grid-cols-[220px_minmax(0,1fr)]">
+          <div className="grid items-center gap-6">
             <ChartContainer config={config} className="mx-auto size-52 !aspect-square">
               <PieChart>
                 <Pie
@@ -71,7 +71,7 @@ export function ModelDistribution({
                   outerRadius={88}
                   strokeWidth={3}
                   isAnimationActive={!reduceMotion}
-                  animationDuration={900}
+                  animationDuration={1000}
                 >
                   {chartRows.map((row) => <Cell key={row.model} fill={row.fill} />)}
                 </Pie>
@@ -83,18 +83,18 @@ export function ModelDistribution({
                 const percentage = `${basisPoints / 100n}.${(basisPoints % 100n).toString().padStart(2, "0")}%`;
                 return (
                   <div key={row.model} className="min-w-0">
-                    <div className="flex min-w-0 items-center justify-between gap-4 text-sm">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="size-2.5 shrink-0 rounded-sm" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
-                        <span className="truncate font-medium">{row.model}</span>
-                      </div>
-                      <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-                        {formatTokenCount(row.value, i18n.language)} · {percentage}
+                    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-sm">
+                      <span className="mt-1 size-2.5 shrink-0 rounded-sm" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                      <span className="min-w-0 font-medium leading-5 [overflow-wrap:anywhere]">{row.model}</span>
+                      <span className="col-start-2 flex min-w-0 flex-wrap items-baseline gap-x-1 font-mono text-xs tabular-nums text-muted-foreground">
+                        <span className="[overflow-wrap:anywhere]">{formatTokenCount(row.value, i18n.language)}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{percentage}</span>
                       </span>
                     </div>
                     <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                       <div
-                        className="h-full rounded-full bg-primary transition-[width] duration-700"
+                        className="h-full rounded-full bg-primary transition-[width] duration-[1000ms]"
                         style={{ width: `${Number(basisPoints) / 100}%` }}
                       />
                     </div>
