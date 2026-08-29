@@ -1471,6 +1471,23 @@
 			"noPatternsDesc": "Add ordered glob patterns to choose billing profiles."
 		}
 	},
+	"apiDocsConsole": {
+		"title": "API Docs",
+		"description": "Choose an API family. Copy a request that uses your configured Base URL.",
+		"baseUrl": "Base URL",
+		"baseUrlMissing": "Configure a secure API Base URL before you copy a request.",
+		"authentication": "Authentication",
+		"streaming": "Streaming",
+		"streamingSupported": "Streaming supported",
+		"streamingUnsupported": "No streaming",
+		"streamingDescription": "Set stream to true. Read Server-Sent Events until the protocol terminal event.",
+		"streamingUnsupportedDescription": "This endpoint returns one JSON response.",
+		"successShape": "Success shape",
+		"commonErrors": "Common errors",
+		"requestSample": "Request sample",
+		"copy": "Copy",
+		"copied": "Copied"
+	},
 	"modelMarketplace": {
 		"title": "Model Marketplace",
 		"description": "Compare available models and Provider prices inside each Group.",

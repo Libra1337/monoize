@@ -1471,6 +1471,23 @@
 			"noPatternsDesc": "添加有序 glob 模式以选择计费配置。"
 		}
 	},
+	"apiDocsConsole": {
+		"title": "API 文档",
+		"description": "选择 API 系列，然后复制使用已配置 Base URL 的请求。",
+		"baseUrl": "Base URL",
+		"baseUrlMissing": "请先配置安全的 API Base URL，再复制请求。",
+		"authentication": "身份验证",
+		"streaming": "流式响应",
+		"streamingSupported": "支持流式响应",
+		"streamingUnsupported": "不支持流式响应",
+		"streamingDescription": "将 stream 设为 true。持续读取 Server-Sent Events，直到协议结束事件。",
+		"streamingUnsupportedDescription": "此端点返回一个 JSON 响应。",
+		"successShape": "成功响应结构",
+		"commonErrors": "常见错误",
+		"requestSample": "请求示例",
+		"copy": "复制",
+		"copied": "已复制"
+	},
 	"modelMarketplace": {
 		"title": "模型广场",
 		"description": "按 Group 查看可用模型并比较各 Provider 的价格。",

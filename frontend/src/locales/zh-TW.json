@@ -1468,6 +1468,23 @@
 			"noPatternsDesc": "新增有序 glob 模式以選擇計費設定。"
 		}
 	},
+	"apiDocsConsole": {
+		"title": "API 文件",
+		"description": "選擇 API 系列，然後複製使用已設定 Base URL 的請求。",
+		"baseUrl": "Base URL",
+		"baseUrlMissing": "請先設定安全的 API Base URL，再複製請求。",
+		"authentication": "身分驗證",
+		"streaming": "串流回應",
+		"streamingSupported": "支援串流回應",
+		"streamingUnsupported": "不支援串流回應",
+		"streamingDescription": "將 stream 設為 true。持續讀取 Server-Sent Events，直到協定結束事件。",
+		"streamingUnsupportedDescription": "此端點回傳一個 JSON 回應。",
+		"successShape": "成功回應結構",
+		"commonErrors": "常見錯誤",
+		"requestSample": "請求範例",
+		"copy": "複製",
+		"copied": "已複製"
+	},
 	"modelMarketplace": {
 		"title": "模型廣場",
 		"description": "按 Group 檢視可用模型並比較各 Provider 的價格。",

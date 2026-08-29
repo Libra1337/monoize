@@ -1467,6 +1467,23 @@
 			"noPatternsDesc": "順序付き glob パターンで課金プロファイルを選択します。"
 		}
 	},
+	"apiDocsConsole": {
+		"title": "API ドキュメント",
+		"description": "API ファミリーを選択し、設定済みの Base URL を使用するリクエストをコピーします。",
+		"baseUrl": "Base URL",
+		"baseUrlMissing": "リクエストをコピーする前に、安全な API Base URL を設定してください。",
+		"authentication": "認証",
+		"streaming": "ストリーミング",
+		"streamingSupported": "ストリーミング対応",
+		"streamingUnsupported": "ストリーミング非対応",
+		"streamingDescription": "stream を true に設定します。プロトコルの終了イベントまで Server-Sent Events を読み取ります。",
+		"streamingUnsupportedDescription": "このエンドポイントは 1 件の JSON レスポンスを返します。",
+		"successShape": "成功レスポンス形式",
+		"commonErrors": "一般的なエラー",
+		"requestSample": "リクエスト例",
+		"copy": "コピー",
+		"copied": "コピーしました"
+	},
 	"modelMarketplace": {
 		"title": "モデルマーケット",
 		"description": "Group ごとに利用可能なモデルと Provider 料金を比較します。",

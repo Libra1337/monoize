@@ -6,48 +6,25 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePublicSiteSettings } from "@/lib/swr";
 import { resolvePublicApiBaseUrl } from "@/lib/public-site";
+import {
+  API_FAMILIES,
+  API_SAMPLE_LANGUAGES,
+  apiFamilyDefinition,
+  generateApiSample,
+  type ApiFamily,
+  type ApiSampleLanguage,
+} from "@/lib/api-samples";
 import { cn } from "@/lib/utils";
-
-type SampleLanguage = "curl" | "python" | "javascript" | "go";
-type ApiFamily = "responses" | "chat" | "messages" | "gemini" | "images";
-
-const languages: SampleLanguage[] = ["curl", "python", "javascript", "go"];
-const families: ApiFamily[] = ["responses", "chat", "messages", "gemini", "images"];
-
-function endpointFor(family: ApiFamily): string {
-  return family === "responses" || family === "gemini" ? "responses" : family === "chat" ? "chat/completions" : family === "messages" ? "messages" : "images/generations";
-}
-
-function bodyFor(family: ApiFamily): string {
-  if (family === "responses") return '{"model":"gpt-5","input":"Explain vector databases."}';
-  if (family === "chat") return '{"model":"gpt-5","messages":[{"role":"user","content":"Hello"}],"stream":true}';
-  if (family === "messages") return '{"model":"claude-sonnet-4","max_tokens":1024,"messages":[{"role":"user","content":"Hello"}]}';
-  if (family === "gemini") return '{"model":"gemini-2.5-pro","input":"Hello"}';
-  return '{"model":"gpt-image-1","prompt":"A blue paper console"}';
-}
-
-function sampleFor(language: SampleLanguage, family: ApiFamily, baseUrl: string): string {
-  const url = `${baseUrl}/${endpointFor(family)}`;
-  const body = bodyFor(family);
-  if (language === "curl") return [
-    `curl "${url}" \\`,
-    `  -H "Authorization: Bearer $LYNSHEN_API_KEY" \\`,
-    `  -H "Content-Type: application/json" \\`,
-    `  -d '${body}'`,
-  ].join("\n");
-  if (language === "python") return `import os\nimport requests\n\nresponse = requests.post(\n    "${url}",\n    headers={"Authorization": f"Bearer {os.environ['LYNSHEN_API_KEY']}"},\n    json=${body.replace(/true/g, "True")},\n)\nresponse.raise_for_status()\nprint(response.json())`;
-  if (language === "javascript") return `const response = await fetch("${url}", {\n  method: "POST",\n  headers: {\n    "Authorization": \`Bearer \${process.env.LYNSHEN_API_KEY}\`,\n    "Content-Type": "application/json",\n  },\n  body: JSON.stringify(${body}),\n});\nif (!response.ok) throw new Error(await response.text());\nconsole.log(await response.json());`;
-  return `package main\n\nimport (\n  "bytes"\n  "net/http"\n  "os"\n)\n\nfunc main() {\n  body := []byte(\`${body}\`)\n  req, _ := http.NewRequest("POST", "${url}", bytes.NewReader(body))\n  req.Header.Set("Authorization", "Bearer "+os.Getenv("LYNSHEN_API_KEY"))\n  req.Header.Set("Content-Type", "application/json")\n  response, err := http.DefaultClient.Do(req)\n  if err != nil { panic(err) }\n  defer response.Body.Close()\n}`;
-}
 
 export function ApiDocsPage() {
   const { t } = useTranslation();
   const { data: site, isLoading } = usePublicSiteSettings();
   const [family, setFamily] = useState<ApiFamily>("responses");
-  const [language, setLanguage] = useState<SampleLanguage>("curl");
+  const [language, setLanguage] = useState<ApiSampleLanguage>("curl");
   const [copied, setCopied] = useState(false);
   const resolution = resolvePublicApiBaseUrl(site?.api_base_url || "", window.location.origin);
-  const sample = useMemo(() => resolution.baseUrl ? sampleFor(language, family, resolution.baseUrl) : "", [family, language, resolution.baseUrl]);
+  const definition = apiFamilyDefinition(family);
+  const sample = useMemo(() => resolution.baseUrl ? generateApiSample(language, family, resolution.baseUrl) : "", [family, language, resolution.baseUrl]);
 
   const copySample = async () => {
     if (!sample || !resolution.baseUrl) return;
@@ -74,12 +51,12 @@ export function ApiDocsPage() {
       </section>
 
       <div className="mt-12 grid gap-10 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <aside><h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">{t("publicSite.docs.apiFamilies")}</h2><div className="mt-3 grid gap-1" role="tablist" aria-orientation="vertical">{families.map((item) => <button key={item} type="button" role="tab" aria-selected={family === item} onClick={() => setFamily(item)} className={cn("min-h-11 rounded-md px-3 text-left text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring", family === item ? "bg-primary text-primary-foreground" : "hover:bg-accent")}>{t(`publicSite.families.${item}`)}</button>)}</div></aside>
+        <aside><h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">{t("publicSite.docs.apiFamilies")}</h2><div className="mt-3 grid gap-1" role="tablist" aria-orientation="vertical">{API_FAMILIES.map((item) => <button key={item} type="button" role="tab" aria-selected={family === item} onClick={() => setFamily(item)} className={cn("min-h-11 rounded-md px-3 text-left text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring", family === item ? "bg-primary text-primary-foreground" : "hover:bg-accent")}>{t(`publicSite.families.${item}`)}</button>)}</div></aside>
         <div className="min-w-0">
           <section aria-labelledby="request-example-heading">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 id="request-example-heading" className="text-2xl font-semibold">{t(`publicSite.docs.familyDescriptions.${family}Title`)}</h2><p className="mt-2 text-muted-foreground">{t(`publicSite.docs.familyDescriptions.${family}`)}</p></div><span className="w-fit rounded-md border px-2 py-1 font-mono text-xs">POST /v1/{endpointFor(family)}</span></div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 id="request-example-heading" className="text-2xl font-semibold">{t(`publicSite.docs.familyDescriptions.${family}Title`)}</h2><p className="mt-2 text-muted-foreground">{t(`publicSite.docs.familyDescriptions.${family}`)}</p></div><span className="w-fit rounded-md border px-2 py-1 font-mono text-xs">{definition.method} {definition.path}</span></div>
             <div className="mt-6 overflow-hidden rounded-lg border bg-foreground text-background">
-              <div className="flex flex-wrap items-center gap-1 border-b border-background/15 px-3 py-2">{languages.map((item) => <button type="button" key={item} onClick={() => setLanguage(item)} className={cn("min-h-11 rounded-md px-3 text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary", language === item ? "bg-background/15 text-background" : "text-background/65 hover:text-background")}>{t(`publicSite.docs.languages.${item}`)}</button>)}<Button variant="ghost" size="icon" className="ml-auto size-11 text-background hover:bg-background/15 hover:text-background" onClick={copySample} disabled={!resolution.baseUrl} aria-label={t("common.copy")}>{copied ? <Check /> : <Copy />}</Button></div>
+              <div className="flex flex-wrap items-center gap-1 border-b border-background/15 px-3 py-2">{API_SAMPLE_LANGUAGES.map((item) => <button type="button" key={item} onClick={() => setLanguage(item)} className={cn("min-h-11 rounded-md px-3 text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary", language === item ? "bg-background/15 text-background" : "text-background/65 hover:text-background")}>{t(`publicSite.docs.languages.${item}`)}</button>)}<Button variant="ghost" size="icon" className="ml-auto size-11 text-background hover:bg-background/15 hover:text-background" onClick={copySample} disabled={!resolution.baseUrl} aria-label={t("common.copy")}>{copied ? <Check /> : <Copy />}</Button></div>
               {isLoading ? <div className="p-5"><Skeleton className="h-56 bg-background/10" /></div> : <pre className="max-h-[34rem] overflow-auto p-5 text-sm leading-7"><code>{sample || t("publicSite.docs.copyDisabled")}</code></pre>}
             </div>
           </section>
