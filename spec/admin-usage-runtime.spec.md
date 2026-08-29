@@ -2,13 +2,16 @@
 
 ## 1. Scope
 
-This specification defines the administrator-only usage ranking and runtime status
-pages under the authenticated dashboard.
+This specification defines usage ranking and runtime status pages under the
+authenticated dashboard. Usage data is privacy-filtered for ordinary users.
 
 ## 2. Access
 
 UR-1. `GET /api/dashboard/admin/usage-ranking` MUST require an authenticated
-`admin` or `super_admin` session. Other roles MUST receive HTTP 403.
+session. Administrator sessions receive full user identifiers, usernames, charges,
+and per-user model rows. Non-administrator sessions receive the same aggregate
+totals and model ranking, but user rows MUST be anonymized and MUST NOT contain
+user identifiers, charges, or per-user model details.
 
 UR-2. The frontend routes `/dashboard/admin/usage` and `/dashboard/admin/runtime`
 MUST render an unauthorized state for non-admin sessions and MUST NOT request an
@@ -46,7 +49,18 @@ UR-7a. The usage page MUST refresh the usage-ranking snapshot every 2 seconds.
 It MUST display one full-width token bar divided into input, cache-read, and
 output segments. The bar label MUST display the aggregate token count.
 
-UR-7b. The usage page MUST display each ranked user's call count, token count,
+UR-7b. The response MUST contain `models`, with at most 20 global model rows
+ordered by total tokens descending, call count descending, then model name in
+UTF-8 byte order. Each row MUST contain `model`, `call_count`, `input_tokens`,
+`cache_read_tokens`, `output_tokens`, and `cost_nano_usd`.
+
+UR-7c. The usage page MUST display user and model rankings in equal-width columns
+on desktop and stacked sections on narrow screens. Token values MUST animate from
+the previous snapshot over at least 1.2 seconds. A small signed delta MUST appear
+under each changing total; zero deltas MUST remain hidden. Changing the selected
+time range MUST preserve the previous value as the animation start value.
+
+UR-7d. The usage page MUST display each ranked user's call count, token count,
 and charge. Selecting a user MUST open a modal that displays that user's model
 rows. The modal MUST keep its dimensions stable while it is open.
 
@@ -65,7 +79,21 @@ Monoize brand mark. While a refresh request is active, the mark MUST rotate
 clockwise. When no refresh request is active, the mark MUST remain stationary.
 The animation MUST stop when the user requests reduced motion.
 
+UR-9b. The authenticated dashboard route `/dashboard/status` MUST be accessible
+to every enabled authenticated role. It MUST render the public Group, Provider,
+model, success-rate, and 24-hour timeline status view without exposing internal
+IDs, credentials, or administrator-only runtime counters. It MUST refresh every
+2 seconds and show a loading skeleton and retry state.
+
 ## 5. Privacy
 
 UR-10. Neither endpoint or page may expose API keys, session tokens, database
 passwords, raw request prompts, or request bodies.
+UR-11. Non-administrator responses MUST NOT expose user IDs, usernames, charges,
+or per-user model rows.
+
+UR-12. Token counters MUST animate between snapshots over 1.2 seconds. The
+animation MUST use the currently displayed value as its start value when a range
+changes. If the new value equals the displayed value, no animation MUST run. A
+signed delta below each counter MUST show the change since the previous snapshot;
+zero deltas MUST be omitted.

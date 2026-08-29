@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { RefreshStatusLogo } from "@/components/admin/refresh-status-logo";
 import {
   Dialog,
   DialogContent,
@@ -111,18 +112,19 @@ function worstState(groups: PublicStatusGroup[]): PublicState {
   return "insufficient_data";
 }
 
-export function PublicStatusPage() {
+export function PublicStatusPage({ refreshInterval = 30_000, dashboard = false }: { refreshInterval?: number; dashboard?: boolean } = {}) {
   const { t, i18n } = useTranslation();
-  const { data, error, isLoading } = useSWR<PublicStatusResponse>(
+  const { data, error, isLoading, isValidating } = useSWR<PublicStatusResponse>(
     "/api/public/status",
     fetchPublicStatus,
-    { refreshInterval: 30_000, keepPreviousData: true },
+    { refreshInterval, keepPreviousData: true },
   );
   const locale = i18n.resolvedLanguage || i18n.language;
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14 lg:px-8">
       <header className="max-w-3xl">
+        {dashboard ? <div className="mb-4 flex justify-end"><RefreshStatusLogo refreshing={isValidating} label={isValidating ? t("adminRuntime.refreshing") : t("adminRuntime.current")} /></div> : null}
         <p className="font-mono text-sm text-primary">SERVICE STATUS</p>
         <h1 className="mt-3 font-display text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
           {t("publicSite.status.title")}

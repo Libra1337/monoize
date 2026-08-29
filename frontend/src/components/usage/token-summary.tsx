@@ -9,41 +9,51 @@ import {
   type ExactTokenTotals,
 } from "@/lib/usage-analytics";
 
-function AnimatedTokenValue({ value }: { value: bigint }) {
+export function AnimatedTokenValue({ value, showDelta = false }: { value: bigint; showDelta?: boolean }) {
   const reduceMotion = useReducedMotion();
   const { i18n } = useTranslation();
   const [visible, setVisible] = useState(value);
-  const previousValue = useRef(value);
+  const visibleRef = useRef(value);
+  const targetRef = useRef(value);
+  const [delta, setDelta] = useState<bigint>(0n);
 
   useEffect(() => {
-    const start = previousValue.current;
-    previousValue.current = value;
+    const start = visibleRef.current;
+    const previousTarget = targetRef.current;
+    targetRef.current = value;
+    setDelta(value - previousTarget);
+    if (value === previousTarget) return;
     if (reduceMotion) {
       setVisible(value);
+      visibleRef.current = value;
       return;
     }
     const controls = animate(0, 1, {
-      duration: 0.9,
+      duration: 1.35,
       ease: "easeOut",
       onUpdate: (progress) => {
         const step = BigInt(Math.round(progress * 1_000));
-        setVisible(start + ((value - start) * step) / 1_000n);
+        const next = start + ((value - start) * step) / 1_000n;
+        visibleRef.current = next;
+        setVisible(next);
       },
     });
     return () => controls.stop();
   }, [reduceMotion, value]);
 
-  return (
+  return <span className="inline-flex flex-col">
     <motion.span
-      key={value.toString()}
-      initial={reduceMotion ? false : { opacity: 0.45, y: 4 }}
+      initial={false}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: reduceMotion ? 0 : 0.4 }}
+      transition={{ duration: reduceMotion ? 0 : 0.25 }}
       className="font-display tabular-nums"
-    >
-      {formatTokenCount(visible, i18n.language)}
-    </motion.span>
-  );
+    >{formatTokenCount(visible, i18n.language)}</motion.span>
+    {showDelta && delta !== 0n ? (
+      <span className={`mt-1 text-xs font-medium tabular-nums ${delta > 0n ? "text-success" : "text-destructive"}`}>
+        {delta > 0n ? "+" : "-"}{formatTokenCount(delta < 0n ? -delta : delta, i18n.language)}
+      </span>
+    ) : null}
+  </span>;
 }
 
 export function TokenSummary({
@@ -89,7 +99,7 @@ export function TokenSummary({
           >
             <p className="text-sm text-muted-foreground">{card.label}</p>
             <p className="mt-2 min-w-0 break-words text-2xl font-semibold">
-              <AnimatedTokenValue value={card.value} />
+              <AnimatedTokenValue value={card.value} showDelta />
             </p>
             {card.key === "cache" && totals ? (
               <p className="mt-2 text-xs text-muted-foreground">

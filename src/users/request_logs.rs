@@ -2182,6 +2182,97 @@ impl UserStore {
         Ok(decoded)
     }
 
+    /// Global model usage ranking for the dashboard. This query intentionally
+    /// aggregates before returning rows so user identifiers never enter the
+    /// ordinary-user response path.
+    pub async fn get_global_model_usage_ranking(
+        &self,
+        time_from: &str,
+        time_to: &str,
+    ) -> Result<Vec<super::UserModelUsageRankingRow>, String> {
+        let is_sqlite = self.db.is_sqlite();
+        let time_from_unix_ms = chrono::DateTime::parse_from_rfc3339(time_from)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
+        let time_to_unix_ms = chrono::DateTime::parse_from_rfc3339(time_to)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
+        if time_from_unix_ms >= time_to_unix_ms {
+            return Err("usage ranking time range must be positive".to_string());
+        }
+        let token_columns = if is_sqlite {
+            "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
+             CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS TEXT) AS cache_read_tokens, \
+             CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS TEXT) AS output_tokens, \
+             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END) AS input_tokens_negative, \
+             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END) AS cache_read_tokens_negative, \
+             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END) AS output_tokens_negative"
+        } else {
+            "COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0)::TEXT AS input_tokens, \
+             COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0)::TEXT AS cache_read_tokens, \
+             COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0)::TEXT AS output_tokens, \
+             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS input_tokens_negative, \
+             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS cache_read_tokens_negative, \
+             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
+        };
+        let model_expr =
+            "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')";
+        let sql = format!(
+            "SELECT {model_expr} AS model, {}, {token_columns}, COUNT(*) AS call_count \
+             FROM request_logs rl \
+             WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms < $2 \
+               AND rl.created_at_unix_ms IS NOT NULL AND rl.user_id IS NOT NULL \
+             GROUP BY {model_expr}",
+            charge_aggregate_columns(!is_sqlite)
+        );
+        let rows = self
+            .db
+            .read()
+            .query_all(
+                self.db
+                    .stmt(&sql, vec![time_from_unix_ms.into(), time_to_unix_ms.into()]),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut decoded = rows
+            .into_iter()
+            .map(|row| {
+                let cost_nano_usd = decode_charge_aggregate(&row, !is_sqlite)?
+                    .parse::<i128>()
+                    .map_err(|_| "request log charge aggregate overflow".to_string())?;
+                if cost_nano_usd < 0 {
+                    return Err("request log charge aggregate is negative".to_string());
+                }
+                Ok(super::UserModelUsageRankingRow {
+                    user_id: String::new(),
+                    username: None,
+                    model: row.try_get("", "model").map_err(|e| e.to_string())?,
+                    call_count: row.try_get("", "call_count").map_err(|e| e.to_string())?,
+                    cost_nano_usd,
+                    input_tokens: decode_token_aggregate(&row, "input_tokens")?,
+                    cache_read_tokens: decode_token_aggregate(&row, "cache_read_tokens")?,
+                    output_tokens: decode_token_aggregate(&row, "output_tokens")?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        decoded.sort_by(|left, right| {
+            let left_tokens = left
+                .input_tokens
+                .saturating_add(left.cache_read_tokens)
+                .saturating_add(left.output_tokens);
+            let right_tokens = right
+                .input_tokens
+                .saturating_add(right.cache_read_tokens)
+                .saturating_add(right.output_tokens);
+            right_tokens
+                .cmp(&left_tokens)
+                .then_with(|| right.call_count.cmp(&left.call_count))
+                .then_with(|| left.model.as_bytes().cmp(right.model.as_bytes()))
+        });
+        decoded.truncate(20);
+        Ok(decoded)
+    }
+
     pub async fn get_admin_usage_totals(
         &self,
         time_from: &str,

@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::dashboard_handlers::session_helpers::require_admin;
+use crate::dashboard_handlers::session_helpers::{get_current_user, require_admin};
 use crate::error::{AppError, AppResult};
 use crate::handlers::routing::health_key;
 use axum::Json;
@@ -274,7 +274,8 @@ pub async fn get_admin_usage_ranking(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<Value>> {
-    require_admin(&headers, &state).await?;
+    let caller = get_current_user(&headers, &state).await?;
+    let is_admin = caller.role.can_manage_users();
     let now = Utc::now();
     let time_to = now.to_rfc3339();
     let time_from = (now - chrono::Duration::hours(24)).to_rfc3339();
@@ -288,6 +289,13 @@ pub async fn get_admin_usage_ranking(
     let totals = state
         .user_store
         .get_admin_usage_totals(&time_from, &time_to)
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
+    let global_models = state
+        .user_store
+        .get_global_model_usage_ranking(&time_from, &time_to)
         .await
         .map_err(|error| {
             AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
@@ -379,15 +387,37 @@ pub async fn get_admin_usage_ranking(
                     })
                 })
                 .collect::<Vec<_>>();
+            if is_admin {
+                json!({
+                    "user_id": user.user_id,
+                    "username": user.username,
+                    "call_count": user.call_count,
+                    "cost_nano_usd": user.cost_nano_usd.to_string(),
+                    "input_tokens": user.input_tokens.to_string(),
+                    "cache_read_tokens": user.cache_read_tokens.to_string(),
+                    "output_tokens": user.output_tokens.to_string(),
+                    "models": models,
+                })
+            } else {
+                json!({
+                    "call_count": user.call_count,
+                    "input_tokens": user.input_tokens.to_string(),
+                    "cache_read_tokens": user.cache_read_tokens.to_string(),
+                    "output_tokens": user.output_tokens.to_string(),
+                })
+            }
+        })
+        .collect::<Vec<_>>();
+    let models = global_models
+        .into_iter()
+        .map(|model| {
             json!({
-                "user_id": user.user_id,
-                "username": user.username,
-                "call_count": user.call_count,
-                "cost_nano_usd": user.cost_nano_usd.to_string(),
-                "input_tokens": user.input_tokens.to_string(),
-                "cache_read_tokens": user.cache_read_tokens.to_string(),
-                "output_tokens": user.output_tokens.to_string(),
-                "models": models,
+                "model": model.model,
+                "call_count": model.call_count,
+                "cost_nano_usd": model.cost_nano_usd.to_string(),
+                "input_tokens": model.input_tokens.to_string(),
+                "cache_read_tokens": model.cache_read_tokens.to_string(),
+                "output_tokens": model.output_tokens.to_string(),
             })
         })
         .collect::<Vec<_>>();
@@ -407,6 +437,7 @@ pub async fn get_admin_usage_ranking(
         "total_calls": totals.call_count,
         "total_cost_nano_usd": totals.cost_nano_usd.to_string(),
         "users": users,
+        "models": models,
     })))
 }
 

@@ -796,14 +796,14 @@ export interface AdminUsageModelRow {
 }
 
 export interface AdminUsageUserRow {
-  user_id: string;
+  user_id?: string;
   username?: string | null;
   call_count: number;
-  cost_nano_usd: string;
+  cost_nano_usd?: string;
   input_tokens: string;
   cache_read_tokens: string;
   output_tokens: string;
-  models: AdminUsageModelRow[];
+  models?: AdminUsageModelRow[];
 }
 
 export interface AdminUsageRanking {
@@ -816,6 +816,7 @@ export interface AdminUsageRanking {
   total_calls: number;
   total_cost_nano_usd: string;
   users: AdminUsageUserRow[];
+  models: AdminUsageModelRow[];
 }
 
 export interface DashboardAnalyticsBucket {

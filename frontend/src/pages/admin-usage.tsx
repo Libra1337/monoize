@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { AlertTriangle, ArrowUpRight, Coins, MousePointerClick, RefreshCw } from "lucide-react";
 
 import { RefreshStatusLogo } from "@/components/admin/refresh-status-logo";
+import { AnimatedTokenValue } from "@/components/usage/token-summary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -108,7 +109,7 @@ export function AdminUsagePage() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <p className="text-sm font-medium text-muted-foreground">{t("adminUsage.totalTokens")}</p>
-            <p className="mt-1 font-mono text-3xl font-semibold tabular-nums">{formatInteger(totals.all)}</p>
+          <p className="mt-1 font-mono text-3xl font-semibold tabular-nums"><AnimatedTokenValue value={totals.all} showDelta /></p>
           </div>
           <Badge variant="secondary" className="font-mono">{t("adminUsage.window24h")}</Badge>
         </div>
@@ -137,20 +138,20 @@ export function AdminUsagePage() {
         <div className="flex items-center gap-3 border-t p-4 sm:border-t-0"><ArrowUpRight className="size-5 text-success" /><div><p className="text-xs text-muted-foreground">{t("adminUsage.activeUsers")}</p><p className="font-mono text-lg font-semibold">{data.users.length}</p></div></div>
       </div>
 
-      <Card className="overflow-hidden rounded-xl">
+      <div className="grid min-w-0 gap-5 lg:grid-cols-2">
+      <Card className="min-w-0 overflow-hidden rounded-xl">
         <CardContent className="p-0">
           <div className="border-b px-5 py-4"><h2 className="font-display text-base font-semibold">{t("adminUsage.ranking")}</h2><p className="mt-1 text-sm text-muted-foreground">{t("adminUsage.rankingHint")}</p></div>
           {data.users.length === 0 ? <EmptyState title={t("adminUsage.empty")} className="py-14" /> : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[680px] text-sm">
-                <thead><tr className="border-b bg-muted/35 text-left text-xs text-muted-foreground"><th className="px-5 py-3 font-medium">#</th><th className="px-3 py-3 font-medium">{t("adminUsage.user")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-3 py-3 text-right font-medium">{t("adminUsage.calls")}</th><th className="px-5 py-3 text-right font-medium">{t("adminUsage.cost")}</th></tr></thead>
+              <table className="w-full min-w-[520px] text-sm">
+                <thead><tr className="border-b bg-muted/35 text-left text-xs text-muted-foreground"><th className="px-5 py-3 font-medium">#</th><th className="px-3 py-3 font-medium">{t("adminUsage.user")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-5 py-3 text-right font-medium">{t("adminUsage.calls")}</th></tr></thead>
                 <tbody>{data.users.map((row, index) => (
-                  <tr key={row.user_id} className="cursor-pointer border-b transition-colors duration-200 last:border-b-0 hover:bg-accent/45 focus-within:bg-accent/45" onClick={() => setSelected(row)}>
+                  <tr key={row.user_id ?? `anonymous-${index}`} className="border-b transition-colors duration-200 last:border-b-0 hover:bg-accent/45">
                     <td className="px-5 py-3 font-mono text-muted-foreground">{String(index + 1).padStart(2, "0")}</td>
-                    <td className="px-3 py-3"><button type="button" className="w-full text-left focus-visible:outline-none"><span className="block font-medium">{row.username || row.user_id}</span>{row.username && <span className="block max-w-64 truncate font-mono text-xs text-muted-foreground">{row.user_id}</span>}</button></td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums">{formatInteger(totalTokens(row))}</td>
+                    <td className="px-3 py-3"><button type="button" disabled={!row.models?.length} onClick={() => setSelected(row)} className="w-full text-left focus-visible:outline-none"><span className="block truncate font-medium">{row.username || row.user_id || `Anonymous ${index + 1}`}</span>{row.username && row.user_id && <span className="block max-w-64 truncate font-mono text-xs text-muted-foreground">{row.user_id}</span>}</button></td>
+                    <td className="px-3 py-3 text-right font-mono tabular-nums"><AnimatedTokenValue value={totalTokens(row)} /></td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">{row.call_count.toLocaleString("en-US")}</td>
-                    <td className="px-5 py-3 text-right font-mono tabular-nums">{formatNanoUsd(row.cost_nano_usd, 4)}</td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -158,14 +159,21 @@ export function AdminUsagePage() {
           )}
         </CardContent>
       </Card>
+      <Card className="min-w-0 overflow-hidden rounded-xl">
+        <CardContent className="p-0">
+          <div className="border-b px-5 py-4"><h2 className="font-display text-base font-semibold">{t("adminUsage.modelRanking")}</h2><p className="mt-1 text-sm text-muted-foreground">{t("adminUsage.modelRankingHint")}</p></div>
+          {data.models.length === 0 ? <EmptyState title={t("adminUsage.empty")} className="py-14" /> : <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="border-b bg-muted/35 text-left text-xs text-muted-foreground"><th className="px-5 py-3 font-medium">#</th><th className="px-3 py-3 font-medium">{t("adminUsage.model")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-5 py-3 text-right font-medium">{t("adminUsage.calls")}</th></tr></thead><tbody>{data.models.map((model, index) => <tr key={model.model} className="border-b last:border-b-0"><td className="px-5 py-3 font-mono text-muted-foreground">{String(index + 1).padStart(2, "0")}</td><td className="max-w-48 truncate px-3 py-3 font-mono">{model.model}</td><td className="px-3 py-3 text-right font-mono tabular-nums"><AnimatedTokenValue value={totalTokens(model)} /></td><td className="px-5 py-3 text-right font-mono tabular-nums">{model.call_count.toLocaleString("en-US")}</td></tr>)}</tbody></table></div>}
+        </CardContent>
+      </Card>
+      </div>
 
       <Dialog open={selected != null} onOpenChange={(open) => !open && setSelected(null)}>
         <DialogContent className="h-[min(42rem,calc(100dvh-2rem))] max-w-3xl rounded-xl" closeLabel={t("common.close")}>
-          <DialogHeader className="pr-10"><DialogTitle>{selected?.username || selected?.user_id}</DialogTitle><DialogDescription>{t("adminUsage.modelDetails")}</DialogDescription></DialogHeader>
+          <DialogHeader className="pr-10"><DialogTitle>{selected?.username || selected?.user_id || t("adminUsage.anonymousUser")}</DialogTitle><DialogDescription>{t("adminUsage.modelDetails")}</DialogDescription></DialogHeader>
           <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
             <table className="w-full min-w-[620px] text-sm">
               <thead className="sticky top-0 bg-background"><tr className="border-b text-left text-xs text-muted-foreground"><th className="px-4 py-3 font-medium">{t("adminUsage.model")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-3 py-3 text-right font-medium">{t("adminUsage.calls")}</th><th className="px-4 py-3 text-right font-medium">{t("adminUsage.cost")}</th></tr></thead>
-              <tbody>{selected?.models.map((model) => (
+              <tbody>{selected?.models?.map((model) => (
                 <tr key={model.model} className="border-b last:border-b-0"><td className="max-w-72 truncate px-4 py-3 font-mono">{model.model}</td><td className="px-3 py-3 text-right font-mono">{formatInteger(totalTokens(model))}</td><td className="px-3 py-3 text-right font-mono">{model.call_count.toLocaleString("en-US")}</td><td className="px-4 py-3 text-right font-mono">{formatNanoUsd(model.cost_nano_usd, 4)}</td></tr>
               ))}</tbody>
             </table>

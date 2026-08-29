@@ -85,6 +85,7 @@ function App() {
           <Route path="/dashboard" element={<DashboardLayout />}>
             <Route index element={<DashboardPage />} />
             <Route path="usage" element={<UsageAnalysisPage />} />
+            <Route path="status" element={<PublicStatusPage refreshInterval={2000} dashboard />} />
             <Route path="admin" element={<AdminRoute><AdminDashboardPage /></AdminRoute>} />
             <Route path="admin/usage" element={<AdminRoute><AdminUsagePage /></AdminRoute>} />
             <Route path="admin/runtime" element={<AdminRoute><AdminRuntimePage /></AdminRoute>} />
