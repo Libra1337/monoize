@@ -137,6 +137,29 @@ export function formatNanoUsd(
   return formatMinor(cnyMinor.toString(), "CNY");
 }
 
+export function formatNanoUsdDecimal(
+  nanoUsd: string,
+  currency: StoreCurrency = "USD",
+  cnyPerUsd = "1",
+): string {
+  const amount = parseNonnegativeDecimal(nanoUsd);
+  const nanoPerMinor = 10_000_000n;
+  let minor: bigint;
+  if (currency === "USD") {
+    minor = divideRoundHalfAwayFromZero(
+      amount.numerator,
+      amount.denominator * nanoPerMinor,
+    );
+  } else {
+    const rate = parseRate(cnyPerUsd);
+    minor = divideRoundHalfAwayFromZero(
+      amount.numerator * rate.numerator,
+      amount.denominator * nanoPerMinor * rate.denominator,
+    );
+  }
+  return formatMinor(minor.toString(), currency);
+}
+
 export function formatPerMillionTokenRate(
   nanoUsdPerToken: string,
   currency: StoreCurrency,

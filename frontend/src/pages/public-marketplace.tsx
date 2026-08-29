@@ -7,22 +7,16 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  marketplaceRequest,
+  type MarketplaceItem,
+  type MarketplaceOffersResponse,
+  type MarketplaceRateRange,
+  type MarketplaceResponse,
+} from "@/lib/marketplace-api";
 import { resolveMarketplacePages } from "@/lib/marketplace-pages";
 
-interface RateRange { min: string; max: string; unit: string }
-interface MarketplaceItem { public_group_name: string; model: string; capabilities: string[]; input_rate_range: RateRange | null; output_rate_range: RateRange | null; offer_count: number }
-interface MarketplaceResponse { generated_at: string; revision: string; next_cursor: string | null; items: MarketplaceItem[] }
-interface MarketplaceOffer { public_provider_name: string; public_channel_name: string; api_type: string; rates: Array<{ usage_class: string; unit: string; display_rate_nano_usd: string; context_tier: string | null; service_tier: string | null; modality: string | null; cache_ttl: string | null }> }
-interface OffersResponse { generated_at: string; revision: string; public_group_name: string; model: string; next_cursor: string | null; offers: MarketplaceOffer[] }
-
-async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { credentials: "omit" });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || data.error?.code || "Request failed");
-  return data;
-}
-
-function rangeLabel(range: RateRange | null): string {
+function rangeLabel(range: MarketplaceRateRange | null): string {
   if (!range) return "—";
   const value = range.min === range.max ? range.min : `${range.min} – ${range.max}`;
   return `${value} nano-USD / ${range.unit}`;
@@ -39,11 +33,11 @@ export function PublicMarketplacePage() {
   const query = new URLSearchParams({ limit: "50" });
   if (deferredSearch) query.set("q", deferredSearch);
   const listKey = `/api/public/marketplace?${query}`;
-  const { data, error, isLoading } = useSWR<MarketplaceResponse>(listKey, getJson, { keepPreviousData: true, onSuccess: (page) => { setPages([page]); setLoadCursor(null); } });
+  const { data, error, isLoading } = useSWR<MarketplaceResponse>(listKey, marketplaceRequest, { keepPreviousData: true, onSuccess: (page) => { setPages([page]); setLoadCursor(null); } });
   const loadKey = loadCursor ? `/api/public/marketplace?${new URLSearchParams({ limit: "50", q: deferredSearch, cursor: loadCursor })}` : null;
-  const { error: loadError, isLoading: isLoadingMore } = useSWR<MarketplaceResponse>(loadKey, getJson, { onSuccess: (page) => { setPages((current) => current.some((candidate) => candidate.revision === page.revision && candidate.items[0]?.model === page.items[0]?.model) ? current : [...current, page].slice(-3)); setLoadCursor(null); } });
+  const { error: loadError, isLoading: isLoadingMore } = useSWR<MarketplaceResponse>(loadKey, marketplaceRequest, { onSuccess: (page) => { setPages((current) => current.some((candidate) => candidate.revision === page.revision && candidate.items[0]?.model === page.items[0]?.model) ? current : [...current, page].slice(-3)); setLoadCursor(null); } });
   const offersKey = selected ? `/api/public/marketplace/offers?group=${encodeURIComponent(selected.public_group_name)}&model=${encodeURIComponent(selected.model)}&limit=50` : null;
-  const { data: offers, error: offersError, isLoading: offersLoading } = useSWR<OffersResponse>(offersKey, getJson);
+  const { data: offers, error: offersError, isLoading: offersLoading } = useSWR<MarketplaceOffersResponse>(offersKey, marketplaceRequest);
 
   const resolvedPages = resolveMarketplacePages(pages, data);
   const items = resolvedPages.flatMap((page) => page.items);
