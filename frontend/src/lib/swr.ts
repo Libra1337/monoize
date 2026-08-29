@@ -8,6 +8,8 @@ import type {
   DashboardAnalytics,
   AdminOverview,
   AdminUsageRanking,
+  PublicUsageRanking,
+  UsageRankingRange,
   ConfigOverview,
   SystemSettings,
   PublicSystemSettings,
@@ -67,6 +69,7 @@ export const SWR_KEYS = {
   SETTINGS: "/dashboard/settings",
   PUBLIC_SETTINGS: "/dashboard/public-settings",
   PUBLIC_SITE_SETTINGS: "/api/public/site",
+  PUBLIC_USAGE_RANKING: "/api/public/usage-ranking",
   PROVIDERS: "/dashboard/providers",
   DASHBOARD_GROUPS: "/dashboard/groups",
   TRANSFORM_REGISTRY: "/dashboard/transforms/registry",
@@ -317,10 +320,20 @@ export function useAdminUsageRanking(config?: SWRConfiguration) {
   });
 }
 
+export function usePublicUsageRanking(range: UsageRankingRange, config?: SWRConfiguration) {
+  const key = `${SWR_KEYS.PUBLIC_USAGE_RANKING}?range=${range}`;
+  return useSWR<PublicUsageRanking>(key, () => api.getPublicUsageRanking(range), {
+    ...defaultConfig,
+    refreshInterval: 2000,
+    keepPreviousData: true,
+    ...config,
+  });
+}
+
 // Mutation helpers with optimistic updates
 
 export async function updateMeOptimistic(
-  updates: { email?: string | null },
+  updates: { email?: string | null; usage_ranking_anonymous?: boolean },
   currentUser: User | undefined,
   onError?: (error: Error) => void
 ) {
@@ -385,6 +398,7 @@ export async function createUserOptimistic(
     balance_nano_usd: "0",
     balance_usd: "0",
     balance_unlimited: false,
+    usage_ranking_anonymous: true,
     group_id: groupId ?? "",
     billing_plan_id: null,
     next_grant_at: null,

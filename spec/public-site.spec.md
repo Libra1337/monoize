@@ -20,6 +20,7 @@ PS-R1. The application MUST register these exact routes:
 | `/apidocs` | API documentation | No |
 | `/status` | Group and Provider status | No |
 | `/marketplace` | Public Model Marketplace | No |
+| `/usage-ranking` | Public anonymous usage ranking | No |
 | `/dashboard` and every `/dashboard/*` path | Console | Yes |
 | `/settings` | User settings | Yes |
 
@@ -30,11 +31,11 @@ PS-R2. `/marketplace` MUST be an explicit public top-level route. The separate
 PS-R3. `/` MUST remain public after authentication. The router MUST NOT redirect an
 authenticated visitor from `/` to `/dashboard`.
 
-PS-R4. `/`, `/apidocs`, `/status`, and `/marketplace` MUST use one
+PS-R4. `/`, `/apidocs`, `/status`, `/marketplace`, and `/usage-ranking` MUST use one
 `PublicLayout`.
 
-PS-R5. `PublicLayout` MUST render Home, Model Marketplace, API Docs, Status, Console, and
-Login actions. Console MUST target `/dashboard`. Login MUST target `/login`.
+PS-R5. `PublicLayout` MUST render Home, Model Marketplace, Usage Ranking, API Docs, Status,
+Console, and Login actions. Console MUST target `/dashboard`. Login MUST target `/login`.
 
 PS-R6. The public gateway MUST return HTTP `308` for every request to
 `https://www.lynshen.org`. The `Location` value MUST use `https://lynshen.org` and MUST
@@ -77,6 +78,7 @@ PS-A1. The public API set is exactly:
 - `GET /api/public/marketplace`;
 - `GET /api/public/marketplace/offers`;
 - `GET /api/public/status`.
+- `GET /api/public/usage-ranking`.
 
 PS-A2. Each endpoint MUST serialize an explicit allow-list. It MUST NOT serialize a
 complete database entity or runtime configuration object.

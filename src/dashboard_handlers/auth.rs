@@ -78,6 +78,7 @@ pub struct UserResponse {
     pub balance_nano_usd: String,
     pub balance_usd: String,
     pub balance_unlimited: bool,
+    pub usage_ranking_anonymous: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     pub group_id: String,
@@ -116,6 +117,7 @@ impl UserResponse {
             balance_usd: format_nano_to_usd(balance_nano),
             balance_nano_usd: u.balance_nano_usd,
             balance_unlimited: u.balance_unlimited,
+            usage_ranking_anonymous: u.usage_ranking_anonymous,
             email: u.email,
             group_id: u.group_id,
             billing_plan_id: u.billing_plan_id,
@@ -152,6 +154,7 @@ fn map_user_response_error(error: String) -> AppError {
 #[derive(Debug, Deserialize)]
 pub struct UpdateMeRequest {
     pub email: Option<Option<String>>,
+    pub usage_ranking_anonymous: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -386,6 +389,13 @@ pub async fn update_me(
         )
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+
+    if let Some(anonymous) = body.usage_ranking_anonymous {
+        user_store
+            .update_usage_ranking_anonymous(&user.id, anonymous)
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    }
 
     let updated_user = user_store
         .get_user_by_id(&user.id)

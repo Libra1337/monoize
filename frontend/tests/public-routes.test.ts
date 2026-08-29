@@ -16,6 +16,7 @@ describe("public browser route contract", () => {
       "/apidocs",
       "/status",
       "/marketplace",
+      "/usage-ranking",
     ]);
   });
 
@@ -25,6 +26,7 @@ describe("public browser route contract", () => {
     expect(isProtectedConsolePath("/settings")).toBe(true);
     expect(isProtectedConsolePath("/dashboard/marketplace")).toBe(true);
     expect(isProtectedConsolePath("/marketplace")).toBe(false);
+    expect(isProtectedConsolePath("/usage-ranking")).toBe(false);
     expect(isProtectedConsolePath("/")).toBe(false);
   });
 });

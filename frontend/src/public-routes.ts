@@ -4,6 +4,7 @@ export const PUBLIC_PATHS = {
   apiDocs: "/apidocs",
   status: "/status",
   marketplace: "/marketplace",
+  usageRanking: "/usage-ranking",
 } as const;
 
 export const PUBLIC_ROUTES = Object.values(PUBLIC_PATHS);

@@ -18,6 +18,9 @@ const selectionDatasetSource = source("../src/hooks/use-selection-dataset.ts");
 const publicStatusSource = source("../src/pages/public-status.tsx");
 const apiKeysSource = source("../src/pages/api-keys.tsx");
 const adminUsageSource = source("../src/pages/admin-usage.tsx");
+const rankingBreakdownSource = source("../src/components/usage/ranking-token-breakdown.tsx");
+const userSettingsSource = source("../src/pages/user-settings.tsx");
+const publicUsageRankingSource = source("../src/pages/public-usage-ranking.tsx");
 const apiSource = source("../src/lib/api.ts");
 const userCenterSource = source("../src/components/user-center-menu.tsx");
 const currencySource = source("../src/hooks/use-store-currency.tsx");
@@ -42,6 +45,18 @@ describe("authenticated Dashboard route ownership", () => {
   });
 });
 
+describe("Public usage ranking", () => {
+  test("offers 24-hour 7-day and 30-day anonymous rankings", () => {
+    expect(appSource).toContain('path={PUBLIC_PATHS.usageRanking} element={<PublicUsageRankingPage />}');
+    expect(publicUsageRankingSource).toContain('"24h"');
+    expect(publicUsageRankingSource).toContain('"7d"');
+    expect(publicUsageRankingSource).toContain('"30d"');
+    expect(publicUsageRankingSource).toContain("RankingTokenBreakdown");
+    expect(publicUsageRankingSource).not.toContain("username");
+    for (const locale of locales) expect(locale.publicSite.nav.usageRanking).toBeString();
+  });
+});
+
 describe("Public status", () => {
   test("renders real traffic timelines and model details in a modal", () => {
     expect(publicStatusSource).toContain("group.timeline");
@@ -49,6 +64,12 @@ describe("Public status", () => {
     expect(publicStatusSource).toContain("<Dialog");
     expect(publicStatusSource).not.toContain("<details");
     expect(publicStatusSource).toContain("overallInsufficient");
+  });
+
+  test("aligns the Dashboard refresh mark with the status title", () => {
+    expect(publicStatusSource).toContain('dashboard ? "flex items-start justify-between gap-4"');
+    expect(publicStatusSource).toContain('className="min-w-0 max-w-3xl"');
+    expect(publicStatusSource).not.toContain('mb-4 flex justify-end');
   });
 });
 
@@ -76,6 +97,31 @@ describe("Dashboard navigation", () => {
     expect(adminUsageSource).toContain('const isAdmin = user?.role === "super_admin" || user?.role === "admin"');
     expect(adminUsageSource).toContain('useStoreExchangeRate(currency === "CNY" && isAdmin)');
     expect(adminUsageSource).toContain("{isAdmin ? (");
+  });
+
+  test("supports mutually consented ranking identity disclosure", () => {
+    expect(apiSource).toContain("usage_ranking_anonymous: boolean");
+    expect(userSettingsSource).toContain("usage_ranking_anonymous");
+    expect(userSettingsSource).toContain("<Switch");
+    expect(adminUsageSource).toContain('t("adminUsage.ranking")');
+    expect(adminUsageSource).toContain("row.models?.length");
+    for (const locale of locales) {
+      expect(locale.userSettings.rankingPrivacy).toBeString();
+      expect(locale.userSettings.rankingPrivacyDescription).toBeString();
+      expect(locale.adminUsage.ranking).toBeString();
+    }
+    expect(locales[1].adminUsage.ranking).toBe("当前排名");
+  });
+
+  test("shows colored input cache-read and output details in both rankings", () => {
+    expect(adminUsageSource).toContain("RankingTokenBreakdown");
+    expect(adminUsageSource.match(/<RankingTokenBreakdown/g)?.length).toBe(2);
+    expect(rankingBreakdownSource).toContain('className="text-primary"');
+    expect(rankingBreakdownSource).toContain('className="text-warning-foreground"');
+    expect(rankingBreakdownSource).toContain('className="text-success"');
+    expect(rankingBreakdownSource).toContain("<AnimatedTokenValue value={integer(input)}");
+    expect(rankingBreakdownSource).toContain("<AnimatedTokenValue value={integer(cacheRead)}");
+    expect(rankingBreakdownSource).toContain("<AnimatedTokenValue value={integer(output)}");
   });
 
   test("adds one persisted CNY and USD display control to the account menu", () => {

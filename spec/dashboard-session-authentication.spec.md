@@ -6,7 +6,7 @@ DSA-P1. `/`, `/login`, `/apidocs`, `/status`, and `/marketplace` require no
 dashboard session. The browser MUST NOT redirect an unauthenticated visitor from any of
 these paths to `/login`.
 
-DSA-P2. The four `/api/public/**` endpoints in `public-site.spec.md` PS-A1 require no
+DSA-P2. The five `/api/public/**` endpoints in `public-site.spec.md` PS-A1 require no
 dashboard session. They MUST ignore dashboard authentication state when deciding access.
 
 DSA-P3. `/dashboard/marketplace` MUST inherit the protected `/dashboard` route guard.

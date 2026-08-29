@@ -673,6 +673,7 @@ fn user_response_serializes_group_id() {
         enabled: true,
         balance_nano_usd: "0".to_string(),
         balance_unlimited: false,
+        usage_ranking_anonymous: true,
         email: None,
         group_id: "g-alpha".to_string(),
         billing_plan_id: None,

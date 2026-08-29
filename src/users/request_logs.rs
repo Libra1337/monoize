@@ -2088,6 +2088,7 @@ impl UserStore {
         &self,
         time_from: &str,
         time_to: &str,
+        rank_by_tokens: bool,
     ) -> Result<Vec<super::UserModelUsageRankingRow>, String> {
         let is_sqlite = self.db.is_sqlite();
         let time_from_unix_ms = chrono::DateTime::parse_from_rfc3339(time_from)
@@ -2102,6 +2103,14 @@ impl UserStore {
 
         let charge_columns = charge_aggregate_columns(!is_sqlite);
         let charge_order = charge_aggregate_order_expr(!is_sqlite, "ranked");
+        let token_rank_column = "COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) + \
+             COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) + \
+             COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS token_count";
+        let rank_order = if rank_by_tokens {
+            "ranked.token_count DESC".to_string()
+        } else {
+            charge_order
+        };
         let token_columns = if is_sqlite {
             "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
              CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS TEXT) AS cache_read_tokens, \
@@ -2122,13 +2131,13 @@ impl UserStore {
         let sql = format!(
             "WITH top_users AS ( \
                 SELECT ranked.user_id FROM ( \
-                    SELECT rl.user_id, {charge_columns}, COUNT(*) AS call_count \
+                    SELECT rl.user_id, {charge_columns}, {token_rank_column}, COUNT(*) AS call_count \
                     FROM request_logs rl \
                     WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms < $2 \
                       AND rl.created_at_unix_ms IS NOT NULL AND rl.user_id IS NOT NULL \
                     GROUP BY rl.user_id \
                 ) ranked \
-                ORDER BY {charge_order}, ranked.call_count DESC, ranked.user_id ASC \
+                ORDER BY {rank_order}, ranked.call_count DESC, ranked.user_id ASC \
                 LIMIT 20 \
              ) \
              SELECT rl.user_id, u.username AS username, {model_expr} AS model, \
@@ -2172,9 +2181,20 @@ impl UserStore {
             })
             .collect::<Result<Vec<_>, String>>()?;
         decoded.sort_by(|left, right| {
-            right
-                .cost_nano_usd
-                .cmp(&left.cost_nano_usd)
+            let order = if rank_by_tokens {
+                let left_tokens = left
+                    .input_tokens
+                    .saturating_add(left.cache_read_tokens)
+                    .saturating_add(left.output_tokens);
+                let right_tokens = right
+                    .input_tokens
+                    .saturating_add(right.cache_read_tokens)
+                    .saturating_add(right.output_tokens);
+                right_tokens.cmp(&left_tokens)
+            } else {
+                right.cost_nano_usd.cmp(&left.cost_nano_usd)
+            };
+            order
                 .then_with(|| right.call_count.cmp(&left.call_count))
                 .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
                 .then_with(|| left.model.as_bytes().cmp(right.model.as_bytes()))
@@ -2745,7 +2765,7 @@ mod today_usage_tests {
         }
 
         let rows = store
-            .get_users_model_usage_ranking(&from.to_rfc3339(), &now.to_rfc3339())
+            .get_users_model_usage_ranking(&from.to_rfc3339(), &now.to_rfc3339(), false)
             .await
             .expect("model ranking query succeeds");
 
@@ -2786,5 +2806,32 @@ mod today_usage_tests {
             ),
             (360, 60, 145)
         );
+
+        for index in 0..20 {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO request_logs (id, user_id, model, is_stream, status, created_at, created_at_unix_ms, charge_nano_usd, input_tokens, cache_read_tokens, output_tokens) VALUES ($1, $2, 'low-token', 0, 'success', $3, $4, '10000', 1, 0, 0)",
+                    vec![
+                        format!("cost-heavy-{index}").into(),
+                        format!("cost-heavy-user-{index}").into(),
+                        now.to_rfc3339().into(),
+                        (now.timestamp_millis() - 600).into(),
+                    ],
+                ))
+                .await
+                .expect("cost-heavy log inserted");
+        }
+
+        let token_rows = store
+            .get_users_model_usage_ranking(&from.to_rfc3339(), &now.to_rfc3339(), true)
+            .await
+            .expect("token ranking query succeeds");
+        assert!(token_rows.iter().any(|row| row.user_id == alice.id));
+        let cost_rows = store
+            .get_users_model_usage_ranking(&from.to_rfc3339(), &now.to_rfc3339(), false)
+            .await
+            .expect("cost ranking query succeeds");
+        assert!(!cost_rows.iter().any(|row| row.user_id == alice.id));
     }
 }

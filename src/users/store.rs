@@ -642,6 +642,7 @@ impl UserStore {
             enabled: true,
             balance_nano_usd: "0".to_string(),
             balance_unlimited: false,
+            usage_ranking_anonymous: true,
             email: None,
             group_id,
             billing_plan_id: None,
@@ -684,7 +685,7 @@ impl UserStore {
     pub async fn get_user_by_id(&self, id: &str) -> Result<Option<User>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, group_id, billing_plan_id, next_grant_at FROM users WHERE id = $1",
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE id = $1",
                 vec![id.into()],
             ))
             .await
@@ -700,7 +701,7 @@ impl UserStore {
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, group_id, billing_plan_id, next_grant_at FROM users WHERE username = $1",
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE username = $1",
                 vec![username.into()],
             ))
             .await
@@ -716,13 +717,25 @@ impl UserStore {
     pub async fn list_users(&self) -> Result<Vec<User>, String> {
         let rows = self.db.read()
             .query_all(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, group_id, billing_plan_id, next_grant_at FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
                 vec![],
             ))
             .await
             .map_err(|e| e.to_string())?;
 
         rows.iter().map(|row| self.row_to_user(row)).collect()
+    }
+
+    pub async fn update_usage_ranking_anonymous(&self, id: &str, anonymous: bool) -> Result<(), String> {
+        self.db.write().await.execute(self.db.stmt(
+            "UPDATE users SET usage_ranking_anonymous = $1, updated_at = $2 WHERE id = $3",
+            vec![
+                SeaValue::Int(Some(if anonymous { 1 } else { 0 })),
+                Utc::now().to_rfc3339().into(),
+                id.into(),
+            ],
+        )).await.map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1553,6 +1566,7 @@ impl UserStore {
                         u.last_login_at AS owner_last_login_at, u.enabled AS owner_enabled,
                         u.balance_nano_usd AS owner_balance_nano_usd,
                         u.balance_unlimited AS owner_balance_unlimited,
+                        u.usage_ranking_anonymous AS owner_usage_ranking_anonymous,
                         u.email AS owner_email, u.group_id AS owner_group_id,
                         u.billing_plan_id AS owner_billing_plan_id,
                         u.next_grant_at AS owner_next_grant_at,
@@ -1613,6 +1627,7 @@ impl UserStore {
                 .try_get::<i32>("", "owner_balance_unlimited")
                 .map_err(|e| e.to_string())?
                 == 1,
+            usage_ranking_anonymous: decode_required_bool(&row, "owner_usage_ranking_anonymous")?,
             email: row
                 .try_get::<Option<String>>("", "owner_email")
                 .map_err(|e| e.to_string())?,
@@ -2230,6 +2245,7 @@ impl UserStore {
                 .try_get::<i32>("", "balance_unlimited")
                 .map_err(|e| e.to_string())?
                 == 1,
+            usage_ranking_anonymous: decode_required_bool(row, "usage_ranking_anonymous")?,
             email: row
                 .try_get::<Option<String>>("", "email")
                 .map_err(|e| e.to_string())?,

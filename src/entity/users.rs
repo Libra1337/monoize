@@ -22,6 +22,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub balance_nano_usd: String,
     pub balance_unlimited: i32,
+    pub usage_ranking_anonymous: i32,
     #[sea_orm(column_type = "Text")]
     pub email: Option<String>,
     #[sea_orm(column_type = "Text")]

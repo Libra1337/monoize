@@ -64,6 +64,7 @@ export interface User {
   balance_nano_usd: string;
   balance_usd: string;
   balance_unlimited: boolean;
+  usage_ranking_anonymous: boolean;
   email?: string | null;
   group_id: string;
   billing_plan_id?: string | null;
@@ -820,6 +821,29 @@ export interface AdminUsageRanking {
   models: AdminUsageModelRow[];
 }
 
+export type UsageRankingRange = "24h" | "7d" | "30d";
+
+export interface PublicUsageRankingUserRow {
+  rank_key: string;
+  call_count: number;
+  input_tokens: string;
+  cache_read_tokens: string;
+  output_tokens: string;
+  models: AdminUsageModelRow[];
+}
+
+export interface PublicUsageRanking {
+  time_from: string;
+  time_to: string;
+  total_tokens: string;
+  total_input_tokens: string;
+  total_cache_read_tokens: string;
+  total_output_tokens: string;
+  total_calls: number;
+  users: PublicUsageRankingUserRow[];
+  models: AdminUsageModelRow[];
+}
+
 export interface DashboardAnalyticsBucket {
   label: string;
   cost_by_model: Record<string, string>;
@@ -1025,7 +1049,7 @@ class ApiClient {
     return this.request(`/billing-plans/${id}/reset`, { method: "POST" });
   }
 
-  async updateMe(updates: { email?: string | null }): Promise<User> {
+  async updateMe(updates: { email?: string | null; usage_ranking_anonymous?: boolean }): Promise<User> {
     return this.request("/auth/me", {
       method: "PUT",
       body: JSON.stringify(updates),
@@ -1317,6 +1341,18 @@ class ApiClient {
 
   async getAdminOverview(): Promise<AdminOverview> {
     return this.request("/admin/overview");
+  }
+
+  async getPublicUsageRanking(range: UsageRankingRange): Promise<PublicUsageRanking> {
+    const response = await fetch(`/api/public/usage-ranking?range=${encodeURIComponent(range)}`, {
+      headers: { "Content-Type": "application/json" },
+      credentials: "omit",
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error?.message || data.error?.code || "Request failed");
+    }
+    return data;
   }
 
   async getAdminUsageRanking(): Promise<AdminUsageRanking> {

@@ -25,6 +25,7 @@ import { WelcomePage } from "@/pages/welcome";
 import { ApiDocsPage } from "@/pages/api-docs";
 import { PublicMarketplacePage } from "@/pages/public-marketplace";
 import { PublicStatusPage } from "@/pages/public-status";
+import { PublicUsageRankingPage } from "@/pages/public-usage-ranking";
 import { PUBLIC_PATHS } from "@/public-routes";
 import { StorePage } from "@/pages/store";
 import { OrdersPage } from "@/pages/orders";
@@ -80,6 +81,7 @@ function App() {
             <Route path={PUBLIC_PATHS.apiDocs} element={<ApiDocsPage />} />
             <Route path={PUBLIC_PATHS.status} element={<PublicStatusPage />} />
             <Route path={PUBLIC_PATHS.marketplace} element={<PublicMarketplacePage />} />
+            <Route path={PUBLIC_PATHS.usageRanking} element={<PublicUsageRankingPage />} />
           </Route>
           {/* Dashboard routes - admin panel */}
           <Route path="/dashboard" element={<DashboardLayout />}>

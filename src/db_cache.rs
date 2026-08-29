@@ -2201,6 +2201,7 @@ mod tests {
             enabled: true,
             balance_nano_usd: "0".to_string(),
             balance_unlimited: false,
+            usage_ranking_anonymous: true,
             email: None,
             group_id: String::new(),
             billing_plan_id: None,

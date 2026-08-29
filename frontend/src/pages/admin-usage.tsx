@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { AlertTriangle, ArrowUpRight, Coins, MousePointerClick, RefreshCw } from "lucide-react";
 
 import { RefreshStatusLogo } from "@/components/admin/refresh-status-logo";
+import { RankingTokenBreakdown } from "@/components/usage/ranking-token-breakdown";
 import { AnimatedTokenValue } from "@/components/usage/token-summary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -174,7 +175,7 @@ export function AdminUsagePage() {
                   >
                     <td className="px-5 py-3 font-mono text-muted-foreground">{String(index + 1).padStart(2, "0")}</td>
                     <td className="px-3 py-3"><button type="button" disabled={!row.models?.length} onClick={() => setSelected(row)} className="w-full text-left focus-visible:outline-none"><span className="block truncate font-medium">{row.username || row.user_id || `${t("adminUsage.anonymousUser")} ${index + 1}`}</span>{row.username && row.user_id && <span className="block max-w-64 truncate font-mono text-xs text-muted-foreground">{row.user_id}</span>}</button></td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums"><AnimatedTokenValue value={totalTokens(row)} showDelta /></td>
+                    <td className="px-3 py-3 text-right font-mono tabular-nums"><AnimatedTokenValue value={totalTokens(row)} showDelta /><RankingTokenBreakdown input={row.input_tokens} cacheRead={row.cache_read_tokens} output={row.output_tokens} /></td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">{row.call_count.toLocaleString("en-US")}</td>
                   </motion.tr>
                 ))}</tbody>
@@ -186,7 +187,7 @@ export function AdminUsagePage() {
       <Card className="min-w-0 overflow-hidden rounded-xl">
         <CardContent className="p-0">
           <div className="border-b px-5 py-4"><h2 className="font-display text-base font-semibold">{t("adminUsage.modelRanking")}</h2><p className="mt-1 text-sm text-muted-foreground">{t("adminUsage.modelRankingHint")}</p></div>
-          {data.models.length === 0 ? <EmptyState title={t("adminUsage.empty")} className="py-14" /> : <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="border-b bg-muted/35 text-left text-xs text-muted-foreground"><th className="px-5 py-3 font-medium">#</th><th className="px-3 py-3 font-medium">{t("adminUsage.model")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-5 py-3 text-right font-medium">{t("adminUsage.calls")}</th></tr></thead><tbody>{data.models.map((model, index) => <motion.tr layout="position" key={model.model} transition={{ layout: { duration: 1.1, ease: [0.22, 1, 0.36, 1] } }} className="border-b last:border-b-0"><td className="px-5 py-3 font-mono text-muted-foreground">{String(index + 1).padStart(2, "0")}</td><td className="max-w-48 truncate px-3 py-3 font-mono">{model.model}</td><td className="px-3 py-3 text-right font-mono tabular-nums"><AnimatedTokenValue value={totalTokens(model)} showDelta /></td><td className="px-5 py-3 text-right font-mono tabular-nums">{model.call_count.toLocaleString("en-US")}</td></motion.tr>)}</tbody></table></div>}
+          {data.models.length === 0 ? <EmptyState title={t("adminUsage.empty")} className="py-14" /> : <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="border-b bg-muted/35 text-left text-xs text-muted-foreground"><th className="px-5 py-3 font-medium">#</th><th className="px-3 py-3 font-medium">{t("adminUsage.model")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-5 py-3 text-right font-medium">{t("adminUsage.calls")}</th></tr></thead><tbody>{data.models.map((model, index) => <motion.tr layout="position" key={model.model} transition={{ layout: { duration: 1.1, ease: [0.22, 1, 0.36, 1] } }} className="border-b last:border-b-0"><td className="px-5 py-3 font-mono text-muted-foreground">{String(index + 1).padStart(2, "0")}</td><td className="max-w-48 truncate px-3 py-3 font-mono">{model.model}</td><td className="px-3 py-3 text-right font-mono tabular-nums"><AnimatedTokenValue value={totalTokens(model)} showDelta /><RankingTokenBreakdown input={model.input_tokens} cacheRead={model.cache_read_tokens} output={model.output_tokens} /></td><td className="px-5 py-3 text-right font-mono tabular-nums">{model.call_count.toLocaleString("en-US")}</td></motion.tr>)}</tbody></table></div>}
         </CardContent>
       </Card>
       </div>

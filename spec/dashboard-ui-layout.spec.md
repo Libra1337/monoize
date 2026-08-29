@@ -762,3 +762,10 @@ render the raw id and remain removable.
 
 GS7. The selector MUST NOT perform freeform text creation of groups. Group creation happens
 only on `/dashboard/groups`.
+
+### 11.3 Dashboard status header
+
+SH1. `/dashboard/status` MUST render its refresh-status mark in the same full-width
+header row as the status title block. The mark MUST align with the upper-right edge
+of that row. It MUST NOT occupy a separate row above the title. The public `/status`
+route MUST NOT render the refresh-status mark.

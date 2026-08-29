@@ -3,13 +3,31 @@ use crate::dashboard_handlers::session_helpers::{get_current_user, require_admin
 use crate::error::{AppError, AppResult};
 use crate::handlers::routing::health_key;
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use chrono::{NaiveTime, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::OnceLock;
+
+#[derive(Debug, serde::Deserialize)]
+pub struct UsageRankingQuery {
+    pub range: Option<String>,
+}
+
+fn usage_ranking_hours(range: Option<&str>) -> AppResult<i64> {
+    match range.unwrap_or("24h") {
+        "24h" => Ok(24),
+        "7d" => Ok(24 * 7),
+        "30d" => Ok(24 * 30),
+        _ => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "range must be one of 24h, 7d, or 30d",
+        )),
+    }
+}
 
 fn anonymous_usage_rank_key(user_id: &str) -> String {
     static SALT: OnceLock<[u8; 16]> = OnceLock::new();
@@ -21,6 +39,15 @@ fn anonymous_usage_rank_key(user_id: &str) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn may_disclose_usage_identity(
+    viewer_id: &str,
+    viewer_anonymous: bool,
+    target_id: &str,
+    target_anonymous: bool,
+) -> bool {
+    viewer_id == target_id || (!viewer_anonymous && !target_anonymous)
 }
 
 pub(crate) fn sort_usage_models(rows: &mut [crate::users::UserModelUsageRankingRow]) {
@@ -310,12 +337,47 @@ pub async fn get_admin_usage_ranking(
 ) -> AppResult<Json<Value>> {
     let caller = get_current_user(&headers, &state).await?;
     let is_admin = caller.role.can_manage_users();
+    Ok(Json(
+        build_usage_ranking(&state, Some(&caller), is_admin, 24).await?,
+    ))
+}
+
+pub async fn get_public_usage_ranking(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<UsageRankingQuery>,
+) -> AppResult<impl axum::response::IntoResponse> {
+    if !crate::public_api::admit(&headers) {
+        return Ok(crate::public_api::rate_limited_response());
+    }
+    let hours = usage_ranking_hours(query.range.as_deref())?;
+    let response = build_usage_ranking(&state, None, false, hours).await?;
+    let bytes = serde_json::to_vec(&response).map_err(|error| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            error.to_string(),
+        )
+    })?;
+    Ok(crate::public_api::cacheable_json_response(
+        &headers,
+        bytes,
+        "public, max-age=2, stale-while-revalidate=4",
+    ))
+}
+
+async fn build_usage_ranking(
+    state: &AppState,
+    caller: Option<&crate::users::User>,
+    is_admin: bool,
+    hours: i64,
+) -> AppResult<Value> {
     let now = Utc::now();
     let time_to = now.to_rfc3339();
-    let time_from = (now - chrono::Duration::hours(24)).to_rfc3339();
+    let time_from = (now - chrono::Duration::hours(hours)).to_rfc3339();
     let rows = state
         .user_store
-        .get_users_model_usage_ranking(&time_from, &time_to)
+        .get_users_model_usage_ranking(&time_from, &time_to, caller.is_none())
         .await
         .map_err(|error| {
             AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
@@ -334,6 +396,20 @@ pub async fn get_admin_usage_ranking(
         .map_err(|error| {
             AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
         })?;
+    let usage_privacy = if is_admin || caller.is_none() {
+        HashMap::new()
+    } else {
+        state
+            .user_store
+            .list_users()
+            .await
+            .map_err(|error| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+            })?
+            .into_iter()
+            .map(|user| (user.id, user.usage_ranking_anonymous))
+            .collect::<HashMap<_, _>>()
+    };
 
     struct UserAccumulator {
         user_id: String,
@@ -344,6 +420,7 @@ pub async fn get_admin_usage_ranking(
         cache_read_tokens: i128,
         output_tokens: i128,
         models: Vec<crate::users::UserModelUsageRankingRow>,
+        usage_ranking_anonymous: bool,
     }
 
     let aggregate_error = |message: &'static str| {
@@ -369,6 +446,7 @@ pub async fn get_admin_usage_ranking(
                 cache_read_tokens: 0,
                 output_tokens: 0,
                 models: Vec::new(),
+                usage_ranking_anonymous: usage_privacy.get(&row.user_id).copied().unwrap_or(true),
             });
             index
         };
@@ -396,11 +474,26 @@ pub async fn get_admin_usage_ranking(
         user.models.push(row);
     }
     users.sort_by(|left, right| {
-        right
-            .cost_nano_usd
-            .cmp(&left.cost_nano_usd)
-            .then_with(|| right.call_count.cmp(&left.call_count))
-            .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
+        if caller.is_none() {
+            let left_tokens = left
+                .input_tokens
+                .saturating_add(left.cache_read_tokens)
+                .saturating_add(left.output_tokens);
+            let right_tokens = right
+                .input_tokens
+                .saturating_add(right.cache_read_tokens)
+                .saturating_add(right.output_tokens);
+            right_tokens
+                .cmp(&left_tokens)
+                .then_with(|| right.call_count.cmp(&left.call_count))
+                .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
+        } else {
+            right
+                .cost_nano_usd
+                .cmp(&left.cost_nano_usd)
+                .then_with(|| right.call_count.cmp(&left.call_count))
+                .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
+        }
     });
     users.truncate(20);
     let users = users
@@ -410,7 +503,7 @@ pub async fn get_admin_usage_ranking(
             let models = user
                 .models
                 .into_iter()
-                .map(|model| usage_model_json(model, true))
+                .map(|model| usage_model_json(model, is_admin))
                 .collect::<Vec<_>>();
             if is_admin {
                 json!({
@@ -424,13 +517,25 @@ pub async fn get_admin_usage_ranking(
                     "models": models,
                 })
             } else {
-                json!({
+                let mut value = json!({
                     "rank_key": anonymous_usage_rank_key(&user.user_id),
                     "call_count": user.call_count,
                     "input_tokens": user.input_tokens.to_string(),
                     "cache_read_tokens": user.cache_read_tokens.to_string(),
                     "output_tokens": user.output_tokens.to_string(),
-                })
+                    "models": models,
+                });
+                if let Some(caller) = caller {
+                    if may_disclose_usage_identity(
+                        &caller.id,
+                        caller.usage_ranking_anonymous,
+                        &user.user_id,
+                        user.usage_ranking_anonymous,
+                    ) {
+                        value["username"] = json!(user.username);
+                    }
+                }
+                value
             }
         })
         .collect::<Vec<_>>();
@@ -456,14 +561,41 @@ pub async fn get_admin_usage_ranking(
         "models": models,
     });
     insert_admin_usage_cost(&mut response, totals.cost_nano_usd, is_admin);
-    Ok(Json(response))
+    Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{insert_admin_usage_cost, sort_usage_models, usage_model_json};
-    use serde_json::json;
+    use super::{
+        insert_admin_usage_cost, may_disclose_usage_identity, sort_usage_models, usage_model_json,
+        usage_ranking_hours,
+    };
     use crate::users::UserModelUsageRankingRow;
+    use serde_json::json;
+
+    #[test]
+    fn ordinary_usage_identity_requires_self_or_mutual_public_preferences() {
+        assert!(may_disclose_usage_identity("viewer", true, "viewer", true));
+        assert!(may_disclose_usage_identity(
+            "viewer", false, "target", false
+        ));
+        assert!(!may_disclose_usage_identity(
+            "viewer", true, "target", false
+        ));
+        assert!(!may_disclose_usage_identity(
+            "viewer", false, "target", true
+        ));
+        assert!(!may_disclose_usage_identity("viewer", true, "target", true));
+    }
+
+    #[test]
+    fn usage_ranking_accepts_only_documented_public_windows() {
+        assert_eq!(usage_ranking_hours(None).unwrap(), 24);
+        assert_eq!(usage_ranking_hours(Some("24h")).unwrap(), 24);
+        assert_eq!(usage_ranking_hours(Some("7d")).unwrap(), 168);
+        assert_eq!(usage_ranking_hours(Some("30d")).unwrap(), 720);
+        assert!(usage_ranking_hours(Some("1d")).is_err());
+    }
 
     #[test]
     fn usage_models_sort_by_total_tokens_then_calls_then_utf8_name() {
@@ -520,7 +652,11 @@ mod tests {
             cache_read_tokens: 3,
             output_tokens: 5,
         };
-        assert!(usage_model_json(row.clone(), false).get("cost_nano_usd").is_none());
+        assert!(
+            usage_model_json(row.clone(), false)
+                .get("cost_nano_usd")
+                .is_none()
+        );
         assert_eq!(usage_model_json(row, true)["cost_nano_usd"], "42");
 
         let mut ordinary = json!({});

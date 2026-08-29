@@ -2346,6 +2346,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         )
         .route("/public/status", get(crate::public_handlers::public_status))
         .route(
+            "/public/usage-ranking",
+            get(crate::dashboard_handlers::get_public_usage_ranking),
+        )
+        .route(
             "/dashboard/auth/register",
             post(crate::dashboard_handlers::register),
         )

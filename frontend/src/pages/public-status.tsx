@@ -123,8 +123,8 @@ export function PublicStatusPage({ refreshInterval = 30_000, dashboard = false }
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14 lg:px-8">
-      <header className="max-w-3xl">
-        {dashboard ? <div className="mb-4 flex justify-end"><RefreshStatusLogo refreshing={isValidating} label={isValidating ? t("adminRuntime.refreshing") : t("adminRuntime.current")} /></div> : null}
+      <header className={dashboard ? "flex items-start justify-between gap-4" : undefined}>
+        <div className="min-w-0 max-w-3xl">
         <p className="font-mono text-sm text-primary">SERVICE STATUS</p>
         <h1 className="mt-3 font-display text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
           {t("publicSite.status.title")}
@@ -132,6 +132,8 @@ export function PublicStatusPage({ refreshInterval = 30_000, dashboard = false }
         <p className="mt-4 text-base leading-7 text-muted-foreground sm:text-lg sm:leading-8">
           {t("publicSite.status.description")}
         </p>
+        </div>
+        {dashboard ? <RefreshStatusLogo refreshing={isValidating} label={isValidating ? t("adminRuntime.refreshing") : t("adminRuntime.current")} /> : null}
       </header>
 
       {isLoading && !data ? (

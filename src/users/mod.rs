@@ -74,6 +74,7 @@ pub struct User {
     pub balance_nano_usd: String,
     /// Unlimited balance bypass flag.
     pub balance_unlimited: bool,
+    pub usage_ranking_anonymous: bool,
     /// Optional email for Gravatar display.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,

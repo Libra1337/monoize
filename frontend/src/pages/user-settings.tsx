@@ -20,6 +20,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -91,6 +92,15 @@ export function UserSettingsPage() {
       toast.error(error instanceof Error ? error.message : t("common.error"));
     } finally {
       setSavingEmail(false);
+    }
+  };
+
+  const handleRankingPrivacyChange = async (checked: boolean) => {
+    try {
+      await updateMeOptimistic({ usage_ranking_anonymous: checked }, user ?? undefined);
+      await refreshUser();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("common.error"));
     }
   };
 
@@ -356,6 +366,19 @@ export function UserSettingsPage() {
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+              </div>
+              <Separator />
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label htmlFor="ranking-anonymous">{t("userSettings.rankingPrivacy")}</Label>
+                  <p className="text-sm text-muted-foreground">{t("userSettings.rankingPrivacyDescription")}</p>
+                </div>
+                <Switch
+                  id="ranking-anonymous"
+                  checked={user?.usage_ranking_anonymous ?? true}
+                  onCheckedChange={handleRankingPrivacyChange}
+                  aria-label={t("userSettings.rankingPrivacy")}
+                />
               </div>
               <Separator />
               <div className="flex items-center justify-between">

@@ -17,7 +17,9 @@ mod users;
 #[cfg(test)]
 mod tests;
 
-pub use admin::{get_admin_overview, get_admin_usage_ranking, get_metrics};
+pub use admin::{
+    get_admin_overview, get_admin_usage_ranking, get_metrics, get_public_usage_ranking,
+};
 pub use analytics_request_logs::{
     AnalyticsQuery, RequestLogsQuery, get_dashboard_analytics, get_my_live_usage,
     list_my_request_logs, stream_request_logs,

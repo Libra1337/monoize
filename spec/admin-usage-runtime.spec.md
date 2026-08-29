@@ -9,9 +9,8 @@ authenticated dashboard. Usage data is privacy-filtered for ordinary users.
 
 UR-1. `GET /api/dashboard/admin/usage-ranking` MUST require an authenticated
 session. Administrator sessions receive full user identifiers, usernames, charges,
-and per-user model rows. Non-administrator sessions receive the same aggregate
-totals and model ranking, but user rows MUST be anonymized and MUST NOT contain
-user identifiers, charges, or per-user model details.
+and per-user model rows. A non-administrator response MUST omit every user charge.
+It MUST include non-charge model rows so each ranked row remains selectable.
 
 UR-2. The frontend routes `/dashboard/admin/usage` and `/dashboard/admin/runtime`
 MUST render an unauthorized state for non-admin sessions and MUST NOT request an
@@ -69,11 +68,37 @@ UR-7d. The usage page MUST display each ranked user's call count, token count,
 and charge. Selecting a user MUST open a modal that displays that user's model
 rows. The modal MUST keep its dimensions stable while it is open.
 
+UR-7d-1. Each user-ranking and model-ranking row MUST display three compact token
+breakdown values below its total Token value. Input MUST use the primary blue
+color, cache-read MUST use the warning orange color, and output MUST use the
+success green color. Each value MUST include its localized label and exact count.
+Each breakdown count MUST satisfy the 7.2-second interpolation and retargeting
+rules in UR-12. An unchanged count MUST remain stationary.
+
 UR-7e. When two user or model rows exchange rank, both rows MUST animate to their
 new positions instead of replacing content at fixed positions. A non-administrator
 user row MAY contain `rank_key`. `rank_key` MUST be generated from the internal
 user ID and a process-local random salt. The salt MUST NOT leave process memory.
 The key MUST change after process restart and MUST NOT be rendered as text.
+
+UR-7f. Each user MUST store `usage_ranking_anonymous` as a non-null Boolean.
+The default and migration value MUST be `true`. `GET /api/dashboard/auth/me`
+MUST return the value. `PUT /api/dashboard/auth/me` MUST update the value only
+when the request contains it.
+
+UR-7g. For a non-administrator viewer and one ranked target, the response MUST
+include the target username only when the target is the viewer or both users have
+`usage_ranking_anonymous = false`. Otherwise, the response MUST omit both the
+target username and target user ID. The viewer's preference MUST NOT modify any
+other user's preference. The frontend heading above user rows MUST use the locale
+equivalent of `Current ranking`.
+
+UR-7h. The public site MUST provide a navigation link and route for a public usage
+ranking. The public endpoint MUST accept exactly `24h`, `7d`, or `30d`, default to
+`24h`, and return total, anonymous user, and global model Token aggregates for the
+selected window. It MUST NOT return a user ID, username, user charge, or model charge.
+Public user rows MUST be ordered by total Tokens descending, call count descending,
+then the internal user ID using UTF-8 byte order. The internal user ID MUST NOT be returned.
 
 ## 4. Runtime status page
 
@@ -100,8 +125,8 @@ IDs, credentials, or administrator-only runtime counters. It MUST refresh every
 
 UR-10. Neither endpoint or page may expose API keys, session tokens, database
 passwords, raw request prompts, or request bodies.
-UR-11. Non-administrator responses MUST NOT expose user IDs, usernames, charges,
-or per-user model rows.
+UR-11. Non-administrator responses MUST NOT expose user IDs or charges. They MAY
+expose a username only under UR-7g. Model rows MUST omit charges.
 
 UR-12. One counter animation cycle starts when an idle counter receives a changed
 target. Its signed delta MUST equal the latest target minus the cycle start value.
