@@ -20,6 +20,7 @@ describe("authenticated Model Marketplace", () => {
     const first = { revision: "1", items: ["first"] };
     const second = { revision: "1", items: ["second"] };
     const refreshed = { revision: "1", items: ["refreshed"] };
+    const nextRevision = { revision: "2", items: ["new-revision"] };
     const state = { key: "all", pages: [first, second] };
 
     expect(replaceMarketplaceFirstPage(state, "all", refreshed)).toEqual({
@@ -35,6 +36,11 @@ describe("authenticated Model Marketplace", () => {
       key: "all",
       pages: [second, refreshed],
     });
+    expect(replaceMarketplaceFirstPage(state, "all", nextRevision)).toEqual({
+      key: "all",
+      pages: [nextRevision],
+    });
+    expect(appendMarketplacePage(state, "all", nextRevision, 3)).toBe(state);
   });
 
   test("renders human per-million prices with exact final rounding", () => {
@@ -73,6 +79,7 @@ describe("authenticated Model Marketplace", () => {
     expect(marketplaceSource.match(/rememberGroups\(page\);/g)?.length).toBe(2);
     expect(marketplaceSource).toContain("offerLoadCursor");
     expect(marketplaceSource).toContain("selected.revision");
+    expect(marketplaceSource).toContain("JSON.stringify([selected.revision");
     expect(marketplaceSource).toContain("appendMarketplacePage");
   });
 

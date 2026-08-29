@@ -198,7 +198,7 @@ export function ModelMarketplacePage() {
     keepPreviousData: true,
   });
   const offerListKey = selected
-    ? `${selected.revision}:${selected.public_group_name}:${selected.model}`
+    ? JSON.stringify([selected.revision, selected.public_group_name, selected.model])
     : null;
   const offersUrl = selected
     ? `/api/public/marketplace/offers?group=${encodeURIComponent(selected.public_group_name)}&model=${encodeURIComponent(selected.model)}&limit=50`
