@@ -278,7 +278,7 @@ async fn channel_extra_headers_are_sent_to_upstream() {
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             confirm_public_exposure: true,
-            pricing_profile: Some("openai".to_string()),
+            pricing_profile: Some("default".to_string()),
             multiplier: Default::default(),
             name: "up-cf-affinity".to_string(),
             api_type_overrides: Vec::new(),
@@ -365,7 +365,7 @@ async fn auto_session_affinity_is_stable_per_conversation_and_distinct_across_se
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             confirm_public_exposure: true,
-            pricing_profile: Some("openai".to_string()),
+            pricing_profile: Some("default".to_string()),
             multiplier: Default::default(),
             name: "up-cf-auto-affinity".to_string(),
             api_type_overrides: Vec::new(),

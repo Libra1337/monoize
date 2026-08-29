@@ -101,6 +101,19 @@ mod tests {
         format!("http://{address}/models")
     }
 
+    async fn get_response(url: String) -> reqwest::Response {
+        crate::node_config::ensure_rustls_crypto_provider()
+            .expect("install Rustls crypto provider");
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build test HTTP client")
+            .get(url)
+            .send()
+            .await
+            .expect("response headers")
+    }
+
     #[test]
     fn discovery_limit_parser_requires_positive_base_ten_integer() {
         assert_eq!(upstream_discovery_max_bytes_from_raw(Some("32")), 32);
@@ -129,7 +142,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\n123456789",
         )
         .await;
-        let response = reqwest::get(url).await.expect("response headers");
+        let response = get_response(url).await;
 
         let error = read_response_body_with_limit(response, 8)
             .await
@@ -149,7 +162,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\n1234\r\n5\r\n56789\r\n0\r\n\r\n",
         )
         .await;
-        let response = reqwest::get(url).await.expect("response headers");
+        let response = get_response(url).await;
         assert_eq!(response.content_length(), None);
 
         let error = read_response_body_with_limit(response, 8)
@@ -167,7 +180,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n12345678",
         )
         .await;
-        let response = reqwest::get(url).await.expect("response headers");
+        let response = get_response(url).await;
 
         let body = read_response_body_with_limit(response, 8)
             .await

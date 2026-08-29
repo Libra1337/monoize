@@ -910,15 +910,15 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
         .expect("routing succeeds");
 
     assert_eq!(attempts.len(), 1);
-    assert_eq!(attempts[0].channel_id, "cheap");
+    assert_eq!(attempts[0].channel_name, "cheap");
     assert_eq!(attempts[0].upstream_model, "cheap-upstream");
     assert_eq!(attempts[0].model_multiplier, Multiplier::ONE);
 }
 
-fn attempt_channel_ids(attempts: &[MonoizeAttempt]) -> BTreeSet<&str> {
+fn attempt_channel_names(attempts: &[MonoizeAttempt]) -> BTreeSet<&str> {
     attempts
         .iter()
-        .map(|attempt| attempt.channel_id.as_str())
+        .map(|attempt| attempt.channel_name.as_str())
         .collect()
 }
 
@@ -2690,12 +2690,15 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         .expect("default-group routing succeeds");
 
     assert_eq!(
-        attempt_channel_ids(&unrestricted),
+        attempt_channel_names(&unrestricted),
         BTreeSet::from(["public", "team-a", "team-b"])
     );
-    assert_eq!(attempt_channel_ids(&team_a), BTreeSet::from(["team-a"]));
     assert_eq!(
-        attempt_channel_ids(&default_only),
+        attempt_channel_names(&team_a),
+        BTreeSet::from(["team-a"])
+    );
+    assert_eq!(
+        attempt_channel_names(&default_only),
         BTreeSet::from(["public"])
     );
 }

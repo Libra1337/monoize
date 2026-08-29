@@ -6,7 +6,7 @@ use sea_orm_migration::MigratorTrait;
 async fn migration_055_preserves_grants_adds_refund_scope_and_recreates_indexes() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     Migrator::up(&db, None).await.unwrap();
-    Migrator::down(&db, Some(1)).await.unwrap();
+    Migrator::down(&db, Some(4)).await.unwrap();
 
     db.execute(Statement::from_string(
         DbBackend::Sqlite,

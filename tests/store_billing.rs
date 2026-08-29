@@ -93,6 +93,64 @@ async fn pass_quota_gate(db: &DbPool) {
         .unwrap();
 }
 
+async fn seed_governed_stripe(db: &DbPool) {
+    db.write()
+        .await
+        .execute_unprepared(
+            "UPDATE store_payment_channels SET enabled = 1
+             WHERE id = 'store-channel-stripe';
+             INSERT INTO store_channel_credentials
+                (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
+                 ciphertext_base64, account_identity_digest, status, created_at)
+             VALUES ('unit-governance-credential', 'store-channel-stripe', 'stripe', 1,
+                     'key', 'nonce', 'ciphertext',
+                     '2222222222222222222222222222222222222222222222222222222222222222',
+                     'active', '2026-08-28T00:00:00Z');
+             INSERT INTO store_payment_compliance
+                (id, channel_id, terms_version, admin_user_id, source_ip, confirmed_at)
+             VALUES ('unit-governance-compliance', 'store-channel-stripe', '2026-08-28',
+                     'admin', '127.0.0.1', '2026-08-28T00:00:00Z');
+             INSERT INTO store_merchant_capabilities
+                (id, channel_id, capability, state, environment, merchant_account_digest,
+                 provider_product, evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES
+                ('unit-cap-payment-query', 'store-channel-stripe', 'payment_query', 'supported',
+                 'sandbox', '2222222222222222222222222222222222222222222222222222222222222222', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin',
+                 '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z'),
+                ('unit-cap-refund', 'store-channel-stripe', 'refund', 'supported',
+                 'sandbox', '2222222222222222222222222222222222222222222222222222222222222222', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin',
+                 '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z'),
+                ('unit-cap-refund-query', 'store-channel-stripe', 'refund_query', 'supported',
+                 'sandbox', '2222222222222222222222222222222222222222222222222222222222222222', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin',
+                 '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z'),
+                ('unit-cap-settlement', 'store-channel-stripe', 'settlement_report', 'supported',
+                 'sandbox', '2222222222222222222222222222222222222222222222222222222222222222', 'checkout', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'admin',
+                 '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z');
+             INSERT INTO store_privacy_records
+                (id, policy_version, jurisdiction, allowed_regions_json, retention_json,
+                 legal_basis, reviewer_id, evidence_digest, approved_at, next_review_at, accepted)
+             VALUES ('unit-governance-privacy', 'v1', 'CN', '[]', '{}', 'contract', 'admin',
+                     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                     '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z', 1);
+             INSERT INTO store_channel_readiness_profiles
+                (channel_id, active_credential_digest, privacy_record_id,
+                 callback_verification_passed, supported_currencies_json, amount_limits_json,
+                 checkout_action_kinds_json, license_evidence_digest, runtime_evidence_digest,
+                 availability_evidence_digest, verifier_admin_id, verified_at, expires_at)
+             VALUES ('store-channel-stripe',
+                     '2222222222222222222222222222222222222222222222222222222222222222',
+                     'unit-governance-privacy', 1, '[\"CNY\",\"USD\"]',
+                     '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"},\"USD\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
+                     '[\"redirect\"]',
+                     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                     'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                     'admin', '2026-08-28T00:00:00Z', '2099-01-01T00:00:00Z')",
+        )
+        .await
+        .unwrap();
+}
+
 fn balance_product(name: &str, sort_order: i32, enabled: bool) -> CreateProductInput {
     CreateProductInput {
         kind: ProductKind::Balance,
@@ -262,7 +320,7 @@ async fn pending_sqlite_gate_rejects_plan_codes_but_not_balance_codes() {
 
 #[tokio::test]
 async fn catalog_filters_disabled_records_and_uses_stable_order() {
-    let (_db, store) = setup().await;
+    let (db, store) = setup().await;
     store
         .create_product(balance_product("Later", 20, true))
         .await
@@ -287,6 +345,7 @@ async fn catalog_filters_disabled_records_and_uses_stable_order() {
         .create_payment_channel(payment_channel("First channel", 10, true))
         .await
         .unwrap();
+    seed_governed_stripe(&db).await;
 
     let catalog = store.catalog().await.unwrap();
     assert_eq!(catalog.settings, StoreSettings::default());
@@ -304,7 +363,7 @@ async fn catalog_filters_disabled_records_and_uses_stable_order() {
             .iter()
             .map(|channel| channel.name.as_str())
             .collect::<Vec<_>>(),
-        ["First channel", "Second channel"]
+        ["Stripe"]
     );
     assert_eq!(
         catalog.products[0]
@@ -540,14 +599,7 @@ async fn store_settings_bound_custom_recharge_on_the_new_order_path() {
         .create_product(balance_product("Custom USD", 0, true))
         .await
         .unwrap();
-    db.write()
-        .await
-        .execute_unprepared(
-            "UPDATE store_payment_channels SET enabled = 1
-             WHERE id = 'store-channel-stripe'",
-        )
-        .await
-        .unwrap();
+    seed_governed_stripe(&db).await;
     let orders = PaymentOrderStore::new(db);
     let request = |key: &str, amount: &str| CreatePaymentOrderInput {
         idempotency_key: key.to_string(),
@@ -614,14 +666,7 @@ async fn admin_lists_include_disabled_records_and_order_references_block_deletes
         .create_payment_channel(payment_channel("Custom draft", 5, false))
         .await
         .unwrap();
-    db.write()
-        .await
-        .execute_unprepared(
-            "UPDATE store_payment_channels SET enabled = 1
-             WHERE id = 'store-channel-stripe'",
-        )
-        .await
-        .unwrap();
+    seed_governed_stripe(&db).await;
     PaymentOrderStore::new(db.clone())
         .create_order(
             "user-a",

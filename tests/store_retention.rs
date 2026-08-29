@@ -80,6 +80,42 @@ async fn setup() -> DbPool {
     db
 }
 
+#[tokio::test]
+async fn migration_058_down_up_round_trip_recreates_retained_table_indexes() {
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("connect SQLite");
+    Migrator::up(&*db.write().await, None)
+        .await
+        .expect("run migrations");
+    Migrator::down(&*db.write().await, Some(1))
+        .await
+        .expect("roll back migration 058");
+
+    for index in [
+        "idx_store_legal_holds_expiry",
+        "idx_store_retention_runs_started",
+    ] {
+        let count = db
+            .read()
+            .query_one(db.stmt(
+                "SELECT COUNT(*) AS value FROM sqlite_master
+                 WHERE type = 'index' AND name = $1",
+                vec![index.into()],
+            ))
+            .await
+            .expect("query index")
+            .expect("count row")
+            .try_get::<i64>("", "value")
+            .expect("index count");
+        assert_eq!(count, 0, "migration 058 down retained {index}");
+    }
+
+    Migrator::up(&*db.write().await, Some(1))
+        .await
+        .expect("reapply migration 058");
+}
+
 async fn insert_privacy(db: &DbPool, version: &str, retention_json: &str) {
     db.write()
         .await

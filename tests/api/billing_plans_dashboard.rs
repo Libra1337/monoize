@@ -97,7 +97,11 @@ async fn create_group(ctx: &TestContext, name: &str) -> String {
         ctx,
         Method::POST,
         "/api/dashboard/groups",
-        Some(json!({ "name": name, "user_selectable": true })),
+        Some(json!({
+            "name": name,
+            "confirm_public_exposure": true,
+            "user_selectable": true
+        })),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);

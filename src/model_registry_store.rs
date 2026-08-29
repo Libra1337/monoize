@@ -1578,15 +1578,16 @@ mod tests {
 
         let enabled: CreateMonoizeProviderInput = serde_json::from_value(json!({
             "name": "enabled",
+            "confirm_public_exposure": true,
             "channel": {
                 "name": "active",
                 "provider_type": "responses",
                 "base_url": "https://example.com",
                 "api_key": "secret",
                 "models": {
-                    "eligible-a": { "redirect": null, "multiplier": "1" },
-                    "eligible-z": { "redirect": null, "multiplier": "1" },
-                    "shared": { "redirect": null, "multiplier": "1" }
+                    "eligible-a": { "redirect": null, "multiplier_override": "1" },
+                    "eligible-z": { "redirect": null, "multiplier_override": "1" },
+                    "shared": { "redirect": null, "multiplier_override": "1" }
                 }
             }
         }))
@@ -1598,6 +1599,7 @@ mod tests {
 
         let disabled: CreateMonoizeProviderInput = serde_json::from_value(json!({
             "name": "disabled provider",
+            "confirm_public_exposure": true,
             "enabled": false,
             "channel": {
                 "name": "active channel",
@@ -1605,7 +1607,7 @@ mod tests {
                 "base_url": "https://example.com",
                 "api_key": "secret-provider-disabled",
                 "models": {
-                    "disabled-provider": { "redirect": null, "multiplier": "1" }
+                    "disabled-provider": { "redirect": null, "multiplier_override": "1" }
                 }
             }
         }))

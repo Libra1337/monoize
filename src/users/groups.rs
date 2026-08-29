@@ -525,15 +525,14 @@ impl UserStore {
         exclude_id: Option<&str>,
         name: &str,
     ) -> Result<bool, GroupStoreError> {
-        let key = name.as_bytes().to_vec();
         let (sql, values): (&str, Vec<SeaValue>) = match exclude_id {
             Some(id) => (
-                "SELECT COUNT(*) AS cnt FROM monoize_groups WHERE public_name_key = $1 AND id != $2",
-                vec![SeaValue::Bytes(Some(Box::new(key))), id.into()],
+                "SELECT COUNT(*) AS cnt FROM monoize_groups WHERE lower(trim(name)) = lower(trim($1)) AND id != $2",
+                vec![name.into(), id.into()],
             ),
             None => (
-                "SELECT COUNT(*) AS cnt FROM monoize_groups WHERE public_name_key = $1",
-                vec![SeaValue::Bytes(Some(Box::new(key)))],
+                "SELECT COUNT(*) AS cnt FROM monoize_groups WHERE lower(trim(name)) = lower(trim($1))",
+                vec![name.into()],
             ),
         };
         let row = self

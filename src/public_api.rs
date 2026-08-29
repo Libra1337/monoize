@@ -181,7 +181,10 @@ mod tests {
         let mut limiter = PublicRateLimiter::new(2);
         let now = Instant::now();
         assert!(limiter.admit("192.0.2.1".parse().unwrap(), now));
-        assert!(limiter.admit("192.0.2.2".parse().unwrap(), now));
+        assert!(limiter.admit(
+            "192.0.2.2".parse().unwrap(),
+            now + Duration::from_secs(1)
+        ));
         assert!(!limiter.admit("192.0.2.3".parse().unwrap(), now + Duration::from_secs(119)));
         assert!(limiter.admit("192.0.2.3".parse().unwrap(), now + Duration::from_secs(120)));
         assert!(!limiter.buckets.contains_key(&"192.0.2.1".parse().unwrap()));

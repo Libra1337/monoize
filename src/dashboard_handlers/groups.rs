@@ -312,13 +312,14 @@ mod tests {
             .create_provider(
                 serde_json::from_value(serde_json::json!({
                     "name": "team-a-provider",
+                    "confirm_public_exposure": true,
                     "group_id": created.id,
                     "channel": {
                         "name": "primary",
                         "provider_type": "responses",
                         "base_url": "https://example.invalid",
                         "api_key": "secret",
-                        "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
+                        "models": { "gpt-5": { "redirect": null, "multiplier_override": "1" } }
                     }
                 }))
                 .expect("provider payload deserializes"),

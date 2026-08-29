@@ -221,7 +221,7 @@ fn dashboard_create_provider_group_id_defaults_to_empty() {
             "provider_type": "responses",
             "base_url": "https://example.com/public",
             "api_key": "secret",
-            "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
+            "models": { "gpt-5": { "redirect": null, "multiplier_override": "1" } }
         }
     }))
     .expect("payload deserializes");
@@ -233,13 +233,13 @@ fn dashboard_create_provider_group_id_defaults_to_empty() {
 fn dashboard_create_provider_rejects_obsolete_channels_field() {
     let result = serde_json::from_value::<CreateMonoizeProviderInput>(json!({
         "name": "OpenAI",
-        "channel": {
+        "channels": [{
             "name": "primary",
             "provider_type": "responses",
             "base_url": "https://example.com",
             "api_key": "secret",
             "models": {}
-        }
+        }]
     }));
 
     assert!(
@@ -272,7 +272,6 @@ fn dashboard_create_provider_rejects_obsolete_provider_models_field() {
 fn dashboard_update_provider_group_id_is_partial() {
     let body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
         "channel": {
-            "id": "mono_ch_existing",
             "name": "existing",
             "provider_type": "responses",
             "base_url": "https://example.com/existing"
@@ -384,23 +383,38 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
         .expect("default group exists")
         .try_get("", "id")
         .expect("default group id decodes");
-    for (id, name) in [("g-alpha", "alpha"), ("g-beta", "beta")] {
-        db.write()
-            .await
-            .execute(db.stmt(
-                "INSERT INTO monoize_groups (id, name, description, is_default, user_selectable, sort_order, created_at, updated_at) \
-                 VALUES ($1, $2, '', 0, 1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
-                vec![id.into(), name.into()],
-            ))
-            .await
-            .expect("registry row inserts");
-    }
+    let (log_tx, _) = tokio::sync::broadcast::channel(1);
+    let user_store = UserStore::new(db.clone(), log_tx)
+        .await
+        .expect("user store creates");
+    user_store
+        .create_group(crate::users::CreateGroupInput {
+            confirm_public_exposure: true,
+            name: "alpha".to_string(),
+            description: String::new(),
+            user_selectable: true,
+            sort_order: 1,
+        })
+        .await
+        .expect("alpha group creates");
+    let beta = user_store
+        .create_group(crate::users::CreateGroupInput {
+            confirm_public_exposure: true,
+            name: "beta".to_string(),
+            description: String::new(),
+            user_selectable: true,
+            sort_order: 2,
+        })
+        .await
+        .expect("beta group creates");
+    drop(user_store);
 
     let store = MonoizeRoutingStore::new(db).await.expect("store creates");
 
     let create_body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
-        "group_id": " g-beta ",
+        "confirm_public_exposure": true,
+        "group_id": format!(" {} ", beta.id),
         "channel": {
             "name": "primary",
             "provider_type": "responses",
@@ -410,7 +424,7 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
             "affinity_idle_ttl_seconds_override": 90,
             "affinity_failback_mode_override": "prefer_higher_priority",
             "affinity_failback_delay_seconds_override": 15,
-            "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
+            "models": { "gpt-5": { "redirect": null, "multiplier_override": "1" } }
         }
     }))
     .expect("create payload deserializes");
@@ -419,9 +433,7 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
         .create_provider(create_body)
         .await
         .expect("provider created");
-    let channel_id = created.channel.id.clone();
-
-    assert_eq!(created.group_id, "g-beta");
+    assert_eq!(created.group_id, beta.id);
     assert_eq!(created.channel.api_key, "secret");
     assert_eq!(created.channel.affinity_enabled_override, Some(true));
     assert_eq!(created.channel.affinity_idle_ttl_seconds_override, Some(90));
@@ -436,7 +448,6 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
 
     let update_body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
         "channel": {
-            "id": channel_id,
             "name": "primary",
             "provider_type": "responses",
             "base_url": "https://example.com",
@@ -445,7 +456,7 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
             "affinity_idle_ttl_seconds_override": 120,
             "affinity_failback_mode_override": "sticky",
             "affinity_failback_delay_seconds_override": 0,
-            "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
+            "models": { "gpt-5": { "redirect": null, "multiplier_override": "1" } }
         }
     }))
     .expect("update payload deserializes");
@@ -455,7 +466,7 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
         .await
         .expect("provider updated");
 
-    assert_eq!(updated.group_id, "g-beta");
+    assert_eq!(updated.group_id, beta.id);
     assert_eq!(updated.channel.api_key, "secret");
     assert_eq!(updated.channel.affinity_enabled_override, Some(false));
     assert_eq!(
@@ -489,7 +500,7 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
         .update_provider(
             &created.id,
             serde_json::from_value(json!({
-                "group_id": "g-missing"
+                "group_id": uuid::Uuid::new_v4().to_string()
             }))
             .expect("unknown payload deserializes"),
         )
@@ -1402,24 +1413,24 @@ async fn sqlite_migration_creates_request_log_retention_indexes() {
         .expect("list request-log foreign keys");
     assert!(request_log_foreign_keys.is_empty());
 
-    let channel_columns = db
+    let provider_columns = db
         .read()
         .query_all(db.stmt(
-            "SELECT name FROM pragma_table_info('monoize_channels')",
+            "SELECT name FROM pragma_table_info('monoize_providers')",
             vec![],
         ))
         .await
-        .expect("list channel columns")
+        .expect("list Provider columns")
         .into_iter()
         .filter_map(|row| row.try_get::<String>("", "name").ok())
         .collect::<std::collections::HashSet<_>>();
     for column in [
-        "affinity_enabled_override",
-        "affinity_idle_ttl_seconds_override",
-        "affinity_failback_mode_override",
-        "affinity_failback_delay_seconds_override",
+        "channel_affinity_enabled_override",
+        "channel_affinity_idle_ttl_seconds_override",
+        "channel_affinity_failback_mode_override",
+        "channel_affinity_failback_delay_seconds_override",
     ] {
-        assert!(channel_columns.contains(column), "missing column {column}");
+        assert!(provider_columns.contains(column), "missing column {column}");
     }
 }
 

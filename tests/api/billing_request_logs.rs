@@ -1691,7 +1691,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             confirm_public_exposure: true,
-            pricing_profile: Some("openai".to_string()),
+            pricing_profile: Some("default".to_string()),
             multiplier: Default::default(),
             name: "alias-fallback-provider".to_string(),
             api_type_overrides: Vec::new(),

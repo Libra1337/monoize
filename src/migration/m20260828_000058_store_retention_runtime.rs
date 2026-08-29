@@ -35,6 +35,16 @@ async fn migrate(manager: &SchemaManager<'_>, up: bool) -> Result<(), DbErr> {
         }
     } else {
         migrate_reauth_scopes(&tx, backend, false).await?;
+        for index in [
+            "idx_store_legal_holds_expiry",
+            "idx_store_retention_runs_started",
+        ] {
+            tx.execute(Statement::from_string(
+                backend,
+                format!("DROP INDEX IF EXISTS {index}"),
+            ))
+            .await?;
+        }
         for table in [
             "store_legal_hold_items",
             "store_legal_hold_approvals",

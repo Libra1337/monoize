@@ -298,6 +298,7 @@ pub async fn create_response(
 
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::Responses;
+        let downstream_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stream = deferred_forward_event_stream(
             downstream,
             forward_stream_typed(
@@ -310,7 +311,9 @@ pub async fn create_response(
                 request_ip.clone(),
                 extract_client_session_id(&headers),
                 capture.clone(),
+                downstream_gone.clone(),
             ),
+            downstream_gone,
         );
         return Ok(Sse::new(stream)
             .keep_alive(api_stream_keep_alive())
@@ -376,6 +379,7 @@ pub async fn create_chat_completions(
     };
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::ChatCompletions;
+        let downstream_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stream = deferred_forward_event_stream(
             downstream,
             forward_stream_typed(
@@ -388,7 +392,9 @@ pub async fn create_chat_completions(
                 request_ip.clone(),
                 extract_client_session_id(&headers),
                 capture.clone(),
+                downstream_gone.clone(),
             ),
+            downstream_gone,
         );
         return Ok(Sse::new(stream)
             .keep_alive(api_stream_keep_alive())
@@ -465,6 +471,7 @@ async fn create_messages_inner(
     };
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::AnthropicMessages;
+        let downstream_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stream = deferred_forward_event_stream(
             downstream,
             forward_stream_typed(
@@ -477,7 +484,9 @@ async fn create_messages_inner(
                 request_ip.clone(),
                 extract_client_session_id(&headers),
                 capture.clone(),
+                downstream_gone.clone(),
             ),
+            downstream_gone,
         );
         return Ok(Sse::new(stream)
             .keep_alive(messages_stream_keep_alive())

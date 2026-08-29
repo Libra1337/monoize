@@ -534,10 +534,8 @@ fn numbered_placeholders(backend: DbBackend, sql: &str) -> String {
 mod tests {
     use crate::db::DbPool;
     use crate::migration::Migrator;
-    use crate::users::UserRole;
     use sea_orm::ConnectionTrait;
     use sea_orm_migration::MigratorTrait;
-    use serde_json::json;
     use std::collections::BTreeMap;
 
     async fn exec(db: &DbPool, sql: &str) {
@@ -558,9 +556,7 @@ mod tests {
             .expect("value decodes")
     }
 
-    /// GM-1..GM-8 on a populated legacy database: run the full stack up (empty
-    /// path), revert one step to the legacy label schema, plant legacy label
-    /// arrays, then re-run the migration and verify every mapping rule.
+    /// GM-1..GM-8 on a populated schema immediately before migration 42.
     #[tokio::test]
     async fn groups_registry_migration_maps_populated_legacy_labels() {
         let db = DbPool::connect("sqlite::memory:")
@@ -568,110 +564,60 @@ mod tests {
             .expect("db connects");
         {
             let write = db.write().await;
-            Migrator::up(&*write, None).await.expect("empty-db up");
-        }
-
-        // Seed rows through the current stores so every non-group column is valid.
-        let (log_tx, _) = tokio::sync::broadcast::channel(1);
-        let user_store = crate::users::UserStore::new(db.clone(), log_tx)
-            .await
-            .expect("user store creates");
-        let user = user_store
-            .create_user("legacy-user", "password123", UserRole::User, None)
-            .await
-            .expect("user creates");
-        let (inherit_key, _) = user_store
-            .create_api_key(&user.id, "inherit-key", None)
-            .await
-            .expect("inherit key creates");
-        let (scoped_key, _) = user_store
-            .create_api_key(&user.id, "scoped-key", None)
-            .await
-            .expect("scoped key creates");
-        let plan = user_store
-            .create_billing_plan(crate::users::BillingPlanInput {
-                name: "legacy-plan".to_string(),
-                grant_amount_nano_usd: Some("0".to_string()),
-                grant_amount_usd: None,
-                schedule: "0 0 * * *".to_string(),
-                group_ids: None,
-                enabled: Some(true),
-            })
-            .await
-            .expect("plan storage ok")
-            .expect("plan creates");
-        drop(user_store);
-
-        let routing_store = crate::monoize_routing::MonoizeRoutingStore::new(db.clone())
-            .await
-            .expect("routing store creates");
-        let channel = json!({
-            "name": "primary",
-            "provider_type": "responses",
-            "base_url": "https://example.com",
-            "api_key": "secret",
-            "models": { "gpt-5": { "redirect": null, "multiplier": "1" } }
-        });
-        let public_provider = routing_store
-            .create_provider(
-                serde_json::from_value(json!({ "name": "public", "channels": [channel.clone()] }))
-                    .expect("payload deserializes"),
-            )
-            .await
-            .expect("public provider creates");
-        let scoped_provider = routing_store
-            .create_provider(
-                serde_json::from_value(json!({ "name": "scoped", "channels": [channel] }))
-                    .expect("payload deserializes"),
-            )
-            .await
-            .expect("scoped provider creates");
-        drop(routing_store);
-
-        {
-            let write = db.write().await;
-            Migrator::down(&*write, Some(1))
+            Migrator::up(&*write, Some(41))
                 .await
-                .expect("one-step down restores legacy schema");
+                .expect("pre-registry migrations run");
         }
 
-        // Plant legacy labels exactly as the pre-registry system stored them.
+        let user_id = "legacy-user";
+        let inherit_key_id = "inherit-key";
+        let scoped_key_id = "scoped-key";
+        let public_provider_id = "public-provider";
+        let scoped_provider_id = "scoped-provider";
+        let plan_id = "legacy-plan";
         exec(
             &db,
-            &format!(
-                r#"UPDATE users SET allowed_groups = '[" Team-A ","beta","TEAM-A"]' WHERE id = '{}'"#,
-                user.id
-            ),
+            r#"INSERT INTO users
+               (id, username, password_hash, role, created_at, updated_at, allowed_groups)
+               VALUES ('legacy-user', 'legacy-user', 'unused', 'user',
+                       '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                       '[" Team-A ","beta","TEAM-A"]')"#,
         )
         .await;
         exec(
             &db,
-            &format!(
-                r#"UPDATE api_keys SET allowed_groups = '["beta"]' WHERE id = '{}'"#,
-                scoped_key.id
-            ),
+            r#"INSERT INTO api_keys
+               (id, user_id, name, key_prefix, key, created_at, allowed_groups)
+               VALUES
+               ('inherit-key', 'legacy-user', 'inherit', 'inherit', 'inherit-secret',
+                '2026-01-01T00:00:00Z', '[]'),
+               ('scoped-key', 'legacy-user', 'scoped', 'scoped', 'scoped-secret',
+                '2026-01-01T00:00:00Z', '["beta"]')"#,
         )
         .await;
         exec(
             &db,
-            &format!(
-                r#"UPDATE monoize_providers SET groups = '["Team-A"]' WHERE id = '{}'"#,
-                scoped_provider.id
-            ),
+            r#"INSERT INTO monoize_providers
+               (id, name, groups, created_at, updated_at)
+               VALUES
+               ('public-provider', 'public', '[]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('scoped-provider', 'scoped', '["Team-A"]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"#,
         )
         .await;
         exec(
             &db,
-            &format!(
-                r#"UPDATE billing_plans SET allowed_groups = '["team-a","gamma"]' WHERE id = '{}'"#,
-                plan.id
-            ),
+            r#"INSERT INTO billing_plans
+               (id, name, grant_amount_nano_usd, schedule, allowed_groups, created_at, updated_at)
+               VALUES ('legacy-plan', 'legacy-plan', '0', '0 0 * * *', '["team-a","gamma"]',
+                       '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"#,
         )
         .await;
 
         {
             let write = db.write().await;
-            Migrator::up(&*write, None).await.expect("populated-db up");
+            Migrator::up(&*write, Some(1))
+                .await
+                .expect("groups registry migration runs");
         }
 
         // GM-2: exactly one default row named "default".
@@ -706,7 +652,7 @@ mod tests {
         assert_eq!(
             scalar(
                 &db,
-                &format!("SELECT group_id AS value FROM users WHERE id = '{}'", user.id)
+                &format!("SELECT group_id AS value FROM users WHERE id = '{user_id}'")
             )
             .await,
             ids["beta"]
@@ -719,7 +665,7 @@ mod tests {
                 &format!(
                     "SELECT CAST(use_user_group AS TEXT) || '|' || group_ids AS value \
                      FROM api_keys WHERE id = '{}'",
-                    inherit_key.id
+                    inherit_key_id
                 )
             )
             .await,
@@ -731,7 +677,7 @@ mod tests {
                 &format!(
                     "SELECT CAST(use_user_group AS TEXT) || '|' || group_ids AS value \
                      FROM api_keys WHERE id = '{}'",
-                    scoped_key.id
+                    scoped_key_id
                 )
             )
             .await,
@@ -744,7 +690,7 @@ mod tests {
                 &db,
                 &format!(
                     "SELECT group_ids AS value FROM monoize_providers WHERE id = '{}'",
-                    public_provider.id
+                    public_provider_id
                 )
             )
             .await,
@@ -755,7 +701,7 @@ mod tests {
                 &db,
                 &format!(
                     "SELECT group_ids AS value FROM monoize_providers WHERE id = '{}'",
-                    scoped_provider.id
+                    scoped_provider_id
                 )
             )
             .await,
@@ -768,7 +714,7 @@ mod tests {
                 &db,
                 &format!(
                     "SELECT group_ids AS value FROM billing_plans WHERE id = '{}'",
-                    plan.id
+                    plan_id
                 )
             )
             .await,

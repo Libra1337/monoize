@@ -144,6 +144,7 @@ fn prestream_error_stream(downstream: DownstreamProtocol, err: AppError) -> Forw
 pub(super) fn deferred_forward_event_stream<F, S>(
     downstream: DownstreamProtocol,
     forwarding: F,
+    downstream_gone: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> futures_util::stream::BoxStream<'static, Result<Event, std::convert::Infallible>>
 where
     F: std::future::Future<Output = AppResult<S>> + Send + 'static,
@@ -151,13 +152,42 @@ where
 {
     let (tx, rx) = mpsc::channel::<Event>(64);
     tokio::spawn(async move {
-        match forwarding.await {
+        tokio::pin!(forwarding);
+        let forwarding_result = tokio::select! {
+            biased;
+            _ = tx.closed() => {
+                downstream_gone.store(true, std::sync::atomic::Ordering::Release);
+                forwarding.await
+            }
+            result = &mut forwarding => result,
+        };
+        match forwarding_result {
             Ok(stream) => {
                 tokio::pin!(stream);
                 let mut downstream_open = true;
-                while let Some(Ok(event)) = stream.next().await {
+                loop {
+                    let next = if downstream_open {
+                        tokio::select! {
+                            biased;
+                            _ = tx.closed() => {
+                                downstream_open = false;
+                                downstream_gone.store(
+                                    true,
+                                    std::sync::atomic::Ordering::Release,
+                                );
+                                continue;
+                            }
+                            next = stream.next() => next,
+                        }
+                    } else {
+                        stream.next().await
+                    };
+                    let Some(Ok(event)) = next else {
+                        break;
+                    };
                     if downstream_open && tx.send(event).await.is_err() {
                         downstream_open = false;
+                        downstream_gone.store(true, std::sync::atomic::Ordering::Release);
                     }
                 }
             }
@@ -165,9 +195,29 @@ where
                 let err_stream = prestream_error_stream(downstream, err);
                 tokio::pin!(err_stream);
                 let mut downstream_open = true;
-                while let Some(Ok(event)) = err_stream.next().await {
+                loop {
+                    let next = if downstream_open {
+                        tokio::select! {
+                            biased;
+                            _ = tx.closed() => {
+                                downstream_open = false;
+                                downstream_gone.store(
+                                    true,
+                                    std::sync::atomic::Ordering::Release,
+                                );
+                                continue;
+                            }
+                            next = err_stream.next() => next,
+                        }
+                    } else {
+                        err_stream.next().await
+                    };
+                    let Some(Ok(event)) = next else {
+                        break;
+                    };
                     if downstream_open && tx.send(event).await.is_err() {
                         downstream_open = false;
+                        downstream_gone.store(true, std::sync::atomic::Ordering::Release);
                     }
                 }
             }
@@ -186,6 +236,7 @@ pub(super) async fn forward_stream_typed(
     request_ip: Option<String>,
     client_session_id: Option<String>,
     capture: RequestCaptureContext,
+    downstream_gone: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> AppResult<
     impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
 > {
@@ -616,6 +667,7 @@ pub(super) async fn forward_stream_typed(
                         let capture_session = capture.session.clone();
                         let pending_request_log_guard_for_stream = pending_request_log_guard;
                         let funding_scope_for_owner = funding_scope.clone();
+                        let downstream_gone_for_log = downstream_gone.clone();
                         tokio::spawn(async move {
                             let _pending_request_log_guard = pending_request_log_guard_for_stream;
                             let tx_err = tx.clone();
@@ -662,7 +714,10 @@ pub(super) async fn forward_stream_typed(
                                                 None,
                                                 reasoning_effort_for_log,
                                                 tried_providers_for_log,
-                                                tx_err.is_closed(),
+                                                tx_err.is_closed()
+                                                    || downstream_gone_for_log.load(
+                                                        std::sync::atomic::Ordering::Acquire,
+                                                    ),
                                             );
                                             true
                                         }
@@ -943,6 +998,7 @@ pub(super) async fn forward_stream_typed(
                         });
                     let pending_request_log_guard_for_stream = pending_request_log_guard;
                     let funding_scope_for_owner = funding_scope.clone();
+                    let downstream_gone_for_log = downstream_gone.clone();
                     tokio::spawn(async move {
                         let _pending_request_log_guard = pending_request_log_guard_for_stream;
                         let tx_err = tx.clone();
@@ -1402,7 +1458,10 @@ pub(super) async fn forward_stream_typed(
                             Some(terminal_diagnostics),
                             reasoning_effort_for_log,
                             tried_providers_for_log,
-                            tx_err.is_closed(),
+                            tx_err.is_closed()
+                                || downstream_gone_for_log.load(
+                                    std::sync::atomic::Ordering::Acquire,
+                                ),
                         );
 
                         if let Some(session) = capture_session.as_ref() {
@@ -1615,7 +1674,11 @@ mod tests {
     #[tokio::test]
     async fn pending_forwarding_allows_sse_keep_alive_before_upstream_headers() {
         let forwarding = std::future::pending::<AppResult<ForwardEventStream>>();
-        let stream = deferred_forward_event_stream(DownstreamProtocol::Responses, forwarding);
+        let stream = deferred_forward_event_stream(
+            DownstreamProtocol::Responses,
+            forwarding,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
         let response = Sse::new(stream)
             .keep_alive(
                 KeepAlive::new()
@@ -1643,9 +1706,11 @@ mod tests {
             observed.fetch_add(1, Ordering::SeqCst);
             Ok(Event::default().data(index.to_string()))
         }));
-        let mut stream = deferred_forward_event_stream(DownstreamProtocol::Responses, async move {
-            Ok::<_, AppError>(inner)
-        });
+        let mut stream = deferred_forward_event_stream(
+            DownstreamProtocol::Responses,
+            async move { Ok::<_, AppError>(inner) },
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
         assert!(stream.next().await.is_some());
         drop(stream);
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -1655,6 +1720,54 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn deferred_stream_marks_disconnect_without_waiting_for_another_event() {
+        let downstream_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let inner = futures_util::stream::once(async {
+            Ok::<_, std::convert::Infallible>(Event::default().data("first"))
+        })
+        .chain(futures_util::stream::pending());
+        let mut stream = deferred_forward_event_stream(
+            DownstreamProtocol::Responses,
+            async move { Ok::<_, AppError>(inner) },
+            downstream_gone.clone(),
+        );
+        assert!(stream.next().await.is_some());
+        drop(stream);
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !downstream_gone.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("outer receiver closure must be observed while the inner stream is idle");
+    }
+
+    #[tokio::test]
+    async fn deferred_stream_marks_disconnect_while_forwarding_is_pending() {
+        let downstream_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (gate_tx, gate_rx) = tokio::sync::oneshot::channel::<()>();
+        let stream = deferred_forward_event_stream(
+            DownstreamProtocol::Responses,
+            async move {
+                let _ = gate_rx.await;
+                Ok::<_, AppError>(futures_util::stream::empty())
+            },
+            downstream_gone.clone(),
+        );
+        drop(stream);
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !downstream_gone.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("outer receiver closure must be observed before forwarding completes");
+        let _ = gate_tx.send(());
     }
 
     #[tokio::test]

@@ -2910,24 +2910,50 @@ mod tests {
             "phase": "request"
         }])
         .to_string();
+        let default_group_id: String = db
+            .read()
+            .query_one(db.stmt(
+                "SELECT id FROM monoize_groups WHERE is_default = 1",
+                vec![],
+            ))
+            .await
+            .expect("default Group query succeeds")
+            .expect("default Group exists")
+            .try_get("", "id")
+            .expect("default Group ID decodes");
         let now = Utc::now().to_rfc3339();
         let row_count = TRANSFORM_MIGRATION_BATCH_SIZE + 3;
-        let mut values = Vec::with_capacity(row_count * 4);
+        let mut values: Vec<SeaValue> = Vec::with_capacity(row_count * 9);
         let mut rows = Vec::with_capacity(row_count);
         for index in 0..row_count {
             let start = values.len() + 1;
+            let provider_name = format!("provider {index}");
+            let channel_name = format!("channel {index}");
             values.extend([
                 format!("provider-{index:04}").into(),
-                format!("provider {index}").into(),
+                default_group_id.clone().into(),
+                provider_name.clone().into(),
+                SeaValue::Bytes(Some(Box::new(provider_name.into_bytes()))),
                 legacy_transforms.clone().into(),
                 now.clone().into(),
+                format!("channel-{index:04}").into(),
+                channel_name.clone().into(),
+                SeaValue::Bytes(Some(Box::new(channel_name.into_bytes()))),
             ]);
             rows.push(format!(
-                "(${start}, ${}, ${}, ${}, ${})",
+                "(${start}, ${}, ${}, ${}, ${}, 0, 1, ${}, ${}, ${}, ${}, ${}, ${}, ${}, \
+                 'responses', 'https://example.com', 'secret', 1)",
                 start + 1,
                 start + 2,
+                start + 2,
                 start + 3,
-                start + 3
+                start + 4,
+                start + 5,
+                start + 5,
+                start + 6,
+                start + 7,
+                start + 7,
+                start + 8,
             ));
         }
         db.write()
@@ -2935,7 +2961,10 @@ mod tests {
             .execute(db.stmt(
                 &format!(
                     "INSERT INTO monoize_providers
-                     (id, name, transforms, created_at, updated_at) VALUES {}",
+                     (id, group_id, name, public_name, public_name_key, priority, enabled, transforms,
+                      created_at, updated_at, channel_id, channel_name, channel_public_name,
+                      channel_public_name_key, channel_provider_type, channel_base_url,
+                      channel_api_key, channel_enabled) VALUES {}",
                     rows.join(", ")
                 ),
                 values,
@@ -2992,12 +3021,13 @@ mod tests {
             .create_provider(
                 serde_json::from_value(json!({
                     "name": "decode contract",
+                    "confirm_public_exposure": true,
                     "channel": {
                         "name": "channel",
                         "provider_type": "responses",
                         "base_url": "https://example.com",
                         "api_key": "secret",
-                        "models": { "model-a": { "redirect": null, "multiplier": "1" } }
+                        "models": { "model-a": { "redirect": null, "multiplier_override": "1" } }
                     }
                 }))
                 .expect("provider input parses"),
@@ -3045,6 +3075,7 @@ mod tests {
             .expect("empty provider reorder succeeds");
         let input: CreateMonoizeProviderInput = serde_json::from_value(json!({
             "name": "visible models",
+            "confirm_public_exposure": true,
             "strip_cross_protocol_nested_extra": false,
             "channel": {
                 "name": "active",
@@ -3052,8 +3083,8 @@ mod tests {
                 "base_url": "https://example.com",
                 "api_key": "secret",
                 "models": {
-                    "model-z": { "redirect": null, "multiplier": "1" },
-                    "model-a": { "redirect": null, "multiplier": "1" }
+                    "model-z": { "redirect": null, "multiplier_override": "1" },
+                    "model-a": { "redirect": null, "multiplier_override": "1" }
                 }
             }
         }))
@@ -3109,12 +3140,13 @@ mod tests {
 
         let second_input: CreateMonoizeProviderInput = serde_json::from_value(json!({
             "name": "second",
+            "confirm_public_exposure": true,
             "channel": {
                 "name": "second channel",
                 "provider_type": "responses",
                 "base_url": "https://example.com",
                 "api_key": "secret",
-                "models": { "model-second": { "redirect": null, "multiplier": "1" } }
+                "models": { "model-second": { "redirect": null, "multiplier_override": "1" } }
             }
         }))
         .expect("second provider input parses");
@@ -3144,6 +3176,7 @@ mod tests {
 
         let disabled_provider: CreateMonoizeProviderInput = serde_json::from_value(json!({
             "name": "disabled provider",
+            "confirm_public_exposure": true,
             "enabled": false,
             "channel": {
                 "name": "active channel",
@@ -3151,7 +3184,7 @@ mod tests {
                 "base_url": "https://example.com",
                 "api_key": "secret",
                 "models": {
-                    "model-disabled-provider": { "redirect": null, "multiplier": "1" }
+                    "model-disabled-provider": { "redirect": null, "multiplier_override": "1" }
                 }
             }
         }))

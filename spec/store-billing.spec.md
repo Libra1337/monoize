@@ -889,3 +889,5 @@ SB-M-10. Production Channel enablement MUST require passing migration, callback,
 SB-M-11. Code deployment and production Channel enablement are separate approvals. A deployed Channel MUST remain disabled until its provider-specific controlled payment and refund pass.
 
 SB-M-12. Before the first real provider payment, rollback MAY restore the old image and matching database backup. After a real payment or refund, database rollback is forbidden; operations MUST stop checkout and reconcile or forward-fix every provider transaction.
+
+SB-M-13. Migration `058` down MUST remove `idx_store_legal_holds_expiry` and `idx_store_retention_runs_started` before it returns. One migration `058` down followed by one migration `058` up MUST succeed and MUST recreate both indexes exactly once.
