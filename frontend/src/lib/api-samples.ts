@@ -35,7 +35,7 @@ const COMMON_ERROR_SHAPE = `{
 const DEFINITIONS: Record<ApiFamily, ApiFamilyDefinition> = {
   responses: {
     method: "POST",
-    path: "/v1/responses",
+    path: "/responses",
     body: { model: "gpt-5", input: "Explain vector databases." },
     supportsStreaming: true,
     successShape: `{
@@ -47,7 +47,7 @@ const DEFINITIONS: Record<ApiFamily, ApiFamilyDefinition> = {
   },
   chat: {
     method: "POST",
-    path: "/v1/chat/completions",
+    path: "/chat/completions",
     body: {
       model: "gpt-5",
       messages: [{ role: "user", content: "Hello" }],
@@ -63,7 +63,7 @@ const DEFINITIONS: Record<ApiFamily, ApiFamilyDefinition> = {
   },
   messages: {
     method: "POST",
-    path: "/v1/messages",
+    path: "/messages",
     body: {
       model: "claude-sonnet-4",
       max_tokens: 1024,
@@ -79,7 +79,7 @@ const DEFINITIONS: Record<ApiFamily, ApiFamilyDefinition> = {
   },
   gemini: {
     method: "POST",
-    path: "/v1/responses",
+    path: "/responses",
     body: { model: "gemini-2.5-pro", input: "Hello" },
     supportsStreaming: true,
     successShape: `{
@@ -91,7 +91,7 @@ const DEFINITIONS: Record<ApiFamily, ApiFamilyDefinition> = {
   },
   images: {
     method: "POST",
-    path: "/v1/images/generations",
+    path: "/images/generations",
     body: { model: "gpt-image-1", prompt: "A blue paper console" },
     supportsStreaming: false,
     successShape: `{

@@ -15,6 +15,28 @@ enabled state, and Group-local priority.
 DL-MIG-3. The authenticated sidebar MUST include Model Marketplace, Usage Analysis, and API
 Docs actions. Each action MUST remain inside `DashboardLayout`.
 
+DL-MIG-4. `/dashboard/api-docs` MUST render inside `DashboardLayout`. It MUST obtain
+`api_base_url` from the public settings SWR resource. Before that resource resolves, the page
+MUST render skeleton placeholders for the title, API-family navigation, and request sample.
+
+DL-MIG-5. The Console API Docs MUST support exactly these request families: Responses, Chat
+Completions, Messages, Gemini-compatible Responses, and Image Generation. It MUST generate
+request samples in exactly cURL, Python, JavaScript, and Go. Every sample MUST use
+`Authorization: Bearer $LYNSHEN_API_KEY` and MUST NOT contain an actual API key.
+
+DL-MIG-6. The configured Console `api_base_url` MUST be non-empty after trimming. The Console
+MUST NOT substitute the browser origin when it is empty. When the value is empty or invalid,
+the page MUST show a configuration error and MUST disable request copying.
+
+DL-MIG-7. The configured Console Base URL includes the downstream `/v1` prefix. Request-family
+paths passed to the shared sample generator MUST omit `/v1`. Joining the Base URL and family
+path MUST produce exactly one `/v1` segment. The generated URL MUST NOT contain `/v1/v1/`.
+
+DL-MIG-8. The Console API Docs MUST show the selected method and path, the configured Base URL,
+the authentication header, one request sample, streaming support, one success shape, and one
+common error shape inside one bordered content panel. Copy success feedback MUST be visible and
+MUST reset without changing panel dimensions.
+
 ## 0. Status
 
 - Product name: Monoize.

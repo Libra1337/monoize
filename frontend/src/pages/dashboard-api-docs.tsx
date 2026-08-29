@@ -24,7 +24,10 @@ export function DashboardApiDocsPage() {
   const [family, setFamily] = useState<ApiFamily>("responses");
   const [language, setLanguage] = useState<ApiSampleLanguage>("curl");
   const [copied, setCopied] = useState(false);
-  const resolution = resolvePublicApiBaseUrl(site?.api_base_url ?? "", window.location.origin);
+  const configuredBaseUrl = site?.api_base_url.trim() ?? "";
+  const resolution = configuredBaseUrl
+    ? resolvePublicApiBaseUrl(configuredBaseUrl, window.location.origin)
+    : { baseUrl: null, error: "public_api_base_url_required" as const };
   const definition = apiFamilyDefinition(family);
   const sample = useMemo(
     () => resolution.baseUrl
@@ -64,13 +67,13 @@ export function DashboardApiDocsPage() {
               family === item ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
-            {t(`publicSite.families.${item}`)}
+            {t(`apiDocsConsole.families.${item}`)}
           </button>
         ))}
       </motion.nav>
 
       <motion.div
-        className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]"
+        className="min-w-0"
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.08, ...transitions.normal }}
@@ -140,29 +143,28 @@ export function DashboardApiDocsPage() {
               <pre className="max-h-[34rem] overflow-auto bg-foreground p-5 text-sm leading-7 text-background"><code>{sample || t("apiDocsConsole.baseUrlMissing")}</code></pre>
             )}
           </section>
-        </div>
-
-        <aside className="flex min-w-0 flex-col gap-4">
-          <section className="rounded-xl border bg-card p-4">
+          <div className="grid border-t md:grid-cols-2">
+          <section className="border-b p-4 md:border-r">
             <div className="flex items-center gap-2"><KeyRound className="size-4 text-primary" /><h2 className="text-sm font-semibold">{t("apiDocsConsole.authentication")}</h2></div>
             <code className="mt-3 block overflow-x-auto rounded-lg bg-muted p-3 text-xs">Authorization: Bearer $LYNSHEN_API_KEY</code>
           </section>
-          <section className="rounded-xl border bg-card p-4">
+          <section className="border-b p-4">
             <div className="flex items-center gap-2"><Radio className="size-4 text-primary" /><h2 className="text-sm font-semibold">{t("apiDocsConsole.streaming")}</h2></div>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
               {definition.supportsStreaming ? t("apiDocsConsole.streamingDescription") : t("apiDocsConsole.streamingUnsupportedDescription")}
             </p>
           </section>
-          <section className="rounded-xl border bg-card p-4">
+          <section className="p-4 md:border-r">
             <h2 className="text-sm font-semibold">{t("apiDocsConsole.successShape")}</h2>
             <pre className="mt-3 overflow-x-auto rounded-lg bg-muted p-3 text-xs leading-5"><code>{definition.successShape}</code></pre>
           </section>
-          <section className="rounded-xl border bg-card p-4">
+          <section className="border-t p-4 md:border-t-0">
             <h2 className="text-sm font-semibold">{t("apiDocsConsole.commonErrors")}</h2>
             <pre className="mt-3 overflow-x-auto rounded-lg bg-muted p-3 text-xs leading-5"><code>{definition.commonErrorShape}</code></pre>
             <p className="mt-3 text-xs leading-5 text-muted-foreground">401 unauthorized · 403 forbidden · 429 rate_limited</p>
           </section>
-        </aside>
+          </div>
+        </div>
       </motion.div>
     </PageWrapper>
   );

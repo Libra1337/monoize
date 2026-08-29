@@ -1474,6 +1474,13 @@
 	"apiDocsConsole": {
 		"title": "API Docs",
 		"description": "Choose an API family. Copy a request that uses your configured Base URL.",
+		"families": {
+			"responses": "OpenAI Responses",
+			"chat": "Chat Completions",
+			"messages": "Anthropic Messages",
+			"gemini": "Gemini-compatible Responses",
+			"images": "Image Generations"
+		},
 		"baseUrl": "Base URL",
 		"baseUrlMissing": "Configure a secure API Base URL before you copy a request.",
 		"authentication": "Authentication",

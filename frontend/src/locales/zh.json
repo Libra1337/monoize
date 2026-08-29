@@ -1474,6 +1474,13 @@
 	"apiDocsConsole": {
 		"title": "API 文档",
 		"description": "选择 API 系列，然后复制使用已配置 Base URL 的请求。",
+		"families": {
+			"responses": "OpenAI Responses",
+			"chat": "Chat Completions",
+			"messages": "Anthropic Messages",
+			"gemini": "Gemini 兼容 Responses",
+			"images": "Image Generations"
+		},
 		"baseUrl": "Base URL",
 		"baseUrlMissing": "请先配置安全的 API Base URL，再复制请求。",
 		"authentication": "身份验证",

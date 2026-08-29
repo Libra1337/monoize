@@ -24,12 +24,14 @@ describe("Dashboard API Docs", () => {
     for (const family of API_FAMILIES) {
       const definition = apiFamilyDefinition(family);
       expect(definition.method).toBe("POST");
-      expect(definition.path.startsWith("/v1/")).toBe(true);
+      expect(definition.path.startsWith("/")).toBe(true);
+      expect(definition.path).not.toContain("/v1/");
       expect(definition.successShape).toContain("id");
       expect(definition.commonErrorShape).toContain("error");
       for (const language of API_SAMPLE_LANGUAGES) {
-        const sample = generateApiSample(language, family, "https://api.lynshen.org");
+        const sample = generateApiSample(language, family, "https://api.lynshen.org/v1");
         expect(sample).toContain("https://api.lynshen.org/v1/");
+        expect(sample).not.toContain("/v1/v1/");
         expect(sample).toContain("LYNSHEN_API_KEY");
         expect(sample).not.toContain("sk-");
       }
@@ -50,6 +52,8 @@ describe("Dashboard API Docs", () => {
     expect(pageSource).toContain("generateApiSample");
     expect(pageSource).toContain("navigator.clipboard.writeText");
     expect(pageSource).toContain("apiDocsConsole.baseUrlMissing");
+    expect(pageSource).toContain("configuredBaseUrl");
+    expect(pageSource).toContain("apiDocsConsole.families");
     expect(pageSource).toContain("apiDocsConsole.streaming");
     expect(pageSource).toContain("apiDocsConsole.successShape");
     expect(pageSource).toContain("apiDocsConsole.commonErrors");
@@ -84,6 +88,7 @@ describe("Dashboard API Docs", () => {
       ]) {
         expect(typeof catalog.apiDocsConsole?.[key], `${locale}: ${key}`).toBe("string");
       }
+      expect(catalog.apiDocsConsole.families.gemini).toBeTruthy();
     }
   });
 });

@@ -1471,6 +1471,13 @@
 	"apiDocsConsole": {
 		"title": "API 文件",
 		"description": "選擇 API 系列，然後複製使用已設定 Base URL 的請求。",
+		"families": {
+			"responses": "OpenAI Responses",
+			"chat": "Chat Completions",
+			"messages": "Anthropic Messages",
+			"gemini": "Gemini 相容 Responses",
+			"images": "Image Generations"
+		},
 		"baseUrl": "Base URL",
 		"baseUrlMissing": "請先設定安全的 API Base URL，再複製請求。",
 		"authentication": "身分驗證",

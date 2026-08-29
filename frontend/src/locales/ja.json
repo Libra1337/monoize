@@ -1470,6 +1470,13 @@
 	"apiDocsConsole": {
 		"title": "API ドキュメント",
 		"description": "API ファミリーを選択し、設定済みの Base URL を使用するリクエストをコピーします。",
+		"families": {
+			"responses": "OpenAI Responses",
+			"chat": "Chat Completions",
+			"messages": "Anthropic Messages",
+			"gemini": "Gemini 互換 Responses",
+			"images": "Image Generations"
+		},
 		"baseUrl": "Base URL",
 		"baseUrlMissing": "リクエストをコピーする前に、安全な API Base URL を設定してください。",
 		"authentication": "認証",
