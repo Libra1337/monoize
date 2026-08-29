@@ -240,6 +240,87 @@ async fn payment_migration_replaces_legacy_store_shape() {
 }
 
 #[tokio::test]
+async fn payment_migration_preserves_legacy_orders_with_foreign_keys_enabled() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.execute_unprepared("PRAGMA foreign_keys = ON")
+        .await
+        .unwrap();
+    Migrator::up(&db, Some(46)).await.unwrap();
+    db.execute_unprepared(
+        "INSERT INTO store_products
+            (id, kind, name, description, price_currency, price_minor, duration_seconds,
+             group_ids, sort_order, enabled, created_at, updated_at)
+         VALUES ('legacy-product', 'balance', 'Legacy balance', '', 'CNY', '1000', NULL,
+                 '[]', 0, 1, '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z');
+         UPDATE store_payment_channels SET enabled = 1
+         WHERE id IN ('store-channel-alipay', 'store-channel-wechat');
+         INSERT INTO store_orders
+            (id, order_number, user_id, product_id, product_kind, status,
+             payment_channel_id, payment_currency, payment_minor, cny_per_usd,
+             rate_source_updated_at, quote_json, created_at, updated_at,
+             completed_at, cancelled_at)
+         VALUES ('legacy-order', 'LS-LEGACY', 'legacy-user', 'legacy-product', 'balance',
+                 'pending', 'store-channel-alipay', 'CNY', '1000', '6.7370',
+                 '2026-08-27T00:00:00Z', '{}', '2026-08-27T00:00:00Z',
+                 '2026-08-27T00:00:00Z', NULL, NULL)",
+    )
+    .await
+    .unwrap();
+
+    Migrator::up(&db, Some(1))
+        .await
+        .expect("migration 051 preserves referenced legacy Channels");
+
+    let order = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT payment_state, fulfillment_state, contract_version, payment_channel_id
+             FROM store_orders WHERE id = 'legacy-order'"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .expect("migrated legacy order");
+    assert_eq!(
+        String::try_get(&order, "", "payment_state").unwrap(),
+        "closed"
+    );
+    assert_eq!(
+        String::try_get(&order, "", "fulfillment_state").unwrap(),
+        "pending"
+    );
+    assert_eq!(i64::try_get(&order, "", "contract_version").unwrap(), 1);
+    assert_eq!(
+        String::try_get(&order, "", "payment_channel_id").unwrap(),
+        "store-channel-alipay"
+    );
+
+    let enabled = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT enabled FROM store_payment_channels ORDER BY id".to_string(),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        enabled
+            .iter()
+            .all(|row| i64::try_get(row, "", "enabled").unwrap() == 0)
+    );
+    assert!(
+        db.query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "PRAGMA foreign_key_check".to_string(),
+        ))
+        .await
+        .unwrap()
+        .is_empty()
+    );
+    let tables = sqlite_names(&db, "table").await;
+    assert!(!tables.iter().any(|name| name.ends_with("_legacy")));
+}
+
+#[tokio::test]
 async fn payment_migration_installs_transition_and_recovery_guards() {
     let db = migrated_database().await;
     let triggers = sqlite_names(&db, "trigger").await;

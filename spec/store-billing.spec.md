@@ -891,3 +891,5 @@ SB-M-11. Code deployment and production Channel enablement are separate approval
 SB-M-12. Before the first real provider payment, rollback MAY restore the old image and matching database backup. After a real payment or refund, database rollback is forbidden; operations MUST stop checkout and reconcile or forward-fix every provider transaction.
 
 SB-M-13. Migration `058` down MUST remove `idx_store_legal_holds_expiry` and `idx_store_retention_runs_started` before it returns. One migration `058` down followed by one migration `058` up MUST succeed and MUST recreate both indexes exactly once.
+
+SB-M-14. SQLite migration `051` MUST succeed with `PRAGMA foreign_keys = ON` when one or more legacy `store_orders` rows reference legacy `store_payment_channels` rows. It MUST preserve every order and its Channel reference, replace both legacy table shapes, disable every migrated Channel, and leave `PRAGMA foreign_key_check` empty.

@@ -141,7 +141,8 @@ fn sqlite_rebuild_statements() -> Vec<String> {
             .to_string(),
         "DROP TABLE store_redemption_codes".to_string(),
         "ALTER TABLE store_redemption_codes_v2 RENAME TO store_redemption_codes".to_string(),
-        "CREATE TABLE store_payment_channels_v2 (
+        "ALTER TABLE store_payment_channels RENAME TO store_payment_channels_legacy".to_string(),
+        "CREATE TABLE store_payment_channels (
             id TEXT NOT NULL PRIMARY KEY,
             adapter_kind TEXT NOT NULL,
             name TEXT NOT NULL,
@@ -157,14 +158,12 @@ fn sqlite_rebuild_statements() -> Vec<String> {
             CONSTRAINT ck_store_payment_channels_revision CHECK (revision > 0)
         )"
         .to_string(),
-        "INSERT INTO store_payment_channels_v2
+        "INSERT INTO store_payment_channels
             (id, adapter_kind, name, icon_kind, icon_value, sort_order, enabled, revision, created_at, updated_at)
          SELECT id, CASE kind WHEN 'custom' THEN 'http' ELSE kind END, name, icon_kind,
                 icon_value, sort_order, 0, 1, created_at, updated_at
-         FROM store_payment_channels"
+         FROM store_payment_channels_legacy"
             .to_string(),
-        "DROP TABLE store_payment_channels".to_string(),
-        "ALTER TABLE store_payment_channels_v2 RENAME TO store_payment_channels".to_string(),
         "INSERT INTO store_payment_channels
             (id, adapter_kind, name, icon_kind, icon_value, sort_order, enabled, revision, created_at, updated_at)
          VALUES ('store-channel-stripe', 'stripe', 'Stripe', 'builtin', 'stripe', 30, 0, 1,
@@ -197,6 +196,7 @@ fn sqlite_rebuild_statements() -> Vec<String> {
             .to_string(),
         "DROP TABLE store_orders".to_string(),
         "ALTER TABLE store_orders_v2 RENAME TO store_orders".to_string(),
+        "DROP TABLE store_payment_channels_legacy".to_string(),
     ]
 }
 
