@@ -1273,6 +1273,8 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
         .await
         .unwrap();
 
+    bind_test_api_key_to_provider(&ctx, "gpt-5-mini", "mono-transform-summary-chat").await;
+
     let req = Request::builder()
         .method("POST")
         .uri("/v1/chat/completions")
@@ -1380,6 +1382,8 @@ async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reaso
         })
         .await
         .unwrap();
+    bind_test_api_key_to_provider(&ctx, "gpt-5-mini", "mono-transform-summary-chat-encrypted")
+        .await;
 
     let req = Request::builder()
         .method("POST")

@@ -440,18 +440,16 @@ impl UserStore {
         .await
         .map_err(storage)?;
 
-        // GR-X2: drop the id from key selections; empty selections fall back
-        // to inheriting the owner's group.
+        // GR-X2: drop the id from key selections. An empty list permits all Groups.
         let rows = tx
             .query_all(self.db.stmt(
-                "SELECT id, use_user_group, group_ids FROM api_keys",
+                "SELECT id, group_ids FROM api_keys",
                 vec![],
             ))
             .await
             .map_err(storage)?;
         for row in rows {
             let row_id: String = row.try_get("", "id").map_err(storage)?;
-            let use_user_group: i32 = row.try_get("", "use_user_group").map_err(storage)?;
             let raw: Option<String> = row.try_get("", "group_ids").map_err(storage)?;
             let group_ids = parse_group_ids_json(raw.as_deref(), "api_keys.group_ids")
                 .map_err(GroupStoreError::Storage)?;
@@ -459,16 +457,10 @@ impl UserStore {
                 continue;
             }
             let remaining: Vec<String> = group_ids.into_iter().filter(|gid| gid != id).collect();
-            let next_use_user_group = if remaining.is_empty() {
-                1
-            } else {
-                use_user_group
-            };
             tx.execute(self.db.stmt(
-                "UPDATE api_keys SET group_ids = $1, use_user_group = $2 WHERE id = $3",
+                "UPDATE api_keys SET group_ids = $1 WHERE id = $2",
                 vec![
                     serde_json::to_string(&remaining).map_err(storage)?.into(),
-                    SeaValue::Int(Some(next_use_user_group)),
                     row_id.into(),
                 ],
             ))

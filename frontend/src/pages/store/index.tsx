@@ -371,7 +371,7 @@ export function StorePage() {
   const channels = catalog.data?.payment_channels ?? [];
   const settings = catalog.data?.settings;
   const customValidation = settings && activeTab === "balance"
-    ? validateCustomAmount(customAmount, currency, catalog.data?.settings)
+    ? validateCustomAmount(customAmount, currency, settings)
     : { hasCustomAmount: false, minor: null, invalid: false };
   const customRechargeMinor = customValidation.hasCustomAmount
     ? customValidation.minor
@@ -677,7 +677,7 @@ export function StorePage() {
               <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
                 <ProductPicker
                   products={products}
-                  kind={activeTab}
+                  kind={activeTab === "redeem" ? "balance" : activeTab}
                   selectedProduct={selectedProduct}
                   onSelect={(product) => setSelectedProductId(product.id)}
                   currency={currency}

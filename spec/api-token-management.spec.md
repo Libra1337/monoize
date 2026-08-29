@@ -26,18 +26,18 @@ An API key row has:
 - `model_limits_enabled: boolean`
 - `model_limits: string[]`
 - `ip_whitelist: string[]`
-- `use_user_group: boolean`
 - `group_ids: string[]` (ordered group ids, see `groups-registry.spec.md`)
+- `channel_bindings: ApiKeyChannelBinding[]`
 - `max_multiplier: string?` (canonical positive base-10 decimal string)
 - `transforms: TransformRuleConfig[]`
 - `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"`
 
 ### 1.2 Group-scoped routing fields
 
-TM-GRP-1. `use_user_group = true` means the key inherits the owning user's single group at
-request-authentication time and the stored `group_ids` value is ignored. The legacy
-`token_group` and `allowed_groups` columns no longer exist (`groups-registry.spec.md`
-GR-D7).
+TM-GRP-1. `group_ids = []` means the key can route through every registered Group. The
+dashboard MUST describe this state as "All Groups" and MUST NOT describe any Group as the
+key's default Group. The legacy `token_group` and `allowed_groups` columns no longer exist
+(`groups-registry.spec.md` GR-D7).
 
 TM-GRP-2. `group_ids` is an **ordered** JSON TEXT array of group ids. Order is significant:
 it defines the routing preference order per `database-provider-routing.spec.md` R-GRP-2.
@@ -46,10 +46,8 @@ TM-GRP-3. On API key create/update, the server MUST canonicalize `group_ids` per
 `groups-registry.spec.md` GR-C1 (trim, drop empties, dedupe preserving first-occurrence
 order) and validate it per GR-C2/GR-C3 (at most 32 entries; every id must exist).
 
-TM-GRP-4. On API key create/update, when the effective `use_user_group` value is `false`,
-the canonicalized `group_ids` MUST be non-empty; otherwise the mutation MUST be rejected
-with HTTP `400` and code `invalid_request`. When the effective `use_user_group` value is
-`true`, the stored `group_ids` MUST be replaced by `[]`.
+TM-GRP-4. On API key create/update, an empty canonicalized `group_ids` value MUST be stored
+as `[]` and MUST NOT be rejected.
 
 TM-GRP-5. Group selection permission on create/update, applied after canonicalization:
 
@@ -61,9 +59,35 @@ TM-GRP-5. Group selection permission on create/update, applied after canonicaliz
 TM-GRP-6. API key create/update requests that violate TM-GRP-3 through TM-GRP-5 MUST be
 rejected with HTTP `400` and code `invalid_request`.
 
-TM-GRP-7. Stored `group_ids` decoding follows `groups-registry.spec.md` GR-C4; stored
-`use_user_group` MUST be integer `0` or `1`, and any other persisted value MUST fail the
-read.
+TM-GRP-7. Stored `group_ids` decoding follows `groups-registry.spec.md` GR-C4.
+
+### 1.3 Channel selection
+
+TM-CH-1. `ApiKeyChannelBinding` has exactly `group_id`, `model`, and `channel_id` string
+fields. The three fields MUST be non-empty after trimming. `(group_id, model)` MUST be
+unique in one key. The stored JSON array MUST contain at most 256 bindings.
+
+TM-CH-2. A routing conflict exists when two or more enabled Providers in one Group have
+enabled embedded Channels that expose the same logical model and have a complete billable
+rate matrix for that model. Disabled Providers, disabled Channels, unpriced models, and
+models without a complete billable rate matrix do not participate. Conflict eligibility
+MUST match request-time pricing eligibility.
+
+TM-CH-3. `GET /api/dashboard/tokens/channel-conflicts` MUST return every current routing
+conflict. Each conflict contains `group_id`, `group_name`, `model`, and an ordered `options`
+array. Each option contains `channel_id`, `channel_name`, and `provider_name`. The endpoint
+MUST NOT return a Base URL, credential, internal header, or pricing secret.
+
+TM-CH-4. Create and update MUST require exactly one valid binding for every conflict in the
+key's effective Group and model scope. `group_ids = []` includes conflicts from every
+Group. When model limits are enabled and non-empty, only listed models are in scope.
+Missing, duplicate, stale, or invalid bindings MUST return HTTP `400` with code
+`invalid_request`.
+
+TM-CH-5. At request time, a matching binding MUST remove every other Channel attempt for
+that `(group_id, model)`. If a conflict exists and the key has no valid matching binding,
+the request MUST fail with HTTP `409` and code `channel_selection_required`; it MUST NOT
+select a Channel by priority, affinity, or random choice.
 
 TM-IP-1. Every non-empty `ip_whitelist` entry on create or update MUST parse as either an exact IPv4/IPv6 address or an IPv4/IPv6 CIDR network. Any invalid entry MUST reject the mutation with HTTP `400` and code `invalid_request`.
 
@@ -73,7 +97,9 @@ TM-STORAGE-1. API-key dashboard reads and forwarding authentication MUST fail wi
 
 TM-STORAGE-2. Persisted `enabled`, `sub_account_enabled`, `model_limits_enabled`, and `reasoning_envelope_enabled` values MUST be integer `0` or integer `1`. A null value, incompatible database type, or any other integer MUST fail the read. It MUST NOT be replaced by a default value.
 
-TM-STORAGE-3. `group_ids` compatibility is limited to TM-GRP-7. Any other malformed or wrongly typed persisted `group_ids` or `use_user_group` value MUST fail the read and MUST NOT be treated as unrestricted or inherited access.
+TM-STORAGE-3. `group_ids` and `channel_bindings` MUST decode as JSON arrays of their
+declared element types. Malformed or wrongly typed values MUST fail the read and MUST NOT
+be treated as empty values.
 
 TM-STORAGE-4. A present, non-null `request_capture_mode` MUST equal `"off"`, `"capture-all"`, or `"capture-only-abnormal"`. Any other value or incompatible database type MUST fail the read instead of falling back to `request_capture_enabled` or `"off"`. An absent or null value retains the `"off"` compatibility behavior defined by `request-capture-dumps.spec.md` RCD-C8.
 
@@ -109,8 +135,8 @@ All endpoints in this spec require an authenticated dashboard session.
   - `model_limits_enabled: boolean` (default false)
   - `model_limits: string[]` (default empty)
   - `ip_whitelist: string[]` (default empty)
-  - `use_user_group: boolean` (default true, meaning inherit the owning user's group)
-  - `group_ids: string[]` (default empty; required non-empty when `use_user_group` is false)
+  - `group_ids: string[]` (default empty; empty means all Groups)
+  - `channel_bindings: ApiKeyChannelBinding[]` (default empty)
   - `max_multiplier: string?` (default null)
   - `transforms: TransformRuleConfig[]` (default empty)
   - `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"` (default `"off"`)
@@ -142,8 +168,8 @@ TM-CREATE-5. `POST /api/dashboard/tokens` MUST read only the `api_key_max_per_us
   - `model_limits_enabled`
   - `model_limits`
   - `ip_whitelist`
-  - `use_user_group`
   - `group_ids`
+  - `channel_bindings`
   - `max_multiplier`
   - `transforms`
   - `request_capture_mode`

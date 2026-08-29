@@ -14,6 +14,8 @@ const dashboardApiDocsSource = source("../src/pages/dashboard-api-docs.tsx");
 const tokenSummarySource = source("../src/components/usage/token-summary.tsx");
 const usageTrendSource = source("../src/components/usage/usage-trend-chart.tsx");
 const modelDistributionSource = source("../src/components/usage/model-distribution.tsx");
+const publicStatusSource = source("../src/pages/public-status.tsx");
+const apiKeysSource = source("../src/pages/api-keys.tsx");
 
 describe("authenticated Dashboard route ownership", () => {
   test("mounts usage, Marketplace, and API Docs under DashboardLayout", () => {
@@ -32,12 +34,37 @@ describe("authenticated Dashboard route ownership", () => {
   });
 });
 
+describe("Public status", () => {
+  test("renders real traffic timelines and model details in a modal", () => {
+    expect(publicStatusSource).toContain("group.timeline");
+    expect(publicStatusSource).toContain("group.models");
+    expect(publicStatusSource).toContain("<Dialog");
+    expect(publicStatusSource).not.toContain("<details");
+    expect(publicStatusSource).toContain("overallInsufficient");
+  });
+});
+
 describe("Dashboard navigation", () => {
   test("links the brand home and exposes the new Console pages", () => {
     expect(layoutSource).toContain('to="/"');
     expect(layoutSource).toContain('to: "/dashboard/usage"');
     expect(layoutSource).toContain('to: "/dashboard/marketplace"');
     expect(layoutSource).toContain('to: "/dashboard/api-docs"');
+  });
+});
+
+describe("API key routing controls", () => {
+  test("uses all Groups for an empty selection and requires ambiguous Channel bindings", () => {
+    expect(apiKeysSource).not.toContain("use_user_group");
+    expect(apiKeysSource).toContain("useApiKeyChannelConflicts");
+    expect(apiKeysSource).toContain("channel_bindings");
+    expect(apiKeysSource).toContain("<Skeleton");
+    expect(apiKeysSource).toContain("unresolvedChannelConflicts");
+    expect(apiKeysSource).toContain("channelSelectionBlocked");
+  });
+
+  test("does not request the admin transform registry for ordinary users", () => {
+    expect(apiKeysSource).toContain("isPaused: () => !canManageSystem");
   });
 });
 
@@ -57,6 +84,8 @@ describe("Dashboard page boundaries", () => {
     expect(usageTrendSource).toContain("isAnimationActive={!reduceMotion}");
     expect(modelDistributionSource).toContain("rankModelsByTokens");
     expect(modelDistributionSource).toContain("Skeleton");
+    expect(tokenSummarySource).toContain("divide-x");
+    expect(tokenSummarySource.match(/<Card(?:\s|>)/g)?.length).toBe(2);
   });
 
   test("supports the approved Dashboard and Usage Analysis ranges", () => {
@@ -68,6 +97,7 @@ describe("Dashboard page boundaries", () => {
     expect(usageSource).toContain('"30d"');
     expect(usageSource).toContain("useDashboardAnalytics(");
     expect(usageSource).toContain('"self"');
+    expect(usageSource).toContain("refreshInterval: 2000");
   });
 
   test("provides separate Usage Analysis and Dashboard API Docs pages", () => {

@@ -100,26 +100,26 @@ export class MonoizeChatTransport implements ChatTransport<UIMessage> {
     if (!config.model.trim()) {
       throw new Error(this.missingModelMessage);
     }
-    if (config.auth.mode === "invalid") {
-      throw new Error(config.auth.message);
+    const auth = config.auth;
+    if (auth.mode === "invalid") {
+      throw new Error(auth.message);
     }
 
-    const internal = config.auth.mode === "internal";
     const provider = createOpenAICompatible({
       name: "monoize",
       baseURL: `${window.location.origin}/api/v1`,
-      ...(internal
+      ...(auth.mode === "internal"
         ? {
             headers: {
               "x-monoize-internal-source": "playground",
-              ...(config.auth.group.trim()
-                ? { "x-monoize-playground-group": config.auth.group.trim() }
+              ...(auth.group.trim()
+                ? { "x-monoize-playground-group": auth.group.trim() }
                 : {}),
             },
             fetch: (input: RequestInfo | URL, init?: RequestInit) =>
               fetch(input, { ...init, credentials: "include" }),
           }
-        : { apiKey: config.auth.apiKey }),
+        : { apiKey: auth.apiKey }),
     });
 
     const systemPrompt = config.systemPrompt.trim();

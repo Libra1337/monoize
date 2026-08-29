@@ -107,12 +107,37 @@
 			"unavailableDescription": "状態エンドポイントは準備中です。後でもう一度試してください。",
 			"incomplete": "一部のソースデータが不完全です。表示する割合は部分データとして扱ってください。",
 			"dataThrough": "{{time}} までのデータ",
+			"overallLabel": "現在のサービス状態",
+			"overallInsufficient": "観測したリクエスト数が不足しています",
+			"overallOperational": "観測したすべての Group は正常です",
+			"overallIncident": "{{count}} 個の Group で障害が発生しています",
+			"updatedAt": "{{time}} に更新",
+			"legendTitle": "Group の可用性",
+			"legendDescription": "各セグメントは 30 分間の実リクエストを使用します。",
+			"successRate": "24 時間の成功率",
+			"windowLabel": "過去 24 時間",
+			"bucketDuration": "1 セグメント 30 分",
+			"timelineLabel": "{{group}} の 24 時間可用性タイムライン",
+			"lastObserved": "最終観測：{{time}}",
+			"noObservation": "この期間にリクエストは観測されませんでした",
+			"providersTitle": "Provider 状態",
+			"modelsAction": "{{count}} モデルを表示",
+			"modelDialogTitle": "{{group}} のモデル状態",
+			"modelDialogDescription": "モデル成功率は過去 24 時間の実リクエストを使用します。",
+			"noModels": "この期間にモデルリクエストは観測されませんでした。",
 			"states": {
 				"operational": "正常",
 				"minor_degradation": "軽度の低下",
 				"major_degradation": "重大な低下",
 				"unavailable": "利用不可",
 				"insufficient_data": "データ不足"
+			},
+			"thresholds": {
+				"operational": "98% 以上",
+				"minor_degradation": "90% から 98%",
+				"major_degradation": "80% から 90%",
+				"unavailable": "80% 未満",
+				"insufficient_data": "リクエスト 10 件未満"
 			}
 		}
 	},
@@ -903,12 +928,14 @@
 		"requestCaptureHelp": "ダンプを書き込むには、システム全体のキャプチャスイッチも有効である必要があります。",
 		"captureBadgeAll": "dump",
 		"captureBadgeAbnormal": "異常",
-		"useUserGroup": "ユーザーのデフォルトグループを使用",
-		"useUserGroupHelp": "有効にすると、このキーは所有ユーザーのグループに従います。",
-		"useUserGroupHelpNamed": "有効にすると、このキーは所有ユーザーのグループに従います（現在：{{name}}）。",
-		"groups": "カスタムグループ",
-		"groupsHelp": "選択したグループは順番に試行され、1 番目が最優先です。ドラッグで並べ替えできます。",
-		"groupsRequired": "デフォルトグループを使用しない場合は、少なくとも 1 つのグループを選択してください。"
+		"groups": "グループ",
+		"groupsHelp": "未選択の場合はすべてのグループを使用します。選択したグループは順番に試行します。",
+		"allGroups": "すべてのグループ",
+		"channelSelection": "Channel の選択",
+		"channelSelectionHelp": "同じグループ内で複数の Provider が同じモデルを提供する場合は、Channel を 1 つ選択してください。",
+		"selectChannel": "Channel を選択",
+		"channelSelectionRequired": "残り {{count}} 件の競合で Channel を選択してください。",
+		"channelSelectionLoadError": "Channel の競合を取得できません。再試行してから保存してください。"
 	},
 	"settings": {
 		"title": "設定",

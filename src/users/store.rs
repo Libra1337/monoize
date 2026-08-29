@@ -1,9 +1,10 @@
 use super::utils::parse_nano_usd;
 use super::{
-    AdminUpdateUserInput, ApiKey, BillingError, BillingErrorKind, CreateApiKeyInput,
-    CreateApiKeyWithLimitError, ModelRedirectRule, RESERVED_INTERNAL_USER_PREFIX,
+    AdminUpdateUserInput, ApiKey, ApiKeyChannelBinding, BillingError, BillingErrorKind,
+    CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule, RESERVED_INTERNAL_USER_PREFIX,
     RegisterUserError, RequestCaptureMode, Session, UpdateApiKeyInput, User, UserBalance, UserRole,
-    UserStore, canonicalize_group_ids, compile_model_redirects, validate_model_redirects,
+    UserStore, canonicalize_channel_bindings, canonicalize_group_ids, compile_model_redirects,
+    validate_model_redirects,
 };
 use crate::transforms::{
     TransformRuleConfig, canonical_transform_id, canonicalize_transform_rule,
@@ -237,6 +238,21 @@ impl UserStore {
 
 pub(crate) fn serialize_group_ids_json(group_ids: &[String]) -> Result<String, String> {
     serde_json::to_string(&canonicalize_group_ids(group_ids)).map_err(|e| e.to_string())
+}
+
+pub(crate) fn parse_channel_bindings_json(
+    raw: &str,
+    column: &str,
+) -> Result<Vec<ApiKeyChannelBinding>, String> {
+    let bindings = parse_persisted_json_array(raw, column)?;
+    canonicalize_channel_bindings(&bindings)
+        .map_err(|error| format!("invalid persisted {column}: {error}"))
+}
+
+pub(crate) fn serialize_channel_bindings_json(
+    bindings: &[ApiKeyChannelBinding],
+) -> Result<String, String> {
+    serde_json::to_string(&canonicalize_channel_bindings(bindings)?).map_err(|e| e.to_string())
 }
 
 pub(crate) const MAX_GROUP_IDS: usize = 32;
@@ -1302,8 +1318,8 @@ impl UserStore {
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
-                use_user_group: true,
                 group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -1352,20 +1368,12 @@ impl UserStore {
             .await?
             .map(|user| user.group_id)
             .unwrap_or_default();
-        // TM-GRP-4: an inheriting key stores no explicit selection.
-        let group_ids = if input.use_user_group {
-            Vec::new()
-        } else {
-            let group_ids = canonicalize_group_ids(&input.group_ids);
-            if group_ids.is_empty() {
-                return Err(
-                    "group_ids must be non-empty when use_user_group is disabled".to_string(),
-                );
-            }
+        let group_ids = canonicalize_group_ids(&input.group_ids);
+        if !group_ids.is_empty() {
             self.validate_api_key_group_selection(&owner_group_id, &group_ids, is_admin)
                 .await?;
-            group_ids
-        };
+        }
+        let channel_bindings = canonicalize_channel_bindings(&input.channel_bindings)?;
         let id = uuid::Uuid::new_v4().to_string();
         let key = format!("sk-{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
         let key_prefix = key[..12].to_string();
@@ -1379,6 +1387,7 @@ impl UserStore {
         let ip_whitelist_json =
             serde_json::to_string(&input.ip_whitelist).map_err(|e| e.to_string())?;
         let group_ids_json = serialize_group_ids_json(&group_ids)?;
+        let channel_bindings_json = serialize_channel_bindings_json(&channel_bindings)?;
         let model_redirects_json =
             serde_json::to_string(&input.model_redirects).map_err(|e| e.to_string())?;
 
@@ -1388,7 +1397,7 @@ impl UserStore {
             .await
             .map_err(|e| e.message)?;
         tx.execute(self.db.stmt(
-                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, use_user_group, group_ids, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode)
+                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, group_ids, channel_bindings, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode)
                    VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)"#,
                 vec![
                     id.clone().into(),
@@ -1403,8 +1412,8 @@ impl UserStore {
                     SeaValue::Int(Some(if input.model_limits_enabled { 1 } else { 0 })),
                     model_limits_json.into(),
                     ip_whitelist_json.into(),
-                    SeaValue::Int(Some(if input.use_user_group { 1 } else { 0 })),
                     group_ids_json.into(),
+                    channel_bindings_json.into(),
                     input.max_multiplier.map(|v| v.to_string()).into(),
                     serde_json::to_string(&input.transforms).map_err(|e| e.to_string())?.into(),
                     model_redirects_json.into(),
@@ -1449,8 +1458,8 @@ impl UserStore {
             model_limits_enabled: input.model_limits_enabled,
             model_limits: input.model_limits,
             ip_whitelist: input.ip_whitelist,
-            use_user_group: input.use_user_group,
             group_ids,
+            channel_bindings,
             max_multiplier: input.max_multiplier,
             transforms: input.transforms,
             model_redirects: input.model_redirects,
@@ -1492,7 +1501,7 @@ impl UserStore {
     pub async fn get_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key_prefix = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key_prefix = $1",
                 vec![prefix.into()],
             ))
             .await
@@ -1510,7 +1519,7 @@ impl UserStore {
             .db
             .read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key = $1",
                 vec![key.into()],
             ))
             .await
@@ -1534,7 +1543,7 @@ impl UserStore {
                         a.created_at, a.expires_at, a.last_used_at, a.enabled,
                         a.sub_account_enabled, a.sub_account_balance_nano,
                         a.model_limits_enabled, a.model_limits, a.ip_whitelist,
-                        a.use_user_group, a.group_ids, a.max_multiplier, a.transforms,
+                        a.group_ids, a.channel_bindings, a.max_multiplier, a.transforms,
                         a.model_redirects, a.reasoning_envelope_enabled,
                         a.request_capture_enabled, a.request_capture_mode,
                         u.role AS owner_role,
@@ -1635,7 +1644,7 @@ impl UserStore {
                 "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at,
                         a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled,
                         a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits,
-                        a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier,
+                        a.ip_whitelist, a.group_ids, a.channel_bindings, a.max_multiplier,
                         a.transforms, a.model_redirects, a.reasoning_envelope_enabled,
                         a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role
                  FROM api_keys a JOIN users u ON u.id = a.user_id
@@ -1678,7 +1687,7 @@ impl UserStore {
                 "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at,
                         a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled,
                         a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits,
-                        a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier,
+                        a.ip_whitelist, a.group_ids, a.channel_bindings, a.max_multiplier,
                         a.transforms, a.model_redirects, a.reasoning_envelope_enabled,
                         a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role
                  FROM api_keys a JOIN users u ON u.id = a.user_id
@@ -2265,11 +2274,17 @@ impl UserStore {
             parse_persisted_json_array(&ip_whitelist_str, "ip_whitelist")?;
         let ip_whitelist = canonicalize_ip_whitelist(&ip_whitelist)
             .map_err(|error| format!("invalid persisted ip_whitelist: {error}"))?;
-        let use_user_group = decode_required_bool(row, "use_user_group")?;
         let group_ids_raw = row
             .try_get::<Option<String>>("", "group_ids")
             .map_err(|error| format!("invalid persisted api_keys.group_ids: {error}"))?;
         let group_ids = parse_group_ids_json(group_ids_raw.as_deref(), "api_keys.group_ids")?;
+        let channel_bindings_raw: String = row
+            .try_get("", "channel_bindings")
+            .map_err(|error| format!("invalid persisted api_keys.channel_bindings: {error}"))?;
+        let channel_bindings = parse_channel_bindings_json(
+            &channel_bindings_raw,
+            "api_keys.channel_bindings",
+        )?;
 
         let max_multiplier = row
             .try_get::<Option<String>>("", "max_multiplier")
@@ -2320,8 +2335,8 @@ impl UserStore {
             model_limits_enabled,
             model_limits,
             ip_whitelist,
-            use_user_group,
             group_ids,
+            channel_bindings,
             max_multiplier,
             transforms,
             model_redirects,
@@ -2384,26 +2399,18 @@ impl UserStore {
             );
         }
         let disabling_sub_account = input.sub_account_enabled == Some(false);
-        let group_fields_changed = input.use_user_group.is_some() || input.group_ids.is_some();
-        let effective_use_user_group = input
-            .use_user_group
-            .unwrap_or(existing_key.use_user_group);
-        // TM-GRP-4: an inheriting key stores []; an explicit key needs >= 1 group.
-        let effective_group_ids = if effective_use_user_group {
-            Vec::new()
-        } else {
-            let group_ids = input
-                .group_ids
-                .as_deref()
-                .map(canonicalize_group_ids)
-                .unwrap_or_else(|| existing_key.group_ids.clone());
-            if group_fields_changed && group_ids.is_empty() {
-                return Err(
-                    "group_ids must be non-empty when use_user_group is disabled".to_string(),
-                );
-            }
-            group_ids
-        };
+        let group_fields_changed = input.group_ids.is_some() || input.channel_bindings.is_some();
+        let effective_group_ids = input
+            .group_ids
+            .as_deref()
+            .map(canonicalize_group_ids)
+            .unwrap_or_else(|| existing_key.group_ids.clone());
+        let effective_channel_bindings = input
+            .channel_bindings
+            .as_deref()
+            .map(canonicalize_channel_bindings)
+            .transpose()?
+            .unwrap_or_else(|| existing_key.channel_bindings.clone());
         let mut set_clauses = Vec::new();
         let mut values: Vec<SeaValue> = Vec::new();
         let mut idx = 1usize;
@@ -2456,15 +2463,11 @@ impl UserStore {
             idx += 1;
         }
         if group_fields_changed {
-            set_clauses.push(format!("use_user_group = ${idx}"));
-            values.push(SeaValue::Int(Some(if effective_use_user_group {
-                1
-            } else {
-                0
-            })));
-            idx += 1;
             set_clauses.push(format!("group_ids = ${idx}"));
             values.push(serialize_group_ids_json(&effective_group_ids)?.into());
+            idx += 1;
+            set_clauses.push(format!("channel_bindings = ${idx}"));
+            values.push(serialize_channel_bindings_json(&effective_channel_bindings)?.into());
             idx += 1;
         }
         if let Some(max_multiplier) = input.max_multiplier {
@@ -2525,7 +2528,7 @@ impl UserStore {
             return Ok(existing_key);
         }
 
-        if group_fields_changed && !effective_use_user_group {
+        if group_fields_changed && !effective_group_ids.is_empty() {
             let owner_group_id = self
                 .get_user_by_id(&existing_key.user_id)
                 .await?
@@ -2693,7 +2696,7 @@ impl UserStore {
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.id = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.id = $1",
                 vec![id.into()],
             ))
             .await
@@ -3723,8 +3726,8 @@ mod tests {
             model_limits_enabled: false,
             model_limits: Vec::new(),
             ip_whitelist: Vec::new(),
-            use_user_group: true,
             group_ids: Vec::new(),
+            channel_bindings: Vec::new(),
             max_multiplier: None,
             transforms: Vec::new(),
             model_redirects: Vec::new(),

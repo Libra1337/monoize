@@ -509,6 +509,11 @@ export function RetentionDialog({
       toast.error(t("store.admin.governance.invalid"));
       return;
     }
+    if (!data) {
+      toast.error(t("store.admin.governance.invalid"));
+      return;
+    }
+    const currentOverview = data;
     const input = { reason: reason.trim(), evidence_digest: evidenceDigest.trim() };
     setBusy(true);
     try {
@@ -517,7 +522,7 @@ export function RetentionDialog({
           const containment = await withRetentionReauth((token) =>
             storeApi.admin.containRetention(input, token),
           );
-          const base = current ?? (await storeApi.admin.getRetention());
+          const base = current ?? currentOverview;
           return {
             ...base,
             status: {
@@ -533,7 +538,8 @@ export function RetentionDialog({
           };
         },
         {
-          optimisticData: (current) => optimisticContainment(input, current),
+          optimisticData: (current) =>
+            optimisticContainment(input, current ?? currentOverview) ?? currentOverview,
           rollbackOnError: true,
           revalidate: true,
         },

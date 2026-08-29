@@ -18,6 +18,8 @@ export function StoreCurrencyProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// The hook and provider share one private Context and must stay in this module.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useStoreCurrency(): StoreCurrencyContextValue {
   const value = useContext(StoreCurrencyContext);
   if (!value) {

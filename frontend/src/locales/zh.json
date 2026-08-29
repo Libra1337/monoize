@@ -107,12 +107,37 @@
 			"unavailableDescription": "状态端点尚未就绪。请稍后重试。",
 			"incomplete": "部分来源数据不完整。请把显示的百分比视为部分数据。",
 			"dataThrough": "数据统计到 {{time}}",
+			"overallLabel": "当前服务状态",
+			"overallInsufficient": "尚未观测到足够的请求",
+			"overallOperational": "已观测的 Group 均运行正常",
+			"overallIncident": "{{count}} 个 Group 存在异常",
+			"updatedAt": "更新于 {{time}}",
+			"legendTitle": "Group 可用性",
+			"legendDescription": "每个色块使用一个 30 分钟窗口内的真实请求。",
+			"successRate": "近 24 小时成功率",
+			"windowLabel": "最近 24 小时",
+			"bucketDuration": "每格 30 分钟",
+			"timelineLabel": "{{group}} 近 24 小时可用性时间轴",
+			"lastObserved": "最近观测：{{time}}",
+			"noObservation": "此窗口内尚未观测到请求",
+			"providersTitle": "Provider 状态",
+			"modelsAction": "查看 {{count}} 个模型",
+			"modelDialogTitle": "{{group}} 模型状态",
+			"modelDialogDescription": "模型成功率使用最近 24 小时内的真实请求。",
+			"noModels": "此窗口内尚未观测到模型请求。",
 			"states": {
 				"operational": "运行正常",
 				"minor_degradation": "轻微降级",
 				"major_degradation": "严重降级",
 				"unavailable": "不可用",
 				"insufficient_data": "数据不足"
+			},
+			"thresholds": {
+				"operational": "成功率不低于 98%",
+				"minor_degradation": "成功率 90% 至 98%",
+				"major_degradation": "成功率 80% 至 90%",
+				"unavailable": "成功率低于 80%",
+				"insufficient_data": "请求少于 10 次"
 			}
 		}
 	},
@@ -906,12 +931,14 @@
 		"requestCaptureHelp": "写入 dump 前仍需要同时开启系统总开关。",
 		"captureBadgeAll": "抓包",
 		"captureBadgeAbnormal": "异常抓包",
-		"useUserGroup": "使用用户默认分组",
-		"useUserGroupHelp": "开启后，此密钥跟随所属用户的分组。",
-		"useUserGroupHelpNamed": "开启后，此密钥跟随所属用户的分组（当前：{{name}}）。",
-		"groups": "自选分组",
-		"groupsHelp": "按顺序尝试所选分组，第 1 位优先。可拖动调整顺序。",
-		"groupsRequired": "关闭“使用用户默认分组”后，至少需要选择一个分组。"
+		"groups": "分组",
+		"groupsHelp": "不选择表示所有分组。按顺序尝试所选分组，可拖动调整顺序。",
+		"allGroups": "所有分组",
+		"channelSelection": "Channel 选择",
+		"channelSelectionHelp": "同一分组内多个 Provider 提供相同模型时，请选择一个 Channel。",
+		"selectChannel": "选择 Channel",
+		"channelSelectionRequired": "请为剩余 {{count}} 个冲突选择 Channel。",
+		"channelSelectionLoadError": "暂时无法读取 Channel 冲突。请重试后再保存。"
 	},
 	"settings": {
 		"title": "系统设置",

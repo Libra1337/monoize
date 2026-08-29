@@ -91,9 +91,8 @@ with selected model id `m` iff `m` is empty, `model_limits_enabled == false`,
 `model_limits == []`, or `m ∈ model_limits`. A time-eligible key *covers* an explicit
 selected group `g` iff one condition is true:
 
-1. `use_user_group == false` and `g ∈ group_ids`.
-2. (`use_user_group == true` or `group_ids == []`) and `g` equals the session user's
-   current group id.
+1. `group_ids == []`.
+2. `g ∈ group_ids`.
 
 PG-AUTH7. When an explicit API key is not model-compatible or does not cover the selected
 non-auto group, sending MUST be disabled and an inline translated reason MUST identify

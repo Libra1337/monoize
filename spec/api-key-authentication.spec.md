@@ -60,14 +60,9 @@ AKP3. If database validation fails or is skipped, Monoize MUST return:
 Groups are first-class registry rows (`groups-registry.spec.md`). All group values in this
 section are group **ids** (UUID strings), never names.
 
-AKG1. The owning user row MUST be read as if it contains `group_id: string` (the user's
-single group id). Authentication MUST NOT join the `monoize_groups` table; a dangling
-`group_id` simply matches no provider downstream.
+AKG1. The owning user's single `group_id` MUST NOT affect API-key Group resolution.
 
-AKG2. The authenticated API key row MUST be read as if it contains
-`use_user_group: boolean` and `group_ids: string[]` (ordered). Persisted `use_user_group`
-MUST be integer `0` or `1`; any other value or incompatible type MUST fail authentication
-with an internal storage error.
+AKG2. The authenticated API key row MUST contain `group_ids: string[]` (ordered).
 
 AKG2a. A stored `api_keys.group_ids` value that is absent, null, empty string, or a
 serialized empty array decodes as `[]`. Every other value MUST decode as a JSON array of
@@ -81,24 +76,24 @@ disabled or missing plan contributes no restriction). Storage decoding follows A
 
 AKG4. The authenticated context MUST represent request-scoped group access as
 `effective_groups: string[] | null` where the array is an **ordered** list of group ids.
-`null` is reserved for system-originated internal traffic (request-capture replay,
-probes); API-key authentication MUST always produce a non-null array.
+For API-key authentication, an empty array means every Group. `null` is reserved for
+system-originated internal traffic.
 
 AKG5. Authentication MUST resolve `effective_groups` as follows:
 
-1. `base = [user.group_id]` if `api_key.use_user_group` is true OR `api_key.group_ids == []`;
-   otherwise `base = api_key.group_ids` with order preserved.
-2. If `plan_group_ids` is present and non-empty, `effective_groups` = the elements of
-   `base` that are members of `plan_group_ids`, in `base` order. Otherwise
-   `effective_groups = base`.
+1. `base = api_key.group_ids` with order preserved. An empty `base` means every Group.
+2. If `plan_group_ids` is present and non-empty and `base` is empty, then
+   `effective_groups = plan_group_ids`.
+3. If `plan_group_ids` is present and non-empty and `base` is non-empty, then
+   `effective_groups` is the intersection in `base` order.
+4. Otherwise `effective_groups = base`.
 
 AKG6. The attached array MUST be deduplicated preserving first occurrence order. Elements
 MUST NOT be lowercased, sorted, or otherwise rewritten; group ids are opaque and their
 order defines routing preference (`database-provider-routing.spec.md` R-GRP-2).
 
-AKG7. Authentication MUST succeed even when `effective_groups = []` (the plan ceiling
-excluded every base group). The downstream routing consequence is that zero providers are
-group-eligible for that request.
+AKG7. Authentication MUST attach the key's `channel_bindings` after strict storage
+decoding. Runtime Channel selection follows `api-token-management.spec.md` TM-CH-5.
 
 ## 5. Error response uniformity
 

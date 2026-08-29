@@ -1334,8 +1334,8 @@ mod tests {
                     model_limits_enabled: false,
                     model_limits: Vec::new(),
                     ip_whitelist: Vec::new(),
-                    use_user_group: true,
                     group_ids: Vec::new(),
+                    channel_bindings: Vec::new(),
                     max_multiplier: None,
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
@@ -1347,28 +1347,18 @@ mod tests {
             .await
             .expect("key creates");
 
-        let (api_key, owner, plan_groups) = store
+        let (api_key, _owner, plan_groups) = store
             .validate_api_key(&token)
             .await
             .expect("validates")
             .expect("key valid");
         assert_eq!(plan_groups, Some(vec![team_a.id.clone()]));
 
-        // The owner's default group is outside the plan ceiling, so the
-        // resolved list is empty; selecting team-a explicitly passes.
-        let effective = resolve_effective_groups(
-            &owner.group_id,
-            api_key.use_user_group,
-            &api_key.group_ids,
-            plan_groups.as_deref(),
-        );
-        assert_eq!(effective, Vec::<String>::new());
-        let explicit = resolve_effective_groups(
-            &owner.group_id,
-            false,
-            std::slice::from_ref(&team_a.id),
-            plan_groups.as_deref(),
-        );
+        // Empty key groups inherit the plan ceiling; selecting team-a explicitly also passes.
+        let effective = resolve_effective_groups(&api_key.group_ids, plan_groups.as_deref());
+        assert_eq!(effective, vec![team_a.id.clone()]);
+        let explicit =
+            resolve_effective_groups(std::slice::from_ref(&team_a.id), plan_groups.as_deref());
         assert_eq!(explicit, vec![team_a.id.clone()]);
     }
 

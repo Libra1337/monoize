@@ -91,9 +91,13 @@ export function DashboardPage() {
   const { user } = useAuth();
   const [range, setRange] = useState<DashboardRange>("24h");
   const rangeConfig = DASHBOARD_RANGES[range];
-  const summary = useDashboardAnalytics(8, 720, "self", { keepPreviousData: true });
+  const summary = useDashboardAnalytics(8, 720, "self", {
+    keepPreviousData: true,
+    refreshInterval: 2000,
+  });
   const usage = useDashboardAnalytics(rangeConfig.buckets, rangeConfig.hours, "self", {
     keepPreviousData: true,
+    refreshInterval: 2000,
   });
   const totals = useMemo(
     () => usage.data ? aggregateTokenTotals(usage.data.buckets) : undefined,

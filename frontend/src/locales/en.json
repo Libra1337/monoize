@@ -107,12 +107,37 @@
 			"unavailableDescription": "The status endpoint is not ready. Try again later.",
 			"incomplete": "Some source data is incomplete. Treat displayed percentages as partial.",
 			"dataThrough": "Data through {{time}}",
+			"overallLabel": "Current service state",
+			"overallInsufficient": "Not enough traffic has been observed",
+			"overallOperational": "All observed Groups are operational",
+			"overallIncident": "{{count}} Groups have an active incident",
+			"updatedAt": "Updated {{time}}",
+			"legendTitle": "Group availability",
+			"legendDescription": "Each segment uses real requests from one 30-minute window.",
+			"successRate": "24-hour success rate",
+			"windowLabel": "Last 24 hours",
+			"bucketDuration": "30 minutes per segment",
+			"timelineLabel": "{{group}} 24-hour availability timeline",
+			"lastObserved": "Last observed {{time}}",
+			"noObservation": "No requests were observed in this window",
+			"providersTitle": "Provider state",
+			"modelsAction": "View {{count}} models",
+			"modelDialogTitle": "{{group}} model state",
+			"modelDialogDescription": "Model success rates use real requests from the last 24 hours.",
+			"noModels": "No model request was observed in this window.",
 			"states": {
 				"operational": "Operational",
 				"minor_degradation": "Minor degradation",
 				"major_degradation": "Major degradation",
 				"unavailable": "Unavailable",
 				"insufficient_data": "Insufficient data"
+			},
+			"thresholds": {
+				"operational": "98% or higher",
+				"minor_degradation": "90% to 98%",
+				"major_degradation": "80% to 90%",
+				"unavailable": "Below 80%",
+				"insufficient_data": "Fewer than 10 requests"
 			}
 		}
 	},
@@ -906,12 +931,14 @@
 		"requestCaptureHelp": "The system-wide capture switch must also be enabled before dumps are written.",
 		"captureBadgeAll": "dump",
 		"captureBadgeAbnormal": "abnormal",
-		"useUserGroup": "Use user's default group",
-		"useUserGroupHelp": "When enabled, this key follows its owner's group.",
-		"useUserGroupHelpNamed": "When enabled, this key follows its owner's group (currently: {{name}}).",
-		"groups": "Custom groups",
-		"groupsHelp": "Selected groups are tried in order; position 1 first. Drag to reorder.",
-		"groupsRequired": "Select at least one group when not using the user's default group."
+		"groups": "Groups",
+		"groupsHelp": "Leave empty for all Groups. Selected Groups are tried in order. Drag to reorder.",
+		"allGroups": "All Groups",
+		"channelSelection": "Channel selection",
+		"channelSelectionHelp": "Select one Channel when multiple Providers expose the same model in one Group.",
+		"selectChannel": "Select Channel",
+		"channelSelectionRequired": "Select a Channel for all {{count}} remaining conflicts.",
+		"channelSelectionLoadError": "Channel conflicts are unavailable. Try again before saving."
 	},
 	"settings": {
 		"title": "Settings",

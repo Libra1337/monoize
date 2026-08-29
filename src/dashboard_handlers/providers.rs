@@ -393,12 +393,12 @@ fn missing_required_usage_classes(rates: &[DbBillingRateRecord]) -> Vec<String> 
 }
 
 #[derive(Debug, Serialize)]
-struct PricingWarning {
-    logical_model: String,
+pub(super) struct PricingWarning {
+    pub(super) logical_model: String,
     missing_usage_classes: Vec<String>,
 }
 
-async fn provider_pricing_warnings(
+pub(super) async fn provider_pricing_warnings(
     state: &AppState,
     provider: &MonoizeProvider,
 ) -> AppResult<Vec<PricingWarning>> {

@@ -88,7 +88,7 @@ async fn migration_058_down_up_round_trip_recreates_retained_table_indexes() {
     Migrator::up(&*db.write().await, None)
         .await
         .expect("run migrations");
-    Migrator::down(&*db.write().await, Some(1))
+    Migrator::down(&*db.write().await, Some(3))
         .await
         .expect("roll back migration 058");
 
@@ -863,6 +863,7 @@ async fn overview_lists_runs_holds_and_containments() {
         .run_at(instant(), actor("overview-run"))
         .await
         .expect("run");
+    let request_time = Utc::now();
     retention
         .create_legal_hold(
             CreateStoreLegalHoldInput {
@@ -872,11 +873,11 @@ async fn overview_lists_runs_holds_and_containments() {
                 requesting_authority: "privacy".to_string(),
                 requester_id: "retention-requester".to_string(),
                 approver_role: "privacy".to_string(),
-                expires_at: instant() + Duration::days(1),
+                expires_at: request_time + Duration::days(1),
                 extends_hold_id: None,
             },
             "retention-admin",
-            instant() + Duration::seconds(1),
+            request_time - Duration::seconds(1),
         )
         .await
         .expect("hold");

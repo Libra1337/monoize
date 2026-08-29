@@ -254,7 +254,7 @@ export function readableAffinityTarget(
 	log: RequestLog,
 	knownTargets: ReadonlyMap<string, string>
 ): string | null {
-	const target = nonempty(log.affinity.target)
+	const target = nonempty(log.affinity?.target)
 	if (!target) return null
 
 	const knownName = nonempty(knownTargets.get(target))

@@ -29,6 +29,7 @@ pub struct AuthResult {
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<crate::users::CompiledModelRedirectRule>,
     pub effective_groups: Option<Vec<String>>,
+    pub channel_bindings: Vec<crate::users::ApiKeyChannelBinding>,
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
@@ -67,8 +68,6 @@ impl AuthState {
                         // GR-I4: API-key auth always yields a concrete ordered list;
                         // `None` is reserved for internal system traffic.
                         let effective_groups = Some(resolve_effective_groups(
-                            &user.group_id,
-                            api_key.use_user_group,
                             &api_key.group_ids,
                             plan_group_ids.as_deref(),
                         ));
@@ -84,6 +83,7 @@ impl AuthState {
                             transforms: api_key.transforms,
                             model_redirects: api_key.compiled_model_redirects,
                             effective_groups,
+                            channel_bindings: api_key.channel_bindings,
                             model_limits_enabled: api_key.model_limits_enabled,
                             model_limits: api_key.model_limits,
                             ip_whitelist: api_key.ip_whitelist,
@@ -127,7 +127,7 @@ mod tests {
         UserStore::new(db, log_tx).await.expect("store creates")
     }
 
-    fn key_input(name: &str, use_user_group: bool, group_ids: Vec<String>) -> CreateApiKeyInput {
+    fn key_input(name: &str, group_ids: Vec<String>) -> CreateApiKeyInput {
         CreateApiKeyInput {
             name: name.to_string(),
             expires_in_days: None,
@@ -136,8 +136,8 @@ mod tests {
             model_limits_enabled: false,
             model_limits: Vec::new(),
             ip_whitelist: Vec::new(),
-            use_user_group,
             group_ids,
+            channel_bindings: Vec::new(),
             max_multiplier: None,
             transforms: Vec::new(),
             model_redirects: Vec::new(),
@@ -147,15 +147,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authenticate_token_resolves_owner_group_for_inheriting_key() {
+    async fn authenticate_token_uses_all_groups_for_empty_key_selection() {
         let store = make_user_store().await;
-        let default_group_id = store.default_group_id().await.expect("default exists");
         let user = store
             .create_user("alice", "password123", UserRole::User, None)
             .await
             .expect("user created");
         let (_, token) = store
-            .create_api_key_extended(&user.id, key_input("inheriting key", true, Vec::new()), false)
+            .create_api_key_extended(&user.id, key_input("inheriting key", Vec::new()), false)
             .await
             .expect("api key created");
 
@@ -165,7 +164,7 @@ mod tests {
             .expect("auth succeeds");
 
         assert_eq!(auth.user_id.as_deref(), Some(user.id.as_str()));
-        assert_eq!(auth.effective_groups, Some(vec![default_group_id]));
+        assert_eq!(auth.effective_groups, Some(Vec::new()));
     }
 
     #[tokio::test]
@@ -199,11 +198,7 @@ mod tests {
         let (_, token) = store
             .create_api_key_extended(
                 &user.id,
-                key_input(
-                    "explicit key",
-                    false,
-                    vec![team_b.id.clone(), team_a.id.clone()],
-                ),
+                key_input("explicit key", vec![team_b.id.clone(), team_a.id.clone()]),
                 true,
             )
             .await

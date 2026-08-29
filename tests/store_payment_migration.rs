@@ -414,26 +414,49 @@ async fn migration_059_repairs_released_entitlements_and_order_expiry() {
             "SELECT id, user_id, generation, product_id, product_name, starts_at, ends_at,
                     rate_numerator, rate_denominator, group_ids, quota_json, source_kind,
                     source_id
-             FROM store_plan_entitlement_generations".to_string(),
+             FROM store_plan_entitlement_generations"
+                .to_string(),
         ))
         .await
         .unwrap()
         .expect("migrated entitlement generation");
-    assert_eq!(String::try_get(&generation, "", "id").unwrap(), "released-entitlement");
-    assert_eq!(String::try_get(&generation, "", "user_id").unwrap(), "released-user");
+    assert_eq!(
+        String::try_get(&generation, "", "id").unwrap(),
+        "released-entitlement"
+    );
+    assert_eq!(
+        String::try_get(&generation, "", "user_id").unwrap(),
+        "released-user"
+    );
     assert_eq!(i64::try_get(&generation, "", "generation").unwrap(), 1);
-    assert_eq!(String::try_get(&generation, "", "product_id").unwrap(), "released-plan");
-    assert_eq!(String::try_get(&generation, "", "rate_numerator").unwrap(), "842227");
-    assert_eq!(String::try_get(&generation, "", "rate_denominator").unwrap(), "125000");
-    assert_eq!(String::try_get(&generation, "", "group_ids").unwrap(), "[\"group-a\"]");
-    assert_eq!(String::try_get(&generation, "", "source_id").unwrap(), "released-order");
+    assert_eq!(
+        String::try_get(&generation, "", "product_id").unwrap(),
+        "released-plan"
+    );
+    assert_eq!(
+        String::try_get(&generation, "", "rate_numerator").unwrap(),
+        "842227"
+    );
+    assert_eq!(
+        String::try_get(&generation, "", "rate_denominator").unwrap(),
+        "125000"
+    );
+    assert_eq!(
+        String::try_get(&generation, "", "group_ids").unwrap(),
+        "[\"group-a\"]"
+    );
+    assert_eq!(
+        String::try_get(&generation, "", "source_id").unwrap(),
+        "released-order"
+    );
 
     let current_count = db
         .query_one(Statement::from_string(
             DbBackend::Sqlite,
             "SELECT COUNT(*) AS value FROM store_plan_entitlement_current
              WHERE user_id = 'released-user' AND entitlement_id = 'released-entitlement'
-               AND generation = 1".to_string(),
+               AND generation = 1"
+                .to_string(),
         ))
         .await
         .unwrap()
@@ -444,7 +467,8 @@ async fn migration_059_repairs_released_entitlements_and_order_expiry() {
             DbBackend::Sqlite,
             "SELECT COUNT(*) AS value FROM store_plan_entitlement_lifecycle
              WHERE entitlement_id = 'released-entitlement' AND suspended_at IS NULL
-               AND revoked_at IS NULL".to_string(),
+               AND revoked_at IS NULL"
+                .to_string(),
         ))
         .await
         .unwrap()
@@ -477,7 +501,7 @@ async fn migration_059_repairs_released_entitlements_and_order_expiry() {
 #[tokio::test]
 async fn migration_059_preserves_complete_current_entitlement_schema() {
     let db = migrated_database().await;
-    Migrator::down(&db, Some(1)).await.unwrap();
+    Migrator::down(&db, Some(2)).await.unwrap();
 
     let group = db
         .query_one(Statement::from_string(
@@ -544,7 +568,8 @@ async fn migration_059_preserves_complete_current_entitlement_schema() {
 #[tokio::test]
 async fn migration_059_rejects_partial_or_mixed_entitlement_schema() {
     let db = migrated_database().await;
-    Migrator::down(&db, Some(1)).await.unwrap();
+    // Migration 060 follows 059, so both must be rolled back before 059 can be re-executed.
+    Migrator::down(&db, Some(2)).await.unwrap();
     db.execute_unprepared("DROP TABLE store_plan_entitlement_current")
         .await
         .unwrap();

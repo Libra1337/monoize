@@ -13,8 +13,8 @@ Channel IDs and names from the selected Provider row. A request-log read MUST NO
 
 RL-MIG-3. Retry-chain identity remains `(provider_id, channel_id)`. Same-Channel physical
 retries reuse the pair; fail-forward to another Provider uses that Provider's embedded
-Channel pair. Public status event storage is independent and MUST NOT expose request-log
-payload or user fields.
+Channel pair. Public status reads terminal request-log outcomes but MUST NOT read or expose
+request-log payload or user fields (`public-provider-status.spec.md` PST-S1 through PST-S5).
 
 ## 0. Status
 

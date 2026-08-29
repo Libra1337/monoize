@@ -25,6 +25,7 @@ type CapturedBodies = Arc<Mutex<Vec<(String, Value)>>>;
 struct TestContext {
     router: axum::Router,
     auth_header: String,
+    api_key_id: String,
     state: monoize::app::AppState,
     captured_headers: CapturedHeaders,
     captured_bodies: CapturedBodies,

@@ -523,22 +523,20 @@ fn dashboard_create_user_group_id_defaults_to_absent() {
 }
 
 #[test]
-fn dashboard_create_api_key_defaults_to_inheriting_user_group() {
+fn dashboard_create_api_key_defaults_to_all_groups() {
     let body: CreateApiKeyRequest = serde_json::from_value(json!({
         "name": "default key"
     }))
     .expect("payload deserializes");
 
-    assert!(body.use_user_group);
     assert!(body.group_ids.is_empty());
+    assert!(body.channel_bindings.is_empty());
 
     let explicit: CreateApiKeyRequest = serde_json::from_value(json!({
         "name": "explicit key",
-        "use_user_group": false,
         "group_ids": ["g-2", "g-1"]
     }))
     .expect("payload deserializes");
-    assert!(!explicit.use_user_group);
     assert_eq!(
         explicit.group_ids,
         vec!["g-2".to_string(), "g-1".to_string()]
@@ -551,19 +549,19 @@ fn dashboard_update_api_key_group_fields_are_partial() {
         "name": "renamed key"
     }))
     .expect("payload deserializes");
-    assert!(omitted.use_user_group.is_none());
     assert!(omitted.group_ids.is_none());
+    assert!(omitted.channel_bindings.is_none());
 
     let present: UpdateApiKeyRequest = serde_json::from_value(json!({
-        "use_user_group": false,
-        "group_ids": ["g-2", "g-1"]
+        "group_ids": ["g-2", "g-1"],
+        "channel_bindings": [{"group_id": "g-2", "model": "gpt-test", "channel_id": "channel-1"}]
     }))
     .expect("payload deserializes");
-    assert_eq!(present.use_user_group, Some(false));
     assert_eq!(
         present.group_ids,
         Some(vec!["g-2".to_string(), "g-1".to_string()])
     );
+    assert_eq!(present.channel_bindings.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -728,7 +726,6 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
 
     let create_body: CreateApiKeyRequest = serde_json::from_value(json!({
         "name": "dashboard key",
-        "use_user_group": false,
         "group_ids": [format!(" {} ", beta.id), alpha.id, beta.id, ""]
     }))
     .expect("create payload deserializes");
@@ -744,8 +741,8 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 model_limits_enabled: create_body.model_limits_enabled,
                 model_limits: create_body.model_limits,
                 ip_whitelist: create_body.ip_whitelist,
-                use_user_group: create_body.use_user_group,
                 group_ids: create_body.group_ids,
+                channel_bindings: create_body.channel_bindings,
                 max_multiplier: create_body.max_multiplier,
                 transforms: create_body.transforms,
                 model_redirects: create_body.model_redirects,
@@ -758,7 +755,6 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         .expect("api key created");
 
     // Order is routing priority (TM-GRP-2): trim + dedupe, keep submitted order.
-    assert!(!created.use_user_group);
     assert_eq!(created.group_ids, vec![beta.id.clone(), alpha.id.clone()]);
 
     let (nano, usd) = super::api_keys::nano_balance_fields(&created.sub_account_balance_nano)
@@ -776,8 +772,8 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         model_limits_enabled: created.model_limits_enabled,
         model_limits: created.model_limits.clone(),
         ip_whitelist: created.ip_whitelist.clone(),
-        use_user_group: created.use_user_group,
         group_ids: created.group_ids.clone(),
+        channel_bindings: created.channel_bindings.clone(),
         max_multiplier: created.max_multiplier,
         transforms: created.transforms.clone(),
         model_redirects: created.model_redirects.clone(),
@@ -785,7 +781,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         request_capture_mode: created.request_capture_mode,
     })
     .expect("created response serializes");
-    assert_eq!(created_value.get("use_user_group"), Some(&json!(false)));
+    assert!(created_value.get("use_user_group").is_none());
     assert_eq!(
         created_value.get("group_ids"),
         Some(&json!([beta.id.clone(), alpha.id.clone()]))
@@ -808,8 +804,8 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
-                use_user_group: update_body.use_user_group,
                 group_ids: update_body.group_ids,
+                channel_bindings: update_body.channel_bindings,
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: None,
@@ -822,7 +818,6 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         .await
         .expect("api key updated");
 
-    assert!(!updated.use_user_group);
     assert_eq!(updated.group_ids, vec![beta.id.clone()]);
     assert_eq!(
         updated.request_capture_mode,
@@ -845,8 +840,8 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         .expect("listed api key exists");
     assert_eq!(listed_key.group_ids, vec![beta.id.clone()]);
 
-    // TM-GRP-4: switching back to inheritance clears the stored selection.
-    let inherited = store
+    // An empty Group selection permits every Group.
+    let all_groups = store
         .update_api_key(
             &created.id,
             UpdateApiKeyInput {
@@ -857,8 +852,8 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
-                use_user_group: Some(true),
-                group_ids: None,
+                group_ids: Some(Vec::new()),
+                channel_bindings: None,
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: None,
@@ -869,9 +864,8 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
             false,
         )
         .await
-        .expect("api key reverts to inheritance");
-    assert!(inherited.use_user_group);
-    assert!(inherited.group_ids.is_empty());
+        .expect("api key permits all groups");
+    assert!(all_groups.group_ids.is_empty());
 
     let (fnano, fusd) = super::api_keys::nano_balance_fields(&fetched.sub_account_balance_nano)
         .expect("stored balance is valid");
@@ -890,8 +884,8 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         model_limits_enabled: fetched.model_limits_enabled,
         model_limits: fetched.model_limits,
         ip_whitelist: fetched.ip_whitelist,
-        use_user_group: fetched.use_user_group,
         group_ids: fetched.group_ids,
+        channel_bindings: fetched.channel_bindings,
         max_multiplier: fetched.max_multiplier,
         transforms: fetched.transforms,
         model_redirects: fetched.model_redirects,
@@ -939,8 +933,8 @@ async fn admin_sub_account_adjustment_records_initial_credit_and_refund() {
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
-                use_user_group: true,
                 group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -964,8 +958,8 @@ async fn admin_sub_account_adjustment_records_initial_credit_and_refund() {
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
-                use_user_group: None,
                 group_ids: None,
+                channel_bindings: None,
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: None,
@@ -1068,7 +1062,7 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
         .await
         .expect("user created");
 
-    fn key_input(name: &str, use_user_group: bool, group_ids: Vec<String>) -> CreateApiKeyInput {
+    fn key_input(name: &str, group_ids: Vec<String>) -> CreateApiKeyInput {
         CreateApiKeyInput {
             name: name.to_string(),
             expires_in_days: None,
@@ -1077,8 +1071,8 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
             model_limits_enabled: false,
             model_limits: Vec::new(),
             ip_whitelist: Vec::new(),
-            use_user_group,
             group_ids,
+            channel_bindings: Vec::new(),
             max_multiplier: None,
             transforms: Vec::new(),
             model_redirects: Vec::new(),
@@ -1091,22 +1085,15 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
     let create_err = store
         .create_api_key_extended(
             &user.id,
-            key_input("hidden key", false, vec![hidden.id.clone()]),
+            key_input("hidden key", vec![hidden.id.clone()]),
             false,
         )
         .await
         .expect_err("create should reject non-selectable group");
     assert!(create_err.contains("not selectable"));
 
-    // TM-GRP-3: an explicit selection must be non-empty.
-    let empty_err = store
-        .create_api_key_extended(&user.id, key_input("empty key", false, Vec::new()), false)
-        .await
-        .expect_err("create should reject empty explicit selection");
-    assert!(empty_err.contains("non-empty"));
-
     let (created, _) = store
-        .create_api_key_extended(&user.id, key_input("baseline key", true, Vec::new()), false)
+        .create_api_key_extended(&user.id, key_input("baseline key", Vec::new()), false)
         .await
         .expect("baseline key created");
 
@@ -1121,8 +1108,8 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
-                use_user_group: Some(false),
                 group_ids: Some(vec![hidden.id.clone()]),
+                channel_bindings: None,
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: None,
@@ -1140,7 +1127,7 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
     let admin_key = store
         .create_api_key_extended(
             &user.id,
-            key_input("admin key", false, vec![hidden.id.clone()]),
+            key_input("admin key", vec![hidden.id.clone()]),
             true,
         )
         .await
@@ -1186,8 +1173,8 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 model_limits_enabled: create_body.model_limits_enabled,
                 model_limits: create_body.model_limits,
                 ip_whitelist: create_body.ip_whitelist,
-                use_user_group: create_body.use_user_group,
                 group_ids: create_body.group_ids,
+                channel_bindings: create_body.channel_bindings,
                 max_multiplier: create_body.max_multiplier,
                 transforms: create_body.transforms,
                 model_redirects: create_body.model_redirects,
@@ -1214,8 +1201,8 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
-                use_user_group: None,
                 group_ids: None,
+                channel_bindings: None,
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: Some(vec![ModelRedirectRule {
@@ -1245,8 +1232,8 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
-                use_user_group: true,
                 group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: vec![ModelRedirectRule {

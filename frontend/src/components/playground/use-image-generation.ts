@@ -63,7 +63,7 @@ export async function requestImages(
   input: ImageRequestInput,
   signal: AbortSignal,
 ): Promise<ImageApiDataItem[]> {
-  const authHeaders = input.apiKey
+  const authHeaders: Record<string, string> = input.apiKey
     ? { Authorization: `Bearer ${input.apiKey}` }
     : {
         "x-monoize-internal-source": "playground",

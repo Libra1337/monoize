@@ -71,6 +71,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
         })
         .await
         .unwrap();
+    bind_test_api_key_to_provider(&ctx, "gpt-5-mini", "mono-transform-summary").await;
 
     let req = Request::builder()
         .method("POST")
@@ -355,6 +356,12 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
         })
         .await
         .unwrap();
+    bind_test_api_key_to_provider(
+        &ctx,
+        "gpt-5-mini",
+        "mono-transform-streaming-markdown-images",
+    )
+    .await;
 
     let image_markdown = "![chart](https://example.com/chart.png)";
     let req = Request::builder()

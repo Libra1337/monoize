@@ -41,7 +41,7 @@ interface ProductDialogProps {
 }
 
 interface QuotaDraft {
-  window_kind: PlanWindowKind | "custom_hours";
+  window_kind: Exclude<PlanWindowKind, "custom"> | "custom_hours";
   window_hours: string;
   quota_minor_cny: string;
 }

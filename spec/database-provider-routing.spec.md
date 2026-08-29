@@ -8,9 +8,9 @@ read `provider.group_ids`, a Channel collection, Channel `weight`, Provider `max
 Other timeout, breaker, affinity, request-deadline, failure, and logging rules in this file
 remain in force for the embedded Channel.
 
-R-MIG-2. A Provider is group-eligible when `effective_groups == null` or its singular
-`group_id` occurs in `effective_groups`. An empty `effective_groups` rejects every
-Provider. For a non-null list, Provider order is Group index, then Provider `priority`,
+R-MIG-2. A Provider is group-eligible when `effective_groups == null`,
+`effective_groups == []`, or its singular `group_id` occurs in `effective_groups`. For a
+non-empty list, Provider order is Group index, then Provider `priority`,
 `created_at`, and `id`, all ascending.
 
 R-MIG-3. One set-based routing query MUST select enabled Providers whose embedded Channel
@@ -50,7 +50,9 @@ R-IN-2a. `max_multiplier` and Channel model multipliers MUST use exact decimal v
 
 R-IN-3. Router MUST read providers from dashboard database in `priority ASC` order.
 
-R-IN-4. Routing input MUST include request-scoped `effective_groups: string[] | null` (an ordered list of group ids) as resolved by `api-key-authentication.spec.md` §4. `null` occurs only for system-originated internal traffic.
+R-IN-4. Routing input MUST include request-scoped `effective_groups: string[] | null` as
+resolved by `api-key-authentication.spec.md` section 4. `null` and an empty array both
+allow every Group; a non-empty array is an ordered restriction.
 
 R-IN-5. Request routing MUST select Provider and Channel rows through queries constrained by the resolved logical model, enabled Provider, enabled Channel, and Channel weight greater than zero. It MUST NOT load disabled or zero-weight routing rows and MUST NOT load model entries for unrelated logical models.
 
@@ -80,7 +82,7 @@ R-GRP-1. A provider is group-eligible if and only if:
 - `effective_groups == null` (internal system traffic), OR
 - `intersection(provider.group_ids, effective_groups)` is non-empty.
 
-R-GRP-1a. If `effective_groups == []`, no provider is group-eligible.
+R-GRP-1a. If `effective_groups == []`, every provider is group-eligible.
 
 R-GRP-2. Group order defines routing preference. For a non-null `effective_groups`, define
 `group_rank(provider) = min { i : effective_groups[i] ∈ provider.group_ids }`. Before

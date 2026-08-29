@@ -107,12 +107,37 @@
 			"unavailableDescription": "狀態端點尚未就緒。請稍後重試。",
 			"incomplete": "部分來源資料不完整。請把顯示的百分比視為部分資料。",
 			"dataThrough": "資料統計到 {{time}}",
+			"overallLabel": "目前服務狀態",
+			"overallInsufficient": "尚未觀測到足夠的請求",
+			"overallOperational": "已觀測的 Group 均運行正常",
+			"overallIncident": "{{count}} 個 Group 存在異常",
+			"updatedAt": "更新於 {{time}}",
+			"legendTitle": "Group 可用性",
+			"legendDescription": "每個色塊使用一個 30 分鐘視窗內的真實請求。",
+			"successRate": "近 24 小時成功率",
+			"windowLabel": "最近 24 小時",
+			"bucketDuration": "每格 30 分鐘",
+			"timelineLabel": "{{group}} 近 24 小時可用性時間軸",
+			"lastObserved": "最近觀測：{{time}}",
+			"noObservation": "此視窗內尚未觀測到請求",
+			"providersTitle": "Provider 狀態",
+			"modelsAction": "查看 {{count}} 個模型",
+			"modelDialogTitle": "{{group}} 模型狀態",
+			"modelDialogDescription": "模型成功率使用最近 24 小時內的真實請求。",
+			"noModels": "此視窗內尚未觀測到模型請求。",
 			"states": {
 				"operational": "運行正常",
 				"minor_degradation": "輕微降級",
 				"major_degradation": "嚴重降級",
 				"unavailable": "不可用",
 				"insufficient_data": "資料不足"
+			},
+			"thresholds": {
+				"operational": "成功率不低於 98%",
+				"minor_degradation": "成功率 90% 至 98%",
+				"major_degradation": "成功率 80% 至 90%",
+				"unavailable": "成功率低於 80%",
+				"insufficient_data": "請求少於 10 次"
 			}
 		}
 	},
@@ -903,12 +928,14 @@
 		"requestCaptureHelp": "寫入 dump 前仍需同時啟用系統總開關。",
 		"captureBadgeAll": "抓包",
 		"captureBadgeAbnormal": "異常抓包",
-		"useUserGroup": "使用使用者預設群組",
-		"useUserGroupHelp": "開啟後，此金鑰跟隨擁有者的群組。",
-		"useUserGroupHelpNamed": "開啟後，此金鑰跟隨擁有者的群組（目前：{{name}}）。",
-		"groups": "自選群組",
-		"groupsHelp": "依序嘗試所選群組，第 1 位優先。可拖曳調整順序。",
-		"groupsRequired": "關閉「使用使用者預設群組」後，至少需選擇一個群組。"
+		"groups": "群組",
+		"groupsHelp": "不選擇表示所有群組。依序嘗試所選群組，可拖曳調整順序。",
+		"allGroups": "所有群組",
+		"channelSelection": "Channel 選擇",
+		"channelSelectionHelp": "同一群組內多個 Provider 提供相同模型時，請選擇一個 Channel。",
+		"selectChannel": "選擇 Channel",
+		"channelSelectionRequired": "請為剩餘 {{count}} 個衝突選擇 Channel。",
+		"channelSelectionLoadError": "暫時無法讀取 Channel 衝突。請重試後再儲存。"
 	},
 	"settings": {
 		"title": "系統設定",

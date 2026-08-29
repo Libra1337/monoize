@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { animate, motion, useReducedMotion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,18 +13,21 @@ function AnimatedTokenValue({ value }: { value: bigint }) {
   const reduceMotion = useReducedMotion();
   const { i18n } = useTranslation();
   const [visible, setVisible] = useState(value);
+  const previousValue = useRef(value);
 
   useEffect(() => {
+    const start = previousValue.current;
+    previousValue.current = value;
     if (reduceMotion) {
       setVisible(value);
       return;
     }
     const controls = animate(0, 1, {
-      duration: 0.24,
+      duration: 0.9,
       ease: "easeOut",
       onUpdate: (progress) => {
         const step = BigInt(Math.round(progress * 1_000));
-        setVisible((value * step) / 1_000n);
+        setVisible(start + ((value - start) * step) / 1_000n);
       },
     });
     return () => controls.stop();
@@ -35,7 +38,7 @@ function AnimatedTokenValue({ value }: { value: bigint }) {
       key={value.toString()}
       initial={reduceMotion ? false : { opacity: 0.45, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: reduceMotion ? 0 : 0.2 }}
+      transition={{ duration: reduceMotion ? 0 : 0.4 }}
       className="font-display tabular-nums"
     >
       {formatTokenCount(visible, i18n.language)}
@@ -60,43 +63,42 @@ export function TokenSummary({
 
   if (loading && !totals) {
     return (
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label={t("usageAnalysis.summary")}>
-        {Array.from({ length: 4 }, (_, index) => (
-          <Card key={index} className="rounded-lg">
-            <CardContent className="p-5">
+      <Card className="overflow-hidden rounded-lg" aria-label={t("usageAnalysis.summary")}>
+        <CardContent className="grid divide-y p-0 sm:grid-cols-4 sm:divide-x sm:divide-y-0">
+          {Array.from({ length: 4 }, (_, index) => (
+            <div key={index} className="min-w-0 p-5">
               <Skeleton className="h-4 w-24" />
               <Skeleton className="mt-4 h-8 w-32" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
     );
   }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label={t("usageAnalysis.summary")}>
-      {cards.map((card, index) => (
-        <motion.div
-          key={card.key}
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.2, delay: index * 0.035 }}
-        >
-          <Card className="h-full rounded-lg">
-            <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">{card.label}</p>
-              <p className="mt-2 min-w-0 break-words text-2xl font-semibold">
-                <AnimatedTokenValue value={card.value} />
+    <Card className="overflow-hidden rounded-lg" aria-label={t("usageAnalysis.summary")}>
+      <CardContent className="grid divide-y p-0 sm:grid-cols-4 sm:divide-x sm:divide-y-0">
+        {cards.map((card, index) => (
+          <motion.div
+            key={card.key}
+            className="min-w-0 p-5"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.7, delay: index * 0.08 }}
+          >
+            <p className="text-sm text-muted-foreground">{card.label}</p>
+            <p className="mt-2 min-w-0 break-words text-2xl font-semibold">
+              <AnimatedTokenValue value={card.value} />
+            </p>
+            {card.key === "cache" && totals ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("usageAnalysis.cacheHitRate")}: {formatCacheHitRate(totals.input, totals.cacheRead)}
               </p>
-              {card.key === "cache" && totals ? (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {t("usageAnalysis.cacheHitRate")}: {formatCacheHitRate(totals.input, totals.cacheRead)}
-                </p>
-              ) : null}
-            </CardContent>
-          </Card>
-        </motion.div>
-      ))}
-    </div>
+            ) : null}
+          </motion.div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }

@@ -64,6 +64,7 @@ export function UsageAnalysisPage() {
   const config = USAGE_RANGES[range];
   const analytics = useDashboardAnalytics(config.buckets, config.hours, "self", {
     keepPreviousData: true,
+    refreshInterval: 2000,
   });
   const totals = useMemo(
     () => analytics.data ? aggregateTokenTotals(analytics.data.buckets) : undefined,

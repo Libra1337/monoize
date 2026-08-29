@@ -445,6 +445,9 @@ AK3a. API key transform editor option list MUST be filtered by transform scope m
 - The editor MUST show only transforms whose `supported_scopes` includes `api_key`.
 - The editor MUST continue filtering by `supported_phases` within the API-key-scoped subset.
 - Transforms not available to API keys MUST be hidden from the add-transform selector instead of being shown and rejected after selection.
+- The page MUST fetch the admin-only transform registry only when the session role is
+  `admin` or `super_admin`. A `user` session MUST pause that SWR request and MUST NOT poll
+  the admin endpoint.
 
 AK3b. Backend API key persistence and validation MUST accept every transform whose registry metadata advertises `supported_scopes` including `api_key`, including `reasoning_inject_content_field` for response-phase rules.
 
@@ -473,8 +476,10 @@ AK10. API key restriction indicators in `/dashboard/tokens` MUST render as a non
 
 AK11. In the `/dashboard/tokens` list table, the API key name and its group badge collection MUST render in a single non-wrapping inline row inside the name cell.
 
-- A key with `use_user_group = true` MUST NOT render group badges (it follows the owner's group).
-- A key with `use_user_group = false` MUST render its `group_ids` in stored order as name badges resolved from `GET /api/dashboard/groups`; an id without a matching registry row MUST fall back to the raw id.
+- A key with `group_ids = []` MUST render the localized all-Groups label.
+- A key with non-empty `group_ids` MUST render them in stored order as name badges resolved
+  from `GET /api/dashboard/groups`; an id without a matching registry row MUST fall back to
+  the raw id.
 - The group badge collection MUST remain adjacent to the API key name and MUST NOT move below the name.
 - If the inline row exceeds the available viewport width, the table container MUST handle overflow through horizontal scrolling.
 
@@ -619,28 +624,29 @@ AK4. The API keys table body in `/dashboard/tokens` MUST use virtualized renderi
 
 AK-UI-BATCH-1. When one or more API keys are selected, the page header MUST show a destructive batch-delete action with a localized label equivalent to "Delete selected". The frontend MUST render the translated label and MUST NOT render an untranslated locale-key identifier.
 
-AK5. API key create and edit dialogs in `/dashboard/tokens` MUST include a group section
-containing exactly:
-
-- a "use the owner's user group" switch bound to `use_user_group` (default on for create);
-- when the switch is off, the shared ordered multi-select group selector (GS rules, §11)
-  bound to `group_ids`.
+AK5. API key create and edit dialogs in `/dashboard/tokens` MUST include the shared ordered
+multi-select Group selector (GS rules, section 11) bound to `group_ids`. An empty selection
+MUST display "All Groups" and MUST mean all Groups.
 
 The dialogs MUST NOT offer freeform group text entry and MUST NOT render a legacy `group`
 text input.
 
-AK6. When `use_user_group` is on, the `group_ids` selector MUST be hidden or disabled and
-the mutation payload MUST send `use_user_group: true`. When it is off, the mutation payload
-MUST send `use_user_group: false` and the ordered `group_ids` array exactly as displayed.
+AK6. The mutation payload MUST send the ordered `group_ids` array exactly as displayed.
+The dialogs MUST NOT render a "default Group" or "use user Group" switch.
 
 AK6a. Selection, removal, and reordering in the API-key group selector MUST apply against
 the latest in-session draft. A reorder MUST NOT resurrect groups the user removed from the
 current draft.
 
-AK7. The group section helper text MUST explain that group order is the routing preference
-order (earlier groups are tried first) and that the owner-group switch inherits the user's
-single group. Non-admin callers MUST only be offered options with `user_selectable = true`
+AK7. The group section helper text MUST explain that an empty selection allows all Groups
+and that earlier selected Groups have higher routing preference. Non-admin callers MUST
+only be offered options with `user_selectable = true`
 plus their own current group; admin callers MUST be offered every group.
+
+AK7a. The dialogs MUST load `GET /api/dashboard/tokens/channel-conflicts` with SWR and show
+a Skeleton while it resolves. For every conflict in the current Group and model scope,
+the dialog MUST show one Channel selector with Group, model, Provider, and Channel names.
+Create and update MUST remain blocked until every displayed conflict has one selection.
 
 AK8. If `POST /api/dashboard/tokens` or `PUT /api/dashboard/tokens/{key_id}` returns a
 group validation error, the frontend MUST surface the server-provided message in a toast

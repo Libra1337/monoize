@@ -4,8 +4,9 @@ use crate::error::{AppError, AppResult};
 use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
 use crate::users::{
-    CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule, RequestCaptureMode,
-    UpdateApiKeyInput, format_nano_to_usd, parse_nano_usd,
+    ApiKeyChannelBinding, CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule,
+    RequestCaptureMode, UpdateApiKeyInput, canonicalize_channel_bindings, format_nano_to_usd,
+    parse_nano_usd,
 };
 use axum::Json;
 use axum::extract::{Path, State};
@@ -33,10 +34,10 @@ pub struct CreateApiKeyRequest {
     pub model_limits: Vec<String>,
     #[serde(default)]
     pub ip_whitelist: Vec<String>,
-    #[serde(default = "default_true")]
-    pub use_user_group: bool,
     #[serde(default)]
     pub group_ids: Vec<String>,
+    #[serde(default)]
+    pub channel_bindings: Vec<ApiKeyChannelBinding>,
     #[serde(default)]
     pub max_multiplier: Option<Multiplier>,
     #[serde(default)]
@@ -69,8 +70,8 @@ pub struct ApiKeyResponse {
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
-    pub use_user_group: bool,
     pub group_ids: Vec<String>,
+    pub channel_bindings: Vec<ApiKeyChannelBinding>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<ModelRedirectRule>,
@@ -92,8 +93,8 @@ pub struct ApiKeyCreatedResponse {
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
-    pub use_user_group: bool,
     pub group_ids: Vec<String>,
+    pub channel_bindings: Vec<ApiKeyChannelBinding>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<ModelRedirectRule>,
@@ -110,14 +111,136 @@ pub struct UpdateApiKeyRequest {
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
-    pub use_user_group: Option<bool>,
     pub group_ids: Option<Vec<String>>,
+    pub channel_bindings: Option<Vec<ApiKeyChannelBinding>>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
     pub reasoning_envelope_enabled: Option<bool>,
     pub request_capture_mode: Option<RequestCaptureMode>,
     pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiKeyChannelOptionResponse {
+    pub channel_id: String,
+    pub channel_name: String,
+    pub provider_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiKeyChannelConflictResponse {
+    pub group_id: String,
+    pub group_name: String,
+    pub model: String,
+    pub options: Vec<ApiKeyChannelOptionResponse>,
+}
+
+async fn current_channel_conflicts(
+    state: &AppState,
+) -> Result<Vec<ApiKeyChannelConflictResponse>, String> {
+    let group_names = state
+        .user_store
+        .list_groups()
+        .await?
+        .into_iter()
+        .map(|group| (group.id, group.name))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let providers = state.monoize_store.list_providers().await?;
+    let mut by_scope = std::collections::BTreeMap::<
+        (String, String),
+        Vec<ApiKeyChannelOptionResponse>,
+    >::new();
+    for provider in providers {
+        if !provider.enabled || !provider.channel.enabled {
+            continue;
+        }
+        let unpriced_models = super::providers::provider_pricing_warnings(state, &provider)
+            .await
+            .map_err(|error| error.message)?
+            .into_iter()
+            .map(|warning| warning.logical_model)
+            .collect::<std::collections::BTreeSet<_>>();
+        for model in provider.channel.models.keys() {
+            if unpriced_models.contains(model) {
+                continue;
+            }
+            by_scope
+                .entry((provider.group_id.clone(), model.clone()))
+                .or_default()
+                .push(ApiKeyChannelOptionResponse {
+                    channel_id: provider.channel.id.clone(),
+                    channel_name: provider.channel.name.clone(),
+                    provider_name: provider.name.clone(),
+                });
+        }
+    }
+    Ok(by_scope
+        .into_iter()
+        .filter(|(_, options)| options.len() > 1)
+        .map(|((group_id, model), options)| ApiKeyChannelConflictResponse {
+            group_name: group_names
+                .get(&group_id)
+                .cloned()
+                .unwrap_or_else(|| group_id.clone()),
+            group_id,
+            model,
+            options,
+        })
+        .collect())
+}
+
+async fn validate_channel_bindings_for_scope(
+    state: &AppState,
+    group_ids: &[String],
+    model_limits_enabled: bool,
+    model_limits: &[String],
+    bindings: &[ApiKeyChannelBinding],
+) -> Result<(), String> {
+    let bindings = canonicalize_channel_bindings(bindings)?;
+    let conflicts = current_channel_conflicts(state).await?;
+    let in_scope = |conflict: &&ApiKeyChannelConflictResponse| {
+        (group_ids.is_empty() || group_ids.iter().any(|id| id == &conflict.group_id))
+            && (!model_limits_enabled
+                || model_limits.is_empty()
+                || model_limits.iter().any(|model| model == &conflict.model))
+    };
+    let required = conflicts.iter().filter(in_scope).collect::<Vec<_>>();
+    if bindings.len() != required.len() {
+        return Err("select one Channel for every ambiguous Group and model".to_string());
+    }
+    for conflict in required {
+        let Some(binding) = bindings.iter().find(|binding| {
+            binding.group_id == conflict.group_id && binding.model == conflict.model
+        }) else {
+            return Err(format!(
+                "Channel selection required for Group {} and model {}",
+                conflict.group_name, conflict.model
+            ));
+        };
+        if !conflict
+            .options
+            .iter()
+            .any(|option| option.channel_id == binding.channel_id)
+        {
+            return Err(format!(
+                "selected Channel is unavailable for Group {} and model {}",
+                conflict.group_name, conflict.model
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub async fn list_api_key_channel_conflicts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    get_current_user(&headers, &state).await?;
+    let conflicts = current_channel_conflicts(&state)
+        .await
+        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?;
+    Ok(Json(conflicts))
 }
 
 #[derive(Debug, Deserialize)]
@@ -157,8 +280,8 @@ pub async fn list_my_api_keys(
                 model_limits_enabled: k.model_limits_enabled,
                 model_limits: k.model_limits,
                 ip_whitelist: k.ip_whitelist,
-                use_user_group: k.use_user_group,
                 group_ids: k.group_ids,
+                channel_bindings: k.channel_bindings,
                 max_multiplier: k.max_multiplier,
                 transforms: k.transforms,
                 model_redirects: k.model_redirects,
@@ -187,6 +310,16 @@ pub async fn create_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
+    validate_channel_bindings_for_scope(
+        &state,
+        &body.group_ids,
+        body.model_limits_enabled,
+        &body.model_limits,
+        &body.channel_bindings,
+    )
+    .await
+    .map_err(|error| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", error))?;
+
     let input = CreateApiKeyInput {
         name: body.name,
         expires_in_days: body.expires_in_days,
@@ -195,8 +328,8 @@ pub async fn create_api_key(
         model_limits_enabled: body.model_limits_enabled,
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
-        use_user_group: body.use_user_group,
         group_ids: body.group_ids,
+        channel_bindings: body.channel_bindings,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
         model_redirects: body.model_redirects,
@@ -237,8 +370,8 @@ pub async fn create_api_key(
             model_limits_enabled: api_key.model_limits_enabled,
             model_limits: api_key.model_limits,
             ip_whitelist: api_key.ip_whitelist,
-            use_user_group: api_key.use_user_group,
             group_ids: api_key.group_ids,
+            channel_bindings: api_key.channel_bindings,
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
             model_redirects: api_key.model_redirects,
@@ -262,13 +395,11 @@ pub async fn delete_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    if api_key.is_none() {
-        return Err(AppError::new(
+    api_key.ok_or_else(|| AppError::new(
             StatusCode::NOT_FOUND,
             "not_found",
             "API key not found",
-        ));
-    }
+        ))?;
 
     user_store
         .delete_api_key(&key_id)
@@ -313,8 +444,8 @@ pub async fn get_api_key(
             model_limits_enabled: api_key.model_limits_enabled,
             model_limits: api_key.model_limits,
             ip_whitelist: api_key.ip_whitelist,
-            use_user_group: api_key.use_user_group,
             group_ids: api_key.group_ids,
+            channel_bindings: api_key.channel_bindings,
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
             model_redirects: api_key.model_redirects,
@@ -339,13 +470,24 @@ pub async fn update_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    if api_key.is_none() {
-        return Err(AppError::new(
+    let api_key = api_key.ok_or_else(|| AppError::new(
             StatusCode::NOT_FOUND,
             "not_found",
             "API key not found",
-        ));
-    }
+        ))?;
+
+    validate_channel_bindings_for_scope(
+        &state,
+        body.group_ids.as_deref().unwrap_or(&api_key.group_ids),
+        body.model_limits_enabled
+            .unwrap_or(api_key.model_limits_enabled),
+        body.model_limits.as_deref().unwrap_or(&api_key.model_limits),
+        body.channel_bindings
+            .as_deref()
+            .unwrap_or(&api_key.channel_bindings),
+    )
+    .await
+    .map_err(|error| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", error))?;
 
     let input = UpdateApiKeyInput {
         name: body.name,
@@ -355,8 +497,8 @@ pub async fn update_api_key(
         model_limits_enabled: body.model_limits_enabled,
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
-        use_user_group: body.use_user_group,
         group_ids: body.group_ids,
+        channel_bindings: body.channel_bindings,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
         model_redirects: body.model_redirects,
@@ -389,8 +531,8 @@ pub async fn update_api_key(
         model_limits_enabled: updated_key.model_limits_enabled,
         model_limits: updated_key.model_limits,
         ip_whitelist: updated_key.ip_whitelist,
-        use_user_group: updated_key.use_user_group,
         group_ids: updated_key.group_ids,
+        channel_bindings: updated_key.channel_bindings,
         max_multiplier: updated_key.max_multiplier,
         transforms: updated_key.transforms,
         model_redirects: updated_key.model_redirects,
@@ -512,4 +654,96 @@ pub async fn transfer_to_sub_account(
         "api_key_balance_nano_usd": key_balance.to_string(),
         "user_balance_nano_usd": user_balance.to_string(),
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::current_channel_conflicts;
+    use crate::app::{RuntimeConfig, load_state_with_runtime};
+    use crate::billing_rate_store::UpsertBillingRateInput;
+    use crate::monoize_routing::CreateMonoizeProviderInput;
+    use crate::users::CreateGroupInput;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn channel_conflicts_ignore_models_without_complete_pricing() {
+        let state = load_state_with_runtime(RuntimeConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_path: "/metrics".to_string(),
+            database_dsn: "sqlite::memory:".to_string(),
+            request_log_spool_dir: None,
+            node: crate::node_config::NodeSettings::primary_default(),
+        })
+        .await
+        .expect("state loads");
+        let group = state
+            .user_store
+            .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "conflict-group".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 1,
+            })
+            .await
+            .expect("Group creates");
+
+        for (name, profile) in [
+            ("priced-provider", "conflict-priced"),
+            ("unpriced-provider", "conflict-unpriced"),
+        ] {
+            let input: CreateMonoizeProviderInput = serde_json::from_value(json!({
+                "name": name,
+                "confirm_public_exposure": true,
+                "group_id": group.id,
+                "pricing_profile": profile,
+                "channel": {
+                    "name": format!("{name}-channel"),
+                    "provider_type": "responses",
+                    "base_url": "https://example.com",
+                    "api_key": "secret",
+                    "models": { "gpt-conflict": { "redirect": null } }
+                }
+            }))
+            .expect("Provider input decodes");
+            state
+                .monoize_store
+                .create_provider(input)
+                .await
+                .expect("Provider creates");
+        }
+
+        for usage_class in ["input_uncached", "output"] {
+            state
+                .billing_rate_store
+                .upsert_billing_rate(
+                    &format!("conflict-priced-{usage_class}"),
+                    UpsertBillingRateInput {
+                        source: Some("test".to_string()),
+                        pricing_profile: Some("conflict-priced".to_string()),
+                        model_pattern: Some(Some("gpt-conflict".to_string())),
+                        provider_type: Some(Some("responses".to_string())),
+                        rate_kind: Some("token".to_string()),
+                        usage_class: Some(usage_class.to_string()),
+                        unit: Some("token".to_string()),
+                        unit_price_nano_usd: Some("1".to_string()),
+                        context_tier: Some(None),
+                        service_tier: Some(None),
+                        modality: Some(None),
+                        cache_ttl: Some(None),
+                        match_json: Some(json!({})),
+                        priority: Some(0),
+                        enabled: Some(true),
+                        raw_json: Some(json!({ "fixture": true })),
+                    },
+                )
+                .await
+                .expect("rate creates");
+        }
+
+        let conflicts = current_channel_conflicts(&state)
+            .await
+            .expect("conflicts load");
+        assert!(conflicts.is_empty());
+    }
 }

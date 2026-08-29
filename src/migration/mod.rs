@@ -62,6 +62,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260828_000057_store_refund_query_retries::Migration),
             Box::new(m20260828_000058_store_retention_runtime::Migration),
             Box::new(m20260829_000059_store_released_schema_repair::Migration),
+            Box::new(m20260829_000060_api_key_channel_bindings::Migration),
         ]
     }
 }
@@ -253,6 +254,7 @@ mod m20260828_000056_store_reprocess_reauth;
 mod m20260828_000057_store_refund_query_retries;
 mod m20260828_000058_store_retention_runtime;
 mod m20260829_000059_store_released_schema_repair;
+mod m20260829_000060_api_key_channel_bindings;
 
 #[cfg(test)]
 mod tests {

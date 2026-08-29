@@ -95,7 +95,7 @@ export function UsageTrendChart({
                 dot={false}
                 activeDot={{ r: 4 }}
                 isAnimationActive={!reduceMotion}
-                animationDuration={240}
+                animationDuration={900}
               />
             </LineChart>
           </ChartContainer>

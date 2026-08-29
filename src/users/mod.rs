@@ -177,12 +177,11 @@ pub struct ApiKey {
     /// List of allowed IP addresses/CIDRs (empty = any IP)
     #[serde(default)]
     pub ip_whitelist: Vec<String>,
-    /// When true the key inherits the owner's single group at authentication time.
-    #[serde(default = "default_true")]
-    pub use_user_group: bool,
-    /// Ordered group ids used when `use_user_group` is false; order is routing preference.
+    /// Ordered group ids; an empty list permits every Group.
     #[serde(default)]
     pub group_ids: Vec<String>,
+    #[serde(default)]
+    pub channel_bindings: Vec<ApiKeyChannelBinding>,
     /// Maximum accepted multiplier for routing
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_multiplier: Option<Multiplier>,
@@ -197,6 +196,14 @@ pub struct ApiKey {
     pub reasoning_envelope_enabled: bool,
     #[serde(default)]
     pub request_capture_mode: RequestCaptureMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApiKeyChannelBinding {
+    pub group_id: String,
+    pub model: String,
+    pub channel_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -263,10 +270,10 @@ pub struct CreateApiKeyInput {
     pub model_limits: Vec<String>,
     #[serde(default)]
     pub ip_whitelist: Vec<String>,
-    #[serde(default = "default_true")]
-    pub use_user_group: bool,
     #[serde(default)]
     pub group_ids: Vec<String>,
+    #[serde(default)]
+    pub channel_bindings: Vec<ApiKeyChannelBinding>,
     #[serde(default)]
     pub max_multiplier: Option<Multiplier>,
     #[serde(default)]
@@ -363,26 +370,49 @@ pub fn canonicalize_group_ids(group_ids: &[String]) -> Vec<String> {
     canonical
 }
 
+pub const MAX_API_KEY_CHANNEL_BINDINGS: usize = 256;
+
+pub fn canonicalize_channel_bindings(
+    bindings: &[ApiKeyChannelBinding],
+) -> Result<Vec<ApiKeyChannelBinding>, String> {
+    if bindings.len() > MAX_API_KEY_CHANNEL_BINDINGS {
+        return Err(format!(
+            "at most {MAX_API_KEY_CHANNEL_BINDINGS} channel bindings can be selected"
+        ));
+    }
+    let mut canonical = Vec::with_capacity(bindings.len());
+    let mut seen = std::collections::HashSet::with_capacity(bindings.len());
+    for binding in bindings {
+        let binding = ApiKeyChannelBinding {
+            group_id: binding.group_id.trim().to_string(),
+            model: binding.model.trim().to_string(),
+            channel_id: binding.channel_id.trim().to_string(),
+        };
+        if binding.group_id.is_empty() || binding.model.is_empty() || binding.channel_id.is_empty()
+        {
+            return Err("channel binding fields must not be empty".to_string());
+        }
+        if !seen.insert((binding.group_id.clone(), binding.model.clone())) {
+            return Err(format!(
+                "duplicate channel binding for group {} and model {}",
+                binding.group_id, binding.model
+            ));
+        }
+        canonical.push(binding);
+    }
+    Ok(canonical)
+}
+
 /// AKG5/AKG6 effective-group resolution for API-key authentication.
 ///
-/// `base = [user_group_id]` when the key inherits the owner's group
-/// (`use_user_group` true) or stores no explicit groups (GR-I3); otherwise the
-/// key's ordered `group_ids`. A present non-empty plan layer filters `base` by
-/// membership while preserving `base` order. The result is always a concrete
-/// ordered list; `None`-typed unrestricted access exists only for internal
-/// system traffic and is never produced here.
+/// An empty key list permits every Group. A non-empty plan list is a ceiling.
 pub fn resolve_effective_groups(
-    user_group_id: &str,
-    use_user_group: bool,
     key_group_ids: &[String],
     plan_group_ids: Option<&[String]>,
 ) -> Vec<String> {
-    let base: Vec<String> = if use_user_group || key_group_ids.is_empty() {
-        vec![user_group_id.to_string()]
-    } else {
-        key_group_ids.to_vec()
-    };
-    let filtered: Vec<String> = match plan_group_ids {
+    let base = canonicalize_group_ids(key_group_ids);
+    let filtered = match plan_group_ids {
+        Some(plan) if !plan.is_empty() && base.is_empty() => canonicalize_group_ids(plan),
         Some(plan) if !plan.is_empty() => base
             .into_iter()
             .filter(|id| plan.iter().any(|allowed| allowed == id))
@@ -400,7 +430,7 @@ pub fn is_provider_group_eligible(
 ) -> bool {
     match effective_groups {
         None => true,
-        Some(groups) => groups.iter().any(|id| id == provider_group_id),
+        Some(groups) => groups.is_empty() || groups.iter().any(|id| id == provider_group_id),
     }
 }
 
@@ -413,6 +443,7 @@ pub fn provider_group_rank(
 ) -> usize {
     match effective_groups {
         None => 0,
+        Some(groups) if groups.is_empty() => 0,
         Some(groups) => groups
             .iter()
             .position(|id| id == provider_group_id)
@@ -430,8 +461,8 @@ pub struct UpdateApiKeyInput {
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
-    pub use_user_group: Option<bool>,
     pub group_ids: Option<Vec<String>>,
+    pub channel_bindings: Option<Vec<ApiKeyChannelBinding>>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
@@ -804,26 +835,19 @@ mod tests {
 
     #[test]
     fn resolve_effective_groups_follows_akg5() {
-        // use_user_group => owner's single group.
+        // Empty key groups mean every Group.
         assert_eq!(
-            resolve_effective_groups("g-user", true, &ids(&["g-1", "g-2"]), None),
-            ids(&["g-user"])
-        );
-        // Explicit empty group_ids resolves like use_user_group (GR-I3).
-        assert_eq!(
-            resolve_effective_groups("g-user", false, &[], None),
-            ids(&["g-user"])
+            resolve_effective_groups(&[], None),
+            Vec::<String>::new()
         );
         // Explicit ordered selection preserves order.
         assert_eq!(
-            resolve_effective_groups("g-user", false, &ids(&["g-2", "g-1"]), None),
+            resolve_effective_groups(&ids(&["g-2", "g-1"]), None),
             ids(&["g-2", "g-1"])
         );
         // Non-empty plan layer filters by membership in base order.
         assert_eq!(
             resolve_effective_groups(
-                "g-user",
-                false,
                 &ids(&["g-2", "g-1", "g-3"]),
                 Some(&ids(&["g-3", "g-2"]))
             ),
@@ -831,13 +855,13 @@ mod tests {
         );
         // Empty plan layer is unrestricted.
         assert_eq!(
-            resolve_effective_groups("g-user", true, &[], Some(&[])),
-            ids(&["g-user"])
-        );
-        // Plan ceiling can exclude every base group.
-        assert_eq!(
-            resolve_effective_groups("g-user", true, &[], Some(&ids(&["g-other"]))),
+            resolve_effective_groups(&[], Some(&[])),
             Vec::<String>::new()
+        );
+        // A non-empty plan is the ceiling when the key selects every Group.
+        assert_eq!(
+            resolve_effective_groups(&[], Some(&ids(&["g-other"]))),
+            ids(&["g-other"])
         );
     }
 
@@ -847,11 +871,12 @@ mod tests {
         assert!(is_provider_group_eligible("g-1", &None));
         assert_eq!(provider_group_rank("g-1", &None), 0);
 
-        // Empty effective groups: nothing eligible (R-GRP-1a).
-        assert!(!is_provider_group_eligible(
+        // Empty effective groups mean every Group for API-key traffic.
+        assert!(is_provider_group_eligible(
             "g-1",
             &Some(Vec::new())
         ));
+        assert_eq!(provider_group_rank("g-1", &Some(Vec::new())), 0);
 
         let effective = Some(ids(&["g-2", "g-1"]));
         assert!(is_provider_group_eligible("g-1", &effective));

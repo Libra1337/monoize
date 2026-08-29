@@ -279,9 +279,15 @@ async fn handle_client_text(
         return send_warmup(socket, session, request, limits).await;
     }
 
+    let mut request_headers = headers.clone();
+    request_headers.insert(
+        axum::http::header::HeaderName::from_static("x-request-id"),
+        axum::http::HeaderValue::from_str(&uuid::Uuid::new_v4().to_string())
+            .expect("UUID request id is a valid header value"),
+    );
     let response = match super::create_response(
         State(state.clone()),
-        headers.clone(),
+        request_headers,
         axum::Json(Value::Object(request.clone())),
     )
     .await

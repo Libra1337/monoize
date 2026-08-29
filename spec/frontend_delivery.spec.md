@@ -42,6 +42,10 @@ FD-C3. The backend MUST replace the entry document's CSP nonce placeholder with 
 
 FD-C4. The backend MUST set `script-src 'self' 'nonce-<request-nonce>'`. The nonce MUST differ between independent requests. The frontend MAY read the nonce from a metadata element and pass it to a library that creates inline scripts, but the frontend MUST NOT create its own executable inline script in `index.html`.
 
+FD-C5. The backend MUST set `img-src * data:`. The policy MUST allow HTTPS Channel icons
+and Playground image output from any network origin. The policy MUST allow data URL image
+attachments.
+
 ## 6. HTTP Caching
 
 FD-H1. Responses serving the embedded SPA entry document (`index.html`) for `GET /` and SPA fallback routes (for example `/dashboard/*`) MUST include `Cache-Control: no-store`.

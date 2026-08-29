@@ -260,6 +260,7 @@ async fn public_settings_and_csp_publish_only_cap_public_configuration() {
         .unwrap()
         .to_string();
     assert!(first_csp.contains("connect-src 'self' http://127.0.0.1:"));
+    assert!(first_csp.contains("img-src * data:;"));
     assert!(first_csp.contains("worker-src 'self' blob:"));
     assert!(!first_csp.contains("script-src 'self' 'unsafe-inline'"));
     let body: Value =
@@ -926,8 +927,8 @@ async fn sub_account_zero_balance_returns_402() {
                 model_limits: vec![],
                 ip_whitelist: Vec::new(),
 
-                use_user_group: true,
                 group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -979,8 +980,8 @@ async fn ip_whitelist_blocks_non_whitelisted() {
                 model_limits: vec![],
                 ip_whitelist: vec!["192.168.1.1".to_string()],
 
-                use_user_group: true,
                 group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),

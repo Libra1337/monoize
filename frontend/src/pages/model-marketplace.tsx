@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useRef, useState } from "react";
 import useSWR from "swr";
 import { useTranslation } from "react-i18next";
 import { Boxes, CircleDollarSign, RefreshCw, Search, Store } from "lucide-react";
@@ -237,12 +237,17 @@ export function ModelMarketplacePage() {
     pageState.key === listKey ? list.data : undefined,
   );
   const items = resolvedPages.flatMap((page) => page.items);
-  const capabilities = useMemo(() => [...new Set(items.flatMap((item) => item.capabilities))], [items]);
+  const capabilities = [...new Set(items.flatMap((item) => item.capabilities))];
   const filtered = items.filter((item) => (
     (pageState.key !== listKey || group === ALL || item.public_group_name === group)
     && (capability === ALL || item.capabilities.includes(capability))
   ));
-  const grouped = Map.groupBy(filtered, (item) => item.public_group_name);
+  const grouped = filtered.reduce<Map<string, typeof filtered>>((groups, item) => {
+    const groupItems = groups.get(item.public_group_name);
+    if (groupItems) groupItems.push(item);
+    else groups.set(item.public_group_name, [item]);
+    return groups;
+  }, new Map());
   const nextCursor = resolvedPages.at(-1)?.next_cursor ?? null;
   const catalogRevision = resolvedPages[0]?.revision ?? "";
   const resolvedOfferPages = offerListKey && offerPageState.key === offerListKey

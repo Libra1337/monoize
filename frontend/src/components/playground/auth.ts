@@ -31,13 +31,9 @@ function allowsModel(key: ApiKey, modelId: string): boolean {
 function coversGroup(
   key: ApiKey,
   groupId: string,
-  userGroupId: string,
 ): boolean {
   if (!groupId) return true;
-  if (key.use_user_group || key.group_ids.length === 0) {
-    return groupId === userGroupId;
-  }
-  return key.group_ids.includes(groupId);
+  return key.group_ids.length === 0 || key.group_ids.includes(groupId);
 }
 
 /**
@@ -48,7 +44,6 @@ export function resolvePlaygroundKey(
   keys: ApiKey[] | undefined,
   pinnedKeyId: string,
   groupId: string,
-  userGroupId: string,
   modelId: string,
 ): ResolvedPlaygroundKey {
   if (!pinnedKeyId) {
@@ -64,7 +59,7 @@ export function resolvePlaygroundKey(
   if (!allowsModel(key, modelId)) {
     return { key, reason: "no-model-key" };
   }
-  if (!coversGroup(key, groupId, userGroupId)) {
+  if (!coversGroup(key, groupId)) {
     return { key, reason: "no-group-key" };
   }
   return { key, reason: "ok" };

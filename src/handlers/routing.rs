@@ -338,6 +338,55 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
             format!("pricing metadata required for model(s): {blocked_list}"),
         ));
     }
+    if auth.api_key_id.is_some() {
+        let mut channels_by_scope = std::collections::BTreeMap::<
+            (String, String),
+            std::collections::BTreeSet<String>,
+        >::new();
+        for attempt in &allowed_attempts {
+            channels_by_scope
+                .entry((attempt.group_id.clone(), attempt.logical_model.clone()))
+                .or_default()
+                .insert(attempt.channel_id.clone());
+        }
+        let conflicts = channels_by_scope
+            .into_iter()
+            .filter(|(_, channels)| channels.len() > 1)
+            .map(|(scope, _)| scope)
+            .collect::<std::collections::BTreeSet<_>>();
+        for (group_id, model) in &conflicts {
+            let valid_channels = allowed_attempts
+                .iter()
+                .filter(|attempt| {
+                    &attempt.group_id == group_id && &attempt.logical_model == model
+                })
+                .map(|attempt| attempt.channel_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let valid_binding = auth.channel_bindings.iter().any(|binding| {
+                &binding.group_id == group_id
+                    && &binding.model == model
+                    && valid_channels.contains(binding.channel_id.as_str())
+            });
+            if !valid_binding {
+                return Err(AppError::new(
+                    StatusCode::CONFLICT,
+                    "channel_selection_required",
+                    format!(
+                        "select one Channel for Group {group_id} and model {model}"
+                    ),
+                ));
+            }
+        }
+        allowed_attempts.retain(|attempt| {
+            let scope = (attempt.group_id.clone(), attempt.logical_model.clone());
+            !conflicts.contains(&scope)
+                || auth.channel_bindings.iter().any(|binding| {
+                    binding.group_id == attempt.group_id
+                        && binding.model == attempt.logical_model
+                        && binding.channel_id == attempt.channel_id
+                })
+        });
+    }
     apply_channel_affinity(state, urp, auth, allowed_attempts).await
 }
 
@@ -675,6 +724,7 @@ pub(super) async fn collect_provider_attempts(
             .unwrap_or(runtime.affinity_failback_delay_seconds);
         out.push(MonoizeAttempt {
             provider_id: provider.id.clone(),
+            group_id: provider.group_id.clone(),
             provider_name: provider.name.clone(),
             provider_type: effective_provider_type.to_config_type(),
             channel_id: channel.id.clone(),

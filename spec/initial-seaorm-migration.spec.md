@@ -12,10 +12,11 @@ ISM-MIG-2. The Provider pricing migration MUST drop `monoize_channels` and
 surviving Channel field into its target Provider row with a `channel_` prefix. The final
 schema MUST NOT contain compatibility views, aliases, columns, tables, entities, or stores.
 
-ISM-MIG-3. The migration MUST create `marketplace_generation`, its source triggers,
-`upstream_call_events`, and `status_source_state` with the exact constraints and indexes
-defined by their owning specifications. Migration registration order MUST place this
-release after `m20260825_000043_channel_allow_missing_usage`.
+ISM-MIG-3. The migration MUST create `marketplace_generation` and its source triggers with
+the exact constraints and indexes defined by `model-marketplace.spec.md`. Public status
+MUST reuse `request_logs` and MUST NOT create a separate status-event table. Migration
+registration order MUST place this release after
+`m20260825_000043_channel_allow_missing_usage`.
 
 ## 0. Scope
 

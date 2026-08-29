@@ -367,6 +367,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
         .create_provider(create_input)
         .await
         .unwrap();
+    bind_test_api_key_to_provider(&ctx, "gpt-5-mini", "mono-transform-strip").await;
 
     let req = Request::builder()
         .method("POST")
@@ -468,6 +469,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
         .create_provider(create_input)
         .await
         .unwrap();
+    bind_test_api_key_to_provider(&ctx, "gpt-5-mini", "mono-transform-sse-split").await;
 
     let long_input = "abcdefghij".repeat(80);
     let req = Request::builder()

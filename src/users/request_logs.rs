@@ -295,6 +295,8 @@ fn analytics_bucket_expr(is_sqlite: bool) -> &'static str {
 
 fn analytics_model_bucket_sql(is_sqlite: bool, user_scoped: bool) -> String {
     let bucket_expr = analytics_bucket_expr(is_sqlite);
+    let model_expr =
+        "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')";
     let charge_columns = charge_aggregate_columns(!is_sqlite);
     let user_filter = if user_scoped {
         " AND rl.user_id = $6"
@@ -317,11 +319,11 @@ fn analytics_model_bucket_sql(is_sqlite: bool, user_scoped: bool) -> String {
          SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
     };
     format!(
-        "SELECT {bucket_expr} AS bucket_idx, rl.model, {charge_columns}, {token_columns}, COUNT(*) AS call_count \
+        "SELECT {bucket_expr} AS bucket_idx, {model_expr} AS model, {charge_columns}, {token_columns}, COUNT(*) AS call_count \
          FROM request_logs rl \
          WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter} \
-         GROUP BY bucket_idx, rl.model \
-         ORDER BY bucket_idx, rl.model"
+         GROUP BY bucket_idx, {model_expr} \
+         ORDER BY bucket_idx, model"
     )
 }
 
@@ -582,13 +584,14 @@ mod tests {
         db.write()
             .await
             .execute_unprepared(
-                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER)",
+                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER)",
             )
             .await
             .unwrap();
         for (
             created_at_unix_ms,
             model,
+            upstream_model,
             charge,
             user_id,
             input_tokens,
@@ -598,17 +601,19 @@ mod tests {
             (
                 100_i64,
                 "exact",
+                "",
                 "9223372036854775807",
                 "u1",
                 9_007_199_254_740_993_i64,
                 4_i64,
                 7_i64,
             ),
-            (200_i64, "exact", "1", "u1", 1_i64, 5_i64, 8_i64),
-            (300_i64, "exact", "+9", "u1", 0_i64, 6_i64, 9_i64),
+            (200_i64, "exact", "", "1", "u1", 1_i64, 5_i64, 8_i64),
+            (300_i64, "exact", "", "+9", "u1", 0_i64, 6_i64, 9_i64),
             (
                 400_i64,
                 "out-of-range",
+                "",
                 "170141183460469231731687303715884105728",
                 "u1",
                 10_i64,
@@ -618,16 +623,20 @@ mod tests {
             (
                 600_i64,
                 "overflow",
+                "",
                 "170141183460469231731687303715884105727",
                 "u1",
                 13_i64,
                 14_i64,
                 15_i64,
             ),
-            (700_i64, "overflow", "1", "u1", 16_i64, 17_i64, 18_i64),
+            (700_i64, "overflow", "", "1", "u1", 16_i64, 17_i64, 18_i64),
+            (800_i64, "  ", "fallback-model", "2", "u1", 1_i64, 2_i64, 3_i64),
+            (900_i64, "", "  ", "3", "u1", 4_i64, 5_i64, 6_i64),
             (
                 100_i64,
                 "excluded",
+                "",
                 "99",
                 "u2",
                 1_000_000_i64,
@@ -638,10 +647,11 @@ mod tests {
             db.write()
                 .await
                 .execute(db.stmt(
-                    "INSERT INTO request_logs (created_at_unix_ms, model, charge_nano_usd, user_id, input_tokens, cache_read_tokens, output_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    "INSERT INTO request_logs (created_at_unix_ms, model, upstream_model, charge_nano_usd, user_id, input_tokens, cache_read_tokens, output_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
                     vec![
                         created_at_unix_ms.into(),
                         model.into(),
+                        upstream_model.into(),
                         charge.into(),
                         user_id.into(),
                         input_tokens.into(),
@@ -654,7 +664,7 @@ mod tests {
         }
 
         let sql = analytics_model_bucket_sql(true, true);
-        assert!(sql.contains("GROUP BY bucket_idx, rl.model"));
+        assert!(sql.contains("COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')"));
         assert!(!sql.contains("SELECT rl.created_at_unix_ms"));
         let rows = db
             .read()
@@ -671,7 +681,7 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 5);
 
         let mut groups = std::collections::BTreeMap::new();
         for row in rows {
@@ -715,6 +725,8 @@ mod tests {
             groups["overflow"].2.as_ref().unwrap_err(),
             "request log charge aggregate overflow"
         );
+        assert_eq!(groups["fallback-model"].3, "1");
+        assert_eq!(groups["unknown"].3, "4");
         assert!(!groups.contains_key("excluded"));
     }
 

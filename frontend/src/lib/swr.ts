@@ -31,6 +31,7 @@ import type {
   CreateGroupInput,
   UpdateGroupInput,
   UserLiveUsage,
+  ApiKeyChannelConflict,
 } from "./api";
 
 // SWR fetcher functions
@@ -38,6 +39,7 @@ const fetchers = {
   me: () => api.me(),
   users: () => api.listUsers(),
   apiKeys: () => api.listApiKeys(),
+  apiKeyChannelConflicts: () => api.listApiKeyChannelConflicts(),
   stats: () => api.getStats(),
   config: () => api.getConfigOverview(),
   settings: () => api.getSettings(),
@@ -58,6 +60,7 @@ export const SWR_KEYS = {
   ME: "/dashboard/me",
   USERS: "/dashboard/users",
   API_KEYS: "/dashboard/tokens",
+  API_KEY_CHANNEL_CONFLICTS: "/dashboard/tokens/channel-conflicts",
   STATS: "/dashboard/stats",
   CONFIG: "/dashboard/config",
   SETTINGS: "/dashboard/settings",
@@ -111,6 +114,14 @@ export function useApiKeys(config?: SWRConfiguration) {
     ...defaultConfig,
     ...config,
   });
+}
+
+export function useApiKeyChannelConflicts(config?: SWRConfiguration) {
+  return useSWR<ApiKeyChannelConflict[]>(
+    SWR_KEYS.API_KEY_CHANNEL_CONFLICTS,
+    fetchers.apiKeyChannelConflicts,
+    { ...defaultConfig, ...config },
+  );
 }
 
 // Billing plans hook (admin only)

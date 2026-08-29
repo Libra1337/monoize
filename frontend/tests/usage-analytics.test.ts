@@ -44,6 +44,15 @@ describe("Usage analytics helpers", () => {
     ]);
   });
 
+  test("never emits an empty model label", () => {
+    expect(rankModelsByTokens([{
+      label: "legacy",
+      input_tokens_by_model: { "": "7" },
+      cache_read_tokens_by_model: {},
+      output_tokens_by_model: {},
+    }], "total")).toEqual([{ model: "unknown", value: 7n }]);
+  });
+
   test("retains integers above the JavaScript safe range", () => {
     expect(aggregateTokenTotals([{
       label: "large",

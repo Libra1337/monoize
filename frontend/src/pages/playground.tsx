@@ -67,10 +67,9 @@ export function PlaygroundPage() {
         apiKeys,
         prefs.apiKeyId,
         prefs.group,
-        user?.group_id ?? "",
         modelForMode.trim(),
       ),
-    [apiKeys, prefs.apiKeyId, prefs.group, user?.group_id, modelForMode],
+    [apiKeys, prefs.apiKeyId, prefs.group, modelForMode],
   );
   const chatResolution = useMemo(
     () =>
@@ -80,7 +79,6 @@ export function PlaygroundPage() {
             apiKeys,
             prefs.apiKeyId,
             prefs.group,
-            user?.group_id ?? "",
             prefs.chatModel.trim(),
           ),
     [
@@ -90,7 +88,6 @@ export function PlaygroundPage() {
       prefs.apiKeyId,
       prefs.group,
       prefs.chatModel,
-      user?.group_id,
     ],
   );
   const selectableGroups = useMemo(() => {

@@ -95,10 +95,11 @@ export function rankModelsByTokens(
       ...Object.keys(bucket.cache_read_tokens_by_model),
       ...Object.keys(bucket.output_tokens_by_model),
     ]);
-    for (const model of models) {
+    for (const sourceModel of models) {
+      const model = sourceModel.trim() || "unknown";
       totals.set(
         model,
-        (totals.get(model) ?? 0n) + modelMetricValue(bucket, model, metric),
+        (totals.get(model) ?? 0n) + modelMetricValue(bucket, sourceModel, metric),
       );
     }
   }

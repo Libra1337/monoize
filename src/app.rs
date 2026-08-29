@@ -2122,7 +2122,7 @@ async fn content_security_policy_middleware(
     request.extensions_mut().insert(CspNonce(nonce.clone()));
     let mut response = next.run(request).await;
     let policy = format!(
-        "default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fontsapi.zeoseven.com; img-src 'self' data: https://www.gravatar.com; connect-src {}; font-src 'self' https://fonts.gstatic.com https://fontsapi.zeoseven.com; worker-src 'self' blob:; frame-ancestors 'none'",
+        "default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fontsapi.zeoseven.com; img-src * data:; connect-src {}; font-src 'self' https://fonts.gstatic.com https://fontsapi.zeoseven.com; worker-src 'self' blob:; frame-ancestors 'none'",
         config.connect_src
     );
     if let Ok(value) = header::HeaderValue::from_str(&policy) {
@@ -2472,6 +2472,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/tokens/batch-delete",
             post(crate::dashboard_handlers::batch_delete_api_keys),
+        )
+        .route(
+            "/dashboard/tokens/channel-conflicts",
+            get(crate::dashboard_handlers::list_api_key_channel_conflicts),
         )
         .route(
             "/dashboard/tokens/{key_id}",

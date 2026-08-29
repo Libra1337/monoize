@@ -69,9 +69,8 @@ GR-D5. `sort_order` defines the system default ordering. The canonical registry 
 | Table               | Column           | Type    | Meaning                                                        |
 |---------------------|------------------|---------|----------------------------------------------------------------|
 | `users`             | `group_id`       | TEXT NOT NULL, default `''` | The user's single group (single-select)    |
-| `api_keys`          | `use_user_group` | INTEGER NOT NULL, `0`/`1`, default `1` | Key inherits the owner's group |
 | `api_keys`          | `group_ids`      | TEXT NOT NULL, default `'[]'` | Ordered JSON array of group ids          |
-| `monoize_providers` | `group_ids`      | TEXT NOT NULL | JSON array of group ids the provider serves; length >= 1 |
+| `monoize_providers` | `group_id`       | TEXT NOT NULL | The Provider's single Group id                       |
 | `billing_plans`     | `group_ids`      | TEXT NOT NULL, default `'[]'` | JSON array of group ids; `[]` = unrestricted ceiling |
 
 GR-D6. Referential integrity is enforced by write paths (validation on every mutation) and
@@ -79,8 +78,9 @@ by the deletion cascade (§4), not by SQL foreign keys.
 
 GR-D7. The legacy columns `users.allowed_groups`, `api_keys.allowed_groups`,
 `api_keys.token_group`, `monoize_providers.groups`, and `billing_plans.allowed_groups` are
-removed by migration `m20260825_000042_groups_registry`. No API surface, entity, or store
-may read or write them after that migration.
+removed by migration `m20260825_000042_groups_registry`. Later destructive migrations also
+remove `api_keys.use_user_group` and `monoize_providers.group_ids`. No current API surface,
+entity, or store may read or write any of these columns.
 
 ### 1.2 Group-id list canonicalization
 
@@ -196,11 +196,10 @@ transaction:
 GR-X1. Every `users` row with `group_id = X.id` is set to the default group's id.
 
 GR-X2. Every `api_keys` row whose `group_ids` array contains `X.id` has that element
-removed, preserving the order of the remaining elements. If the resulting array is empty
-and the row has `use_user_group = 0`, the row is additionally set to `use_user_group = 1`.
+removed, preserving the order of the remaining elements. An empty result means all Groups.
 
-GR-X3. Every `monoize_providers` row whose `group_ids` array contains `X.id` has that
-element removed. If the resulting array is empty, it is replaced by `[default_group_id]`.
+GR-X3. If a `monoize_providers` row has `group_id = X.id`, deletion MUST fail with HTTP
+`409` and code `group_in_use`. No row may change.
 
 GR-X4. Every `billing_plans` row whose `group_ids` array contains `X.id` has that element
 removed. An empty result stays `[]` (unrestricted ceiling).
@@ -208,9 +207,7 @@ removed. An empty result stays `[]` (unrestricted ceiling).
 GR-X5. Rows whose stored `group_ids` value fails GR-C4 decoding MUST abort the transaction
 with a storage error; the cascade MUST NOT silently repair or skip corrupt rows.
 
-GR-X6. After commit, the process MUST invalidate the API-key authentication cache and bump
-the routing config revision so in-flight affinity bindings re-validate against the new
-provider group sets.
+GR-X6. After commit, the process MUST invalidate the API-key authentication cache.
 
 ## 4. Migration `m20260825_000042_groups_registry`
 
@@ -270,17 +267,10 @@ GM-10. Running `up()` on an empty database (fresh install) MUST produce exactly 
 
 GR-I1. Every `users.group_id` references an existing group (write validation + cascade).
 
-GR-I2. Every `monoize_providers.group_ids` is non-empty. The former "public provider"
-concept no longer exists; the default group plays that role. Provider create/update
-requests whose canonicalized `group_ids` is empty MUST be stored as `[default_group_id]`.
+GR-I2. Every `monoize_providers.group_id` references one existing Group. The former public
+Provider concept no longer exists. A Provider belongs to exactly one Group.
 
-GR-I3. `api_keys.use_user_group = 1` means the key's own `group_ids` is ignored at
-authentication time. `use_user_group = 0` requires a non-empty stored `group_ids`
-(write-path validation); if a stored row nevertheless has `use_user_group = 0` and
-`group_ids = []`, authentication MUST resolve it exactly like `use_user_group = 1`.
+GR-I3. An API key stores an ordered `group_ids` array. An empty array means every Group.
 
-GR-I4. There is no longer an "unrestricted" caller tier derived from empty group lists:
-every API-key request resolves to a concrete ordered group-id list per
-`api-key-authentication.spec.md` §4. A `null` group filter exists only for
-system-originated internal traffic (request-capture replay, probes) and is never produced
-by API-key authentication.
+GR-I4. API-key Group resolution follows `api-key-authentication.spec.md` section 4. A
+non-empty billing-plan Group ceiling still restricts an API key whose own list is empty.

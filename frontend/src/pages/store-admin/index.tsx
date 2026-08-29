@@ -313,13 +313,16 @@ export function StoreAdminPage() {
     request: () => Promise<T>,
     apply: (current: AdminStoreOrderDetailCache | undefined, result: T) => AdminStoreOrderDetailCache | undefined,
   ): Promise<T> => {
+    const cachedDetail = orderDetail.data;
+    if (!cachedDetail) throw new Error(t("common.error"));
     let result: T | undefined;
     await orderDetail.mutate(async (current) => {
       result = await request();
-      const applied = apply(current, result);
-      return applied ? { ...applied, pending_action: undefined } : applied;
+      const currentDetail = current ?? cachedDetail;
+      const applied = apply(currentDetail, result);
+      return { ...(applied ?? currentDetail), pending_action: undefined };
     }, {
-      optimisticData: (current) => current ? { ...current, pending_action: actionKey } : current,
+      optimisticData: (current) => ({ ...(current ?? cachedDetail), pending_action: actionKey }),
       rollbackOnError: true,
       revalidate: false,
     });

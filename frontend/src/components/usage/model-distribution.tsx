@@ -71,7 +71,7 @@ export function ModelDistribution({
                   outerRadius={88}
                   strokeWidth={3}
                   isAnimationActive={!reduceMotion}
-                  animationDuration={240}
+                  animationDuration={900}
                 >
                   {chartRows.map((row) => <Cell key={row.model} fill={row.fill} />)}
                 </Pie>
@@ -94,7 +94,7 @@ export function ModelDistribution({
                     </div>
                     <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                       <div
-                        className="h-full rounded-full bg-primary transition-[width] duration-200"
+                        className="h-full rounded-full bg-primary transition-[width] duration-700"
                         style={{ width: `${Number(basisPoints) / 100}%` }}
                       />
                     </div>

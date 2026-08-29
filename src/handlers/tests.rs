@@ -504,6 +504,7 @@ fn build_test_auth_with_role(
         transforms: Vec::new(),
         model_redirects: Vec::new(),
         effective_groups,
+        channel_bindings: Vec::new(),
         model_limits_enabled: false,
         model_limits: Vec::new(),
         ip_whitelist: Vec::new(),
@@ -3760,6 +3761,7 @@ fn affinity_test_attempt(
     failback_delay_seconds: u64,
 ) -> MonoizeAttempt {
     MonoizeAttempt {
+        group_id: "group-1".to_string(),
         provider_id: provider_id.to_string(),
         provider_name: provider_id.to_string(),
         provider_type: ProviderType::Responses,

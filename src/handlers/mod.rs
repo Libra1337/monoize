@@ -911,6 +911,7 @@ pub(crate) struct UrpRequest {
 #[derive(Clone, Debug)]
 struct MonoizeAttempt {
     provider_id: String,
+    group_id: String,
     provider_name: String,
     provider_type: ProviderType,
     channel_id: String,
@@ -1288,6 +1289,7 @@ async fn authenticate_playground_session(
         transforms: Vec::new(),
         model_redirects: Vec::new(),
         effective_groups: Some(vec![group_id]),
+        channel_bindings: Vec::new(),
         model_limits_enabled: false,
         model_limits: Vec::new(),
         ip_whitelist: Vec::new(),

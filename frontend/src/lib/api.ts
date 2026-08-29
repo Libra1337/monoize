@@ -127,6 +127,23 @@ export interface ModelRedirectRule {
 
 export type RequestCaptureMode = "off" | "capture-all" | "capture-only-abnormal";
 
+export interface ApiKeyChannelBinding {
+  group_id: string;
+  model: string;
+  channel_id: string;
+}
+
+export interface ApiKeyChannelConflict {
+  group_id: string;
+  group_name: string;
+  model: string;
+  options: Array<{
+    channel_id: string;
+    channel_name: string;
+    provider_name: string;
+  }>;
+}
+
 export interface ApiKey {
   id: string;
   name: string;
@@ -142,8 +159,8 @@ export interface ApiKey {
   model_limits_enabled: boolean;
   model_limits: string[];
   ip_whitelist: string[];
-  use_user_group: boolean;
   group_ids: string[];
+  channel_bindings: ApiKeyChannelBinding[];
   max_multiplier?: string;
   transforms: TransformRuleConfig[];
   model_redirects: ModelRedirectRule[];
@@ -161,8 +178,8 @@ export interface CreateApiKeyInput {
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
-  use_user_group?: boolean;
   group_ids?: string[];
+  channel_bindings?: ApiKeyChannelBinding[];
   max_multiplier?: string;
   transforms?: TransformRuleConfig[];
   model_redirects?: ModelRedirectRule[];
@@ -178,8 +195,8 @@ export interface UpdateApiKeyInput {
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
-  use_user_group?: boolean;
   group_ids?: string[];
+  channel_bindings?: ApiKeyChannelBinding[];
   max_multiplier?: string;
   transforms?: TransformRuleConfig[];
   expires_at?: string;
@@ -988,6 +1005,10 @@ class ApiClient {
   // API Keys
   async listApiKeys(): Promise<ApiKey[]> {
     return this.request("/tokens");
+  }
+
+  async listApiKeyChannelConflicts(): Promise<ApiKeyChannelConflict[]> {
+    return this.request("/tokens/channel-conflicts");
   }
 
   async getApiKey(id: string): Promise<ApiKey> {

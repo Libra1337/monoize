@@ -1,14 +1,13 @@
 # Primary/Replica Deployment Specification
 
-## 0A. LynShen status-event shipment
+## 0A. LynShen public status source
 
-PR-MIG-1. Status events are the fourth Replica shipment data class. Shipment, Primary
-idempotent apply, heartbeats, retirement, source completeness, and clock checks MUST follow
-`public-provider-status.spec.md` PST-R1 through PST-R9.
+PR-MIG-1. Public status MUST use the `request_logs` rows already shipped by the Replica
+metering pipeline. It MUST NOT add a fourth shipment data class.
 
-PR-MIG-2. Each Primary and Replica MUST use one process-wide physical-dispatch semaphore
-and one node-local durable status spool. Startup and deployment preflight MUST satisfy
-PST-C1 through PST-C5 and PST-S1 through PST-Q14 before accepting forwarding traffic.
+PR-MIG-2. Primary and Replica request-log durability, shipment, replay, and preflight MUST
+follow `request-logs.spec.md`, `db-performance-tuning.spec.md`, and this specification.
+Public status MUST NOT add a separate dispatch semaphore or status spool.
 
 PR-MIG-3. Existing per-Channel proxy, header, affinity, probe, and missing-usage behavior
 applies to the singular embedded Channel stored on its Provider after migration. Schema

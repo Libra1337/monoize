@@ -30,8 +30,10 @@ UA-5. The range values map to analytics queries as follows:
 
 ## 2. Summary And Trend
 
-UA-6. The page MUST render four exact summary values: input Tokens, cache-read Tokens,
-output Tokens, and total Tokens.
+UA-6. The page MUST render one full-width summary panel containing four exact values in
+this order: input Tokens, cache-read Tokens, output Tokens, and total Tokens. Adjacent
+values MUST be separated by a visible vertical divider at widths of 640 pixels or more.
+Below 640 pixels, the values MAY wrap and MUST use horizontal dividers.
 
 UA-7. The metric control MUST contain exactly `total`, `input`, `cache_read`, and `output`.
 The initial metric is `total`.
@@ -60,10 +62,16 @@ selected metric total. It MUST remain readable without the chart.
 UA-14. The chart and ranked rows MUST use only logical model names. They MUST NOT expose an
 internal Provider ID, Channel ID, database ID, Base URL, credential, or header.
 
+UA-14a. Analytics aggregation MUST use the trimmed logical-model request-log value. If a
+historical row has an empty logical-model value, it MUST use the trimmed upstream-model
+value. If both values are empty, it MUST use the literal label `unknown`. The model chart
+and every ranked row MUST render the resulting non-empty model label.
+
 ## 4. Fetching And Interaction
 
-UA-15. The page MUST use SWR. Initial loading MUST render shape-matched Skeletons for the
-summary, trend, distribution, and ranking regions.
+UA-15. The page MUST use SWR with `refreshInterval = 2000` milliseconds. Initial loading
+MUST render shape-matched Skeletons for the summary, trend, distribution, and ranking
+regions. A refresh MUST keep the last resolved response visible.
 
 UA-16. A range change MUST keep the last resolved response visible until the next response
 resolves. It MUST NOT require a close, reopen, or page refresh.
@@ -84,8 +92,9 @@ column. The page MUST NOT use a fixed content height or create horizontal overfl
 UA-21. Range and metric controls MUST expose visible focus. Charts MUST expose the same
 values in adjacent text or ranked rows.
 
-UA-22. Page entry, count-up, chart drawing, and segmented-control movement MAY run for 180
-through 260 milliseconds. Reduced-motion mode MUST render final values immediately and
-remove nonessential movement.
+UA-22. Page entry and segmented-control movement MAY run for 180 through 260 milliseconds.
+Token count-up and chart drawing MUST run for 800 through 1200 milliseconds so the change
+remains readable. A refresh MUST animate from the last displayed value rather than zero.
+Reduced-motion mode MUST render final values immediately and remove nonessential movement.
 
 UA-23. Every visible string MUST use an i18n key present in `en`, `zh`, `zh-TW`, and `ja`.

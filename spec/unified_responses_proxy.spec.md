@@ -104,6 +104,8 @@ WS10. Monoize MUST accept the v1 `response.append` event. The event MUST contain
 
 WS11. Before sending a generated request through the existing handler, Monoize MUST remove `type`, `generate`, `client_metadata`, and any locally consumed `previous_response_id`, and MUST set `stream=true`.
 
+WS11a. Monoize MUST assign a new UUID `x-request-id` header to every generated WebSocket request before it enters the existing Responses handler. Two generated requests on one WebSocket connection MUST NOT share the upgrade request's `x-request-id` or each other's `x-request-id`.
+
 WS12. A valid client Ping MUST receive the WebSocket protocol Pong behavior supplied by the WebSocket implementation. A Close message MUST close the connection. A binary data message or a JSON value that is not an object MUST produce a WebSocket error event with status `400` and code `invalid_websocket_event`.
 
 WS13. The WebSocket message and frame limit MUST default to 50 MiB, equal to the forwarding HTTP body limit in C5, and MUST be configurable with `MONOIZE_RESPONSES_WS_MESSAGE_MAX_BYTES`.

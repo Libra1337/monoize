@@ -784,6 +784,8 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
         .await
         .unwrap();
 
+    bind_test_api_key_to_provider(&ctx, "gpt-5-mini", "mono-transform-markdown-images").await;
+
     let image_markdown = "![chart](https://example.com/chart.png)";
     let default_appended_markdown = "![image](https://example.com/chart.png)";
     let (status, body) = json_post(

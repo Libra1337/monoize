@@ -643,6 +643,8 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
         .await
         .unwrap();
 
+    bind_test_api_key_to_provider(&ctx, "gpt-5-mini", "mono-transform-summary-messages").await;
+
     let text = collect_messages_stream_text(
         &ctx,
         json!({

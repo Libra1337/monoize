@@ -322,7 +322,6 @@ export function AdminDashboardPage() {
 									<thead>
 										<tr className='border-b text-left text-muted-foreground'>
 											<th className='py-1 pr-2 font-medium'>{tt('adminDashboard.channel', 'Channel')}</th>
-											<th className='py-1 pr-2 font-medium'>{tt('adminDashboard.weight', 'Weight')}</th>
 											<th className='py-1 pr-2 font-medium'>{tt('adminDashboard.affinity', 'Affinity')}</th>
 											<th className='py-1 pr-2 font-medium'>{tt('adminDashboard.status', 'Status')}</th>
 											<th className='py-1 pr-2 text-right font-medium'>{tt('adminDashboard.todaySpend', "Today")}</th>
@@ -336,7 +335,6 @@ export function AdminDashboardPage() {
 													<span className='font-medium'>{channel.channel_name}</span>
 													<span className='text-muted-foreground'> · {channel.provider_name}</span>
 												</td>
-												<td className='py-1 pr-2 font-mono'>{channel.weight}</td>
 												<td className='py-1 pr-2'>
 													{channel.session_affinity_auto ? (
 														<Badge variant='secondary' className='border-info-border bg-info-soft text-info-foreground'>

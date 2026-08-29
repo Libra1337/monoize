@@ -5084,6 +5084,58 @@ async fn create_test_provider(
     base_url: &str,
     api_key: &str,
 ) -> monoize::monoize_routing::MonoizeProvider {
+    create_test_provider_in_group(
+        state,
+        name,
+        provider_type,
+        logical_model,
+        base_url,
+        api_key,
+        "",
+    )
+    .await
+}
+
+async fn create_test_provider_in_new_group(
+    state: &monoize::app::AppState,
+    name: &str,
+    provider_type: monoize::monoize_routing::MonoizeProviderType,
+    logical_model: &str,
+    base_url: &str,
+    api_key: &str,
+) -> monoize::monoize_routing::MonoizeProvider {
+    let group = state
+        .user_store
+        .create_group(monoize::users::CreateGroupInput {
+            confirm_public_exposure: true,
+            name: format!("{name}-group"),
+            description: String::new(),
+            user_selectable: false,
+            sort_order: 0,
+        })
+        .await
+        .expect("test Group creates");
+    create_test_provider_in_group(
+        state,
+        name,
+        provider_type,
+        logical_model,
+        base_url,
+        api_key,
+        &group.id,
+    )
+    .await
+}
+
+async fn create_test_provider_in_group(
+    state: &monoize::app::AppState,
+    name: &str,
+    provider_type: monoize::monoize_routing::MonoizeProviderType,
+    logical_model: &str,
+    base_url: &str,
+    api_key: &str,
+    group_id: &str,
+) -> monoize::monoize_routing::MonoizeProvider {
     let pricing_profile = if logical_model.starts_with("gpt-") || logical_model.starts_with('o') {
         "openai"
     } else if logical_model.starts_with("claude-") {
@@ -5111,7 +5163,7 @@ async fn create_test_provider(
             multiplier: Default::default(),
             name: name.to_string(),
             api_type_overrides: Vec::new(),
-            group_id: String::new(),
+            group_id: group_id.to_string(),
             channel: monoize::monoize_routing::CreateMonoizeChannelInput {
                 name: format!("{name}-channel"),
                 provider_type,
@@ -5154,6 +5206,47 @@ async fn create_test_provider(
         })
         .await
         .unwrap()
+}
+
+async fn bind_test_api_key_to_provider(ctx: &TestContext, model: &str, provider_name: &str) {
+    let provider = ctx
+        .state
+        .monoize_store
+        .list_providers()
+        .await
+        .expect("test Providers list")
+        .into_iter()
+        .find(|provider| provider.name == provider_name)
+        .expect("target test Provider exists");
+    ctx.state
+        .user_store
+        .update_api_key(
+            &ctx.api_key_id,
+            monoize::users::UpdateApiKeyInput {
+                name: None,
+                enabled: None,
+                sub_account_enabled: None,
+                sub_account_balance_nano_usd: None,
+                model_limits_enabled: None,
+                model_limits: None,
+                ip_whitelist: None,
+                group_ids: None,
+                channel_bindings: Some(vec![monoize::users::ApiKeyChannelBinding {
+                    group_id: provider.group_id,
+                    model: model.to_string(),
+                    channel_id: provider.channel.id,
+                }]),
+                max_multiplier: None,
+                transforms: None,
+                model_redirects: None,
+                reasoning_envelope_enabled: None,
+                request_capture_mode: None,
+                expires_at: None,
+            },
+            false,
+        )
+        .await
+        .expect("test API Key Channel binding updates");
 }
 
 async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&str]) {
@@ -5356,7 +5449,7 @@ async fn setup_with_unknown_fields() -> TestContext {
         )
         .await
         .expect("update user balance");
-    let (_, test_token) = state
+    let (test_key, test_token) = state
         .user_store
         .create_api_key(&user.id, "test-key", None)
         .await
@@ -5427,6 +5520,7 @@ async fn setup_with_unknown_fields() -> TestContext {
     TestContext {
         router,
         auth_header: format!("Bearer {test_token}"),
+        api_key_id: test_key.id,
         state,
         captured_headers,
         captured_bodies,

@@ -17,7 +17,7 @@ use sea_orm::ConnectionTrait;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
@@ -29,12 +29,23 @@ struct Snapshot {
 
 static SNAPSHOT: OnceLock<Mutex<Option<Snapshot>>> = OnceLock::new();
 
+#[derive(Clone)]
+struct CachedPublicStatusSnapshot {
+    source_id: usize,
+    revision: u64,
+    created_at: Instant,
+    bytes: Vec<u8>,
+}
+
+static PUBLIC_STATUS_SNAPSHOT: OnceLock<tokio::sync::Mutex<Option<CachedPublicStatusSnapshot>>> =
+    OnceLock::new();
+
 fn snapshot(revision: u64) -> Snapshot {
     let storage = SNAPSHOT.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = storage.lock() {
         if let Some(current) = guard.as_ref()
             && current.revision == revision
-            && current.created_at.elapsed() < Duration::from_secs(60)
+            && current.created_at.elapsed() < Duration::from_secs(15)
         {
             return current.clone();
         }
@@ -124,10 +135,27 @@ struct PublicStatusProvider {
 }
 
 #[derive(Debug, Serialize)]
+struct PublicStatusTimelineBucket {
+    started_at: String,
+    state: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicStatusModel {
+    name: String,
+    state: &'static str,
+    success_rate_24h_basis_points: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
 struct PublicStatusGroup {
     public_name: String,
     state: &'static str,
     insufficient_provider_count: usize,
+    success_rate_24h_basis_points: Option<u32>,
+    last_observed_at: Option<String>,
+    timeline: Vec<PublicStatusTimelineBucket>,
+    models: Vec<PublicStatusModel>,
     providers: Vec<PublicStatusProvider>,
 }
 
@@ -137,6 +165,88 @@ struct PublicStatusResponse {
     data_through: String,
     data_complete: bool,
     groups: Vec<PublicStatusGroup>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct StatusCounts {
+    attempts: u64,
+    successes: u64,
+}
+
+impl StatusCounts {
+    fn record(&mut self, success: bool) {
+        self.attempts = self.attempts.saturating_add(1);
+        if success {
+            self.successes = self.successes.saturating_add(1);
+        }
+    }
+
+    fn success_rate_basis_points(self) -> Option<u32> {
+        (self.attempts > 0)
+            .then(|| ((u128::from(self.successes) * 10_000) / u128::from(self.attempts)) as u32)
+    }
+
+    fn state(self) -> &'static str {
+        if self.attempts < 10 {
+            return "insufficient_data";
+        }
+        let successes = u128::from(self.successes);
+        let attempts = u128::from(self.attempts);
+        if successes * 100 >= attempts * 98 {
+            "operational"
+        } else if successes * 100 >= attempts * 90 {
+            "minor_degradation"
+        } else if successes * 100 >= attempts * 80 {
+            "major_degradation"
+        } else {
+            "unavailable"
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ProviderStatusAccumulator {
+    public_name: String,
+    group_id: String,
+    channel_id: String,
+    current: StatusCounts,
+    window: StatusCounts,
+}
+
+#[derive(Debug, Default)]
+struct ModelStatusAccumulator {
+    current: StatusCounts,
+    window: StatusCounts,
+}
+
+#[derive(Debug)]
+struct GroupStatusAccumulator {
+    public_name: String,
+    window: StatusCounts,
+    last_observed_at_unix_ms: Option<i64>,
+    timeline: Vec<StatusCounts>,
+    models: BTreeMap<String, ModelStatusAccumulator>,
+    provider_indices: Vec<usize>,
+}
+
+fn worst_provider_state(providers: &[PublicStatusProvider]) -> &'static str {
+    let states = providers.iter().map(|provider| provider.state);
+    if states.clone().any(|state| state == "unavailable") {
+        "unavailable"
+    } else if states.clone().any(|state| state == "major_degradation") {
+        "major_degradation"
+    } else if states.clone().any(|state| state == "minor_degradation") {
+        "minor_degradation"
+    } else if states.clone().any(|state| state == "operational") {
+        "operational"
+    } else {
+        "insufficient_data"
+    }
+}
+
+fn status_time(unix_ms: i64) -> Option<String> {
+    chrono::DateTime::<Utc>::from_timestamp_millis(unix_ms)
+        .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
 #[derive(Debug, Clone)]
@@ -711,7 +821,41 @@ pub async fn public_status(
     if !crate::public_api::admit(&headers) {
         return Ok(crate::public_api::rate_limited_response());
     }
+    let source_id = Arc::as_ptr(&state.routing_config_revision) as usize;
+    let revision = state
+        .routing_config_revision
+        .load(std::sync::atomic::Ordering::Acquire);
+    let cache = PUBLIC_STATUS_SNAPSHOT.get_or_init(|| tokio::sync::Mutex::new(None));
+    let mut cache = cache.lock().await;
+    if let Some(current) = cache.as_ref()
+        && current.source_id == source_id
+        && current.revision == revision
+        && current.created_at.elapsed() < Duration::from_secs(15)
+    {
+        return Ok(crate::public_api::cacheable_json_response(
+            &headers,
+            current.bytes.clone(),
+            "public, max-age=15",
+        ));
+    }
+
+    let generated_at = now_string();
+    let data_through_unix_ms = chrono::DateTime::parse_from_rfc3339(&generated_at)
+        .map_err(status_source_error)?
+        .timestamp_millis();
+    const HALF_HOUR_MS: i64 = 1_800_000;
+    const DAY_MS: i64 = 86_400_000;
+    let window_start_unix_ms = data_through_unix_ms.saturating_sub(DAY_MS);
+    let current_start_unix_ms = data_through_unix_ms.saturating_sub(HALF_HOUR_MS);
+    let latest_bucket_start = data_through_unix_ms.div_euclid(HALF_HOUR_MS) * HALF_HOUR_MS;
+    let first_bucket_start = latest_bucket_start.saturating_sub(47 * HALF_HOUR_MS);
+
     let groups = groups_by_id(&state).await.map_err(status_source_error)?;
+    let group_order = state
+        .user_store
+        .list_groups()
+        .await
+        .map_err(status_source_error)?;
     let providers = state
         .monoize_store
         .list_providers()
@@ -720,92 +864,167 @@ pub async fn public_status(
     let public_provider_names = public_provider_names_by_id(&state)
         .await
         .map_err(status_source_error)?;
-    let since = Utc::now().timestamp_millis() - 86_400_000;
-    let mut grouped: BTreeMap<String, Vec<PublicStatusProvider>> = BTreeMap::new();
-    let mut data_complete = true;
+    let mut provider_accumulators = Vec::<ProviderStatusAccumulator>::new();
+    let mut provider_indices = HashMap::<String, usize>::new();
+    let mut group_accumulators = HashMap::<String, GroupStatusAccumulator>::new();
     for provider in providers {
+        if !provider.enabled || !provider.channel.enabled {
+            continue;
+        }
         let public_names = public_names_for_provider(&public_provider_names, &provider)
             .ok_or_else(|| status_source_error("Provider public name missing"))?;
-        let group_names = provider_group_names(&provider, &groups);
-        let row = state.db_pool.read().query_one(state.db_pool.stmt("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS successes FROM request_logs WHERE provider_id = $1 AND created_at_unix_ms >= $2", vec![provider.id.clone().into(), since.into()])).await.map_err(status_source_error)?;
-        let total = row
-            .as_ref()
-            .and_then(|row| row.try_get::<i64>("", "total").ok())
-            .unwrap_or(0);
-        if total == 0 {
-            data_complete = false;
-        }
-        let successes = row
-            .as_ref()
-            .and_then(|row| row.try_get::<Option<i64>>("", "successes").ok())
-            .flatten()
-            .unwrap_or(0);
-        let rate = (total > 0)
-            .then(|| ((successes.max(0) * 10_000 / total.max(1)).clamp(0, 10_000)) as u32);
-        let state_name = match rate {
-            None => "insufficient_data",
-            Some(value) if value >= 9_900 => "operational",
-            Some(value) if value >= 9_000 => "minor_degradation",
-            _ => "major_degradation",
-        };
-        let entry = PublicStatusProvider {
+        let group_public_name = groups
+            .get(&provider.group_id)
+            .cloned()
+            .ok_or_else(|| status_source_error("Provider Group public name missing"))?;
+        let provider_index = provider_accumulators.len();
+        provider_indices.insert(provider.id.clone(), provider_index);
+        provider_accumulators.push(ProviderStatusAccumulator {
             public_name: public_names.provider.clone(),
-            state: state_name,
-            success_rate_24h_basis_points: rate,
+            group_id: provider.group_id.clone(),
+            channel_id: provider.channel.id.clone(),
+            current: StatusCounts::default(),
+            window: StatusCounts::default(),
+        });
+        group_accumulators
+            .entry(provider.group_id)
+            .or_insert_with(|| GroupStatusAccumulator {
+                public_name: group_public_name,
+                window: StatusCounts::default(),
+                last_observed_at_unix_ms: None,
+                timeline: vec![StatusCounts::default(); 48],
+                models: BTreeMap::new(),
+                provider_indices: Vec::new(),
+            })
+            .provider_indices
+            .push(provider_index);
+    }
+
+    let rows = state
+        .db_pool
+        .read()
+        .query_all(state.db_pool.stmt(
+            "SELECT provider_id, channel_id, COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(upstream_model), ''), 'unknown') AS status_model, status, created_at_unix_ms FROM request_logs WHERE created_at_unix_ms >= $1 AND created_at_unix_ms <= $2 AND provider_id IS NOT NULL",
+            vec![window_start_unix_ms.into(), data_through_unix_ms.into()],
+        ))
+        .await
+        .map_err(status_source_error)?;
+
+    for row in rows {
+        let provider_id: String = row
+            .try_get("", "provider_id")
+            .map_err(status_source_error)?;
+        let Some(provider_index) = provider_indices.get(&provider_id).copied() else {
+            continue;
         };
-        for group_name in group_names {
-            grouped.entry(group_name).or_default().push(entry.clone());
+        let channel_id: Option<String> =
+            row.try_get("", "channel_id").map_err(status_source_error)?;
+        if channel_id.as_deref() != Some(provider_accumulators[provider_index].channel_id.as_str())
+        {
+            continue;
+        }
+        let model: String = row
+            .try_get("", "status_model")
+            .map_err(status_source_error)?;
+        let status: String = row.try_get("", "status").map_err(status_source_error)?;
+        let observed_at: i64 = row
+            .try_get("", "created_at_unix_ms")
+            .map_err(status_source_error)?;
+        let success = matches!(status.as_str(), "success" | "client_gone");
+        let provider = &mut provider_accumulators[provider_index];
+        provider.window.record(success);
+        if observed_at >= current_start_unix_ms {
+            provider.current.record(success);
+        }
+
+        let group = group_accumulators
+            .get_mut(&provider.group_id)
+            .ok_or_else(|| status_source_error("Provider Group accumulator missing"))?;
+        group.window.record(success);
+        group.last_observed_at_unix_ms = Some(
+            group
+                .last_observed_at_unix_ms
+                .map_or(observed_at, |current| current.max(observed_at)),
+        );
+        if observed_at >= first_bucket_start {
+            let bucket_index = ((observed_at - first_bucket_start) / HALF_HOUR_MS) as usize;
+            if let Some(bucket) = group.timeline.get_mut(bucket_index) {
+                bucket.record(success);
+            }
+        }
+        let model_status = group.models.entry(model).or_default();
+        model_status.window.record(success);
+        if observed_at >= current_start_unix_ms {
+            model_status.current.record(success);
         }
     }
-    let output = grouped
-        .into_iter()
-        .map(|(name, mut providers)| {
-            providers.sort_by(|left, right| {
-                left.public_name
-                    .as_bytes()
-                    .cmp(right.public_name.as_bytes())
-            });
-            let insufficient = providers
-                .iter()
-                .filter(|provider| provider.state == "insufficient_data")
-                .count();
-            let state = if providers.is_empty() {
-                "insufficient_data"
-            } else if providers
-                .iter()
-                .any(|provider| provider.state == "major_degradation")
-            {
-                "major_degradation"
-            } else if providers
-                .iter()
-                .any(|provider| provider.state == "minor_degradation")
-            {
-                "minor_degradation"
-            } else if insufficient > 0 {
-                "insufficient_data"
-            } else {
-                "operational"
-            };
-            PublicStatusGroup {
-                public_name: name,
-                state,
-                insufficient_provider_count: insufficient,
-                providers,
-            }
-        })
-        .collect();
-    let snapshot = snapshot(
-        state
-            .routing_config_revision
-            .load(std::sync::atomic::Ordering::Acquire),
-    );
+
+    let mut output = Vec::new();
+    for group_row in group_order {
+        let Some(group) = group_accumulators.remove(&group_row.id) else {
+            continue;
+        };
+        let providers = group
+            .provider_indices
+            .iter()
+            .map(|index| {
+                let provider = &provider_accumulators[*index];
+                PublicStatusProvider {
+                    public_name: provider.public_name.clone(),
+                    state: provider.current.state(),
+                    success_rate_24h_basis_points: provider.window.success_rate_basis_points(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let insufficient_provider_count = providers
+            .iter()
+            .filter(|provider| provider.state == "insufficient_data")
+            .count();
+        let timeline = group
+            .timeline
+            .into_iter()
+            .enumerate()
+            .map(|(index, counts)| PublicStatusTimelineBucket {
+                started_at: status_time(
+                    first_bucket_start.saturating_add(index as i64 * HALF_HOUR_MS),
+                )
+                .unwrap_or_else(|| generated_at.clone()),
+                state: counts.state(),
+            })
+            .collect();
+        let models = group
+            .models
+            .into_iter()
+            .map(|(name, counts)| PublicStatusModel {
+                name,
+                state: counts.current.state(),
+                success_rate_24h_basis_points: counts.window.success_rate_basis_points(),
+            })
+            .collect();
+        output.push(PublicStatusGroup {
+            public_name: group.public_name,
+            state: worst_provider_state(&providers),
+            insufficient_provider_count,
+            success_rate_24h_basis_points: group.window.success_rate_basis_points(),
+            last_observed_at: group.last_observed_at_unix_ms.and_then(status_time),
+            timeline,
+            models,
+            providers,
+        });
+    }
     let response = PublicStatusResponse {
-        generated_at: snapshot.generated_at.clone(),
-        data_through: snapshot.generated_at,
-        data_complete,
+        generated_at: generated_at.clone(),
+        data_through: generated_at,
+        data_complete: true,
         groups: output,
     };
     let bytes = serde_json::to_vec(&response).map_err(status_source_error)?;
+    *cache = Some(CachedPublicStatusSnapshot {
+        source_id,
+        revision,
+        created_at: Instant::now(),
+        bytes: bytes.clone(),
+    });
     Ok(crate::public_api::cacheable_json_response(
         &headers,
         bytes,
@@ -816,14 +1035,15 @@ pub async fn public_status(
 #[cfg(test)]
 mod tests {
     use super::{
-        ascii_search_key, canonical_text, exact_marketplace_model, marketplace_group_filter,
-        public_status, select_complete_marketplace_rates,
+        StatusCounts, ascii_search_key, canonical_text, exact_marketplace_model,
+        marketplace_group_filter, public_status, select_complete_marketplace_rates,
     };
     use crate::app::{AppState, RuntimeConfig, load_state_with_runtime};
     use crate::billing_rate_store::DbBillingRateRecord;
     use axum::extract::State;
     use axum::http::HeaderMap;
     use axum::response::IntoResponse;
+    use chrono::Utc;
     use http_body_util::BodyExt;
     use sea_orm::{ConnectionTrait, Value as SeaValue};
 
@@ -907,8 +1127,68 @@ mod tests {
         assert!(selected.iter().all(|rate| rate.id.starts_with("logical-")));
     }
 
+    #[test]
+    fn public_status_classifies_exact_success_rate_boundaries() {
+        assert_eq!(
+            StatusCounts {
+                attempts: 9,
+                successes: 9
+            }
+            .state(),
+            "insufficient_data"
+        );
+        assert_eq!(
+            StatusCounts {
+                attempts: 100,
+                successes: 98
+            }
+            .state(),
+            "operational"
+        );
+        assert_eq!(
+            StatusCounts {
+                attempts: 100,
+                successes: 97
+            }
+            .state(),
+            "minor_degradation"
+        );
+        assert_eq!(
+            StatusCounts {
+                attempts: 100,
+                successes: 90
+            }
+            .state(),
+            "minor_degradation"
+        );
+        assert_eq!(
+            StatusCounts {
+                attempts: 100,
+                successes: 89
+            }
+            .state(),
+            "major_degradation"
+        );
+        assert_eq!(
+            StatusCounts {
+                attempts: 100,
+                successes: 80
+            }
+            .state(),
+            "major_degradation"
+        );
+        assert_eq!(
+            StatusCounts {
+                attempts: 100,
+                successes: 79
+            }
+            .state(),
+            "unavailable"
+        );
+    }
+
     #[tokio::test]
-    async fn public_status_uses_only_persisted_public_names() {
+    async fn public_status_uses_public_names_and_reuses_immutable_snapshot() {
         let state = make_state().await;
         let group_id = state
             .user_store
@@ -960,30 +1240,100 @@ mod tests {
                     SeaValue::Bytes(Some(Box::new(b"Public Provider".to_vec()))),
                     "Public Channel".into(),
                     SeaValue::Bytes(Some(Box::new(b"Public Channel".to_vec()))),
-                    provider.id.into(),
+                    provider.id.clone().into(),
                 ],
             ))
             .await
             .expect("Provider public names update");
 
-        let response = public_status(State(state), HeaderMap::new())
+        let observed_at = Utc::now().timestamp_millis();
+        for index in 0..12 {
+            state
+                .db_pool
+                .write()
+                .await
+                .execute(state.db_pool.stmt(
+                    "INSERT INTO request_logs (id, user_id, model, provider_id, upstream_model, channel_id, is_stream, status, created_at, created_at_unix_ms) VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9)",
+                    vec![
+                        format!("status-log-{index}").into(),
+                        "status-user".into(),
+                        "gpt-status".into(),
+                        provider.id.clone().into(),
+                        "gpt-status-upstream".into(),
+                        provider.channel.id.clone().into(),
+                        if index == 11 { "client_gone" } else { "success" }.into(),
+                        Utc::now().to_rfc3339().into(),
+                        observed_at.into(),
+                    ],
+                ))
+                .await
+                .expect("status request log inserts");
+        }
+
+        let response = public_status(State(state.clone()), HeaderMap::new())
             .await
             .expect("status succeeds")
             .into_response();
-        let body = response
+        let first_etag = response
+            .headers()
+            .get(axum::http::header::ETAG)
+            .cloned()
+            .expect("ETag exists");
+        let first_body = response
             .into_body()
             .collect()
             .await
             .expect("body reads")
             .to_bytes();
-        let body: serde_json::Value = serde_json::from_slice(&body).expect("body is JSON");
+        let body: serde_json::Value = serde_json::from_slice(&first_body).expect("body is JSON");
 
         assert_eq!(body["groups"][0]["public_name"], "Public Group");
         assert_eq!(
             body["groups"][0]["providers"][0]["public_name"],
             "Public Provider"
         );
+        assert_eq!(body["groups"][0]["timeline"].as_array().unwrap().len(), 48);
+        assert_eq!(body["groups"][0]["models"][0]["name"], "gpt-status");
+        assert_eq!(body["groups"][0]["success_rate_24h_basis_points"], 10000);
+        assert!(body["groups"][0]["last_observed_at"].is_string());
         assert!(!body.to_string().contains("Internal Provider"));
         assert!(!body.to_string().contains("Internal Channel"));
+
+        state
+            .db_pool
+            .write()
+            .await
+            .execute(state.db_pool.stmt(
+                "INSERT INTO request_logs (id, user_id, model, provider_id, upstream_model, channel_id, is_stream, status, created_at, created_at_unix_ms) VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9)",
+                vec![
+                    "status-late-log".into(),
+                    "status-user".into(),
+                    "gpt-status".into(),
+                    provider.id.into(),
+                    "gpt-status-upstream".into(),
+                    provider.channel.id.into(),
+                    "error".into(),
+                    Utc::now().to_rfc3339().into(),
+                    observed_at.into(),
+                ],
+            ))
+            .await
+            .expect("late status request log inserts");
+
+        let cached_response = public_status(State(state), HeaderMap::new())
+            .await
+            .expect("cached status succeeds")
+            .into_response();
+        assert_eq!(
+            cached_response.headers().get(axum::http::header::ETAG),
+            Some(&first_etag)
+        );
+        let cached_body = cached_response
+            .into_body()
+            .collect()
+            .await
+            .expect("cached body reads")
+            .to_bytes();
+        assert_eq!(cached_body, first_body);
     }
 }

@@ -39,13 +39,15 @@ import {
   deleteApiKeyOptimistic,
   batchDeleteApiKeysOptimistic,
   useDashboardGroups,
+  useApiKeyChannelConflicts,
   useTransformRegistry,
 } from "@/lib/swr";
-import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, Group, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
+import type { ApiKey, ApiKeyChannelBinding, ApiKeyChannelConflict, ApiKeyCreated, CreateApiKeyInput, Group, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
 import { api as apiClient } from "@/lib/api";
 import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
+import { Skeleton } from "@/components/ui/skeleton";
 import { DataTableShell, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
@@ -207,73 +209,152 @@ function ApiKeyRestrictionBadges({
 
 interface KeyGroupsSectionProps {
   idPrefix: string;
-  useUserGroup: boolean;
   groupIds: string[];
   groups: Group[];
   groupsLoading: boolean;
   ownerGroupId: string | null;
   isAdmin: boolean;
-  onUseUserGroupChange: (next: boolean) => void;
   onGroupIdsChange: (next: string[]) => void;
 }
 
+function scopedChannelConflicts(
+  conflicts: ApiKeyChannelConflict[],
+  groupIds: string[],
+  modelLimitsEnabled: boolean,
+  modelLimits: string[],
+) {
+  return conflicts.filter((conflict) => (
+    (groupIds.length === 0 || groupIds.includes(conflict.group_id))
+    && (!modelLimitsEnabled || modelLimits.length === 0 || modelLimits.includes(conflict.model))
+  ));
+}
+
+function scopedChannelBindings(
+  conflicts: ApiKeyChannelConflict[],
+  bindings: ApiKeyChannelBinding[],
+) {
+  return conflicts.flatMap((conflict) => {
+    const binding = bindings.find((candidate) => (
+      candidate.group_id === conflict.group_id && candidate.model === conflict.model
+    ));
+    return binding && conflict.options.some((option) => option.channel_id === binding.channel_id)
+      ? [binding]
+      : [];
+  });
+}
+
+function unresolvedChannelConflicts(
+  conflicts: ApiKeyChannelConflict[],
+  bindings: ApiKeyChannelBinding[],
+) {
+  return conflicts.filter((conflict) => !bindings.some((binding) => (
+    binding.group_id === conflict.group_id
+    && binding.model === conflict.model
+    && conflict.options.some((option) => option.channel_id === binding.channel_id)
+  )));
+}
+
 /**
- * TM-GRP-1..TM-GRP-5: a key either inherits the owner's single group or holds
- * an ordered explicit selection; non-admins may only pick `user_selectable`
- * groups plus their own current group.
+ * TM-GRP-1..TM-GRP-5: an empty selection permits every Group. Non-admins may
+ * only pick `user_selectable` Groups plus their own current Group.
  */
 function KeyGroupsSection({
   idPrefix,
-  useUserGroup,
   groupIds,
   groups,
   groupsLoading,
   ownerGroupId,
   isAdmin,
-  onUseUserGroupChange,
   onGroupIdsChange,
 }: KeyGroupsSectionProps) {
   const { t } = useTranslation();
-  const ownerGroup = useMemo(
-    () => groups.find((group) => group.id === ownerGroupId) ?? null,
-    [groups, ownerGroupId]
-  );
 
   return (
     <div className="space-y-3 rounded-lg border p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <Label htmlFor={`${idPrefix}-use-user-group`}>{t("apiKeys.useUserGroup")}</Label>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {ownerGroup
-              ? t("apiKeys.useUserGroupHelpNamed", { name: ownerGroup.name })
-              : t("apiKeys.useUserGroupHelp")}
-          </p>
-        </div>
-        <Switch
-          id={`${idPrefix}-use-user-group`}
-          checked={useUserGroup}
-          onCheckedChange={onUseUserGroupChange}
-        />
+      <Label htmlFor={`${idPrefix}-groups`}>{t("apiKeys.groups")}</Label>
+      <GroupMultiSelect
+        value={groupIds}
+        groups={groups}
+        loading={groupsLoading}
+        sortable
+        optionFilter={
+          isAdmin
+            ? undefined
+            : (group) => group.user_selectable || group.id === ownerGroupId
+        }
+        onChange={onGroupIdsChange}
+      />
+      <p className="text-xs text-muted-foreground">{t("apiKeys.groupsHelp")}</p>
+    </div>
+  );
+}
+
+function ChannelBindingsSection({
+  conflicts,
+  loading,
+  groupIds,
+  modelLimitsEnabled,
+  modelLimits,
+  value,
+  onChange,
+  failed,
+}: {
+  conflicts: ApiKeyChannelConflict[];
+  loading: boolean;
+  groupIds: string[];
+  modelLimitsEnabled: boolean;
+  modelLimits: string[];
+  value: ApiKeyChannelBinding[];
+  onChange: (next: ApiKeyChannelBinding[]) => void;
+  failed: boolean;
+}) {
+  const { t } = useTranslation();
+  const scoped = scopedChannelConflicts(conflicts, groupIds, modelLimitsEnabled, modelLimits);
+  if (loading) return <Skeleton className="h-24 w-full rounded-lg" />;
+  if (failed) return <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{t("apiKeys.channelSelectionLoadError")}</p>;
+  if (scoped.length === 0) return null;
+  return (
+    <div className="space-y-3 rounded-lg border p-3">
+      <div>
+        <p className="text-sm font-medium">{t("apiKeys.channelSelection")}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{t("apiKeys.channelSelectionHelp")}</p>
       </div>
-      {!useUserGroup && (
-        <div className="space-y-2">
-          <Label>{t("apiKeys.groups")}</Label>
-          <GroupMultiSelect
-            value={groupIds}
-            groups={groups}
-            loading={groupsLoading}
-            sortable
-            optionFilter={
-              isAdmin
-                ? undefined
-                : (group) => group.user_selectable || group.id === ownerGroupId
-            }
-            onChange={onGroupIdsChange}
-          />
-          <p className="text-xs text-muted-foreground">{t("apiKeys.groupsHelp")}</p>
-        </div>
-      )}
+      {scoped.map((conflict) => {
+        const selected = value.find((binding) => (
+          binding.group_id === conflict.group_id && binding.model === conflict.model
+        ));
+        return (
+          <div key={`${conflict.group_id}:${conflict.model}`} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)] sm:items-center">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">{conflict.model}</p>
+              <p className="truncate text-xs text-muted-foreground">{conflict.group_name}</p>
+            </div>
+            <Select
+              value={selected?.channel_id ?? ""}
+              onValueChange={(channelId) => onChange([
+                ...value.filter((binding) => !(
+                  binding.group_id === conflict.group_id && binding.model === conflict.model
+                )),
+                { group_id: conflict.group_id, model: conflict.model, channel_id: channelId },
+              ])}
+            >
+              <SelectTrigger><SelectValue placeholder={t("apiKeys.selectChannel")} /></SelectTrigger>
+              <SelectContent>
+                {conflict.options.map((option) => (
+                  <SelectItem key={option.channel_id} value={option.channel_id}>
+                    {option.provider_name} · {option.channel_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        );
+      })}
+      {unresolvedChannelConflicts(scoped, value).length > 0 ? (
+        <p role="alert" className="text-xs text-destructive">
+          {t("apiKeys.channelSelectionRequired", { count: unresolvedChannelConflicts(scoped, value).length })}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -351,8 +432,11 @@ export function ApiKeysPage() {
   const { user: currentUser } = useAuth();
   const { data: keys = [], isLoading } = useApiKeys();
   const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
+  const { data: channelConflicts = [], isLoading: channelConflictsLoading, error: channelConflictsError } =
+    useApiKeyChannelConflicts();
+  const canManageSystem = currentUser?.role === "admin" || currentUser?.role === "super_admin";
   const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
-    useTransformRegistry();
+    useTransformRegistry({ isPaused: () => !canManageSystem });
   const apiKeyTransformRegistry = useMemo(
     () => transformRegistry.filter((item) => item.supported_scopes.includes("api_key")),
     [transformRegistry]
@@ -375,8 +459,8 @@ export function ApiKeysPage() {
   const [newKeyModelLimits, setNewKeyModelLimits] = useState("");
   const [newKeyIpWhitelist, setNewKeyIpWhitelist] = useState("");
 
-  const [newKeyUseUserGroup, setNewKeyUseUserGroup] = useState(true);
   const [newKeyGroupIds, setNewKeyGroupIds] = useState<string[]>([]);
+  const [newKeyChannelBindings, setNewKeyChannelBindings] = useState<ApiKeyChannelBinding[]>([]);
   const [newKeyMaxMultiplier, setNewKeyMaxMultiplier] = useState("");
   const [newKeyTransforms, setNewKeyTransforms] = useState<TransformRuleConfig[]>([]);
   const [newKeyModelRedirects, setNewKeyModelRedirects] = useState<ModelRedirectRule[]>([]);
@@ -387,7 +471,26 @@ export function ApiKeysPage() {
   const [updating, setUpdating] = useState(false);
   const [createdKey, setCreatedKey] = useState<ApiKeyCreated | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const canManageSystem = currentUser?.role === "admin" || currentUser?.role === "super_admin";
+  const newKeyModelList = useMemo(
+    () => newKeyModelLimits.split(",").map((model) => model.trim()).filter(Boolean),
+    [newKeyModelLimits],
+  );
+  const activeChannelConflicts = useMemo(
+    () => scopedChannelConflicts(
+      channelConflicts,
+      newKeyGroupIds,
+      newKeyModelLimitsEnabled,
+      newKeyModelList,
+    ),
+    [channelConflicts, newKeyGroupIds, newKeyModelLimitsEnabled, newKeyModelList],
+  );
+  const activeChannelBindings = useMemo(
+    () => scopedChannelBindings(activeChannelConflicts, newKeyChannelBindings),
+    [activeChannelConflicts, newKeyChannelBindings],
+  );
+  const channelSelectionBlocked = channelConflictsLoading
+    || Boolean(channelConflictsError)
+    || unresolvedChannelConflicts(activeChannelConflicts, activeChannelBindings).length > 0;
 
   const resetCreateForm = () => {
     setNewKeyName("");
@@ -398,8 +501,8 @@ export function ApiKeysPage() {
     setNewKeyModelLimits("");
     setNewKeyIpWhitelist("");
 
-    setNewKeyUseUserGroup(true);
     setNewKeyGroupIds([]);
+    setNewKeyChannelBindings([]);
     setNewKeyMaxMultiplier("");
     setNewKeyTransforms([]);
     setNewKeyModelRedirects([]);
@@ -409,6 +512,12 @@ export function ApiKeysPage() {
 
   const handleCreate = async () => {
     if (!newKeyName.trim()) return;
+    if (channelSelectionBlocked) {
+      toast.error(t("apiKeys.channelSelectionRequired", {
+        count: unresolvedChannelConflicts(activeChannelConflicts, activeChannelBindings).length,
+      }));
+      return;
+    }
     const invalidRule = findFirstInvalidTransformRule(newKeyTransforms, apiKeyTransformRegistry);
     if (invalidRule) {
       const firstError = invalidRule.errors[0];
@@ -416,10 +525,6 @@ export function ApiKeysPage() {
         index: invalidRule.index + 1,
         reason: `${firstError.field} ${firstError.message}`,
       }));
-      return;
-    }
-    if (!newKeyUseUserGroup && newKeyGroupIds.length === 0) {
-      toast.error(t("apiKeys.groupsRequired"));
       return;
     }
     setCreating(true);
@@ -442,10 +547,10 @@ export function ApiKeysPage() {
           ? { sub_account_balance_nano_usd: initialSubAccountBalance }
           : {}),
         model_limits_enabled: newKeyModelLimitsEnabled,
-        model_limits: newKeyModelLimits ? newKeyModelLimits.split(",").map(s => s.trim()).filter(s => s) : [],
+        model_limits: newKeyModelList,
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
-        use_user_group: newKeyUseUserGroup,
-        group_ids: newKeyUseUserGroup ? [] : newKeyGroupIds,
+        group_ids: newKeyGroupIds,
+        channel_bindings: activeChannelBindings,
         max_multiplier: parseOptionalMultiplier(newKeyMaxMultiplier),
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
@@ -468,6 +573,12 @@ export function ApiKeysPage() {
 
   const handleUpdate = async () => {
     if (!editKey) return;
+    if (channelSelectionBlocked) {
+      toast.error(t("apiKeys.channelSelectionRequired", {
+        count: unresolvedChannelConflicts(activeChannelConflicts, activeChannelBindings).length,
+      }));
+      return;
+    }
     const invalidRule = findFirstInvalidTransformRule(newKeyTransforms, apiKeyTransformRegistry);
     if (invalidRule) {
       const firstError = invalidRule.errors[0];
@@ -475,10 +586,6 @@ export function ApiKeysPage() {
         index: invalidRule.index + 1,
         reason: `${firstError.field} ${firstError.message}`,
       }));
-      return;
-    }
-    if (!newKeyUseUserGroup && newKeyGroupIds.length === 0) {
-      toast.error(t("apiKeys.groupsRequired"));
       return;
     }
     setUpdating(true);
@@ -490,10 +597,10 @@ export function ApiKeysPage() {
           ? { sub_account_balance_nano_usd: parseOptionalNanoBalance(newKeySubAccountBalanceNanoUsd) }
           : {}),
         model_limits_enabled: newKeyModelLimitsEnabled,
-        model_limits: newKeyModelLimits ? newKeyModelLimits.split(",").map(s => s.trim()).filter(s => s) : [],
+        model_limits: newKeyModelList,
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
-        use_user_group: newKeyUseUserGroup,
-        group_ids: newKeyUseUserGroup ? [] : newKeyGroupIds,
+        group_ids: newKeyGroupIds,
+        channel_bindings: activeChannelBindings,
         max_multiplier: parseOptionalMultiplier(newKeyMaxMultiplier),
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
@@ -578,8 +685,8 @@ export function ApiKeysPage() {
     setNewKeyModelLimitsEnabled(key.model_limits_enabled);
     setNewKeyModelLimits(key.model_limits.join(", "));
     setNewKeyIpWhitelist(key.ip_whitelist.join(", "));
-    setNewKeyUseUserGroup(key.use_user_group);
     setNewKeyGroupIds(key.group_ids ?? []);
+    setNewKeyChannelBindings(key.channel_bindings ?? []);
     setNewKeyMaxMultiplier(key.max_multiplier != null ? String(key.max_multiplier) : "");
     setNewKeyTransforms(key.transforms ?? []);
     setNewKeyModelRedirects(key.model_redirects ?? []);
@@ -672,14 +779,22 @@ export function ApiKeysPage() {
                 </div>
                 <KeyGroupsSection
                   idPrefix="create"
-                  useUserGroup={newKeyUseUserGroup}
                   groupIds={newKeyGroupIds}
                   groups={groups}
                   groupsLoading={groupsLoading}
                   ownerGroupId={currentUser?.group_id ?? null}
                   isAdmin={canManageSystem}
-                  onUseUserGroupChange={setNewKeyUseUserGroup}
                   onGroupIdsChange={setNewKeyGroupIds}
+                />
+                <ChannelBindingsSection
+                  conflicts={channelConflicts}
+                  loading={channelConflictsLoading}
+                  groupIds={newKeyGroupIds}
+                  modelLimitsEnabled={newKeyModelLimitsEnabled}
+                  modelLimits={newKeyModelLimits.split(",").map((model) => model.trim()).filter(Boolean)}
+                  value={newKeyChannelBindings}
+                  onChange={setNewKeyChannelBindings}
+                  failed={Boolean(channelConflictsError)}
                 />
                 <div className="flex items-center space-x-2">
                   <Switch
@@ -793,7 +908,7 @@ export function ApiKeysPage() {
                 <Button variant="outline" onClick={() => { setCreateOpen(false); resetCreateForm(); }}>
                   {t("common.cancel")}
                 </Button>
-                <Button onClick={handleCreate} disabled={creating || !newKeyName.trim()}>
+                <Button onClick={handleCreate} disabled={creating || !newKeyName.trim() || channelSelectionBlocked}>
                   {creating ? t("common.creating") : t("common.create")}
                 </Button>
               </DialogFooter>
@@ -946,8 +1061,11 @@ export function ApiKeysPage() {
                     <VirtualTableCell className="font-medium">
                       <div className="flex min-w-max items-center gap-2 whitespace-nowrap">
                         <span>{key.name}</span>
-                        {!key.use_user_group && key.group_ids.length > 0 && (
+                        {key.group_ids.length > 0 && (
                           <GroupsBadge groupIds={key.group_ids} variant="secondary" />
+                        )}
+                        {key.group_ids.length === 0 && (
+                          <Badge variant="secondary">{t("apiKeys.allGroups")}</Badge>
                         )}
                       </div>
                     </VirtualTableCell>
@@ -1055,14 +1173,22 @@ export function ApiKeysPage() {
             </div>
             <KeyGroupsSection
               idPrefix="edit"
-              useUserGroup={newKeyUseUserGroup}
               groupIds={newKeyGroupIds}
               groups={groups}
               groupsLoading={groupsLoading}
               ownerGroupId={currentUser?.group_id ?? null}
               isAdmin={canManageSystem}
-              onUseUserGroupChange={setNewKeyUseUserGroup}
               onGroupIdsChange={setNewKeyGroupIds}
+            />
+            <ChannelBindingsSection
+              conflicts={channelConflicts}
+              loading={channelConflictsLoading}
+              groupIds={newKeyGroupIds}
+              modelLimitsEnabled={newKeyModelLimitsEnabled}
+              modelLimits={newKeyModelLimits.split(",").map((model) => model.trim()).filter(Boolean)}
+              value={newKeyChannelBindings}
+              onChange={setNewKeyChannelBindings}
+              failed={Boolean(channelConflictsError)}
             />
             <div className="flex items-center space-x-2">
               <Switch
@@ -1172,7 +1298,7 @@ export function ApiKeysPage() {
             <Button variant="outline" onClick={() => { setEditKey(null); resetCreateForm(); }}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleUpdate} disabled={updating}>
+            <Button onClick={handleUpdate} disabled={updating || channelSelectionBlocked}>
               {updating ? t("common.saving") : t("common.save")}
             </Button>
           </DialogFooter>

@@ -561,8 +561,8 @@ async fn models_list_respects_api_key_model_limits() {
                 model_limits: vec!["gpt-5-mini".to_string(), "grok-4".to_string()],
                 ip_whitelist: Vec::new(),
 
-                use_user_group: true,
                 group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -626,8 +626,8 @@ async fn models_list_model_limits_disabled_shows_all() {
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: Vec::new(),
 
-                use_user_group: true,
                 group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -687,8 +687,8 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
 
-                use_user_group: true,
                 group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
                 model_redirects: Vec::new(),
@@ -745,8 +745,8 @@ async fn forwarding_applies_api_key_model_redirects_before_model_limits_and_rout
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
-                use_user_group: true,
                 group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
                 model_redirects: vec![monoize::users::ModelRedirectRule {
@@ -841,8 +841,8 @@ async fn image_generation_applies_api_key_model_redirects_before_model_limits() 
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
-                use_user_group: true,
                 group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
                 model_redirects: vec![monoize::users::ModelRedirectRule {
@@ -886,7 +886,7 @@ async fn nonstream_http_client_error_fails_forward_without_same_channel_retry() 
     let (first_address, first_hits) = start_http_error_upstream(StatusCode::UNAUTHORIZED).await;
     let (second_address, _, second_bodies) = start_upstream().await;
 
-    let first = create_test_provider(
+    let first = create_test_provider_in_new_group(
         &ctx.state,
         "http-client-error-first",
         monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -896,7 +896,7 @@ async fn nonstream_http_client_error_fails_forward_without_same_channel_retry() 
     )
     .await;
     set_test_provider_retry_and_priority(&ctx.state, &first.id, 3, -100).await;
-    let second = create_test_provider(
+    let second = create_test_provider_in_new_group(
         &ctx.state,
         "http-client-error-second",
         monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -931,7 +931,7 @@ async fn nonstream_invalid_upstream_response_fails_forward_without_same_channel_
     let (first_address, first_hits) = start_http_error_upstream(StatusCode::OK).await;
     let (second_address, _, second_bodies) = start_upstream().await;
 
-    let first = create_test_provider(
+    let first = create_test_provider_in_new_group(
         &ctx.state,
         "invalid-response-first",
         monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
@@ -941,7 +941,7 @@ async fn nonstream_invalid_upstream_response_fails_forward_without_same_channel_
     )
     .await;
     set_test_provider_retry_and_priority(&ctx.state, &first.id, 3, -100).await;
-    let second = create_test_provider(
+    let second = create_test_provider_in_new_group(
         &ctx.state,
         "invalid-response-second",
         monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -976,7 +976,7 @@ async fn streaming_http_client_error_fails_forward_before_first_downstream_byte(
     let (first_address, first_hits) = start_http_error_upstream(StatusCode::FORBIDDEN).await;
     let (second_address, _, second_bodies) = start_upstream().await;
 
-    let first = create_test_provider(
+    let first = create_test_provider_in_new_group(
         &ctx.state,
         "stream-http-client-error-first",
         monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -986,7 +986,7 @@ async fn streaming_http_client_error_fails_forward_before_first_downstream_byte(
     )
     .await;
     set_test_provider_retry_and_priority(&ctx.state, &first.id, 3, -100).await;
-    let second = create_test_provider(
+    let second = create_test_provider_in_new_group(
         &ctx.state,
         "stream-http-client-error-second",
         monoize::monoize_routing::MonoizeProviderType::Responses,
