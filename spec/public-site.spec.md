@@ -19,17 +19,18 @@ PS-R1. The application MUST register these exact routes:
 | `/login` | Login and registration | No |
 | `/apidocs` | API documentation | No |
 | `/status` | Group and Provider status | No |
-| `/dashboard/marketplace` | Model Marketplace | No |
-| `/dashboard` and every other `/dashboard/*` path | Console | Yes |
+| `/marketplace` | Public Model Marketplace | No |
+| `/dashboard` and every `/dashboard/*` path | Console | Yes |
 | `/settings` | User settings | Yes |
 
-PS-R2. `/dashboard/marketplace` MUST be an explicit top-level route. It MUST NOT be a child
-of the protected `/dashboard` route and MUST NOT render inside `DashboardLayout`.
+PS-R2. `/marketplace` MUST be an explicit public top-level route. The separate
+`/dashboard/marketplace` route MUST be a protected child of `/dashboard` and render inside
+`DashboardLayout`.
 
 PS-R3. `/` MUST remain public after authentication. The router MUST NOT redirect an
 authenticated visitor from `/` to `/dashboard`.
 
-PS-R4. `/`, `/apidocs`, `/status`, and `/dashboard/marketplace` MUST use one
+PS-R4. `/`, `/apidocs`, `/status`, and `/marketplace` MUST use one
 `PublicLayout`.
 
 PS-R5. `PublicLayout` MUST render Home, Model Marketplace, API Docs, Status, Console, and

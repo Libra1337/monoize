@@ -15,15 +15,16 @@ describe("public browser route contract", () => {
       "/login",
       "/apidocs",
       "/status",
-      "/dashboard/marketplace",
+      "/marketplace",
     ]);
   });
 
-  test("protects Console paths except the public Marketplace", () => {
+  test("protects every Console path and keeps the public Marketplace separate", () => {
     expect(isProtectedConsolePath("/dashboard")).toBe(true);
     expect(isProtectedConsolePath("/dashboard/providers")).toBe(true);
     expect(isProtectedConsolePath("/settings")).toBe(true);
-    expect(isProtectedConsolePath("/dashboard/marketplace")).toBe(false);
+    expect(isProtectedConsolePath("/dashboard/marketplace")).toBe(true);
+    expect(isProtectedConsolePath("/marketplace")).toBe(false);
     expect(isProtectedConsolePath("/")).toBe(false);
   });
 });

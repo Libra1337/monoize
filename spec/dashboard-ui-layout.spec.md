@@ -2,9 +2,8 @@
 
 ## 0A. LynShen migration release
 
-DL-MIG-1. `/dashboard/marketplace` is the sole exception to this file's `/dashboard/*`
-scope. It is a public top-level route, uses `PublicLayout`, and MUST NOT render the
-authenticated sidebar or account menu.
+DL-MIG-1. `/dashboard/marketplace` is an authenticated Console route. It MUST render inside
+`DashboardLayout`. The separate public Marketplace uses `/marketplace` and `PublicLayout`.
 
 DL-MIG-2. After the Provider pricing migration, section 2 Provider list and editor rules
 that require a Channel count, Channel master list, `group_ids`, Channel `weight`, Provider
@@ -13,9 +12,8 @@ that require a Channel count, Channel master list, `group_ids`, Channel `weight`
 Group, embedded Channel public name, model count, effective default Profile, multiplier,
 enabled state, and Group-local priority.
 
-DL-MIG-3. The authenticated sidebar MUST include a Model Marketplace action that targets
-the public `/dashboard/marketplace` route. Navigating to it MUST leave `DashboardLayout`.
-The public header and LynShen branding follow `public-site.spec.md`.
+DL-MIG-3. The authenticated sidebar MUST include Model Marketplace, Usage Analysis, and API
+Docs actions. Each action MUST remain inside `DashboardLayout`.
 
 ## 0. Status
 
@@ -96,9 +94,20 @@ DL4. Mobile (`< lg`) MUST render sidebar via left sheet menu.
 DL5. Sidebar main navigation (always visible to authenticated users) MUST include exactly:
 
 - `/dashboard`
+- `/dashboard/usage`
 - `/dashboard/tokens`
 - `/dashboard/logs`
 - `/dashboard/playground`
+- `/dashboard/marketplace`
+- `/dashboard/api-docs`
+- `/dashboard/store`
+- `/dashboard/orders`
+
+DL5a. `/dashboard/logs` MUST retain the existing request-log page. Usage Analysis MUST NOT
+replace, mount, or redirect that route.
+
+DL5b. The expanded, collapsed, and mobile sidebar brand link MUST target `/`. The mobile
+brand link MUST invoke the existing navigation-close callback.
 
 DL6. Sidebar admin navigation group (visible only when user role is `admin` or `super_admin`) MUST include exactly:
 

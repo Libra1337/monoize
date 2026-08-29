@@ -510,6 +510,11 @@ SB-R-2A. A v2 unused unexpired code MUST store `code_format_version = 2` and one
 
 SB-R-3. A generation response MUST return every full generated code once. The dialog MUST keep them visible until the Admin closes it.
 
+SB-R-3A. Generation, v2 reveal, and v2 export require a loaded Store PaymentKeyRing. When
+the key ring is absent, each operation MUST return HTTP `503` with the same fixed code
+`store_redemption_encryption_unavailable`. The response MUST NOT return an environment
+variable value, key ID, ciphertext field, or backend error text.
+
 SB-R-4. An unused v2 code MAY be revealed or exported only with a reauthentication grant scoped to redemption access and expiring after five minutes.
 
 SB-R-5. The server MUST store only a hash of a reauthentication token. Logout, password change, session rotation, session expiry, role removal, or account disablement MUST invalidate the grant.
@@ -525,6 +530,11 @@ SB-R-8. Reveal, copy, and export MUST write an audit containing Admin, action, c
 SB-R-9. Successful redemption and revocation MUST delete encrypted full code in the same transaction. Cleanup MUST delete encrypted full code within 24 hours after expiry.
 
 SB-R-10. Legacy v1 codes MUST remain redeemable through their existing digest and alphabet. They MUST NOT become recoverable.
+
+SB-R-10A. An Admin list record MUST contain `can_reveal`. It MAY contain the fixed
+`reveal_unavailable_reason` value `legacy_digest_only` or `ciphertext_destroyed`. It MUST
+NOT contain encrypted value fields. A v1 row MUST return `can_reveal = false` and
+`reveal_unavailable_reason = legacy_digest_only`.
 
 SB-R-11. Redemption normalization MUST uppercase ASCII letters and remove ASCII hyphens. It MUST NOT map look-alike characters.
 
@@ -846,7 +856,23 @@ SB-UI-11. Store Management MUST have Products, Payment Channels, Orders, and Red
 
 SB-UI-12. Orders MUST show payment and fulfillment state separately. It MUST expose query, verified event reprocess, close, refund, dispute, hold, and case actions according to role and state. Close MUST be hidden when another Attempt for the order has state `created` or `presented`. Each user-triggered order or refund mutation MUST use an SWR optimistic cache value, roll back that value on error, apply the returned record to the cache, and then revalidate order detail and list data. A successful refund query MUST clear the reauthentication password. It MUST NOT show manual Complete.
 
-SB-UI-13. Generated redemption codes MUST remain fully visible in the generation result. List rows MUST remain masked until scoped reveal.
+SB-UI-13. Generated redemption codes MUST remain fully visible in the generation result
+until the Admin closes it. The result MUST render every complete code, one Copy action per
+code, and one Copy All action. Closing the result MUST clear plaintext component state.
+List rows MUST remain masked until scoped reveal.
+
+SB-UI-13A. An unused revealable v2 list row MUST expose a labeled reveal or copy action.
+The action MUST obtain a five-minute `redemption_access` reauthentication grant from the
+current Admin password. Plaintext MUST render only in a modal and MUST clear when that modal
+closes.
+
+SB-UI-13B. A v1 list row MUST render a localized legacy digest-only label. It MUST explain
+that the full code cannot be recovered and expose only valid non-reveal actions such as
+revoke. The UI MUST NOT fabricate or reconstruct plaintext.
+
+SB-UI-13C. A `store_redemption_encryption_unavailable` response MUST render one localized
+readiness message that names `MONOIZE_STORE_PAYMENT_KEYS_JSON` for the operator. It MUST NOT
+display the raw backend message or any key value.
 
 SB-UI-14. Main Store cards MUST use a 16-pixel radius. Interactive controls SHOULD use a 12-pixel radius. Product lists MUST expand naturally.
 

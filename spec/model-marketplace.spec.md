@@ -1,10 +1,10 @@
-# Public Model Marketplace Specification
+# Model Marketplace Specification
 
 ## 0. Scope
 
-MM-0.1. This specification defines the public Model Marketplace at
-`/dashboard/marketplace`, its two public APIs, persistent generation, pagination, pricing
-display, and modal interaction.
+MM-0.1. This specification defines the public Model Marketplace at `/marketplace`, the
+authenticated Model Marketplace at `/dashboard/marketplace`, the two public APIs,
+persistent generation, pagination, pricing display, and modal interaction.
 
 MM-0.2. `provider-pricing.spec.md` defines public-name, model-key, effective pricing, and
 unpriced-mapping behavior. `public-site.spec.md` defines route authentication, shared
@@ -277,6 +277,41 @@ fetch the first list page, and show a localized catalog-updated notice. Rows fro
 revisions MUST NOT combine.
 
 MM-U7. Every user-visible string MUST exist in `en`, `zh`, `zh-TW`, and `ja` catalogs.
+
+### 7.1 Authenticated Marketplace
+
+MM-UA1. `/dashboard/marketplace` MUST require an authenticated session and render inside
+`DashboardLayout`. Navigating to it from another Console page MUST preserve the Console
+shell.
+
+MM-UA2. The page MUST use the public Marketplace allow-list response or an authenticated
+response with the same field allow-list. It MUST NOT expose internal Provider names,
+Channel names, IDs, Base URLs, API keys, proxy URLs, custom headers, multipliers, Profile
+names, or internal errors.
+
+MM-UA3. The page MUST render Group sections explicitly. A model in two Groups MUST render
+once in each Group. Two Groups MUST NOT share one combined price range.
+
+MM-UA4. The toolbar MUST provide Group and capability filters plus a CNY/USD segmented
+control. The currency value MUST use the same in-memory Store currency provider as
+`/dashboard/store`. It MUST NOT use `localStorage`.
+
+MM-UA5. Currency conversion MUST use the current Store exchange-rate snapshot. CNY and USD
+prices MUST render as `¥<amount> / 1M tokens` and `$<amount> / 1M tokens`, respectively.
+The page MUST NOT show nano-USD values to a user.
+
+MM-UA6. A per-token nano-USD rate MUST first multiply by exactly 1,000,000 source units.
+Currency conversion MUST use exact integer or rational arithmetic. Rounding MUST occur once
+at the final currency minor unit.
+
+MM-UA7. The list MUST use compact model rows that expand naturally with the number of Groups
+and models. It MUST NOT use a fixed viewport table height.
+
+MM-UA8. Offer details MUST open in a modal. The modal MUST show only allow-listed Group,
+Provider, Channel, API type, capability, and human-price values.
+
+MM-UA9. The page MUST use SWR, show shape-matched initial Skeletons, retain the prior result
+during filter changes, and expose inline retry for a failed request.
 
 ## 8. Qualification
 

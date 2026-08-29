@@ -1,138 +1,125 @@
-# Dashboard Home Overview Spec
+# Dashboard Home Overview Specification
 
-## Scope
+## 0. Scope
 
-This spec defines expected behavior for `GET /dashboard` frontend page in the admin console.
+DH-0.1. This specification defines the authenticated browser page at `/dashboard`.
 
-## Rendering Contract
+DH-0.2. `dashboard-usage-analysis.spec.md` defines the detailed Usage Analysis page.
+`dashboard-ui-layout.spec.md` defines the shared Console shell and navigation.
 
-DH-1. The page MUST render three visual rows in this order:
-- row A: greeting only (no action controls);
-- row B: overview cards;
-- row C: analysis panel and API information panel.
+## 1. Page Structure
 
-DH-2. Row B layout MUST be responsive:
-- `< md`: 1 column;
-- `md` to `< xl`: 2 columns;
-- `>= xl`: 4 columns.
+DH-1. The page MUST render these sections in order:
 
-DH-3. Each overview card MUST contain:
-- exactly two metric rows (`label`, `value`);
-- compact metric rows with no embedded chart and no decorative metric icons.
-- overview card section title typography MUST be one size smaller than row C section title typography.
-- overview card internal top spacing MUST be compact (reduced header/content padding) to avoid excessive top whitespace.
+1. one greeting header with no action control;
+2. four overview cards;
+3. one Token Usage section.
 
-DH-3a. Row B account card MUST use these two metrics, sourced from the authenticated user object (`GET /api/dashboard/auth/me` / session user), not from admin-only billing-plan endpoints:
-- metric 1 label = current balance. Value MUST be the localized unlimited label when `balance_unlimited` is true; otherwise `balance_usd` formatted as USD with 2 fractional digits.
-- metric 2 label = subscription. Value MUST be the localized no-plan label when `billing_plan` is null. When `billing_plan` is present, value MUST contain `billing_plan.name`, `billing_plan.grant_amount_usd`, and `billing_plan.schedule`.
-- The account card MUST NOT display `my_api_keys_count`.
+DH-2. The page MUST NOT render the former Model Data tab panel or the former API
+Information panel.
 
-DH-4. Row C left panel MUST contain:
-- one title row;
-- exactly four analysis tabs (`消耗分布`, `消耗趋势`, `调用次数分布`, `调用次数排行`);
-- one analysis chart rendered with `@/components/ui/chart` + Recharts `BarChart`.
-- analysis values MUST be computed from real request log rows (`GET /api/dashboard/request-logs`) and MUST NOT use synthetic fallback matrix generation.
-- title row MUST render without decorative section icon.
-- tab strip MUST be rendered on the same horizontal row as the section title and right-aligned.
-- visual separator `/` between tabs MUST NOT be part of active-tab underline.
-- chart heading MUST be a level-2 heading that follows active tab label.
-- chart heading and `总计` text MUST be rendered in the same horizontal row.
-- for `调用次数排行` tab, ranking key MUST use provider dimension (`providers[]`) rather than channel dimension.
+DH-3. The four overview cards MUST use these responsive columns:
 
-DH-5. Row C right panel MUST contain downstream API information:
-- data source: `api_base_url` field from `GET /api/dashboard/settings/public`;
-- if `api_base_url` is empty, show explicit empty state text directing user to system settings;
-- if `api_base_url` is non-empty, show:
-  - the configured API base URL;
-  - derived endpoint paths: `/v1/chat/completions`, `/v1/responses`, `/v1/models`.
+- below `md`: one column;
+- from `md` through below `xl`: two columns;
+- at or above `xl`: four columns.
 
-DH-5a. Row C right panel (API information) MUST be visible to all authenticated dashboard users (including non-admin `user` role). It MUST NOT depend on admin-only endpoints.
+DH-4. Each overview card MUST contain exactly two metric rows. A metric row contains one
+label and one value. It MUST NOT contain a chart or decorative metric icon.
 
-DH-5b. `GET /api/dashboard/settings/public` MUST read only the four setting keys returned by that endpoint in one set-based database query. It MUST NOT load transforms, redirects, pricing patterns, suffix maps, or other unrelated settings.
+DH-5. The account overview card MUST read the authenticated session user. It MUST show the
+current balance and subscription. It MUST NOT call an Admin-only billing-plan endpoint.
 
-## Data Source Contract
+DH-6. An unlimited balance MUST render the localized unlimited label. Another balance MUST
+render `balance_usd` with two USD fractional digits.
 
-DH-6. Provider-derived metrics shown on dashboard home MUST use `GET /api/dashboard/providers` data when available.
+DH-7. A missing `billing_plan` MUST render the localized no-plan label. A present plan MUST
+render its name, `grant_amount_usd`, and schedule.
 
-DH-7. The page MUST NOT throw runtime exceptions when optional config fields are missing from `GET /api/dashboard/settings`.
+## 2. Token Usage
 
-DH-8. Row C analysis charts MUST be driven by the server-side analytics endpoint `GET /api/dashboard/analytics` using `buckets=8` and `range_hours=24`.
+DH-8. The Token Usage range control MUST contain exactly `24h`, `week`, and `month`.
+The initial range is `24h`.
 
-DH-9. `GET /api/dashboard/stats` MUST compute `my_api_keys_count` with a database count aggregate scoped to the current user. It MUST NOT load the user's API-key records to compute their count.
+DH-9. The range values map to analytics queries as follows:
 
-DH-9a. `GET /api/dashboard/stats` MUST return `user_count` as the global user count when the authenticated user has role `admin` or `super_admin`. It MUST return `user_count: null` for role `user`. The role `user` path MUST NOT query the global user count.
+| Range | `range_hours` | `buckets` |
+| --- | ---: | ---: |
+| `24h` | 24 | 24 |
+| `week` | 168 | 28 |
+| `month` | 720 | 30 |
 
-### Analytics Endpoint Contract
+DH-10. Every Dashboard Token Usage query MUST request `scope=self`. This rule applies to
+`user`, `admin`, and `super_admin` sessions. The page MUST NOT display another user's data.
 
-- **Endpoint:** `GET /api/dashboard/analytics`
-- **Authorization:** Any authenticated dashboard user.
-- **Query parameters:**
-  - `buckets: integer` (default 8, clamped to [1, 48])
-  - `range_hours: integer` (default 24, clamped to [1, 720])
-- **Behavior:**
-  - The server computes `time_from = NOW() - range_hours` and `time_to = NOW()`.
-  - For admin users: aggregates across ALL users' request logs.
-  - For non-admin users: aggregates only the requesting user's logs.
-  - Bucket boundaries: `bucket_width = range_hours / buckets`. Each bucket `i` covers `[time_from + i * bucket_width, time_from + (i+1) * bucket_width)`.
-  - For every backend, `bucket_idx` MUST equal `floor((created_at_unix_ms - time_from_unix_ms) * buckets / (time_to_unix_ms - time_from_unix_ms))`. PostgreSQL MUST use `FLOOR` or exact integer division; it MUST NOT cast a fractional floating-point value directly to `BIGINT`, because PostgreSQL numeric casts round rather than floor.
-  - Per bucket, the server groups by `model` and by `provider_id`, computing:
-    - `cost_nano_usd: SUM(charge_nano_usd)` — total cost per model per bucket.
-    - `call_count: COUNT(*)` — total calls per model (or provider) per bucket.
-  - The model aggregation query MUST execute `GROUP BY bucket_idx, model` in the database and return at most one row per group. It MUST NOT transfer one `created_at_unix_ms`, `model`, or `charge_nano_usd` value per matching request log to Rust.
-  - PostgreSQL MUST aggregate each model bucket with exact `NUMERIC`. SQLite MUST aggregate each model bucket with the five exact decimal limbs defined by `spec/request-logs.spec.md` RL-S2e. Rust MUST decode one aggregate per group with checked `i128` arithmetic.
-  - A canonical stored charge outside the signed `i128` domain MUST return an internal storage error. A per-group sum or the sum across groups outside the signed `i128` domain MUST return an aggregate-overflow error. Non-canonical stored charge text MUST not contribute to cost and MUST still contribute to `call_count`.
-  - Only models/providers with nonzero totals across all buckets are included.
-- **Response:**
+DH-11. The Token Usage summary MUST render exact input, cache-read, output, and total Token
+values returned by `GET /api/dashboard/analytics`. It MUST parse and add decimal integer
+strings with `BigInt`. It MUST NOT use JavaScript `Number` for exact totals.
 
-```json
-{
-  "buckets": [
-    {
-      "label": "MM-DD HH:00",
-      "cost_by_model": { "model-a": "12345", "model-b": "678" },
-      "calls_by_model": { "model-a": 5, "model-b": 2 },
-      "calls_by_provider": { "provider-x": 4, "provider-y": 3 }
-    }
-  ],
-  "time_from": "ISO 8601 string",
-  "time_to": "ISO 8601 string",
-  "total_cost_nano_usd": "13023",
-  "total_calls": 7,
-  "today_cost_nano_usd": "8000",
-  "today_calls": 4
-}
+DH-12. The Token Usage trend MUST use the selected range buckets. The chart MAY receive
+bounded display numbers. Adjacent visible text MUST retain the exact total values.
+
+DH-13. A range change MUST keep the last resolved analytics response visible until the next
+response resolves. An unresolved first request MUST render a shape-matched Skeleton.
+
+DH-14. A failed analytics request MUST render an inline localized failure state and a retry
+action. Retrying MUST revalidate the SWR key without a page reload.
+
+DH-15. A resolved response with zero total Tokens MUST render an explicit empty state.
+
+## 3. Analytics API
+
+DH-16. `GET /api/dashboard/analytics` accepts optional `scope`. The only valid explicit
+value is `self`. Another explicit value MUST return HTTP `400` with `invalid_request`.
+
+DH-17. `scope=self` MUST aggregate only rows whose user ID equals the authenticated user ID,
+including when the authenticated role is `admin` or `super_admin`.
+
+DH-18. An omitted `scope` keeps the existing role behavior: Admin roles aggregate all users,
+and role `user` aggregates only the authenticated user.
+
+DH-19. Each analytics bucket MUST include these maps in addition to existing cost and call
+maps:
+
+```text
+input_tokens_by_model: Record<string, string>
+cache_read_tokens_by_model: Record<string, string>
+output_tokens_by_model: Record<string, string>
 ```
 
-- `cost_by_model`, `total_cost_nano_usd`, and `today_cost_nano_usd` values are signed base-10 integer strings in nano-USD. The server MUST aggregate them with checked `i128` arithmetic and MUST NOT narrow through a JSON number, SQL floating-point value, or Rust `i64`. The frontend MUST NOT narrow these values through JavaScript `Number` before exact totals and comparisons are complete.
-- The dashboard MUST parse, sum, and format monetary strings with `BigInt`. Chart libraries MAY receive a derived bounded display number, but that number MUST NOT be reused for totals, comparisons, persistence, or API requests.
-- `calls_by_provider` keys use the human-readable provider name (from `monoize_providers.name`) when available, falling back to `provider_id`.
-- Models/providers with zero total cost or zero total calls across ALL buckets MUST be omitted from the response entirely.
+DH-20. The analytics response MUST include these decimal integer strings:
 
-## Motion Contract
+```text
+total_input_tokens
+total_cache_read_tokens
+total_output_tokens
+total_tokens
+```
 
-DH-9. The page MUST use `framer-motion` for:
-- page entry transition on header and row C panels;
-- staggered entry of row B cards;
-- hover lift on row B cards.
+DH-21. For each bucket and model, `total_tokens` equals input Tokens plus cache-read Tokens
+plus output Tokens. Response-wide totals equal the checked sum of all returned buckets.
 
-## Loading Contract
+DH-22. Token aggregation MUST execute in the database in the same set-based model-bucket
+query as cost and call aggregation. PostgreSQL MUST use exact integer or numeric aggregates.
+SQLite MUST decode persisted integer values with checked `i128` arithmetic.
 
-DH-10. Before required dashboard data resolves, the page MUST render skeleton placeholders for row A, row B, and row C.
+DH-23. A negative persisted Token value or an aggregate outside signed `i128` MUST return an
+internal storage error. The server MUST NOT serialize a partial analytics response.
 
-DH-11. `/dashboard` row C analysis section MUST render chart visualization, not tabular list.
+DH-24. Token totals MUST serialize as base-10 strings. They MUST NOT pass through a JSON
+number, SQL floating-point value, Rust floating-point value, or Rust `i64` narrowing step.
 
-DH-12. Row C layout MUST be container-responsive:
-- the analysis panel MUST fit within viewport width without horizontal overflow at mobile, tablet, and desktop widths;
-- the chart MUST resize with its card container.
+## 4. Motion, Layout, And Localization
 
-DH-13. In desktop layout, row C left analysis card and right API info card MUST be vertically aligned to equal row height.
+DH-25. The header, overview cards, Token summary, and Token trend MAY animate with opacity,
+vertical translation, count-up, or progressive chart drawing for 180 through 260
+milliseconds.
 
-DH-14. In desktop layout, `/dashboard` MUST avoid page-level vertical overflow for normal data volumes:
-- row C cards MUST adapt to remaining viewport height;
-- overflow content inside row C cards MUST scroll within the card, not expand page height.
+DH-26. Reduced-motion mode MUST render final values immediately. It MUST remove nonessential
+translation and progressive chart drawing.
 
-## i18n Contract
+DH-27. The Token Usage section MUST stack into one column below 768 pixels. It MUST NOT set a
+fixed viewport height or cause horizontal page overflow.
 
-DH-15. Every user-visible string in the dashboard page MUST be wrapped in an i18n translation call.
-DH-16. All hardcoded fallback strings passed to the translation helper (`tt()` / `t()`) MUST be in English (en). Chinese or other non-English fallbacks are forbidden in source code.
-DH-17. Corresponding translation keys MUST exist in both `locales/en.json` and `locales/zh.json`.
+DH-28. Every user-visible string MUST use an i18n key present in `en`, `zh`, `zh-TW`, and
+`ja`. English fallback text MUST be used in source code.
