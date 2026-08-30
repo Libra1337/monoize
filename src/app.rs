@@ -2122,7 +2122,7 @@ async fn content_security_policy_middleware(
     request.extensions_mut().insert(CspNonce(nonce.clone()));
     let mut response = next.run(request).await;
     let policy = format!(
-        "default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fontsapi.zeoseven.com; img-src * data:; connect-src {}; font-src 'self' https://fonts.gstatic.com https://fontsapi.zeoseven.com; worker-src 'self' blob:; frame-ancestors 'none'",
+        "default-src 'self'; script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fontsapi.zeoseven.com; img-src * data:; connect-src {}; font-src 'self' https://fonts.gstatic.com https://fontsapi.zeoseven.com; worker-src 'self' blob:; frame-ancestors 'none'",
         config.connect_src
     );
     if let Ok(value) = header::HeaderValue::from_str(&policy) {
