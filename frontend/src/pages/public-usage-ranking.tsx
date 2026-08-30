@@ -178,7 +178,7 @@ export function PublicUsageRankingPage() {
           ] as const).map(([label, value, tone]) => (
             <div key={label} className="flex items-center justify-between gap-3 p-5">
               <span className="flex items-center gap-2 text-sm text-muted-foreground"><span className={`size-2 rounded-full ${tone}`} />{t(`adminUsage.${label}`)}</span>
-              <span className="font-mono text-sm font-semibold"><AnimatedTokenValue value={value} /></span>
+              <span className="font-mono text-sm font-semibold"><AnimatedTokenValue value={value} showDelta /></span>
             </div>
           ))}
         </div>

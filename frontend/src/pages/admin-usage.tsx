@@ -103,6 +103,14 @@ export function AdminUsagePage() {
     }
     return formatNanoUsd(nanoUsd, 4);
   };
+  const rankingSummaryLabel = isAdmin
+    ? t("adminUsage.activeUsers")
+    : t("adminUsage.currentRank");
+  const rankingSummaryValue = isAdmin
+    ? data.users.length.toString()
+    : data.current_user_rank != null
+      ? `#${data.current_user_rank}`
+      : t("adminUsage.unranked");
 
   const segments = [
     { key: "input", label: t("adminUsage.inputTokens"), value: totals.input, className: "bg-primary" },
@@ -144,7 +152,7 @@ export function AdminUsagePage() {
           {segments.map((segment) => (
             <div key={segment.key} className="flex items-center justify-between gap-3 py-3 sm:px-4 sm:first:pl-0 sm:last:pr-0">
               <span className="flex items-center gap-2 text-sm text-muted-foreground"><span className={cn("size-2 rounded-full", segment.className)} />{segment.label}</span>
-              <span className="font-mono text-sm font-medium tabular-nums">{formatInteger(segment.value)}</span>
+              <span className="font-mono text-sm font-medium tabular-nums"><AnimatedTokenValue value={segment.value} showDelta /></span>
             </div>
           ))}
         </div>
@@ -155,7 +163,7 @@ export function AdminUsagePage() {
         {isAdmin ? (
           <div className="flex items-center gap-3 border-t p-4 sm:border-t-0"><Coins className="size-5 text-warning" /><div><p className="text-xs text-muted-foreground">{t("adminUsage.cost")}</p>{moneyLoading ? <Skeleton className="mt-1 h-6 w-20" /> : <p className="font-mono text-lg font-semibold">{formatCost(data.total_cost_nano_usd)}</p>}</div></div>
         ) : null}
-        <div className="flex items-center gap-3 border-t p-4 sm:border-t-0"><ArrowUpRight className="size-5 text-success" /><div><p className="text-xs text-muted-foreground">{t("adminUsage.activeUsers")}</p><p className="font-mono text-lg font-semibold">{data.users.length}</p></div></div>
+        <div className="flex items-center gap-3 border-t p-4 sm:border-t-0"><ArrowUpRight className="size-5 text-success" /><div><p className="text-xs text-muted-foreground">{rankingSummaryLabel}</p><p className="font-mono text-lg font-semibold">{rankingSummaryValue}</p></div></div>
       </div>
 
       <div className="grid min-w-0 gap-5 lg:grid-cols-2">

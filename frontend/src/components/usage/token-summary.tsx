@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { animate, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, animate, motion, useReducedMotion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -36,10 +36,9 @@ export function AnimatedTokenValue({ value, showDelta = false }: { value: bigint
     if (!cycleActiveRef.current) {
       cycleStartRef.current = visibleRef.current;
       cycleActiveRef.current = true;
+      setDelta(0n);
+      setDeltaVisible(false);
     }
-    const netDelta = value - cycleStartRef.current;
-    setDelta(netDelta);
-    setDeltaVisible(netDelta !== 0n);
     const start = visibleRef.current;
     const controls = animate(0, 1, {
       duration: 7.2,
@@ -49,6 +48,8 @@ export function AnimatedTokenValue({ value, showDelta = false }: { value: bigint
         const next = start + ((value - start) * step) / 1_000n;
         visibleRef.current = next;
         setVisible(next);
+        setDelta(next - cycleStartRef.current);
+        setDeltaVisible(next !== cycleStartRef.current);
       },
       onComplete: () => {
         if (targetRef.current !== value) return;
@@ -62,25 +63,27 @@ export function AnimatedTokenValue({ value, showDelta = false }: { value: bigint
     return () => controls.stop();
   }, [reduceMotion, value]);
 
-  return <span className="inline-flex flex-col">
+  return <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
     <motion.span
       initial={false}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reduceMotion ? 0 : 0.25 }}
       className="font-display tabular-nums"
     >{formatTokenCount(visible, i18n.language)}</motion.span>
-    <span className="mt-1 min-h-4 text-xs">
-    {showDelta && delta !== 0n ? (
-      <motion.span
-        initial={false}
-        animate={{ opacity: deltaVisible ? 1 : 0, y: deltaVisible ? 0 : 2 }}
-        transition={{ duration: reduceMotion ? 0 : 0.35 }}
-        className={`font-medium tabular-nums ${delta > 0n ? "text-success" : "text-destructive"}`}
-      >
-        {delta > 0n ? "+" : "-"}{formatTokenCount(delta < 0n ? -delta : delta, i18n.language)}
-      </motion.span>
-    ) : null}
-    </span>
+    <AnimatePresence initial={false}>
+      {showDelta && deltaVisible && delta !== 0n ? (
+        <motion.span
+          key="delta"
+          initial={{ opacity: 0, y: 2 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -2 }}
+          transition={{ duration: reduceMotion ? 0 : 0.35 }}
+          className={`text-xs font-medium tabular-nums ${delta > 0n ? "text-success" : "text-destructive"}`}
+        >
+          {delta > 0n ? "+" : "-"}{formatTokenCount(delta < 0n ? -delta : delta, i18n.language)}
+        </motion.span>
+      ) : null}
+    </AnimatePresence>
   </span>;
 }
 

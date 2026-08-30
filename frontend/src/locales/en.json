@@ -1795,6 +1795,8 @@
 		"calls": "Calls",
 		"cost": "Cost",
 		"activeUsers": "Ranked users",
+		"currentRank": "Current rank",
+		"unranked": "Unranked",
 		"ranking": "Current ranking",
 		"rankingHint": "Select a user to inspect model usage.",
 		"modelRanking": "Model usage ranking",

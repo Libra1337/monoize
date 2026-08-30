@@ -817,6 +817,7 @@ export interface AdminUsageRanking {
   total_output_tokens: string;
   total_calls: number;
   total_cost_nano_usd?: string;
+  current_user_rank?: number | null;
   users: AdminUsageUserRow[];
   models: AdminUsageModelRow[];
 }

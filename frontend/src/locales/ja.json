@@ -1791,6 +1791,8 @@
 		"calls": "呼び出し回数",
 		"cost": "費用",
 		"activeUsers": "ランキング対象",
+		"currentRank": "現在の順位",
+		"unranked": "ランク外",
 		"ranking": "現在のランキング",
 		"rankingHint": "ユーザーを選択するとモデル別の使用量を表示します。",
 		"modelRanking": "モデル使用量ランキング",

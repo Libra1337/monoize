@@ -50,6 +50,17 @@ fn may_disclose_usage_identity(
     viewer_id == target_id || (!viewer_anonymous && !target_anonymous)
 }
 
+fn top_twenty_rank<'a>(
+    user_ids: impl IntoIterator<Item = &'a str>,
+    viewer_id: &str,
+) -> Option<usize> {
+    user_ids
+        .into_iter()
+        .take(20)
+        .position(|user_id| user_id == viewer_id)
+        .map(|position| position + 1)
+}
+
 pub(crate) fn sort_usage_models(rows: &mut [crate::users::UserModelUsageRankingRow]) {
     rows.sort_by(|left, right| {
         let left_tokens = left
@@ -495,6 +506,9 @@ async fn build_usage_ranking(
                 .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
         }
     });
+    let current_user_rank = caller.filter(|_| !is_admin).and_then(|caller| {
+        top_twenty_rank(users.iter().map(|user| user.user_id.as_str()), &caller.id)
+    });
     users.truncate(20);
     let users = users
         .into_iter()
@@ -560,6 +574,9 @@ async fn build_usage_ranking(
         "users": users,
         "models": models,
     });
+    if caller.is_some() && !is_admin {
+        response["current_user_rank"] = json!(current_user_rank);
+    }
     insert_admin_usage_cost(&mut response, totals.cost_nano_usd, is_admin);
     Ok(response)
 }
@@ -567,8 +584,8 @@ async fn build_usage_ranking(
 #[cfg(test)]
 mod tests {
     use super::{
-        insert_admin_usage_cost, may_disclose_usage_identity, sort_usage_models, usage_model_json,
-        usage_ranking_hours,
+        insert_admin_usage_cost, may_disclose_usage_identity, sort_usage_models, top_twenty_rank,
+        usage_model_json, usage_ranking_hours,
     };
     use crate::users::UserModelUsageRankingRow;
     use serde_json::json;
@@ -595,6 +612,29 @@ mod tests {
         assert_eq!(usage_ranking_hours(Some("7d")).unwrap(), 168);
         assert_eq!(usage_ranking_hours(Some("30d")).unwrap(), 720);
         assert!(usage_ranking_hours(Some("1d")).is_err());
+    }
+
+    #[test]
+    fn current_user_rank_is_limited_to_returned_top_twenty() {
+        let ids = (1..=21)
+            .map(|rank| format!("user-{rank}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            top_twenty_rank(ids.iter().map(String::as_str), "user-1"),
+            Some(1)
+        );
+        assert_eq!(
+            top_twenty_rank(ids.iter().map(String::as_str), "user-20"),
+            Some(20)
+        );
+        assert_eq!(
+            top_twenty_rank(ids.iter().map(String::as_str), "user-21"),
+            None
+        );
+        assert_eq!(
+            top_twenty_rank(ids.iter().map(String::as_str), "missing"),
+            None
+        );
     }
 
     #[test]

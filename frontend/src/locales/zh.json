@@ -1795,6 +1795,8 @@
 		"calls": "调用次数",
 		"cost": "费用",
 		"activeUsers": "排行用户",
+		"currentRank": "当前排名",
+		"unranked": "未上榜",
 		"ranking": "当前排名",
 		"rankingHint": "点击用户可查看模型用量明细。",
 		"modelRanking": "模型用量排行",

@@ -113,6 +113,17 @@ describe("Dashboard navigation", () => {
     expect(locales[1].adminUsage.ranking).toBe("当前排名");
   });
 
+  test("shows the ordinary viewer's returned-list rank or unranked state", () => {
+    expect(apiSource).toContain("current_user_rank?: number | null");
+    expect(adminUsageSource).toContain("data.current_user_rank != null");
+    expect(adminUsageSource).toContain('t("adminUsage.currentRank")');
+    expect(adminUsageSource).toContain('t("adminUsage.unranked")');
+    for (const locale of locales) {
+      expect(locale.adminUsage.currentRank).toBeString();
+      expect(locale.adminUsage.unranked).toBeString();
+    }
+  });
+
   test("shows colored input cache-read and output details in both rankings", () => {
     expect(adminUsageSource).toContain("RankingTokenBreakdown");
     expect(adminUsageSource.match(/<RankingTokenBreakdown/g)?.length).toBe(2);
@@ -202,6 +213,16 @@ describe("Dashboard page boundaries", () => {
   test("uses slow token interpolation for live totals and rankings", () => {
     expect(tokenSummarySource).toContain("duration: 7.2");
     expect(tokenSummarySource).toContain('ease: "easeInOut"');
+  });
+
+  test("renders transient Token deltas inline with all three segment values", () => {
+    expect(tokenSummarySource).toContain("AnimatePresence");
+    expect(tokenSummarySource).toContain('className="inline-flex items-baseline');
+    expect(tokenSummarySource).not.toContain('className="inline-flex flex-col"');
+    expect(tokenSummarySource).not.toContain("min-h-4");
+    expect(tokenSummarySource).toContain("setDelta(next - cycleStartRef.current)");
+    expect(adminUsageSource).toContain("<AnimatedTokenValue value={segment.value} showDelta />");
+    expect(publicUsageRankingSource).toContain("<AnimatedTokenValue value={value} showDelta />");
   });
 
   test("keeps every model label visible without legend overflow", () => {

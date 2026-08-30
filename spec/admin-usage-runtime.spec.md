@@ -51,7 +51,10 @@ Negative or out-of-range stored aggregates MUST return an internal error.
 
 UR-7a. The usage page MUST refresh the usage-ranking snapshot every 2 seconds.
 It MUST display one full-width token bar divided into input, cache-read, and
-output segments. The bar label MUST display the aggregate token count.
+output segments. The bar label MUST display the aggregate token count. Each
+segment row MUST render its signed animation delta immediately after its main
+Token value on the same line. A segment delta MUST NOT reserve a second line or
+render below the segment row.
 
 UR-7b. The response MUST contain `models`, with at most 20 global model rows
 ordered by total tokens descending, call count descending, then model name in
@@ -93,6 +96,14 @@ target username and target user ID. The viewer's preference MUST NOT modify any
 other user's preference. The frontend heading above user rows MUST use the locale
 equivalent of `Current ranking`.
 
+UR-7g-1. An authenticated non-administrator usage-ranking response MUST contain
+`current_user_rank`. If the viewer occurs in the returned top-20 user list, this
+value MUST equal the viewer's one-based position in that list. Otherwise, this
+value MUST be null. The non-administrator summary MUST label this value as the
+locale equivalent of `Current rank`. It MUST render a null value as the locale
+equivalent of `Unranked`. The administrator summary MUST continue to display the
+number of returned ranked users.
+
 UR-7h. The public site MUST provide a navigation link and route for a public usage
 ranking. The public endpoint MUST accept exactly `24h`, `7d`, or `30d`, default to
 `24h`, and return total, anonymous user, and global model Token aggregates for the
@@ -129,12 +140,15 @@ UR-11. Non-administrator responses MUST NOT expose user IDs or charges. They MAY
 expose a username only under UR-7g. Model rows MUST omit charges.
 
 UR-12. One counter animation cycle starts when an idle counter receives a changed
-target. Its signed delta MUST equal the latest target minus the cycle start value.
-If another target arrives before completion, the counter MUST retarget from its
-currently displayed value and the signed delta MUST update to the net cycle change.
+target. At each rendered animation frame, its signed delta MUST equal the currently
+displayed value minus the cycle start value. If another target arrives before
+completion, the counter MUST retarget from its currently displayed value and the
+signed delta MUST continue from that displayed net cycle change.
 The delta MUST NOT show each intermediate update as a separate positive or negative
 change. The delta MUST fade in, remain visible while the counter is moving, and
 start fading out when the displayed value reaches the latest target. If the new
 value equals the latest target, no new animation or delta MUST start. Reduced-motion
 mode MUST update the value without number interpolation. Every interpolation MUST
-last 7.2 seconds and MUST use an ease-in-out timing function.
+last 7.2 seconds and MUST use an ease-in-out timing function. The delta MUST share
+the main value's inline formatting context. After its fade-out completes, the
+delta MUST be removed from layout.
