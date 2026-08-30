@@ -61,6 +61,17 @@ fn top_twenty_rank<'a>(
         .map(|position| position + 1)
 }
 
+fn compare_usage_rank(
+    left: (i128, i64, &str),
+    right: (i128, i64, &str),
+) -> std::cmp::Ordering {
+    right
+        .0
+        .cmp(&left.0)
+        .then_with(|| right.1.cmp(&left.1))
+        .then_with(|| left.2.as_bytes().cmp(right.2.as_bytes()))
+}
+
 pub(crate) fn sort_usage_models(rows: &mut [crate::users::UserModelUsageRankingRow]) {
     rows.sort_by(|left, right| {
         let left_tokens = left
@@ -485,26 +496,18 @@ async fn build_usage_ranking(
         user.models.push(row);
     }
     users.sort_by(|left, right| {
-        if caller.is_none() {
-            let left_tokens = left
-                .input_tokens
-                .saturating_add(left.cache_read_tokens)
-                .saturating_add(left.output_tokens);
-            let right_tokens = right
-                .input_tokens
-                .saturating_add(right.cache_read_tokens)
-                .saturating_add(right.output_tokens);
-            right_tokens
-                .cmp(&left_tokens)
-                .then_with(|| right.call_count.cmp(&left.call_count))
-                .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
-        } else {
-            right
-                .cost_nano_usd
-                .cmp(&left.cost_nano_usd)
-                .then_with(|| right.call_count.cmp(&left.call_count))
-                .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
-        }
+        let left_tokens = left
+            .input_tokens
+            .saturating_add(left.cache_read_tokens)
+            .saturating_add(left.output_tokens);
+        let right_tokens = right
+            .input_tokens
+            .saturating_add(right.cache_read_tokens)
+            .saturating_add(right.output_tokens);
+        compare_usage_rank(
+            (left_tokens, left.call_count, &left.user_id),
+            (right_tokens, right.call_count, &right.user_id),
+        )
     });
     let current_user_rank = caller.and_then(|caller| {
         top_twenty_rank(users.iter().map(|user| user.user_id.as_str()), &caller.id)
@@ -584,8 +587,8 @@ async fn build_usage_ranking(
 #[cfg(test)]
 mod tests {
     use super::{
-        insert_admin_usage_cost, may_disclose_usage_identity, sort_usage_models, top_twenty_rank,
-        usage_model_json, usage_ranking_hours,
+        compare_usage_rank, insert_admin_usage_cost, may_disclose_usage_identity,
+        sort_usage_models, top_twenty_rank, usage_model_json, usage_ranking_hours,
     };
     use crate::users::UserModelUsageRankingRow;
     use serde_json::json;
@@ -634,6 +637,24 @@ mod tests {
         assert_eq!(
             top_twenty_rank(ids.iter().map(String::as_str), "missing"),
             None
+        );
+    }
+
+    #[test]
+    fn usage_rank_orders_total_tokens_before_calls_and_user_id() {
+        use std::cmp::Ordering;
+
+        assert_eq!(
+            compare_usage_rank((591_083_254, 2_395, "first"), (744_622_503, 1_486, "second")),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_usage_rank((100, 3, "beta"), (100, 5, "alpha")),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_usage_rank((100, 5, "alpha"), (100, 5, "beta")),
+            Ordering::Less
         );
     }
 

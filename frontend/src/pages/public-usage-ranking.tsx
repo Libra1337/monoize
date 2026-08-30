@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Activity, AlertTriangle, MousePointerClick, RefreshCw } from "lucide-react";
 
-import { RankingTokenBreakdown } from "@/components/usage/ranking-token-breakdown";
 import { AnimatedTokenValue } from "@/components/usage/token-summary";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -105,7 +104,6 @@ function RankingTable({
                       </td>
                       <td className="px-3 py-3 text-right font-mono tabular-nums">
                         <AnimatedTokenValue value={totalTokens(row)} showDelta />
-                        <RankingTokenBreakdown input={row.input_tokens} cacheRead={row.cache_read_tokens} output={row.output_tokens} />
                       </td>
                       <td className="px-5 py-3 text-right font-mono tabular-nums">{row.call_count.toLocaleString("en-US")}</td>
                     </motion.tr>

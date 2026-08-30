@@ -36,8 +36,9 @@ UR-4. The response MUST contain `time_from`, `time_to`, `total_tokens`,
 request log with a non-null user id in the window, including users outside the
 top-20 ranking.
 
-UR-5. `users` MUST contain at most 20 users ordered by total cost descending,
-call count descending, then user id ascending. Each user object MUST contain
+UR-5. `users` MUST contain at most 20 users ordered by total Tokens descending,
+call count descending, then user id ascending. Total Tokens MUST equal input Tokens
+plus cache-read Tokens plus output Tokens. Each user object MUST contain
 `user_id`, `username`, `call_count`, `cost_nano_usd`, `input_tokens`,
 `cache_read_tokens`, `output_tokens`, and `models`.
 
@@ -71,12 +72,9 @@ UR-7d. The usage page MUST display each ranked user's call count, token count,
 and charge. Selecting a user MUST open a modal that displays that user's model
 rows. The modal MUST keep its dimensions stable while it is open.
 
-UR-7d-1. Each user-ranking and model-ranking row MUST display three compact token
-breakdown values below its total Token value. Input MUST use the primary blue
-color, cache-read MUST use the warning orange color, and output MUST use the
-success green color. Each value MUST include its localized label and exact count.
-Each breakdown count MUST satisfy the 7.2-second interpolation and retargeting
-rules in UR-12. An unchanged count MUST remain stationary.
+UR-7d-1. Each user-ranking and model-ranking row on authenticated and public
+usage-ranking pages MUST display only its total Token value in the Token column.
+It MUST NOT render input, cache-read, or output breakdown values below that total.
 
 UR-7e. When two user or model rows exchange rank, both rows MUST animate to their
 new positions instead of replacing content at fixed positions. A non-administrator

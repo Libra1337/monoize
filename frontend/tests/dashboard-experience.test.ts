@@ -18,7 +18,6 @@ const selectionDatasetSource = source("../src/hooks/use-selection-dataset.ts");
 const publicStatusSource = source("../src/pages/public-status.tsx");
 const apiKeysSource = source("../src/pages/api-keys.tsx");
 const adminUsageSource = source("../src/pages/admin-usage.tsx");
-const rankingBreakdownSource = source("../src/components/usage/ranking-token-breakdown.tsx");
 const userSettingsSource = source("../src/pages/user-settings.tsx");
 const publicUsageRankingSource = source("../src/pages/public-usage-ranking.tsx");
 const apiSource = source("../src/lib/api.ts");
@@ -51,7 +50,7 @@ describe("Public usage ranking", () => {
     expect(publicUsageRankingSource).toContain('"24h"');
     expect(publicUsageRankingSource).toContain('"7d"');
     expect(publicUsageRankingSource).toContain('"30d"');
-    expect(publicUsageRankingSource).toContain("RankingTokenBreakdown");
+    expect(publicUsageRankingSource).not.toContain("RankingTokenBreakdown");
     expect(publicUsageRankingSource).not.toContain("username");
     for (const locale of locales) expect(locale.publicSite.nav.usageRanking).toBeString();
   });
@@ -131,15 +130,9 @@ describe("Dashboard navigation", () => {
     expect(adminUsageSource).not.toContain('isAdmin\n    ? t("adminUsage.activeUsers")');
   });
 
-  test("shows colored input cache-read and output details in both rankings", () => {
-    expect(adminUsageSource).toContain("RankingTokenBreakdown");
-    expect(adminUsageSource.match(/<RankingTokenBreakdown/g)?.length).toBe(2);
-    expect(rankingBreakdownSource).toContain('className="text-primary"');
-    expect(rankingBreakdownSource).toContain('className="text-warning-foreground"');
-    expect(rankingBreakdownSource).toContain('className="text-success"');
-    expect(rankingBreakdownSource).toContain("<AnimatedTokenValue value={integer(input)}");
-    expect(rankingBreakdownSource).toContain("<AnimatedTokenValue value={integer(cacheRead)}");
-    expect(rankingBreakdownSource).toContain("<AnimatedTokenValue value={integer(output)}");
+  test("removes token breakdown details from authenticated and public rankings", () => {
+    expect(adminUsageSource).not.toContain("RankingTokenBreakdown");
+    expect(publicUsageRankingSource).not.toContain("RankingTokenBreakdown");
   });
 
   test("adds one persisted CNY and USD display control to the account menu", () => {
