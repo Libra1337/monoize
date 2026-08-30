@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { api, subscribeDashboardUnauthorized } from "../src/lib/api";
+import { readFileSync } from "node:fs";
 
 const originalFetch = globalThis.fetch;
 
@@ -81,5 +82,13 @@ describe("public site transport", () => {
       "site_description",
       "site_name",
     ]);
+  });
+});
+
+describe("public dashboard settings cache", () => {
+  test("preserves CAPTCHA settings when an unauthenticated session check clears private data", () => {
+    const swrSource = readFileSync(new URL("../src/lib/swr.ts", import.meta.url), "utf8");
+
+    expect(swrSource).toContain("key === SWR_KEYS.PUBLIC_SETTINGS");
   });
 });

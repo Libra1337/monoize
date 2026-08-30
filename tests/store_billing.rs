@@ -544,6 +544,55 @@ async fn usd_balance_redemption_does_not_require_an_exchange_rate() {
 }
 
 #[tokio::test]
+async fn balance_redemption_credits_a_negative_existing_balance() {
+    let (db, store) = setup().await;
+    insert_user(&db, "user-negative").await;
+    insert_user(&db, "admin").await;
+    db.write()
+        .await
+        .execute(db.stmt(
+            "UPDATE users SET balance_nano_usd = '-80036872' WHERE id = $1",
+            vec!["user-negative".into()],
+        ))
+        .await
+        .unwrap();
+    let generated = store
+        .generate_redemption_codes(
+            &redemption_keys(),
+            "admin",
+            GenerateRedemptionCodesInput {
+                reward: RedemptionRewardInput::Balance {
+                    currency: Currency::USD,
+                    amount_minor: "100".to_string(),
+                },
+                count: 1,
+                validity_days: 30,
+            },
+        )
+        .await
+        .unwrap();
+
+    let redeemed = store
+        .redeem("user-negative", &generated[0].code, None, "203.0.113.75")
+        .await
+        .unwrap();
+
+    assert_eq!(redeemed.status, RedemptionCodeStatus::Used);
+    let balance: String = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT balance_nano_usd FROM users WHERE id = $1",
+            vec!["user-negative".into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "balance_nano_usd")
+        .unwrap();
+    assert_eq!(balance, "919963128");
+}
+
+#[tokio::test]
 async fn plan_group_ids_are_canonical_and_validated_in_the_product_write() {
     let (db, store) = setup().await;
     pass_quota_gate(&db).await;

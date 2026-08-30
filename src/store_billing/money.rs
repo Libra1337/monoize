@@ -135,6 +135,18 @@ pub fn parse_minor(value: &str) -> Result<i128, MoneyError> {
     value.parse().map_err(|_| MoneyError::AmountOverflow)
 }
 
+pub(crate) fn parse_signed_minor(value: &str) -> Result<i128, MoneyError> {
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    if digits.is_empty()
+        || value == "-0"
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        || (digits.len() > 1 && digits.starts_with('0'))
+    {
+        return Err(MoneyError::InvalidAmount);
+    }
+    value.parse().map_err(|_| MoneyError::AmountOverflow)
+}
+
 pub fn convert_minor(
     amount: i128,
     source: Currency,

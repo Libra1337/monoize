@@ -547,6 +547,8 @@ SB-R-12. Invalid syntax and no match MUST both return HTTP `404` with code `inva
 
 SB-R-13. Redemption MUST lock or serialize the code row and apply the reward and used state in one transaction. It MUST NOT create a payment order or require a payment Channel.
 
+SB-R-13A. A balance redemption MUST accept a canonical signed `users.balance_nano_usd` value, including a negative current balance. It MUST add the nonnegative reward with checked signed integer arithmetic. It MUST update the balance, append the ledger credit, and mark the code used in one transaction.
+
 SB-R-14. Redemption MUST allow at most ten attempts per minute per user and source IP. Five failed attempts in 15 minutes MUST create a 30-minute account-and-IP cooldown.
 
 SB-R-14A. Redemption limits MUST use a persistent lock row keyed by user and SHA-256 source-IP digest plus persistent attempt rows. The service MUST lock the limit row before it counts attempts. A rate-limited or cooldown request MUST perform no code lookup or mutation.

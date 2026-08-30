@@ -3,7 +3,10 @@ use super::{
     exchange_rate::ExchangeRateSnapshot,
     governance::{evaluate_channel, evaluate_channels},
     models::*,
-    money::{Currency, MoneyError, convert_minor, parse_minor, quoted_received_to_nano_usd},
+    money::{
+        Currency, MoneyError, convert_minor, parse_minor, parse_signed_minor,
+        quoted_received_to_nano_usd,
+    },
     quota::{EntitlementGenerationInput, QuotaError, replace_entitlement_tx},
     quota_gate::QuotaGateStore,
     redemption::{
@@ -846,7 +849,7 @@ impl StoreBillingStore {
             .await
             .map_err(storage)?
             .ok_or_else(|| storage("reward user does not exist"))?;
-        let previous = parse_minor(&row_string(&row, "balance_nano_usd")?)?;
+        let previous = parse_signed_minor(&row_string(&row, "balance_nano_usd")?)?;
         let balance = previous
             .checked_add(delta)
             .ok_or(StoreBillingError::AmountOverflow)?;

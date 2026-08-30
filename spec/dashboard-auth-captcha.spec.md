@@ -71,6 +71,8 @@ CAP-U2. The frontend MUST bundle the pinned Cap WASM solver and its pako decompr
 
 CAP-U3. While public settings are loading, the login form MUST show a skeleton in the widget position and MUST disable submission. If `captcha_enabled` is `false`, the page MUST omit the widget and allow submission without a token. If `captcha_enabled` is `true` and `cap_api_endpoint` is `null`, the page MUST show a configuration error and disable submission.
 
+CAP-U3A. An unauthenticated `GET /api/dashboard/auth/me` response MAY clear private dashboard cache entries. It MUST preserve the public dashboard settings cache entry. The login page MUST keep the Cap widget mounted after that response.
+
 CAP-U4. When `captcha_enabled` is `true`, the client MUST enable submission only after the widget emits a non-empty token and MUST send that token as `captcha_token`. When it is `false`, the client MUST send an empty token and MUST NOT gate submission on a token.
 
 CAP-U5. After a failed login or registration request, the client MUST clear the stored token and reset the widget. Switching between login and registration MUST also clear the token and reset the widget.

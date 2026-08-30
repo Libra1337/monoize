@@ -1167,7 +1167,11 @@ export function revalidateAll() {
 
 export function clearCache() {
   return mutate(
-    (key) => !(typeof key === "string" && key.startsWith("/api/public/")),
+    (key) =>
+      !(
+        typeof key === "string" &&
+        (key === SWR_KEYS.PUBLIC_SETTINGS || key.startsWith("/api/public/"))
+      ),
     undefined,
     { revalidate: false }
   );
