@@ -27,21 +27,31 @@ describe("Usage analytics helpers", () => {
       input: 17n,
       cacheRead: 6n,
       output: 8n,
-      total: 31n,
+      total: 25n,
     });
-    expect(tokenMetricForBucket(buckets[0], "total")).toBe(22n);
+    expect(tokenMetricForBucket(buckets[0], "total")).toBe(19n);
   });
 
   test("formats cache hit rate after exact rational arithmetic", () => {
-    expect(formatCacheHitRate(17n, 6n)).toBe("26.1%");
+    expect(formatCacheHitRate(17n, 6n)).toBe("35.3%");
     expect(formatCacheHitRate(0n, 0n)).toBe("—");
   });
 
   test("ranks model totals by exact value and then model name", () => {
     expect(rankModelsByTokens(buckets, "total")).toEqual([
-      { model: "alpha", value: 26n },
-      { model: "beta", value: 5n },
+      { model: "alpha", value: 21n },
+      { model: "beta", value: 4n },
     ]);
+  });
+
+  test("treats cache-read tokens as an input detail, not an additional total", () => {
+    expect(tokenMetricForBucket({
+      label: "inclusive-input",
+      input_tokens_by_model: { model: "100" },
+      cache_read_tokens_by_model: { model: "90" },
+      output_tokens_by_model: { model: "10" },
+    }, "total")).toBe(110n);
+    expect(formatCacheHitRate(100n, 90n)).toBe("90%");
   });
 
   test("never emits an empty model label", () => {

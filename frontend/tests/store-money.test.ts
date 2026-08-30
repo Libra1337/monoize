@@ -3,6 +3,7 @@ import {
   addMinor,
   convertMinor,
   formatMinor,
+  formatNanoUsd,
   formatPerMillionTokenRate,
   formatPlanQuota,
   minorToDecimal,
@@ -13,6 +14,11 @@ describe("Store money helpers", () => {
     expect(formatMinor("1250", "CNY")).toBe("¥12.50");
     expect(formatMinor("1250", "USD")).toBe("$12.50");
     expect(formatMinor("5", "CNY")).toBe("¥0.05");
+  });
+
+  test("formats signed account balances without crashing the dashboard", () => {
+    expect(formatNanoUsd("-1000000000", "USD", "1")).toBe("-$1.00");
+    expect(formatNanoUsd("-1000000000", "CNY", "7")).toBe("-¥7.00");
   });
 
   test("converts CNY and USD minor units at the exact decimal rate", () => {

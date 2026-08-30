@@ -79,7 +79,9 @@ DL3d. The quota/plan block MUST be sourced from the session user object only and
 NOT call `GET /api/dashboard/billing-plans`. It MUST render:
 
 - a balance row: localized unlimited label when `balance_unlimited` is true, otherwise
-  `balance_usd` formatted as USD with 2 fractional digits via `formatUsdDecimal`;
+  the signed `balance_nano_usd` value formatted in the selected display currency with
+  2 fractional digits. A negative balance MUST render with a leading minus sign and MUST
+  NOT throw during Dashboard rendering;
 - when `billing_plan` is non-null: a plan row with `billing_plan.name`, a grant row with
   `grant_amount_usd` (USD, 2 fractional digits) and the cron `schedule` as monospace
   text, and a next-reset row with `next_grant_at` localized via `toLocaleString()` when

@@ -25,7 +25,7 @@ function integer(value: string): bigint {
 }
 
 function totalTokens(row: Pick<AdminUsageModelRow, "input_tokens" | "cache_read_tokens" | "output_tokens">): bigint {
-  return integer(row.input_tokens) + integer(row.cache_read_tokens) + integer(row.output_tokens);
+  return integer(row.input_tokens) + integer(row.output_tokens);
 }
 
 function RankingSkeleton() {

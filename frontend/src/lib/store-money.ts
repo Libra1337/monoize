@@ -1,6 +1,7 @@
 export type StoreCurrency = "CNY" | "USD";
 
 const CANONICAL_MINOR = /^(0|[1-9][0-9]*)$/;
+const CANONICAL_SIGNED_MINOR = /^-?(0|[1-9][0-9]*)$/;
 const POSITIVE_DECIMAL = /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/;
 
 function parseNonnegativeDecimal(value: string): { numerator: bigint; denominator: bigint } {
@@ -18,6 +19,13 @@ function parseNonnegativeDecimal(value: string): { numerator: bigint; denominato
 function parseMinor(value: string): bigint {
   if (!CANONICAL_MINOR.test(value)) {
     throw new Error("amount must be a canonical minor-unit string");
+  }
+  return BigInt(value);
+}
+
+function parseSignedMinor(value: string): bigint {
+  if (!CANONICAL_SIGNED_MINOR.test(value)) {
+    throw new Error("amount must be a canonical signed minor-unit string");
   }
   return BigInt(value);
 }
@@ -56,6 +64,12 @@ export function formatMinor(minor: string, currency: StoreCurrency): string {
   const whole = amount / 100n;
   const fraction = (amount % 100n).toString().padStart(2, "0");
   return `${currency === "CNY" ? "¥" : "$"}${whole}.${fraction}`;
+}
+
+function formatSignedMinor(minor: bigint, currency: StoreCurrency): string {
+  const negative = minor < 0n;
+  const formatted = formatMinor((negative ? -minor : minor).toString(), currency);
+  return negative ? `-${formatted}` : formatted;
 }
 
 export function convertMinor(
@@ -120,13 +134,10 @@ export function formatNanoUsd(
   currency: StoreCurrency = "USD",
   cnyPerUsd = "1",
 ): string {
-  const nano = parseMinor(nanoUsd);
+  const nano = parseSignedMinor(nanoUsd);
   const nanoPerMinor = 10_000_000n;
   if (currency === "USD") {
-    return formatMinor(
-      divideRoundHalfAwayFromZero(nano, nanoPerMinor).toString(),
-      "USD",
-    );
+    return formatSignedMinor(divideRoundHalfAwayFromZero(nano, nanoPerMinor), "USD");
   }
 
   const rate = parseRate(cnyPerUsd);
@@ -134,7 +145,7 @@ export function formatNanoUsd(
     nano * rate.numerator,
     nanoPerMinor * rate.denominator,
   );
-  return formatMinor(cnyMinor.toString(), "CNY");
+  return formatSignedMinor(cnyMinor, "CNY");
 }
 
 export function formatNanoUsdDecimal(

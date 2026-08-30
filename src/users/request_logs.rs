@@ -1922,9 +1922,10 @@ impl UserStore {
                 ))
             },
         )?;
+        // `input_tokens` is the inclusive prompt total. Cache-read tokens are
+        // a detail of that total and must not be added a second time.
         let total_tokens = total_input_tokens
-            .checked_add(total_cache_read_tokens)
-            .and_then(|value| value.checked_add(total_output_tokens))
+            .checked_add(total_output_tokens)
             .ok_or_else(|| "analytics total token aggregate overflow".to_string())?;
 
         let mut today_sql = format!(
@@ -2104,7 +2105,6 @@ impl UserStore {
         let charge_columns = charge_aggregate_columns(!is_sqlite);
         let charge_order = charge_aggregate_order_expr(!is_sqlite, "ranked");
         let token_rank_column = "COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) + \
-             COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) + \
              COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS token_count";
         let rank_order = if rank_by_tokens {
             "ranked.token_count DESC".to_string()
@@ -2184,11 +2184,9 @@ impl UserStore {
             let order = if rank_by_tokens {
                 let left_tokens = left
                     .input_tokens
-                    .saturating_add(left.cache_read_tokens)
                     .saturating_add(left.output_tokens);
                 let right_tokens = right
                     .input_tokens
-                    .saturating_add(right.cache_read_tokens)
                     .saturating_add(right.output_tokens);
                 right_tokens.cmp(&left_tokens)
             } else {
@@ -2278,11 +2276,9 @@ impl UserStore {
         decoded.sort_by(|left, right| {
             let left_tokens = left
                 .input_tokens
-                .saturating_add(left.cache_read_tokens)
                 .saturating_add(left.output_tokens);
             let right_tokens = right
                 .input_tokens
-                .saturating_add(right.cache_read_tokens)
                 .saturating_add(right.output_tokens);
             right_tokens
                 .cmp(&left_tokens)

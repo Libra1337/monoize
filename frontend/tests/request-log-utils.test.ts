@@ -123,9 +123,10 @@ describe('formatCost', () => {
 })
 
 describe('formatCachePercentage', () => {
-	test('rounds cached input as an integer share of total input', () => {
+	test('rounds cached input to at most one decimal place of total input', () => {
 		expect(formatCachePercentage(16_000, 32_000)).toBe('50%')
-		expect(formatCachePercentage(1, 3)).toBe('33%')
+		expect(formatCachePercentage(1, 3)).toBe('33.3%')
+		expect(formatCachePercentage(313_088, 314_241)).toBe('99.6%')
 	})
 
 	test('omits the share when cached or total input is not positive', () => {

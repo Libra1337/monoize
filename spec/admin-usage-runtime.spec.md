@@ -37,15 +37,16 @@ request log with a non-null user id in the window, including users outside the
 top-20 ranking.
 
 UR-5. `users` MUST contain at most 20 users ordered by total Tokens descending,
-call count descending, then user id ascending. Total Tokens MUST equal input Tokens
-plus cache-read Tokens plus output Tokens. Each user object MUST contain
+call count descending, then user id ascending. `input_tokens` is an inclusive input
+total and `cache_read_tokens` is a detail of that total. Total Tokens MUST equal input
+Tokens plus output Tokens; cache-read Tokens MUST NOT be added again. Each user object MUST contain
 `user_id`, `username`, `call_count`, `cost_nano_usd`, `input_tokens`,
 `cache_read_tokens`, `output_tokens`, and `models`.
 
 UR-6. Each `models` item MUST contain `model`, `call_count`, `cost_nano_usd`,
 `input_tokens`, `cache_read_tokens`, and `output_tokens`. Model rows MUST be
-ordered by total tokens descending, call count descending, then model name using
-UTF-8 byte order.
+ordered by input Tokens plus output Tokens descending, call count descending, then
+model name using UTF-8 byte order. Cache-read Tokens MUST NOT be added again.
 
 UR-7. Token and charge totals MUST be serialized as canonical decimal strings.
 Negative or out-of-range stored aggregates MUST return an internal error.

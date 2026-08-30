@@ -76,11 +76,9 @@ pub(crate) fn sort_usage_models(rows: &mut [crate::users::UserModelUsageRankingR
     rows.sort_by(|left, right| {
         let left_tokens = left
             .input_tokens
-            .saturating_add(left.cache_read_tokens)
             .saturating_add(left.output_tokens);
         let right_tokens = right
             .input_tokens
-            .saturating_add(right.cache_read_tokens)
             .saturating_add(right.output_tokens);
         right_tokens
             .cmp(&left_tokens)
@@ -498,11 +496,9 @@ async fn build_usage_ranking(
     users.sort_by(|left, right| {
         let left_tokens = left
             .input_tokens
-            .saturating_add(left.cache_read_tokens)
             .saturating_add(left.output_tokens);
         let right_tokens = right
             .input_tokens
-            .saturating_add(right.cache_read_tokens)
             .saturating_add(right.output_tokens);
         compare_usage_rank(
             (left_tokens, left.call_count, &left.user_id),
@@ -562,8 +558,7 @@ async fn build_usage_ranking(
         .collect::<Vec<_>>();
     let total_tokens = totals
         .input_tokens
-        .checked_add(totals.cache_read_tokens)
-        .and_then(|value| value.checked_add(totals.output_tokens))
+        .checked_add(totals.output_tokens)
         .ok_or_else(|| aggregate_error("usage total token aggregate overflow"))?;
 
     let mut response = json!({
@@ -668,7 +663,7 @@ mod tests {
                 call_count: 4,
                 cost_nano_usd: 0,
                 input_tokens: 10,
-                cache_read_tokens: 0,
+                cache_read_tokens: 100,
                 output_tokens: 0,
             },
             UserModelUsageRankingRow {

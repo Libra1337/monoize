@@ -40,7 +40,8 @@ export function tokenMetricForBucket(
   if (metric === "input") return input;
   if (metric === "cache_read") return cacheRead;
   if (metric === "output") return output;
-  return input + cacheRead + output;
+  // input_tokens is an inclusive total; cache_read is a detail of that input.
+  return input + output;
 }
 
 export function aggregateTokenTotals(
@@ -54,7 +55,7 @@ export function aggregateTokenTotals(
     }),
     { input: 0n, cacheRead: 0n, output: 0n },
   );
-  return { ...totals, total: totals.input + totals.cacheRead + totals.output };
+  return { ...totals, total: totals.input + totals.output };
 }
 
 function modelMetricValue(
@@ -68,7 +69,7 @@ function modelMetricValue(
   if (metric === "input") return input;
   if (metric === "cache_read") return cacheRead;
   if (metric === "output") return output;
-  return input + cacheRead + output;
+  return input + output;
 }
 
 function compareUtf8(left: string, right: string): number {
@@ -117,9 +118,8 @@ export function formatCacheHitRate(input: bigint, cacheRead: bigint): string {
   if (input < 0n || cacheRead < 0n) {
     throw new Error("token counts must be non-negative");
   }
-  const denominator = input + cacheRead;
-  if (denominator === 0n) return "—";
-  const tenths = (cacheRead * 1_000n + denominator / 2n) / denominator;
+  if (input === 0n) return "—";
+  const tenths = (cacheRead * 1_000n + input / 2n) / input;
   const whole = tenths / 10n;
   const fraction = tenths % 10n;
   return fraction === 0n ? `${whole}%` : `${whole}.${fraction}%`;

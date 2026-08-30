@@ -31,7 +31,9 @@ DH-5. The account overview card MUST read the authenticated session user. It MUS
 current balance and subscription. It MUST NOT call an Admin-only billing-plan endpoint.
 
 DH-6. An unlimited balance MUST render the localized unlimited label. Another balance MUST
-render `balance_usd` with two USD fractional digits.
+render signed `balance_nano_usd` in the selected display currency with two fractional
+digits. A negative balance MUST render with a leading minus sign and MUST NOT prevent the
+Dashboard from rendering.
 
 DH-7. A missing `billing_plan` MUST render the localized no-plan label. A present plan MUST
 render its name, `grant_amount_usd`, and schedule.
@@ -96,8 +98,10 @@ total_output_tokens
 total_tokens
 ```
 
-DH-21. For each bucket and model, `total_tokens` equals input Tokens plus cache-read Tokens
-plus output Tokens. Response-wide totals equal the checked sum of all returned buckets.
+DH-21. `input_tokens` is an inclusive input total and `cache_read_tokens` is a detail of
+that total. For each bucket and model, `total_tokens` equals input Tokens plus output
+Tokens. Response-wide totals equal the checked sum of all returned buckets. Cache-read
+Tokens MUST NOT be added a second time.
 
 DH-22. Token aggregation MUST execute in the database in the same set-based model-bucket
 query as cost and call aggregation. PostgreSQL MUST use exact integer or numeric aggregates.

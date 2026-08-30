@@ -44,9 +44,10 @@ visible adjacent text summary MUST expose the exact selected metric total.
 UA-9. Exact totals, percentages, comparisons, and ranking order MUST use `BigInt` values.
 A chart-only display value MAY use a bounded `number` derived from the exact value.
 
-UA-10. Cache hit rate equals `cache_read / (input + cache_read)` when the denominator is
-positive. A zero denominator MUST render an em dash. Percentage rounding occurs only in
-the final display formatter.
+UA-10. `input_tokens` is the inclusive input total and `cache_read_tokens` is a detail of
+that total. Cache hit rate equals `cache_read / input` when input is positive. A zero
+input total MUST render an em dash. Percentage rounding occurs only in the final display
+formatter.
 
 ## 3. Model Analysis
 

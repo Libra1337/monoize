@@ -181,7 +181,8 @@ export function formatCachePercentage(
 		return null
 	}
 
-	return `${Math.round((cachedTokens / totalTokens) * 100)}%`
+	const percent = Math.round((cachedTokens / totalTokens) * 1000) / 10
+	return `${percent.toFixed(1).replace(/\.0$/, '')}%`
 }
 
 export function formatDuration(ms: number | null | undefined): string | null {

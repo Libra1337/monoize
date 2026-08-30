@@ -36,7 +36,7 @@ function formatInteger(value: string | bigint): string {
 }
 
 function totalTokens(row: Pick<AdminUsageUserRow, "input_tokens" | "cache_read_tokens" | "output_tokens">): bigint {
-  return integer(row.input_tokens) + integer(row.cache_read_tokens) + integer(row.output_tokens);
+  return integer(row.input_tokens) + integer(row.output_tokens);
 }
 
 function percent(value: bigint, total: bigint): number {
@@ -108,9 +108,11 @@ export function AdminUsagePage() {
     : t("adminUsage.unranked");
 
   const segments = [
-    { key: "input", label: t("adminUsage.inputTokens"), value: totals.input, className: "bg-primary" },
-    { key: "cache", label: t("adminUsage.cacheTokens"), value: totals.cache, className: "bg-warning" },
-    { key: "output", label: t("adminUsage.outputTokens"), value: totals.output, className: "bg-success" },
+    // Cache-read is included in input. Use the uncached remainder for the
+    // visual partition so segment widths add up to the inclusive total.
+    { key: "input", label: t("adminUsage.inputTokens"), value: totals.input, barValue: totals.input > totals.cache ? totals.input - totals.cache : 0n, className: "bg-primary" },
+    { key: "cache", label: t("adminUsage.cacheTokens"), value: totals.cache, barValue: totals.cache, className: "bg-warning" },
+    { key: "output", label: t("adminUsage.outputTokens"), value: totals.output, barValue: totals.output, className: "bg-success" },
   ];
 
   return (
@@ -139,7 +141,7 @@ export function AdminUsagePage() {
             <div
               key={segment.key}
               className={cn("h-full border-r border-background/80 transition-[width] duration-700 ease-out last:border-r-0", segment.className)}
-              style={{ width: `${percent(segment.value, totals.all)}%` }}
+              style={{ width: `${percent(segment.barValue, totals.all)}%` }}
             />
           ))}
         </div>
