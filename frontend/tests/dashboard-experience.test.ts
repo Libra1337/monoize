@@ -124,6 +124,13 @@ describe("Dashboard navigation", () => {
     }
   });
 
+  test("shows current rank for administrator viewers instead of ranked-user count", () => {
+    expect(adminUsageSource).toContain('const rankingSummaryLabel = t("adminUsage.currentRank")');
+    expect(adminUsageSource).toContain('data.current_user_rank != null');
+    expect(adminUsageSource).toContain('t("adminUsage.unranked")');
+    expect(adminUsageSource).not.toContain('isAdmin\n    ? t("adminUsage.activeUsers")');
+  });
+
   test("shows colored input cache-read and output details in both rankings", () => {
     expect(adminUsageSource).toContain("RankingTokenBreakdown");
     expect(adminUsageSource.match(/<RankingTokenBreakdown/g)?.length).toBe(2);

@@ -96,13 +96,14 @@ target username and target user ID. The viewer's preference MUST NOT modify any
 other user's preference. The frontend heading above user rows MUST use the locale
 equivalent of `Current ranking`.
 
-UR-7g-1. An authenticated non-administrator usage-ranking response MUST contain
+UR-7g-1. Every authenticated usage-ranking response MUST contain
 `current_user_rank`. If the viewer occurs in the returned top-20 user list, this
 value MUST equal the viewer's one-based position in that list. Otherwise, this
-value MUST be null. The non-administrator summary MUST label this value as the
-locale equivalent of `Current rank`. It MUST render a null value as the locale
-equivalent of `Unranked`. The administrator summary MUST continue to display the
-number of returned ranked users.
+value MUST be null. Every authenticated summary MUST label this value as the
+locale equivalent of `Current rank` and render a null value as the locale
+equivalent of `Unranked`. Administrator-only cost metrics MAY remain visible in
+the administrator summary, but the summary MUST NOT replace the current rank
+with a ranked-user count.
 
 UR-7h. The public site MUST provide a navigation link and route for a public usage
 ranking. The public endpoint MUST accept exactly `24h`, `7d`, or `30d`, default to

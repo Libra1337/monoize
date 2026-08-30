@@ -103,14 +103,10 @@ export function AdminUsagePage() {
     }
     return formatNanoUsd(nanoUsd, 4);
   };
-  const rankingSummaryLabel = isAdmin
-    ? t("adminUsage.activeUsers")
-    : t("adminUsage.currentRank");
-  const rankingSummaryValue = isAdmin
-    ? data.users.length.toString()
-    : data.current_user_rank != null
-      ? `#${data.current_user_rank}`
-      : t("adminUsage.unranked");
+  const rankingSummaryLabel = t("adminUsage.currentRank");
+  const rankingSummaryValue = data.current_user_rank != null
+    ? `#${data.current_user_rank}`
+    : t("adminUsage.unranked");
 
   const segments = [
     { key: "input", label: t("adminUsage.inputTokens"), value: totals.input, className: "bg-primary" },

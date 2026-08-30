@@ -506,7 +506,7 @@ async fn build_usage_ranking(
                 .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
         }
     });
-    let current_user_rank = caller.filter(|_| !is_admin).and_then(|caller| {
+    let current_user_rank = caller.and_then(|caller| {
         top_twenty_rank(users.iter().map(|user| user.user_id.as_str()), &caller.id)
     });
     users.truncate(20);
@@ -574,7 +574,7 @@ async fn build_usage_ranking(
         "users": users,
         "models": models,
     });
-    if caller.is_some() && !is_admin {
+    if caller.is_some() {
         response["current_user_rank"] = json!(current_user_rank);
     }
     insert_admin_usage_cost(&mut response, totals.cost_nano_usd, is_admin);
