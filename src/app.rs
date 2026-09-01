@@ -2406,6 +2406,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             get(crate::dashboard_handlers::get_store_retention_admin),
         )
         .route(
+            "/dashboard/store/admin/primary-status",
+            get(crate::dashboard_handlers::get_store_primary_status_admin),
+        )
+        .route(
             "/dashboard/store/admin/payment-channels/{id}/readiness",
             get(crate::dashboard_handlers::get_store_channel_readiness_admin),
         )

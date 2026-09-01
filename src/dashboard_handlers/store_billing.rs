@@ -1204,6 +1204,33 @@ pub async fn get_store_retention_admin(
     Ok((no_store_headers(), Json(overview)))
 }
 
+pub async fn get_store_primary_status_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let status = match state.store_primary_lease.as_ref() {
+        Some(lease) => lease.status_at(Utc::now()).await.map_err(|error| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "failed to read Store Primary status",
+            )
+            .with_internal_message(error.to_string())
+        })?,
+        None => crate::store_billing::availability::StorePrimaryLeaseStatus {
+            state: "replica".to_string(),
+            owner_id: None,
+            epoch: None,
+            expires_at: None,
+            last_successful_renewal_at: None,
+            consecutive_failures: 0,
+            last_failure_kind: None,
+        },
+    };
+    Ok((no_store_headers(), Json(status)))
+}
+
 pub async fn run_store_retention_admin(
     State(state): State<AppState>,
     headers: HeaderMap,

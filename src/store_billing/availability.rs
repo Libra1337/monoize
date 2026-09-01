@@ -1,9 +1,10 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use sea_orm::{ConnectionTrait, DbErr, QueryResult, SqlErr};
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::db::DbPool;
@@ -49,6 +50,20 @@ pub struct StorePrimaryLease {
     epoch: i64,
     renewal_failed: Arc<AtomicBool>,
     expires_at: Arc<tokio::sync::RwLock<DateTime<Utc>>>,
+    last_successful_renewal_at: Arc<tokio::sync::RwLock<Option<DateTime<Utc>>>>,
+    consecutive_failures: Arc<AtomicU64>,
+    last_failure_kind: Arc<tokio::sync::RwLock<Option<String>>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StorePrimaryLeaseStatus {
+    pub state: String,
+    pub owner_id: Option<String>,
+    pub epoch: Option<i64>,
+    pub expires_at: Option<String>,
+    pub last_successful_renewal_at: Option<String>,
+    pub consecutive_failures: u64,
+    pub last_failure_kind: Option<String>,
 }
 
 #[derive(Debug)]
@@ -116,6 +131,9 @@ impl StorePrimaryLease {
                         StorePrimaryLeaseError::Storage("lease expiry overflow".to_string())
                     })?,
             )),
+            last_successful_renewal_at: Arc::new(tokio::sync::RwLock::new(None)),
+            consecutive_failures: Arc::new(AtomicU64::new(0)),
+            last_failure_kind: Arc::new(tokio::sync::RwLock::new(None)),
         })
     }
 
@@ -189,6 +207,13 @@ impl StorePrimaryLease {
                 .ok_or_else(|| {
                     StorePrimaryLeaseError::Storage("lease expiry overflow".to_string())
                 })?;
+            *self.last_successful_renewal_at.write().await = Some(renewal_time);
+            self.consecutive_failures.store(0, Ordering::Release);
+            *self.last_failure_kind.write().await = None;
+        } else {
+            self.consecutive_failures.fetch_add(1, Ordering::AcqRel);
+            *self.last_failure_kind.write().await =
+                Some(failure_kind(outcome.as_ref().err().expect("error")));
         }
         if outcome.as_ref().is_err_and(|error| is_fencing_loss(error)) {
             self.renewal_failed.store(true, Ordering::Release);
@@ -198,6 +223,47 @@ impl StorePrimaryLease {
 
     async fn remaining_ttl(&self) -> Duration {
         *self.expires_at.read().await - Utc::now()
+    }
+
+    pub async fn status_at(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<StorePrimaryLeaseStatus, StorePrimaryLeaseError> {
+        let now = canonical_time(now)?;
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                "SELECT owner_id, epoch, expires_at FROM store_primary_leases WHERE name = $1",
+                vec![STORE_PRIMARY_LEASE_NAME.into()],
+            ))
+            .await?;
+        let stored = row.map(|row| stored_lease(&row)).transpose()?;
+        let fenced = match stored.as_ref() {
+            None => true,
+            Some(stored) => validate_token(stored, &self.owner_id, self.epoch, now).is_err(),
+        };
+        let state = if self.renewal_failed.load(Ordering::Acquire) || fenced {
+            "lease_lost"
+        } else if self.consecutive_failures.load(Ordering::Acquire) > 0 {
+            "degraded"
+        } else {
+            "healthy"
+        };
+        Ok(StorePrimaryLeaseStatus {
+            state: state.to_string(),
+            owner_id: stored.as_ref().map(|lease| lease.owner_id.clone()),
+            epoch: stored.as_ref().map(|lease| lease.epoch),
+            expires_at: stored.as_ref().map(|lease| format_time(lease.expires_at)),
+            last_successful_renewal_at: self
+                .last_successful_renewal_at
+                .read()
+                .await
+                .as_ref()
+                .map(|value| format_time(*value)),
+            consecutive_failures: self.consecutive_failures.load(Ordering::Acquire),
+            last_failure_kind: self.last_failure_kind.read().await.clone(),
+        })
     }
 
     pub async fn validate(&self) -> Result<(), StorePrimaryLeaseError> {
@@ -450,6 +516,20 @@ fn is_fencing_loss(error: &StorePrimaryLeaseError) -> bool {
             | StorePrimaryLeaseError::EpochOverflow
             | StorePrimaryLeaseError::InvalidOwner
     )
+}
+
+fn failure_kind(error: &StorePrimaryLeaseError) -> String {
+    match error {
+        StorePrimaryLeaseError::Storage(_) => "storage".to_string(),
+        StorePrimaryLeaseError::Unavailable => "unavailable".to_string(),
+        StorePrimaryLeaseError::Missing => "missing".to_string(),
+        StorePrimaryLeaseError::OwnerMismatch => "owner_mismatch".to_string(),
+        StorePrimaryLeaseError::EpochMismatch => "epoch_mismatch".to_string(),
+        StorePrimaryLeaseError::Expired => "expired".to_string(),
+        StorePrimaryLeaseError::RenewalFailed => "renewal_failed".to_string(),
+        StorePrimaryLeaseError::InvalidOwner => "invalid_owner".to_string(),
+        StorePrimaryLeaseError::EpochOverflow => "epoch_overflow".to_string(),
+    }
 }
 
 async fn finish_transaction<T>(

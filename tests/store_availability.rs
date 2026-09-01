@@ -98,6 +98,22 @@ async fn same_owner_renewal_preserves_epoch() {
 }
 
 #[tokio::test]
+async fn primary_status_reports_lease_and_renewal_telemetry() {
+    let db = database().await;
+    let now = instant();
+    let lease = StorePrimaryLease::acquire_at(db, "owner-a", now)
+        .await
+        .expect("first acquisition");
+
+    let status = lease.status_at(now).await.expect("status");
+    assert_eq!(status.state, "healthy");
+    assert_eq!(status.owner_id.as_deref(), Some("owner-a"));
+    assert_eq!(status.epoch, Some(1));
+    assert_eq!(status.consecutive_failures, 0);
+    assert!(status.last_successful_renewal_at.is_none());
+}
+
+#[tokio::test]
 async fn sqlite_renewal_can_commit_repeatedly_without_losing_transaction_context() {
     let db = database().await;
     let now = instant();
