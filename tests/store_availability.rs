@@ -98,6 +98,22 @@ async fn same_owner_renewal_preserves_epoch() {
 }
 
 #[tokio::test]
+async fn sqlite_renewal_can_commit_repeatedly_without_losing_transaction_context() {
+    let db = database().await;
+    let now = instant();
+    let lease = StorePrimaryLease::acquire_at(db, "owner-a", now)
+        .await
+        .expect("first acquisition");
+
+    for step in 1..=20 {
+        lease
+            .renew_at(now + Duration::seconds(step))
+            .await
+            .expect("repeated renewal");
+    }
+}
+
+#[tokio::test]
 async fn competing_owner_is_blocked_before_expiry() {
     let db = database().await;
     let now = instant();

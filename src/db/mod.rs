@@ -223,49 +223,85 @@ impl DbPool {
     where
         E: From<DbErr>,
         F: for<'a> FnOnce(
-            &'a DatabaseConnection,
+            &'a DatabaseTransaction,
         ) -> Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>,
     {
         if !self.is_sqlite() {
             return Err(E::from(DbErr::Custom(
-                "BEGIN IMMEDIATE is available only for SQLite".to_string(),
+                "serialized SQLite write transactions are available only for SQLite".to_string(),
             )));
         }
-        let _guard = self.write_lock.clone().lock_owned().await;
-        if let Err(error) = self
-            .write_conn
+        let guard = self.write_lock.clone().lock_owned().await;
+        self.write_conn
             .execute_unprepared("PRAGMA busy_timeout = 5000")
             .await
-        {
-            return Err(E::from(error));
-        }
-        if let Err(error) = self.write_conn.execute_unprepared("BEGIN IMMEDIATE").await {
-            let restore = self
-                .write_conn
-                .execute_unprepared("PRAGMA busy_timeout = 15000")
-                .await;
-            return Err(E::from(restore.err().unwrap_or(error)));
-        }
-
-        let outcome = operation(&self.write_conn).await;
-        let terminal_sql = if outcome.is_ok() {
-            "COMMIT"
-        } else {
-            "ROLLBACK"
-        };
-        if let Err(error) = self.write_conn.execute_unprepared(terminal_sql).await {
-            let _ = self.write_conn.execute_unprepared("ROLLBACK").await;
-            let restore = self
-                .write_conn
-                .execute_unprepared("PRAGMA busy_timeout = 15000")
-                .await;
-            return Err(E::from(restore.err().unwrap_or(error)));
-        }
-        self.write_conn
-            .execute_unprepared("PRAGMA busy_timeout = 15000")
-            .await
             .map_err(E::from)?;
-        outcome
+
+        // Keep the transaction object alive across the entire operation. Using
+        // separate DatabaseConnection calls lets SQLx return the pooled SQLite
+        // connection between BEGIN and COMMIT, which can make COMMIT observe no
+        // active transaction.
+        let txn = match self.write_conn.begin().await {
+            Ok(txn) => txn,
+            Err(error) => {
+                let _ = self
+                    .write_conn
+                    .execute_unprepared("PRAGMA busy_timeout = 15000")
+                    .await;
+                return Err(E::from(error));
+            }
+        };
+        let transaction = WriteTransaction {
+            txn: Some(txn),
+            _guard: Some(Box::new(guard)),
+        };
+        let outcome = operation(&*transaction).await;
+        match outcome {
+            Ok(value) => {
+                let result = transaction.commit().await;
+                if let Err(error) = &result {
+                    match self.write_conn.ping().await {
+                        Ok(()) => {
+                            tracing::warn!(error = %error, "SQLite transaction commit failed; connection remains responsive")
+                        }
+                        Err(ping_error) => {
+                            tracing::error!(error = %error, ping_error = %ping_error, "SQLite transaction commit failed and connection health check failed")
+                        }
+                    }
+                }
+                if let Err(error) = self
+                    .write_conn
+                    .execute_unprepared("PRAGMA busy_timeout = 15000")
+                    .await
+                {
+                    tracing::error!(error = %error, "failed to restore SQLite busy timeout after commit");
+                }
+                result.map_err(E::from)?;
+                Ok(value)
+            }
+            Err(error) => {
+                let result = transaction.rollback().await;
+                if let Err(rollback_error) = &result {
+                    match self.write_conn.ping().await {
+                        Ok(()) => {
+                            tracing::warn!(error = %rollback_error, "SQLite transaction rollback failed; connection remains responsive")
+                        }
+                        Err(ping_error) => {
+                            tracing::error!(error = %rollback_error, ping_error = %ping_error, "SQLite transaction rollback failed and connection health check failed")
+                        }
+                    }
+                }
+                if let Err(restore_error) = self
+                    .write_conn
+                    .execute_unprepared("PRAGMA busy_timeout = 15000")
+                    .await
+                {
+                    tracing::error!(error = %restore_error, "failed to restore SQLite busy timeout after rollback");
+                }
+                result.map_err(E::from)?;
+                Err(error)
+            }
+        }
     }
 
     pub(crate) async fn with_sqlite_quota_probe<T, E, F>(&self, operation: F) -> Result<T, E>

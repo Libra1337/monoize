@@ -11,6 +11,8 @@ use crate::db::DbPool;
 pub const STORE_PRIMARY_LEASE_NAME: &str = "store_primary";
 pub const STORE_PRIMARY_LEASE_SECONDS: i64 = 15;
 pub const STORE_PRIMARY_RENEWAL_SECONDS: u64 = 5;
+const STORE_PRIMARY_RENEWAL_SAFETY_SECONDS: i64 = 5;
+const STORE_PRIMARY_RETRY_DELAYS_MS: [u64; 3] = [100, 250, 500];
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum StorePrimaryLeaseError {
@@ -46,6 +48,7 @@ pub struct StorePrimaryLease {
     owner_id: Arc<str>,
     epoch: i64,
     renewal_failed: Arc<AtomicBool>,
+    expires_at: Arc<tokio::sync::RwLock<DateTime<Utc>>>,
 }
 
 #[derive(Debug)]
@@ -79,19 +82,26 @@ impl StorePrimaryLease {
         if owner_id.trim().is_empty() {
             return Err(StorePrimaryLeaseError::InvalidOwner);
         }
+        let acquisition_time = now.unwrap_or_else(Utc::now);
         let transaction_db = db.clone();
         let transaction_owner = owner_id.clone();
         let epoch = if db.is_sqlite() {
             db.with_immediate_write(move |connection| {
                 Box::pin(async move {
-                    acquire_locked(&transaction_db, connection, &transaction_owner, now, false)
-                        .await
+                    acquire_locked(
+                        &transaction_db,
+                        connection,
+                        &transaction_owner,
+                        Some(acquisition_time),
+                        false,
+                    )
+                    .await
                 })
             })
             .await?
         } else {
             let tx = db.begin_write().await?;
-            let outcome = acquire_locked(&db, &*tx, &owner_id, now, true).await;
+            let outcome = acquire_locked(&db, &*tx, &owner_id, Some(acquisition_time), true).await;
             finish_transaction(tx, outcome).await?
         };
         Ok(Self {
@@ -99,6 +109,13 @@ impl StorePrimaryLease {
             owner_id: owner_id.into(),
             epoch,
             renewal_failed: Arc::new(AtomicBool::new(false)),
+            expires_at: Arc::new(tokio::sync::RwLock::new(
+                acquisition_time
+                    .checked_add_signed(Duration::seconds(STORE_PRIMARY_LEASE_SECONDS))
+                    .ok_or_else(|| {
+                        StorePrimaryLeaseError::Storage("lease expiry overflow".to_string())
+                    })?,
+            )),
         })
     }
 
@@ -129,6 +146,7 @@ impl StorePrimaryLease {
         if self.renewal_failed.load(Ordering::Acquire) {
             return Err(StorePrimaryLeaseError::RenewalFailed);
         }
+        let renewal_time = now.unwrap_or_else(Utc::now);
         let transaction_db = self.db.clone();
         let owner_id = self.owner_id.to_string();
         let epoch = self.epoch;
@@ -136,25 +154,50 @@ impl StorePrimaryLease {
             self.db
                 .with_immediate_write(move |connection| {
                     Box::pin(async move {
-                        renew_locked(&transaction_db, connection, &owner_id, epoch, now, false)
-                            .await
+                        renew_locked(
+                            &transaction_db,
+                            connection,
+                            &owner_id,
+                            epoch,
+                            Some(renewal_time),
+                            false,
+                        )
+                        .await
                     })
                 })
                 .await
         } else {
             match self.db.begin_write().await {
                 Ok(tx) => {
-                    let outcome =
-                        renew_locked(&self.db, &*tx, &self.owner_id, self.epoch, now, true).await;
+                    let outcome = renew_locked(
+                        &self.db,
+                        &*tx,
+                        &self.owner_id,
+                        self.epoch,
+                        Some(renewal_time),
+                        true,
+                    )
+                    .await;
                     finish_transaction(tx, outcome).await
                 }
                 Err(error) => Err(error.into()),
             }
         };
-        if outcome.is_err() {
+        if outcome.is_ok() {
+            *self.expires_at.write().await = renewal_time
+                .checked_add_signed(Duration::seconds(STORE_PRIMARY_LEASE_SECONDS))
+                .ok_or_else(|| {
+                    StorePrimaryLeaseError::Storage("lease expiry overflow".to_string())
+                })?;
+        }
+        if outcome.as_ref().is_err_and(|error| is_fencing_loss(error)) {
             self.renewal_failed.store(true, Ordering::Release);
         }
         outcome
+    }
+
+    async fn remaining_ttl(&self) -> Duration {
+        *self.expires_at.read().await - Utc::now()
     }
 
     pub async fn validate(&self) -> Result<(), StorePrimaryLeaseError> {
@@ -200,13 +243,44 @@ impl StorePrimaryLease {
                 if shutdown.load(Ordering::Acquire) {
                     break;
                 }
-                if let Err(error) = lease.renew().await {
-                    tracing::error!(error = %error, "Store Primary lease renewal failed");
+                if let Err(error) = renew_with_retry(&lease, &shutdown).await {
+                    lease.renewal_failed.store(true, Ordering::Release);
+                    tracing::error!(error = %error, "Store Primary lease renewal failed; lease marked lost");
                     break;
                 }
             }
         });
     }
+}
+
+async fn renew_with_retry(
+    lease: &StorePrimaryLease,
+    shutdown: &AtomicBool,
+) -> Result<(), StorePrimaryLeaseError> {
+    let mut last_error = None;
+    for (attempt, delay_ms) in std::iter::once(0)
+        .chain(STORE_PRIMARY_RETRY_DELAYS_MS)
+        .enumerate()
+    {
+        if shutdown.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if delay_ms != 0 {
+            tokio::time::sleep(StdDuration::from_millis(delay_ms)).await;
+        }
+        if lease.remaining_ttl().await <= Duration::seconds(STORE_PRIMARY_RENEWAL_SAFETY_SECONDS) {
+            return Err(StorePrimaryLeaseError::Expired);
+        }
+        match lease.renew().await {
+            Ok(()) => return Ok(()),
+            Err(error) if is_fencing_loss(&error) => return Err(error),
+            Err(error) => {
+                tracing::warn!(error = %error, attempt, delay_ms, "Store Primary renewal transient failure; retrying");
+                last_error = Some(error);
+            }
+        }
+    }
+    Err(last_error.unwrap_or(StorePrimaryLeaseError::RenewalFailed))
 }
 
 async fn acquire_locked<C: ConnectionTrait>(
@@ -362,6 +436,20 @@ fn validate_token(
         return Err(StorePrimaryLeaseError::Expired);
     }
     Ok(())
+}
+
+fn is_fencing_loss(error: &StorePrimaryLeaseError) -> bool {
+    matches!(
+        error,
+        StorePrimaryLeaseError::Unavailable
+            | StorePrimaryLeaseError::Missing
+            | StorePrimaryLeaseError::OwnerMismatch
+            | StorePrimaryLeaseError::EpochMismatch
+            | StorePrimaryLeaseError::Expired
+            | StorePrimaryLeaseError::RenewalFailed
+            | StorePrimaryLeaseError::EpochOverflow
+            | StorePrimaryLeaseError::InvalidOwner
+    )
 }
 
 async fn finish_transaction<T>(
