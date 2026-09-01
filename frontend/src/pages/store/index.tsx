@@ -30,8 +30,9 @@ import {
 import {
   addMinor,
   convertMinor,
+  formatCoinFromMinor,
   formatMinor,
-  formatPlanQuota,
+  formatPlanQuotaCoin,
   type StoreCurrency,
 } from "@/lib/store-money";
 import { cn } from "@/lib/utils";
@@ -192,31 +193,6 @@ function ProductPicker({
         <div className="grid items-start gap-3 sm:grid-cols-2">
           {products.map((product) => {
             const selected = selectedProduct?.id === product.id;
-            const priceMinor = convertMinor(
-              product.price_minor,
-              product.price_currency,
-              currency,
-              cnyPerUsd,
-            );
-            const bonusMinor = product.balance
-              ? convertMinor(
-                  product.balance.bonus_minor,
-                  product.price_currency,
-                  currency,
-                  cnyPerUsd,
-                )
-              : null;
-            const actualReceivedMinor = product.balance && bonusMinor !== null
-              ? addMinor(
-                  convertMinor(
-                    product.balance.recharge_minor,
-                    product.price_currency,
-                    currency,
-                    cnyPerUsd,
-                  ),
-                  bonusMinor,
-                )
-              : null;
             return (
               <button
                 key={product.id}
@@ -240,17 +216,18 @@ function ProductPicker({
                   {selected && <Check className="size-5 shrink-0" />}
                 </span>
                 <span className="mt-4 text-xl font-semibold">
-                  {formatMinor(priceMinor, currency)}
+                  {formatCoinFromMinor(product.price_minor, product.price_currency, cnyPerUsd)}
                 </span>
                 {product.balance && (
                   <span className="mt-3 grid gap-1 text-xs text-muted-foreground">
                     <span>
-                      {t("store.balanceProduct.bonus")}: {formatMinor(bonusMinor ?? "0", currency)}
+                      {t("store.balanceProduct.bonus")}: {formatCoinFromMinor(product.balance.bonus_minor, product.price_currency, cnyPerUsd)}
                     </span>
                     <span className="font-medium text-foreground">
-                      {t("store.balanceProduct.actualReceived")}: {formatMinor(
-                        actualReceivedMinor ?? "0",
-                        currency,
+                      {t("store.balanceProduct.actualReceived")}: {formatCoinFromMinor(
+                        addMinor(product.balance.recharge_minor, product.balance.bonus_minor),
+                        product.price_currency,
+                        cnyPerUsd,
                       )}
                     </span>
                   </span>
@@ -259,11 +236,7 @@ function ProductPicker({
                   <span className="mt-3 grid gap-1 text-xs text-muted-foreground">
                     {product.quotas.map((quota) => (
                       <span key={quota.id}>
-                        {quota.window_kind}: {formatPlanQuota(
-                          quota.quota_fen_cny,
-                          currency,
-                          cnyPerUsd,
-                        )}
+                        {quota.window_kind}: {formatPlanQuotaCoin(quota.quota_fen_cny)}
                       </span>
                     ))}
                   </span>

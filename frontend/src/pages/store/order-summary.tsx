@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { StorePaymentChannel, StoreProduct } from "@/lib/store-api";
-import { addMinor, convertMinor, formatMinor, type StoreCurrency } from "@/lib/store-money";
+import { addMinor, formatCoinFromMinor, type StoreCurrency } from "@/lib/store-money";
 
 interface OrderSummaryProps {
   product: StoreProduct | null;
@@ -14,16 +14,6 @@ interface OrderSummaryProps {
   customAmountInvalid: boolean;
   submitting: boolean;
   onSubmit: () => void;
-}
-
-function displayMinor(
-  product: StoreProduct,
-  currency: StoreCurrency,
-  cnyPerUsd: string,
-  customRechargeMinor: string | null,
-) {
-  if (customRechargeMinor !== null) return customRechargeMinor;
-  return convertMinor(product.price_minor, product.price_currency, currency, cnyPerUsd);
 }
 
 export function OrderSummary({
@@ -37,26 +27,11 @@ export function OrderSummary({
   onSubmit,
 }: OrderSummaryProps) {
   const { t } = useTranslation();
-  const totalMinor = product
-    ? displayMinor(product, currency, cnyPerUsd, customRechargeMinor)
+  const totalCoin = product
+    ? customRechargeMinor !== null
+      ? formatCoinFromMinor(customRechargeMinor, currency, cnyPerUsd)
+      : formatCoinFromMinor(product.price_minor, product.price_currency, cnyPerUsd)
     : null;
-  const actualReceivedMinor = product?.balance
-    ? customRechargeMinor ?? addMinor(
-        convertMinor(
-          product.balance.recharge_minor,
-          product.price_currency,
-          currency,
-          cnyPerUsd,
-        ),
-        convertMinor(
-          product.balance.bonus_minor,
-          product.price_currency,
-          currency,
-          cnyPerUsd,
-        ),
-      )
-    : null;
-
   return (
     <Card className="min-h-[260px] rounded-2xl">
       <CardHeader className="p-5 pb-3">
@@ -72,11 +47,17 @@ export function OrderSummary({
             <dt className="text-muted-foreground">{t("store.summary.payment")}</dt>
             <dd className="text-right font-medium">{paymentChannel?.name ?? "-"}</dd>
           </div>
-          {actualReceivedMinor !== null && (
+          {product?.balance && (
             <div className="flex items-start justify-between gap-4">
               <dt className="text-muted-foreground">{t("store.summary.actualReceived")}</dt>
               <dd className="text-right font-medium">
-                {formatMinor(actualReceivedMinor, currency)}
+                {customRechargeMinor !== null
+                  ? formatCoinFromMinor(customRechargeMinor, currency, cnyPerUsd)
+                  : formatCoinFromMinor(
+                      addMinor(product.balance.recharge_minor, product.balance.bonus_minor),
+                      product.price_currency,
+                      cnyPerUsd,
+                    )}
               </dd>
             </div>
           )}
@@ -85,7 +66,7 @@ export function OrderSummary({
           <div>
             <p className="text-xs text-muted-foreground">{t("store.summary.total")}</p>
             <p className="text-xl font-semibold">
-              {totalMinor === null ? "-" : formatMinor(totalMinor, currency)}
+              {totalCoin ?? "-"}
             </p>
           </div>
           <Button

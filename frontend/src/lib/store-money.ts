@@ -80,6 +80,19 @@ function formatCoinMinor(minor: bigint): string {
   return `${negative ? "-" : ""}C${whole}.${fraction}`;
 }
 
+/** Format a payment-currency minor amount as Coin (1 C = 1 CNY). */
+export function formatCoinFromMinor(
+  minor: string,
+  currency: StoreCurrency,
+  cnyPerUsd: string,
+): string {
+  const amount = parseMinor(minor);
+  const cnyMinor = currency === "CNY"
+    ? amount
+    : BigInt(convertMinor(minor, "USD", "CNY", cnyPerUsd));
+  return formatCoinMinor(cnyMinor);
+}
+
 /** Format an internal nano-USD amount as Coin using the current CNY/USD snapshot. */
 export function formatCoinFromNanoUsd(nanoUsd: string, cnyPerUsd: string): string {
   const nano = parseSignedMinor(nanoUsd);
@@ -148,6 +161,12 @@ export function formatPlanQuota(
     100n * rate.numerator,
   );
   return `$${wholeUsd}`;
+}
+
+/** Format a CNY-denominated plan quota as whole Coin units. */
+export function formatPlanQuotaCoin(quotaFenCny: string): string {
+  const quota = parseMinor(quotaFenCny);
+  return `C${divideRoundHalfAwayFromZero(quota, 100n)}`;
 }
 
 const DECIMAL_MINOR_INPUT = /^(?:0|[1-9][0-9]*)(?:\.([0-9]{0,2}))?$/;

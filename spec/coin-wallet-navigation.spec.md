@@ -6,11 +6,11 @@ This specification defines the Coin display unit, wallet route ownership, usage 
 
 CN-1. Coin is the only user-visible monetary unit in authenticated Store, Wallet, Usage, Usage Ranking, Dashboard, and Marketplace views.
 
-CN-2. The UI renders Coin with the symbol `C` and never renders `¥` or `$` in those views.
+CN-2. The UI renders Coin with the symbol `C` for all user-visible monetary values in those views. Payment-currency controls MAY show `CNY` or `USD` because they select the provider settlement currency.
 
-CN-3. Wallet and usage amounts originate from internal nano-USD balances. The UI converts them to Coin using the current `cny_per_usd` snapshot, where one Coin equals one CNY cent at minor-unit precision.
+CN-3. Wallet and usage amounts originate from internal nano-USD balances. The UI converts them to CNY minor units using the current `cny_per_usd` snapshot and then displays Coin, where `1 C = 1 CNY`.
 
-CN-4. Marketplace model rates retain their source billing basis. A USD-basis model rate displays the same numeric amount in Coin as USD; a CNY-basis rate displays the same numeric amount in Coin as CNY. Conversion MUST occur once at the final display unit.
+CN-4. A recharge product priced in CNY displays its CNY amount as Coin. A recharge product priced in USD displays its USD amount multiplied by the current `cny_per_usd` snapshot as Coin. Marketplace model rates retain their source billing basis: a USD-basis rate uses `1 C = 1 USD`, while a CNY-basis rate uses `1 C = 1 CNY`. Conversion MUST occur once at the final display unit.
 
 CN-5. Payment orders retain `CNY` or `USD` as the settlement currency and persist the exchange-rate snapshot. Coin is a display unit and is not sent as a payment-provider currency.
 
