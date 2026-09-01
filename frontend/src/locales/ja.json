@@ -231,8 +231,21 @@
 		"adminRuntime": "稼働状態",
 		"groups": "グループ",
 		"store": "ストア",
+		"wallet": "ウォレット",
+		"collapseSidebar": "サイドバーを折りたたむ",
+		"expandSidebar": "サイドバーを展開",
 		"orders": "注文",
 		"storeManagement": "ストア管理"
+	},
+	"wallet": {
+		"title": "ウォレット",
+		"description": "残高、プラン、引き換えコード、注文を一つの画面で確認します。",
+		"summaryLabel": "ウォレット概要",
+		"balance": "利用可能残高",
+		"monthlyUsage": "今月の使用量",
+		"currentPlan": "現在のプラン",
+		"redemptionTitle": "コードを引き換える",
+		"orders": "注文履歴"
 	},
 	"store": {
 		"ui": {

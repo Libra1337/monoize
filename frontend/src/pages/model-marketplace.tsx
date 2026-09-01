@@ -23,8 +23,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
 import {
   marketplaceRequest,
   type MarketplaceItem,
@@ -41,7 +41,6 @@ import {
   resolveMarketplacePages,
   type MarketplacePageState,
 } from "@/lib/marketplace-pages";
-import { cn } from "@/lib/utils";
 
 const ALL = "__all";
 const LIST_LIMIT = "50";
@@ -70,27 +69,12 @@ function MarketplaceSkeleton() {
   );
 }
 
-function CurrencyControl({ unavailable }: { unavailable: boolean }) {
+function CurrencyControl({ unavailable: _unavailable }: { unavailable: boolean }) {
   const { t } = useTranslation();
-  const { currency, setCurrency } = useStoreCurrency();
+  void _unavailable;
   return (
-    <div className="flex min-h-11 rounded-lg border bg-muted/45 p-1" role="radiogroup" aria-label={t("modelMarketplace.currency")}>
-      {(["CNY", "USD"] as const).map((item) => (
-        <button
-          key={item}
-          type="button"
-          role="radio"
-          aria-checked={currency === item}
-          disabled={item === "CNY" && unavailable}
-          onClick={() => setCurrency(item)}
-          className={cn(
-            "relative min-h-9 min-w-14 cursor-pointer rounded-md px-3 text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45",
-            currency === item ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {item}
-        </button>
-      ))}
+    <div className="flex min-h-11 items-center rounded-lg border bg-muted/45 px-3 text-sm font-semibold" aria-label={t("modelMarketplace.currency")}>
+      C
     </div>
   );
 }
@@ -105,11 +89,10 @@ function ModelRow({
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
-  const { currency } = useStoreCurrency();
-  const canPrice = currency === "USD" || currencyRate !== null;
+  const canPrice = currencyRate !== null;
   const price = (range: MarketplaceItem["input_rate_range"]) => {
     if (!range || !canPrice) return t("modelMarketplace.unavailable");
-    return formatMarketplaceRateRange(range, currency, currencyRate ?? "1");
+    return formatMarketplaceRateRange(range, "USD", currencyRate ?? "1");
   };
 
   return (
@@ -142,6 +125,7 @@ function ModelRow({
 export function ModelMarketplacePage() {
   const { t } = useTranslation();
   const { currency } = useStoreCurrency();
+  void currency;
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search.trim());
   const [group, setGroup] = useState(ALL);
@@ -284,17 +268,7 @@ export function ModelMarketplacePage() {
           <CurrencyControl unavailable={cnyUnavailable} />
         </div>
 
-        {currency === "CNY" && cnyUnavailable ? (
-          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-warning/45 bg-warning/10 px-4 py-3 text-sm text-foreground">
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              <CircleDollarSign className="size-4 shrink-0 text-warning" />
-              <span>{t("modelMarketplace.currencyUnavailable")}</span>
-            </div>
-            <Button size="sm" variant="outline" onClick={() => exchangeRate.mutate()}>
-              <RefreshCw className="size-4" />{t("modelMarketplace.retry")}
-            </Button>
-          </div>
-        ) : null}
+        {cnyUnavailable ? <div className="flex items-center gap-2 rounded-lg border border-warning/45 bg-warning/10 px-4 py-3 text-sm"><CircleDollarSign className="size-4 text-warning" />{t("modelMarketplace.currencyUnavailable")}</div> : null}
 
         {list.isLoading && !list.data ? <MarketplaceSkeleton /> : list.error ? (
           <div className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-5">
@@ -397,7 +371,7 @@ export function ModelMarketplacePage() {
                           {[rate.context_tier, rate.service_tier, rate.modality, rate.cache_ttl].filter(Boolean).map((value) => <Badge key={value} variant="secondary">{value}</Badge>)}
                         </dt>
                         <dd className="font-mono text-xs font-medium tabular-nums">
-                          {currency === "CNY" && !cnyRate ? t("modelMarketplace.unavailable") : formatMarketplaceRate(rate.display_rate_nano_usd, rate.unit, currency, cnyRate ?? "1")}
+                          {cnyRate ? formatMarketplaceRate(rate.display_rate_nano_usd, rate.unit, "USD", cnyRate) : t("modelMarketplace.unavailable")}
                         </dd>
                       </div>
                     ))}

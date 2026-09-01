@@ -8,7 +8,7 @@ import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { useTheme } from "@/hooks/use-theme";
 import { useLiveUsage } from "@/lib/swr";
 import { formatCacheHitRate, planRemainingFraction } from "@/lib/live-usage";
-import { formatNanoUsd } from "@/lib/store-money";
+import { formatCoinFromNanoUsd } from "@/lib/store-money";
 import { cn, getGravatarUrl } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -209,16 +209,12 @@ export function UserCenterMenu({
   const { user, logout } = useAuth();
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { currency } = useStoreCurrency();
-  const exchangeRate = useStoreExchangeRate(currency === "CNY");
+  const exchangeRate = useStoreExchangeRate(true);
   const cnyPerUsd = exchangeRate.data?.cny_per_usd;
-  const moneyLoading = currency === "CNY" && !cnyPerUsd && exchangeRate.isLoading;
-  const moneyUnavailable = currency === "CNY" && !cnyPerUsd && !moneyLoading;
+  const moneyLoading = !cnyPerUsd && exchangeRate.isLoading;
+  const moneyUnavailable = !cnyPerUsd && !moneyLoading;
   const formatMoney = (nanoUsd: string) => {
-    if (currency === "CNY") {
-      return cnyPerUsd ? formatNanoUsd(nanoUsd, "CNY", cnyPerUsd) : "—";
-    }
-    return formatNanoUsd(nanoUsd, "USD", "1");
+    return cnyPerUsd ? formatCoinFromNanoUsd(nanoUsd, cnyPerUsd) : "—";
   };
 
   const roleLabel = t(`roles.${user?.role || "user"}`);

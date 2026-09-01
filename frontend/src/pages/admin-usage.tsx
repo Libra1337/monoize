@@ -18,13 +18,11 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatNanoUsd } from "@/lib/exact-decimal";
 import { useAuth } from "@/hooks/use-auth";
-import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
-import type { AdminUsageUserRow } from "@/lib/api";
+import type { AdminUsageUserRow, UsageRankingRange } from "@/lib/api";
 import { useAdminUsageRanking } from "@/lib/swr";
-import { formatNanoUsd as formatDisplayNanoUsd } from "@/lib/store-money";
+import { formatCoinFromNanoUsd } from "@/lib/store-money";
 import { cn } from "@/lib/utils";
 
 function integer(value: string): bigint {
@@ -61,9 +59,9 @@ export function AdminUsagePage() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
-  const { currency } = useStoreCurrency();
-  const exchangeRate = useStoreExchangeRate(currency === "CNY" && isAdmin);
-  const { data, error, isLoading, isValidating, mutate } = useAdminUsageRanking();
+  const exchangeRate = useStoreExchangeRate(true);
+  const [range, setRange] = useState<UsageRankingRange>("24h");
+  const { data, error, isLoading, isValidating, mutate } = useAdminUsageRanking(range);
   const [selected, setSelected] = useState<AdminUsageUserRow | null>(null);
 
   const totals = useMemo(() => {
@@ -95,12 +93,9 @@ export function AdminUsagePage() {
   if (!data) return null;
 
   const cnyPerUsd = exchangeRate.data?.cny_per_usd;
-  const moneyLoading = isAdmin && currency === "CNY" && !cnyPerUsd && exchangeRate.isLoading;
+  const moneyLoading = isAdmin && !cnyPerUsd && exchangeRate.isLoading;
   const formatCost = (nanoUsd: string | null | undefined) => {
-    if (currency === "CNY") {
-      return cnyPerUsd ? formatDisplayNanoUsd(nanoUsd ?? "0", "CNY", cnyPerUsd) : "—";
-    }
-    return formatNanoUsd(nanoUsd, 4);
+    return cnyPerUsd ? formatCoinFromNanoUsd(nanoUsd ?? "0", cnyPerUsd) : "—";
   };
   const rankingSummaryLabel = t("adminUsage.currentRank");
   const rankingSummaryValue = data.current_user_rank != null
@@ -120,7 +115,9 @@ export function AdminUsagePage() {
       <PageHeader
         title={t("adminUsage.title")}
         description={t("adminUsage.description")}
-        actions={<RefreshStatusLogo refreshing={isValidating} label={isValidating ? t("adminUsage.refreshing") : t("adminUsage.current")} />}
+        actions={<div className="flex items-center gap-3"><div className="flex rounded-xl border bg-muted/40 p-1" role="group" aria-label={t("publicSite.usageRanking.rangeLabel")}>
+          {(["24h", "7d", "30d"] as UsageRankingRange[]).map((item) => <button key={item} type="button" aria-pressed={range === item} onClick={() => setRange(item)} className="relative min-h-9 rounded-lg px-3 text-xs font-medium text-muted-foreground transition-colors data-[active=true]:text-foreground" data-active={range === item}>{range === item && <motion.span layoutId="admin-usage-range" className="absolute inset-0 rounded-lg bg-background shadow-sm" transition={{ duration: 0.55, ease: "easeInOut" }} />}<span className="relative z-10">{t(`publicSite.usageRanking.ranges.${item}`)}</span></button>)}
+        </div><RefreshStatusLogo refreshing={isValidating} label={isValidating ? t("adminUsage.refreshing") : t("adminUsage.current")} /></div>}
       />
 
       <motion.section
@@ -134,7 +131,7 @@ export function AdminUsagePage() {
             <p className="text-sm font-medium text-muted-foreground">{t("adminUsage.totalTokens")}</p>
           <p className="mt-1 font-mono text-3xl font-semibold tabular-nums"><AnimatedTokenValue value={totals.all} showDelta /></p>
           </div>
-          <Badge variant="secondary" className="font-mono">{t("adminUsage.window24h")}</Badge>
+          <Badge variant="secondary" className="font-mono">{t(`publicSite.usageRanking.ranges.${range}`)}</Badge>
         </div>
         <div className="mt-5 flex h-3 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Number(totals.all > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : totals.all)}>
           {totals.all > 0n && segments.map((segment) => (

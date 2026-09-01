@@ -1356,8 +1356,8 @@ class ApiClient {
     return data;
   }
 
-  async getAdminUsageRanking(): Promise<AdminUsageRanking> {
-    return this.request("/admin/usage-ranking");
+  async getAdminUsageRanking(range: UsageRankingRange = "24h"): Promise<AdminUsageRanking> {
+    return this.request(`/admin/usage-ranking?range=${encodeURIComponent(range)}`);
   }
 
   async testChannel(

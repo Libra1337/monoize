@@ -9,7 +9,7 @@ interface StoreTabsProps {
   onTabChange: (tab: StoreTab) => void;
 }
 
-const tabs: StoreTab[] = ["balance", "plan", "redeem"];
+const tabs: StoreTab[] = ["balance", "plan"];
 
 export function StoreTabs({ activeTab, onTabChange }: StoreTabsProps) {
   const { t } = useTranslation();
@@ -17,7 +17,7 @@ export function StoreTabs({ activeTab, onTabChange }: StoreTabsProps) {
 
   return (
     <div
-      className="grid w-full grid-cols-3 gap-1 rounded-xl bg-muted p-1 sm:w-fit sm:min-w-[360px]"
+      className="grid w-full grid-cols-2 gap-1 rounded-xl bg-muted p-1 sm:w-fit sm:min-w-[240px]"
       role="tablist"
       aria-label={t("store.ui.tabsLabel")}
     >

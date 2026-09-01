@@ -231,8 +231,21 @@
 		"adminRuntime": "執行狀態",
 		"groups": "群組",
 		"store": "商店",
+		"wallet": "錢包",
+		"collapseSidebar": "收合側邊欄",
+		"expandSidebar": "展開側邊欄",
 		"orders": "訂單",
 		"storeManagement": "商店管理"
+	},
+	"wallet": {
+		"title": "錢包",
+		"description": "在同一頁查看餘額、方案、兌換碼與訂單。",
+		"summaryLabel": "錢包摘要",
+		"balance": "可用餘額",
+		"monthlyUsage": "本月用量",
+		"currentPlan": "目前方案",
+		"redemptionTitle": "兌換碼",
+		"orders": "訂單記錄"
 	},
 	"store": {
 		"ui": {

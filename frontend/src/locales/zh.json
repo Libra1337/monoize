@@ -231,8 +231,21 @@
 		"adminRuntime": "运行状态",
 		"groups": "分组",
 		"store": "商店",
+		"wallet": "钱包",
+		"collapseSidebar": "收起侧边栏",
+		"expandSidebar": "展开侧边栏",
 		"orders": "订单",
 		"storeManagement": "商店管理"
+	},
+	"wallet": {
+		"title": "钱包",
+		"description": "在一个页面查看余额、套餐、兑换码和订单。",
+		"summaryLabel": "钱包概览",
+		"balance": "可用余额",
+		"monthlyUsage": "本月用量",
+		"currentPlan": "当前套餐",
+		"redemptionTitle": "兑换码",
+		"orders": "订单记录"
 	},
 	"store": {
 		"ui": {

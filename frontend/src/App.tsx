@@ -31,6 +31,7 @@ import { StorePage } from "@/pages/store";
 import { OrdersPage } from "@/pages/orders";
 import { StoreAdminPage } from "@/pages/store-admin";
 import { UsageAnalysisPage } from "@/pages/usage-analysis";
+import { WalletPage } from "@/pages/wallet";
 import { ModelMarketplacePage } from "@/pages/model-marketplace";
 import { DashboardApiDocsPage } from "@/pages/dashboard-api-docs";
 import { useAuth } from "@/hooks/use-auth";
@@ -103,6 +104,7 @@ function App() {
             <Route path="groups" element={<GroupsPage />} />
             <Route path="plans" element={<BillingPlansPage />} />
             <Route path="store" element={<StorePage />} />
+            <Route path="wallet" element={<WalletPage />} />
             <Route path="orders" element={<OrdersPage />} />
             <Route path="store-admin" element={<StoreAdminRoute />} />
             <Route path="admin-settings" element={<SettingsPage />} />

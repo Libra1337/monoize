@@ -14,8 +14,9 @@ import {
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/use-auth";
+import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { storeApi, type StoreOrder } from "@/lib/store-api";
-import { formatMinor } from "@/lib/store-money";
+import { convertMinor } from "@/lib/store-money";
 import { isPaymentPollingTerminal } from "./store/checkout-state";
 
 const ORDERS_KEY = "/api/dashboard/store/orders";
@@ -39,11 +40,21 @@ function OrdersSkeleton() {
   );
 }
 
-export function OrdersPage() {
+export function OrdersPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, i18n } = useTranslation();
   const { refreshUser } = useAuth();
+  const exchangeRate = useStoreExchangeRate(true);
   const [selectedOrder, setSelectedOrder] = useState<StoreOrder | null>(null);
   const orders = useSWR(ORDERS_KEY, () => storeApi.listOrders(100));
+  const formatOrderAmount = (order: StoreOrder) => {
+    const cnyRate = exchangeRate.data?.cny_per_usd;
+    if (!cnyRate) return "--";
+    const cents = order.payment_currency === "USD"
+      ? convertMinor(order.payment_minor, "USD", "CNY", cnyRate)
+      : order.payment_minor;
+    const amount = BigInt(cents);
+    return `C${(amount / 100n).toString()}.${(amount % 100n).toString().padStart(2, "0")}`;
+  };
 
   useEffect(() => {
     if (!selectedOrder) return;
@@ -84,7 +95,7 @@ export function OrdersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title={t("store.orders.title")} description={t("store.orders.description")} />
+      {!embedded && <PageHeader title={t("store.orders.title")} description={t("store.orders.description")} />}
 
       {orders.isLoading ? (
         <OrdersSkeleton />
@@ -124,7 +135,7 @@ export function OrdersPage() {
                 </div>
                 <div>
                   <p className="font-medium">
-                    {formatMinor(order.payment_minor, order.payment_currency)}
+                    {formatOrderAmount(order)}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {new Date(order.created_at).toLocaleString(i18n.language)}
@@ -172,7 +183,7 @@ export function OrdersPage() {
               <div className="flex justify-between gap-4 border-b pb-3">
                 <dt className="text-muted-foreground">{t("store.orders.amount")}</dt>
                 <dd className="text-right font-medium">
-                  {formatMinor(selectedOrder.payment_minor, selectedOrder.payment_currency)}
+                  {formatOrderAmount(selectedOrder)}
                 </dd>
               </div>
               <div className="flex justify-between gap-4 border-b pb-3">

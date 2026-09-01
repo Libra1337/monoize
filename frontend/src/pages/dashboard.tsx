@@ -11,10 +11,9 @@ import { PageWrapper, SharedTabIndicator, motion } from "@/components/ui/motion"
 import { TokenSummary } from "@/components/usage/token-summary";
 import { UsageTrendChart } from "@/components/usage/usage-trend-chart";
 import { useAuth } from "@/hooks/use-auth";
-import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { useDashboardAnalytics } from "@/lib/swr";
-import { formatNanoUsd } from "@/lib/store-money";
+import { formatCoinFromNanoUsd } from "@/lib/store-money";
 import { aggregateTokenTotals, formatCacheHitRate } from "@/lib/usage-analytics";
 import { cn } from "@/lib/utils";
 
@@ -91,8 +90,7 @@ function RangeControl({
 export function DashboardPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
-  const { currency } = useStoreCurrency();
-  const exchangeRate = useStoreExchangeRate(currency === "CNY");
+  const exchangeRate = useStoreExchangeRate(true);
   const [range, setRange] = useState<DashboardRange>("24h");
   const rangeConfig = DASHBOARD_RANGES[range];
   const summary = useDashboardAnalytics(8, 720, "self", {
@@ -112,12 +110,9 @@ export function DashboardPage() {
 
   const plan = user?.billing_plan;
   const cnyPerUsd = exchangeRate.data?.cny_per_usd;
-  const moneyLoading = currency === "CNY" && !cnyPerUsd && exchangeRate.isLoading;
+  const moneyLoading = !cnyPerUsd && exchangeRate.isLoading;
   const displayMoney = (nanoUsd: string | null | undefined) => {
-    if (currency === "CNY") {
-      return cnyPerUsd ? formatNanoUsd(nanoUsd ?? "0", "CNY", cnyPerUsd) : "—";
-    }
-    return formatNanoUsd(nanoUsd ?? "0", "USD", "1");
+    return cnyPerUsd ? formatCoinFromNanoUsd(nanoUsd ?? "0", cnyPerUsd) : "—";
   };
   const summaryTotals = summary.data ? aggregateTokenTotals(summary.data.buckets) : undefined;
   const overview = [

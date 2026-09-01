@@ -1,8 +1,4 @@
-import {
-  formatNanoUsdDecimal,
-  formatPerMillionTokenRate,
-  type StoreCurrency,
-} from "@/lib/store-money";
+import { formatCoinDecimalUsd, formatCoinPerMillionUsd } from "@/lib/store-money";
 
 export interface MarketplaceRateRange {
   min: string;
@@ -17,18 +13,20 @@ function isTokenUnit(unit: string): boolean {
 export function formatMarketplaceRate(
   nanoUsd: string,
   unit: string,
-  currency: StoreCurrency,
-  cnyPerUsd: string,
+  _currency: "CNY" | "USD",
+  _cnyPerUsd: string,
 ): string {
+  void _currency;
+  void _cnyPerUsd;
   if (isTokenUnit(unit)) {
-    return formatPerMillionTokenRate(nanoUsd, currency, cnyPerUsd);
+    return formatCoinPerMillionUsd(nanoUsd);
   }
-  return `${formatNanoUsdDecimal(nanoUsd, currency, cnyPerUsd)} / ${unit}`;
+  return formatCoinDecimalUsd(nanoUsd, unit);
 }
 
 export function formatMarketplaceRateRange(
   range: MarketplaceRateRange,
-  currency: StoreCurrency,
+  currency: "CNY" | "USD",
   cnyPerUsd: string,
 ): string {
   const minimum = formatMarketplaceRate(range.min, range.unit, currency, cnyPerUsd);

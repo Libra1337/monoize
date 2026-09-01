@@ -26,6 +26,10 @@ compatibility route, but it MUST NOT be the only usage-ranking entry point.
 
 ## 3. Usage ranking endpoint
 
+UR-3. The authenticated usage-ranking endpoint MUST accept `range=24h`, `range=7d`, or
+`range=30d`. The selected range MUST be applied to totals, user ranking, model ranking,
+costs, and current-user rank in one response. Missing range selects `24h`.
+
 UR-3. The endpoint MUST aggregate request logs from the preceding 24 hours ending
 at the request time. It MUST aggregate in SQL and MUST NOT load raw request-log
 rows into application memory.

@@ -354,11 +354,13 @@ fn redact_dsn(dsn: &str) -> String {
 pub async fn get_admin_usage_ranking(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<UsageRankingQuery>,
 ) -> AppResult<Json<Value>> {
     let caller = get_current_user(&headers, &state).await?;
     let is_admin = caller.role.can_manage_users();
+    let hours = usage_ranking_hours(query.range.as_deref())?;
     Ok(Json(
-        build_usage_ranking(&state, Some(&caller), is_admin, 24).await?,
+        build_usage_ranking(&state, Some(&caller), is_admin, hours).await?,
     ))
 }
 

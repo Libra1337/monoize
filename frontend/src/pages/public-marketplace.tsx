@@ -15,11 +15,16 @@ import {
   type MarketplaceResponse,
 } from "@/lib/marketplace-api";
 import { resolveMarketplacePages } from "@/lib/marketplace-pages";
+import { formatCoinDecimalUsd, formatCoinPerMillionUsd } from "@/lib/store-money";
 
 function rangeLabel(range: MarketplaceRateRange | null): string {
   if (!range) return "—";
-  const value = range.min === range.max ? range.min : `${range.min} – ${range.max}`;
-  return `${value} nano-USD / ${range.unit}`;
+  const format = (value: string) => range.unit.toLowerCase() === "token"
+    ? formatCoinPerMillionUsd(value)
+    : formatCoinDecimalUsd(value, range.unit);
+  const value = format(range.min);
+  if (range.min === range.max) return value;
+  return `${value.replace(/ \/ .*$/, "")}–${format(range.max)}`;
 }
 
 export function PublicMarketplacePage() {

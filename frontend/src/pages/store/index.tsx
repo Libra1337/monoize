@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, Check, Infinity as InfinityIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertCircle, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { QRCodeSVG } from "qrcode.react";
@@ -18,7 +18,6 @@ import { PageHeader } from "@/components/ui/page-header";
 import { useAuth } from "@/hooks/use-auth";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
-import { api } from "@/lib/api";
 import {
   storeApi,
   StoreApiError,
@@ -32,14 +31,12 @@ import {
   addMinor,
   convertMinor,
   formatMinor,
-  formatNanoUsd,
   formatPlanQuota,
   type StoreCurrency,
 } from "@/lib/store-money";
 import { cn } from "@/lib/utils";
 import { OrderSummary } from "./order-summary";
 import { PaymentMethods } from "./payment-methods";
-import { RedemptionPanel } from "./redemption-panel";
 import {
   filterCompatiblePaymentChannels,
   selectStoreProduct,
@@ -59,22 +56,8 @@ import {
 } from "./checkout-state";
 
 const CATALOG_KEY = "/api/dashboard/store/catalog";
-const ENTITLEMENT_KEY = "/api/dashboard/store/entitlement";
 const ORDERS_KEY = "/api/dashboard/store/orders";
-const REDEMPTION_STATUS_KEY = "/api/dashboard/store/redemption-status";
 const MOBILE_CHECKOUT_QUERY = "(max-width: 767px)";
-
-interface RedemptionStatus {
-  state: "idle" | "redeeming";
-  code: string | null;
-}
-
-const IDLE_REDEMPTION_STATUS: RedemptionStatus = { state: "idle", code: null };
-
-function monthStartIso() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-}
 
 function optimisticOrder(
   product: StoreProduct,
@@ -345,22 +328,10 @@ export function StorePage() {
       ?? null;
   });
   const [qrAction, setQrAction] = useState<Extract<StoreCheckoutAction, { kind: "qr" }> | null>(null);
-  const monthStart = useMemo(monthStartIso, []);
-
   const catalog = useSWR(CATALOG_KEY, storeApi.getCatalog);
   const exchangeRate = useStoreExchangeRate();
-  const entitlement = useSWR(ENTITLEMENT_KEY, storeApi.getEntitlement);
-  const mutateEntitlement = entitlement.mutate;
-  const redemptionStatus = useSWR<RedemptionStatus>(REDEMPTION_STATUS_KEY, null, {
-    fallbackData: IDLE_REDEMPTION_STATUS,
-  });
-  const monthlyUsage = useSWR(
-    ["store-monthly-usage", monthStart],
-    () => api.listRequestLogs(1, 0, { time_from: monthStart }),
-  );
-
-  const loading = catalog.isLoading || exchangeRate.isLoading || entitlement.isLoading || monthlyUsage.isLoading;
-  const error = catalog.error || exchangeRate.error || entitlement.error || monthlyUsage.error;
+  const loading = catalog.isLoading || exchangeRate.isLoading;
+  const error = catalog.error || exchangeRate.error;
   const rate = exchangeRate.data?.cny_per_usd ?? "1";
   const products = (catalog.data?.products ?? []).filter(
     (product) => product.enabled && product.kind === activeTab,
@@ -396,7 +367,6 @@ export function StorePage() {
   const selectedChannel = compatibleChannels.find((channel) => channel.id === selectedChannelId)
     ?? compatibleChannels[0]
     ?? null;
-  const redeeming = redemptionStatus.data?.state === "redeeming";
   const customMinimumMinor = currency === "CNY"
     ? settings?.custom_recharge_cny_min_minor ?? "0"
     : settings?.custom_recharge_usd_min_minor ?? "0";
@@ -407,8 +377,6 @@ export function StorePage() {
   const retry = () => Promise.all([
     catalog.mutate(),
     exchangeRate.mutate(),
-    entitlement.mutate(),
-    monthlyUsage.mutate(),
   ]);
 
   useEffect(() => {
@@ -437,7 +405,7 @@ export function StorePage() {
           expiresAt: order.expires_at,
         }, Date.now())) {
           clearPendingCheckout(window.sessionStorage, order.id);
-          await Promise.all([mutate(ORDERS_KEY), refreshUser(), mutateEntitlement()]);
+          await Promise.all([mutate(ORDERS_KEY), refreshUser()]);
           if (active) {
             setPollingOrderId(null);
             setQrAction(null);
@@ -463,7 +431,7 @@ export function StorePage() {
       active = false;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [mutateEntitlement, pollingOrderId, refreshUser]);
+  }, [pollingOrderId, refreshUser]);
 
   const handleTabChange = (tab: StoreTab) => {
     setActiveTab(tab);
@@ -574,21 +542,6 @@ export function StorePage() {
     }
   };
 
-  const handleRedeem = async (code: string) => {
-    await redemptionStatus.mutate(
-      async () => {
-        await storeApi.redeem(code);
-        await Promise.all([refreshUser(), entitlement.mutate()]);
-        return IDLE_REDEMPTION_STATUS;
-      },
-      {
-        optimisticData: { state: "redeeming", code },
-        rollbackOnError: true,
-        revalidate: false,
-      },
-    );
-  };
-
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title={t("store.title")} description={t("store.description")} />
@@ -636,40 +589,6 @@ export function StorePage() {
         </Card>
       ) : (
         <>
-          <section className="grid gap-3 sm:grid-cols-3" aria-label={t("store.ui.accountLabel")}>
-            <Card className="rounded-2xl">
-              <CardContent className="p-5">
-                <p className="text-sm text-muted-foreground">{t("store.account.balance")}</p>
-                <p className="mt-2 text-xl font-semibold">
-                  {user?.balance_unlimited ? (
-                    <span className="flex items-center gap-2"><InfinityIcon className="size-5" />{t("store.ui.accountUnlimited")}</span>
-                  ) : formatNanoUsd(user?.balance_nano_usd ?? "0", currency, rate)}
-                </p>
-              </CardContent>
-            </Card>
-            <Card className="rounded-2xl">
-              <CardContent className="p-5">
-                <p className="text-sm text-muted-foreground">{t("store.account.monthlyUsage")}</p>
-                <p className="mt-2 text-xl font-semibold">
-                  {formatNanoUsd(monthlyUsage.data?.total_charge_nano_usd ?? "0", currency, rate)}
-                </p>
-              </CardContent>
-            </Card>
-            <Card className="rounded-2xl">
-              <CardContent className="p-5">
-                <p className="text-sm text-muted-foreground">{t("store.account.currentPlan")}</p>
-                <p className="mt-2 font-semibold">
-                  {entitlement.data?.product_name ?? t("store.account.noPlan")}
-                </p>
-                {entitlement.data && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t("store.ui.accountEnds", { date: new Date(entitlement.data.ends_at).toLocaleDateString() })}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          </section>
-
           <StoreModeContent
             activeTab={activeTab}
             purchaseContent={(
@@ -706,12 +625,7 @@ export function StorePage() {
               />
               </>
             )}
-            redemptionContent={(
-              <RedemptionPanel
-                onRedeem={handleRedeem}
-                redeeming={redeeming}
-              />
-            )}
+            redemptionContent={null}
           />
         </>
       )}

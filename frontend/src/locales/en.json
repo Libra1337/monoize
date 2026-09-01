@@ -231,8 +231,21 @@
 		"adminRuntime": "Runtime Status",
 		"groups": "Groups",
 		"store": "Store",
+		"wallet": "Wallet",
+		"collapseSidebar": "Collapse sidebar",
+		"expandSidebar": "Expand sidebar",
 		"orders": "Orders",
 		"storeManagement": "Store Management"
+	},
+	"wallet": {
+		"title": "Wallet",
+		"description": "Review balance, plan, redemption codes, and orders in one place.",
+		"summaryLabel": "Wallet summary",
+		"balance": "Available balance",
+		"monthlyUsage": "This month usage",
+		"currentPlan": "Current plan",
+		"redemptionTitle": "Redeem a code",
+		"orders": "Order history"
 	},
 	"store": {
 		"ui": {

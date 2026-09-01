@@ -16,12 +16,15 @@ import {
   Boxes,
   ShoppingBag,
   ReceiptText,
+  WalletCards,
   BadgeDollarSign,
   ChartNoAxesCombined,
   BookOpenText,
   ChartSpline,
   HeartPulse,
   Activity,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -116,11 +119,13 @@ function Sidebar({
   layoutId = "nav-active",
   disableLayoutAnimation = false,
   collapsed = false,
+  onToggle,
 }: {
   onNavigate?: () => void;
   layoutId?: string;
   disableLayoutAnimation?: boolean;
   collapsed?: boolean;
+  onToggle?: () => void;
 }) {
   const { user } = useAuth();
   const { t } = useTranslation();
@@ -139,6 +144,7 @@ function Sidebar({
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
     { to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") },
+    { to: "/dashboard/wallet", icon: WalletCards, label: t("nav.wallet") },
     { to: "/dashboard/orders", icon: ReceiptText, label: t("nav.orders") },
   ];
 
@@ -182,6 +188,13 @@ function Sidebar({
             <span className="truncate font-display text-sm font-semibold tracking-tight">{siteName}</span>
           )}
         </Link>
+
+        {onToggle && (
+          <button type="button" onClick={onToggle} className={cn("mt-2 flex min-h-9 items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground", collapsed ? "mx-auto justify-center px-2" : "w-full gap-2 px-2.5")} aria-label={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}>
+            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+            {!collapsed && <span className="text-xs">{t("nav.collapseSidebar")}</span>}
+          </button>
+        )}
 
         <Separator className="my-3" />
 
@@ -233,6 +246,15 @@ export function DashboardLayout() {
   const { user, loading } = useAuth();
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("lynshen-sidebar-collapsed") === "1";
+  });
+  const toggleCollapsed = () => setCollapsed((value) => {
+    const next = !value;
+    window.localStorage.setItem("lynshen-sidebar-collapsed", next ? "1" : "0");
+    return next;
+  });
 
   if (loading) {
     return (
@@ -272,15 +294,9 @@ export function DashboardLayout() {
       </Sheet>
 
       {/* Desktop sidebar: full-bleed, responsive collapse */}
-      <aside className="hidden h-dvh shrink-0 border-r lg:block lg:w-16 xl:w-64">
-        {/* Collapsed sidebar at lg, expanded at xl */}
-        <div className="hidden h-full lg:block xl:hidden">
-          <Sidebar collapsed layoutId="nav-active-collapsed" />
-        </div>
-        <div className="hidden h-full xl:block">
-          <Sidebar />
-        </div>
-      </aside>
+      <motion.aside animate={{ width: collapsed ? 64 : 256 }} transition={{ duration: 0.35, ease: "easeInOut" }} className="hidden h-dvh shrink-0 border-r lg:block">
+        <Sidebar collapsed={collapsed} onToggle={toggleCollapsed} />
+        </motion.aside>
 
       {/* Main content area */}
       <div className="min-h-0 min-w-0 flex flex-1 flex-col overflow-y-auto px-6 py-6 pt-16 lg:px-8 lg:pt-6">

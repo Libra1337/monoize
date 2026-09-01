@@ -72,6 +72,44 @@ function formatSignedMinor(minor: bigint, currency: StoreCurrency): string {
   return negative ? `-${formatted}` : formatted;
 }
 
+function formatCoinMinor(minor: bigint): string {
+  const negative = minor < 0n;
+  const absolute = negative ? -minor : minor;
+  const whole = absolute / 100n;
+  const fraction = (absolute % 100n).toString().padStart(2, "0");
+  return `${negative ? "-" : ""}C${whole}.${fraction}`;
+}
+
+/** Format an internal nano-USD amount as Coin using the current CNY/USD snapshot. */
+export function formatCoinFromNanoUsd(nanoUsd: string, cnyPerUsd: string): string {
+  const nano = parseSignedMinor(nanoUsd);
+  const rate = parseRate(cnyPerUsd);
+  const cnyMinor = divideRoundHalfAwayFromZero(
+    nano * rate.numerator,
+    10_000_000n * rate.denominator,
+  );
+  return formatCoinMinor(cnyMinor);
+}
+
+/** Format a USD-basis model rate as Coin without applying the wallet FX rate. */
+export function formatCoinPerMillionUsd(nanoUsdPerToken: string): string {
+  const rate = parseNonnegativeDecimal(nanoUsdPerToken);
+  const minor = divideRoundHalfAwayFromZero(
+    rate.numerator * 1_000_000n,
+    rate.denominator * 10_000_000n,
+  );
+  return `${formatCoinMinor(minor)} / 1M tokens`;
+}
+
+export function formatCoinDecimalUsd(nanoUsd: string, unit: string): string {
+  const amount = parseNonnegativeDecimal(nanoUsd);
+  const minor = divideRoundHalfAwayFromZero(
+    amount.numerator,
+    amount.denominator * 10_000_000n,
+  );
+  return `${formatCoinMinor(minor)} / ${unit}`;
+}
+
 export function convertMinor(
   minor: string,
   source: StoreCurrency,

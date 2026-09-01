@@ -312,8 +312,8 @@ export function useAdminOverview(config?: SWRConfiguration) {
   });
 }
 
-export function useAdminUsageRanking(config?: SWRConfiguration) {
-  return useSWR<AdminUsageRanking>(SWR_KEYS.ADMIN_USAGE, () => api.getAdminUsageRanking(), {
+export function useAdminUsageRanking(range: UsageRankingRange = "24h", config?: SWRConfiguration) {
+  return useSWR<AdminUsageRanking>(`${SWR_KEYS.ADMIN_USAGE}?range=${range}`, () => api.getAdminUsageRanking(range), {
     ...defaultConfig,
     refreshInterval: 2000,
     ...config,
