@@ -1350,7 +1350,7 @@ class ApiClient {
   }
 
   async listWalletLedger(limit = 50): Promise<BillingLedgerEntry[]> {
-    return this.request(`/wallet/ledger?limit=${Math.min(Math.max(limit, 1), 50)}`);
+    return this.request(`/dashboard/wallet/ledger?limit=${Math.min(Math.max(limit, 1), 50)}`);
   }
 
   async getAdminOverview(): Promise<AdminOverview> {

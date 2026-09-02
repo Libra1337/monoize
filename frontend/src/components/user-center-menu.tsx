@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CoinAmount } from "@/components/coin-amount";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { springs } from "@/components/ui/motion";
 
@@ -225,9 +226,16 @@ export function UserCenterMenu({
       : moneyUnavailable
         ? "—"
         : formatMoney(user?.balance_nano_usd ?? "0");
+  const renderCoinValue = (value: string, iconClassName = "size-3") =>
+    value === "—" || value === "…"
+      ? <span>{value}</span>
+      : <CoinAmount value={value} iconClassName={iconClassName} />;
+  const balanceDisplay = user?.balance_unlimited
+    ? <span>{balanceLabel}</span>
+    : renderCoinValue(balanceLabel);
   const accountSummary = user?.billing_plan?.name
-    ? `${user.billing_plan.name} · ${balanceLabel}`
-    : balanceLabel;
+    ? <><span>{user.billing_plan.name} · </span>{balanceDisplay}</>
+    : balanceDisplay;
   const remainingFraction =
     user && user.billing_plan && !user.balance_unlimited
       ? planRemainingFraction(user.balance_nano_usd, user.billing_plan.grant_amount_nano_usd)
@@ -307,7 +315,7 @@ export function UserCenterMenu({
             <>
               <QuotaRow label={t("userMenu.balance", "Balance")}>
                 {moneyLoading ? <Skeleton className="h-4 w-16" /> : (
-                  <span className="font-mono text-xs font-medium tabular-nums">{balanceLabel}</span>
+                  <span className="font-mono text-xs font-medium tabular-nums">{balanceDisplay}</span>
                 )}
               </QuotaRow>
               {user.billing_plan ? (
@@ -318,7 +326,7 @@ export function UserCenterMenu({
                   <QuotaRow label={t("userMenu.grant", "Grant")}>
                     {moneyLoading ? <Skeleton className="h-4 w-24" /> : (
                       <span className="truncate font-mono text-xs tabular-nums">
-                        {moneyUnavailable ? "—" : formatMoney(user.billing_plan.grant_amount_nano_usd)}
+                        {moneyUnavailable ? "—" : renderCoinValue(formatMoney(user.billing_plan.grant_amount_nano_usd))}
                         <span className="text-muted-foreground">
                           {" · "}
                           {user.billing_plan.schedule}
