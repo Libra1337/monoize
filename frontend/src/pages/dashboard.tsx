@@ -13,8 +13,9 @@ import { TokenSummary } from "@/components/usage/token-summary";
 import { UsageTrendChart } from "@/components/usage/usage-trend-chart";
 import { useAuth } from "@/hooks/use-auth";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useDashboardAnalytics } from "@/lib/swr";
-import { formatCoinFromNanoUsd } from "@/lib/store-money";
+import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
 import { aggregateTokenTotals, formatCacheHitRate } from "@/lib/usage-analytics";
 import { cn } from "@/lib/utils";
 
@@ -92,6 +93,7 @@ export function DashboardPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const exchangeRate = useStoreExchangeRate(true);
+  const { currency } = useStoreCurrency();
   const [range, setRange] = useState<DashboardRange>("24h");
   const rangeConfig = DASHBOARD_RANGES[range];
   const summary = useDashboardAnalytics(8, 720, "self", {
@@ -113,7 +115,7 @@ export function DashboardPage() {
   const cnyPerUsd = exchangeRate.data?.cny_per_usd;
   const moneyLoading = !cnyPerUsd && exchangeRate.isLoading;
   const displayMoney = (nanoUsd: string | null | undefined) => {
-    return cnyPerUsd ? formatCoinFromNanoUsd(nanoUsd ?? "0", cnyPerUsd) : "—";
+    return cnyPerUsd ? formatCoinFromNanoUsdForCurrency(nanoUsd ?? "0", currency, cnyPerUsd) : "—";
   };
   const displayCoin = (nanoUsd: string | null | undefined) => {
     const value = displayMoney(nanoUsd);

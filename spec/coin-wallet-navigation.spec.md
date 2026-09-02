@@ -28,7 +28,7 @@ CN-9. `/dashboard/wallet` is an authenticated child page. It contains available 
 
 CN-10. `/dashboard/store` contains only balance top-up and plan purchase flows. It MUST NOT render account summary, redemption entry, or order history.
 
-CN-13. `/api/dashboard/wallet/ledger` MUST require an authenticated user and return at most 50 entries for that user, ordered by `created_at` descending and `id` descending.
+CN-13. `/api/dashboard/wallet/ledger` MUST require an authenticated user and accept an optional `limit` query parameter. The server MUST clamp it to `1..=50`, return at most that many entries for the user, and order rows by `created_at` descending and `id` descending. The Wallet page MUST default to 10 entries and offer 10, 25, and 50 entry choices.
 The frontend API client MUST call this endpoint through its `/api/dashboard` base URL as `/wallet/ledger`; it MUST NOT duplicate the `/dashboard` path segment.
 
 CN-14. Each ledger entry MUST include `id`, `kind`, signed `delta_nano_usd`, optional `balance_after_nano_usd`, `meta`, and RFC 3339 `created_at`. The endpoint MUST never return another user's entry.

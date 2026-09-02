@@ -9,9 +9,10 @@ import { CoinAmount } from "@/components/coin-amount";
 import { PageWrapper } from "@/components/ui/motion";
 import { useAuth } from "@/hooks/use-auth";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { api, type BillingLedgerEntry } from "@/lib/api";
 import { storeApi } from "@/lib/store-api";
-import { formatCoinFromNanoUsd } from "@/lib/store-money";
+import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
 import { RedemptionPanel } from "./store/redemption-panel";
 import { OrdersPage } from "./orders";
 
@@ -22,16 +23,18 @@ export function WalletPage() {
   const { user, refreshUser } = useAuth();
   const [redeeming, setRedeeming] = useState(false);
   const [walletSection, setWalletSection] = useState<"ledger" | "orders">("ledger");
+  const [ledgerLimit, setLedgerLimit] = useState(10);
   const exchangeRate = useStoreExchangeRate(true);
+  const { currency } = useStoreCurrency();
   const entitlement = useSWR(ENTITLEMENT_KEY, storeApi.getEntitlement);
   const monthStart = useMemo(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   }, []);
   const monthlyUsage = useSWR(["wallet-monthly-usage", monthStart], () => api.listRequestLogs(1, 0, { time_from: monthStart }));
-  const ledger = useSWR("/api/dashboard/wallet/ledger", () => api.listWalletLedger());
+  const ledger = useSWR(["/api/dashboard/wallet/ledger", ledgerLimit], () => api.listWalletLedger(ledgerLimit));
   const rate = exchangeRate.data?.cny_per_usd;
-  const formatCoin = (value: string | null | undefined) => rate ? formatCoinFromNanoUsd(value ?? "0", rate) : "--";
+  const formatCoin = (value: string | null | undefined) => rate ? formatCoinFromNanoUsdForCurrency(value ?? "0", currency, rate) : "--";
   const ledgerLabel = (entry: BillingLedgerEntry) => t(`wallet.ledger.kinds.${entry.kind}`, { defaultValue: entry.kind });
 
   const handleRedeem = async (code: string) => {
@@ -55,7 +58,7 @@ export function WalletPage() {
       <Card className="rounded-2xl"><CardContent className="p-5"><div className="mb-4 flex items-center gap-2"><WalletCards className="size-5 text-primary" /><h2 className="font-display text-base font-semibold">{t("wallet.redemptionTitle")}</h2></div><RedemptionPanel onRedeem={handleRedeem} redeeming={redeeming} /></CardContent></Card>
       <section aria-labelledby="wallet-records-title">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h2 id="wallet-records-title" className="font-display text-lg font-semibold">{t("wallet.recordsTitle")}</h2>
+          <div className="flex items-center gap-3"><h2 id="wallet-records-title" className="font-display text-lg font-semibold">{t("wallet.recordsTitle")}</h2>{walletSection === "ledger" ? <label className="flex items-center gap-2 text-xs text-muted-foreground"><span>{t("wallet.ledger.limit")}</span><select value={ledgerLimit} onChange={(event) => setLedgerLimit(Number(event.target.value))} className="h-9 rounded-lg border bg-background px-2 text-foreground"><option value="10">10</option><option value="25">25</option><option value="50">50</option></select></label> : null}</div>
           <div className="grid grid-cols-2 rounded-xl bg-muted p-1" role="tablist" aria-label={t("wallet.recordsTitle")}>
             {(["ledger", "orders"] as const).map((section) => (
               <button key={section} type="button" role="tab" aria-selected={walletSection === section} onClick={() => setWalletSection(section)} className={`min-h-10 rounded-lg px-4 text-sm font-medium transition-colors ${walletSection === section ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}>
@@ -68,16 +71,16 @@ export function WalletPage() {
           ledger.isLoading ? <div className="grid gap-2" aria-hidden="true">{[0, 1, 2].map((item) => <Skeleton key={item} className="h-16 rounded-xl" />)}</div>
             : ledger.error ? <Card className="rounded-2xl border-destructive/40"><CardContent className="p-6 text-sm text-destructive">{t("wallet.ledger.loadFailed")}</CardContent></Card>
               : !ledger.data?.length ? <Card className="rounded-2xl"><CardContent className="p-8 text-center text-sm text-muted-foreground">{t("wallet.ledger.empty")}</CardContent></Card>
-                : <div className="divide-y overflow-hidden rounded-2xl border bg-card">{ledger.data.map((entry) => <LedgerRow key={entry.id} entry={entry} label={ledgerLabel(entry)} rate={rate} />)}</div>
+                : <div className="divide-y overflow-hidden rounded-2xl border bg-card">{ledger.data.map((entry) => <LedgerRow key={entry.id} entry={entry} label={ledgerLabel(entry)} rate={rate} currency={currency} />)}</div>
         )}
       </section>
     </PageWrapper>
   );
 }
 
-function LedgerRow({ entry, label, rate }: { entry: BillingLedgerEntry; label: string; rate?: string }) {
+function LedgerRow({ entry, label, rate, currency }: { entry: BillingLedgerEntry; label: string; rate?: string; currency: "CNY" | "USD" }) {
   const positive = !entry.delta_nano_usd.startsWith("-") && entry.delta_nano_usd !== "0";
-  const value = rate ? formatCoinFromNanoUsd(entry.delta_nano_usd, rate) : "--";
+  const value = rate ? formatCoinFromNanoUsdForCurrency(entry.delta_nano_usd, currency, rate) : "--";
   const meta = typeof entry.meta?.model === "string" ? entry.meta.model : typeof entry.meta?.order_id === "string" ? `#${entry.meta.order_id}` : null;
   return (
     <div className="flex items-center justify-between gap-4 px-4 py-4 sm:px-5">

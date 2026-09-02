@@ -31,7 +31,7 @@ import {
 import {
   addMinor,
   convertMinor,
-  formatCoinFromMinor,
+  formatCoinFromMinorForCurrency,
   formatMinor,
   formatPlanQuotaCoin,
   type StoreCurrency,
@@ -217,17 +217,18 @@ function ProductPicker({
                   {selected && <Check className="size-5 shrink-0" />}
                 </span>
                 <span className="mt-4 text-xl font-semibold">
-                  <CoinAmount value={formatCoinFromMinor(product.price_minor, product.price_currency, cnyPerUsd)} />
+                  <CoinAmount value={formatCoinFromMinorForCurrency(product.price_minor, product.price_currency, currency, cnyPerUsd)} />
                 </span>
                 {product.balance && (
                   <span className="mt-3 grid gap-1 text-xs text-muted-foreground">
                     <span>
-                      {t("store.balanceProduct.bonus")}: <CoinAmount value={formatCoinFromMinor(product.balance.bonus_minor, product.price_currency, cnyPerUsd)} />
+                      {t("store.balanceProduct.bonus")}: <CoinAmount value={formatCoinFromMinorForCurrency(product.balance.bonus_minor, product.price_currency, currency, cnyPerUsd)} />
                     </span>
                     <span className="font-medium text-foreground">
-                      {t("store.balanceProduct.actualReceived")}: <CoinAmount value={formatCoinFromMinor(
+                      {t("store.balanceProduct.actualReceived")}: <CoinAmount value={formatCoinFromMinorForCurrency(
                         addMinor(product.balance.recharge_minor, product.balance.bonus_minor),
                         product.price_currency,
+                        currency,
                         cnyPerUsd,
                       )} />
                     </span>

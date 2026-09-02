@@ -247,7 +247,7 @@
 		"redemptionTitle": "Redeem a code",
 		"recordsTitle": "Balance activity",
 		"tabs": { "ledger": "Ledger", "orders": "Orders" },
-		"ledger": { "empty": "No balance activity", "loadFailed": "Balance activity could not be loaded", "kinds": { "store_recharge": "Recharge", "redemption_credit": "Redemption credit", "request_charge": "API usage", "admin_adjustment": "Admin adjustment", "admin_sub_account_adjustment": "Admin adjustment", "sub_account_refund": "Sub-account refund", "sub_account_debt_transfer": "Sub-account transfer", "plan_grant": "Plan grant" } }
+		"ledger": { "limit": "Show entries", "empty": "No balance activity", "loadFailed": "Balance activity could not be loaded", "kinds": { "store_recharge": "Recharge", "redemption_credit": "Redemption credit", "request_charge": "API usage", "admin_adjustment": "Admin adjustment", "admin_sub_account_adjustment": "Admin adjustment", "sub_account_refund": "Sub-account refund", "sub_account_debt_transfer": "Sub-account transfer", "plan_grant": "Plan grant" } }
 	},
 	"store": {
 		"ui": {

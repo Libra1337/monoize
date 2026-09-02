@@ -3,6 +3,7 @@ import useSWR from "swr";
 import { useTranslation } from "react-i18next";
 import { Boxes, CircleDollarSign, RefreshCw, Search, Store } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { CoinAmount } from "@/components/coin-amount";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,6 +26,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
+import type { StoreCurrency } from "@/lib/store-money";
 import {
   marketplaceRequest,
   type MarketplaceItem,
@@ -71,28 +73,31 @@ function MarketplaceSkeleton() {
 
 function CurrencyControl({ unavailable: _unavailable }: { unavailable: boolean }) {
   const { t } = useTranslation();
+  const { currency, setCurrency } = useStoreCurrency();
   void _unavailable;
-  return (
-    <div className="flex min-h-11 items-center rounded-lg border bg-muted/45 px-3 text-sm font-semibold" aria-label={t("modelMarketplace.currency")}>
-      C
-    </div>
-  );
+  return <div className="grid min-h-11 grid-cols-2 rounded-lg border bg-muted/45 p-1" role="group" aria-label={t("modelMarketplace.currency")}>
+    {(["CNY", "USD"] as StoreCurrency[]).map((value) => <button key={value} type="button" aria-pressed={currency === value} onClick={() => setCurrency(value)} className={`rounded-md px-3 text-xs font-medium transition-colors ${currency === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+      {value === "CNY" ? "¥ CNY" : "$ USD"}
+    </button>)}
+  </div>;
 }
 
 function ModelRow({
   item,
   currencyRate,
+  currency,
   onOpen,
 }: {
   item: MarketplaceItem;
   currencyRate: string | null;
+  currency: StoreCurrency;
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
   const canPrice = currencyRate !== null;
   const price = (range: MarketplaceItem["input_rate_range"]) => {
     if (!range || !canPrice) return t("modelMarketplace.unavailable");
-    return formatMarketplaceRateRange(range, "USD", currencyRate ?? "1");
+    return formatMarketplaceRateRange(range, currency, currencyRate ?? "1");
   };
 
   return (
@@ -109,11 +114,11 @@ function ModelRow({
       </div>
       <div>
         <div className="text-xs text-muted-foreground">{t("modelMarketplace.inputPrice")}</div>
-        <div className="mt-1 font-mono text-xs font-medium tabular-nums">{price(item.input_rate_range)}</div>
+        <div className="mt-1 font-mono text-xs font-medium tabular-nums">{item.input_rate_range && canPrice ? <CoinAmount value={price(item.input_rate_range)} /> : price(item.input_rate_range)}</div>
       </div>
       <div>
         <div className="text-xs text-muted-foreground">{t("modelMarketplace.outputPrice")}</div>
-        <div className="mt-1 font-mono text-xs font-medium tabular-nums">{price(item.output_rate_range)}</div>
+        <div className="mt-1 font-mono text-xs font-medium tabular-nums">{item.output_rate_range && canPrice ? <CoinAmount value={price(item.output_rate_range)} /> : price(item.output_rate_range)}</div>
       </div>
       <Badge className="w-fit justify-self-start md:justify-self-end" variant="secondary">
         {t("modelMarketplace.offerCount", { count: item.offer_count })}
@@ -125,7 +130,6 @@ function ModelRow({
 export function ModelMarketplacePage() {
   const { t } = useTranslation();
   const { currency } = useStoreCurrency();
-  void currency;
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search.trim());
   const [group, setGroup] = useState(ALL);
@@ -299,6 +303,7 @@ export function ModelMarketplacePage() {
                       key={`${item.public_group_name}:${item.model}`}
                       item={item}
                       currencyRate={cnyRate}
+                      currency={currency}
                       onOpen={() => {
                         setSelected({ ...item, revision: catalogRevision });
                         setOfferLoadCursor(null);
@@ -371,7 +376,7 @@ export function ModelMarketplacePage() {
                           {[rate.context_tier, rate.service_tier, rate.modality, rate.cache_ttl].filter(Boolean).map((value) => <Badge key={value} variant="secondary">{value}</Badge>)}
                         </dt>
                         <dd className="font-mono text-xs font-medium tabular-nums">
-                          {cnyRate ? formatMarketplaceRate(rate.display_rate_nano_usd, rate.unit, "USD", cnyRate) : t("modelMarketplace.unavailable")}
+                          {cnyRate ? <CoinAmount value={formatMarketplaceRate(rate.display_rate_nano_usd, rate.unit, currency, cnyRate)} /> : t("modelMarketplace.unavailable")}
                         </dd>
                       </div>
                     ))}

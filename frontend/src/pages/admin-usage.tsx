@@ -21,9 +21,10 @@ import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/use-auth";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
 import type { AdminUsageUserRow, UsageRankingRange } from "@/lib/api";
 import { useAdminUsageRanking } from "@/lib/swr";
-import { formatCoinFromNanoUsd } from "@/lib/store-money";
+import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
 import { cn } from "@/lib/utils";
 
 function integer(value: string): bigint {
@@ -61,6 +62,7 @@ export function AdminUsagePage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
   const exchangeRate = useStoreExchangeRate(true);
+  const { currency } = useStoreCurrency();
   const [range, setRange] = useState<UsageRankingRange>("24h");
   const { data, error, isLoading, isValidating, mutate } = useAdminUsageRanking(range);
   const [selected, setSelected] = useState<AdminUsageUserRow | null>(null);
@@ -96,7 +98,7 @@ export function AdminUsagePage() {
   const cnyPerUsd = exchangeRate.data?.cny_per_usd;
   const moneyLoading = isAdmin && !cnyPerUsd && exchangeRate.isLoading;
   const formatCost = (nanoUsd: string | null | undefined) => {
-    return cnyPerUsd ? formatCoinFromNanoUsd(nanoUsd ?? "0", cnyPerUsd) : "—";
+    return cnyPerUsd ? formatCoinFromNanoUsdForCurrency(nanoUsd ?? "0", currency, cnyPerUsd) : "—";
   };
   const rankingSummaryLabel = t("adminUsage.currentRank");
   const rankingSummaryValue = data.current_user_rank != null

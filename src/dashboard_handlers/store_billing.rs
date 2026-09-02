@@ -1207,14 +1207,21 @@ pub async fn get_store_retention_admin(
 pub async fn list_wallet_ledger(
     State(state): State<AppState>,
     headers: HeaderMap,
+    query: Result<Query<WalletLedgerQuery>, QueryRejection>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
+    let query = parse_store_query(query)?;
     let entries = state
         .user_store
-        .list_billing_ledger(&user.id, 50)
+        .list_billing_ledger(&user.id, query.limit.unwrap_or(50))
         .await
         .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?;
     Ok(Json(entries))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WalletLedgerQuery {
+    pub limit: Option<u64>,
 }
 
 pub async fn get_store_primary_status_admin(

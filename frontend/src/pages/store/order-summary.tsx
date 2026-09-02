@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { CoinAmount } from "@/components/coin-amount";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { StorePaymentChannel, StoreProduct } from "@/lib/store-api";
-import { addMinor, formatCoinFromMinor, type StoreCurrency } from "@/lib/store-money";
+import { addMinor, formatCoinFromMinorForCurrency, type StoreCurrency } from "@/lib/store-money";
 
 interface OrderSummaryProps {
   product: StoreProduct | null;
@@ -30,8 +30,8 @@ export function OrderSummary({
   const { t } = useTranslation();
   const totalCoin = product
     ? customRechargeMinor !== null
-      ? formatCoinFromMinor(customRechargeMinor, currency, cnyPerUsd)
-      : formatCoinFromMinor(product.price_minor, product.price_currency, cnyPerUsd)
+      ? formatCoinFromMinorForCurrency(customRechargeMinor, currency, currency, cnyPerUsd)
+      : formatCoinFromMinorForCurrency(product.price_minor, product.price_currency, currency, cnyPerUsd)
     : null;
   return (
     <Card className="min-h-[260px] rounded-2xl">
@@ -53,10 +53,11 @@ export function OrderSummary({
               <dt className="text-muted-foreground">{t("store.summary.actualReceived")}</dt>
               <dd className="text-right font-medium">
                 <CoinAmount value={customRechargeMinor !== null
-                  ? formatCoinFromMinor(customRechargeMinor, currency, cnyPerUsd)
-                  : formatCoinFromMinor(
+                  ? formatCoinFromMinorForCurrency(customRechargeMinor, currency, currency, cnyPerUsd)
+                  : formatCoinFromMinorForCurrency(
                       addMinor(product.balance.recharge_minor, product.balance.bonus_minor),
                       product.price_currency,
+                      currency,
                       cnyPerUsd,
                     )} />
               </dd>
