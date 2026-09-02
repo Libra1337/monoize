@@ -35,9 +35,11 @@ CN-14. Each ledger entry MUST include `id`, `kind`, signed `delta_nano_usd`, opt
 
 CN-15. The Wallet page MUST render ledger entries as a chronological balance statement. It MUST distinguish positive and negative deltas, show the entry kind and timestamp, and convert amounts to Coin using the current exchange-rate snapshot.
 
-CN-16. Coin amounts MUST use the shared graphical Coin mark component. The component MUST render a self-contained coin SVG with a rim and embossed center detail. User-facing balance, ledger, Store, Marketplace, Dashboard, and Usage values MUST NOT use a plain `C` character as the currency logo or a text `C` prefix.
+CN-16. Coin amounts MUST use the shared graphical Coin mark component. User-facing balance, ledger, Store, Marketplace, Dashboard, Usage, and order values MUST NOT use a plain `C` character as the currency logo or a text `C` prefix.
 
 CN-17. Redemption input MUST be a single compact action row without a nested card. Order history MUST be available through its own Wallet tab and MUST not be mixed into the ledger list.
+
+CN-18. Wallet order history and order details MUST render payment amounts with the shared Coin mark component. The amount MUST use the selected display currency and the current valid exchange-rate snapshot.
 
 ## Sidebar
 

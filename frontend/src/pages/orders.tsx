@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import useSWR, { mutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { CoinAmount } from "@/components/coin-amount";
 import {
   Dialog,
   DialogContent,
@@ -15,8 +16,9 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/use-auth";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { storeApi, type StoreOrder } from "@/lib/store-api";
-import { convertMinor } from "@/lib/store-money";
+import { formatCoinFromMinorForCurrency } from "@/lib/store-money";
 import { isPaymentPollingTerminal } from "./store/checkout-state";
 
 const ORDERS_KEY = "/api/dashboard/store/orders";
@@ -44,16 +46,13 @@ export function OrdersPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, i18n } = useTranslation();
   const { refreshUser } = useAuth();
   const exchangeRate = useStoreExchangeRate(true);
+  const { currency } = useStoreCurrency();
   const [selectedOrder, setSelectedOrder] = useState<StoreOrder | null>(null);
   const orders = useSWR(ORDERS_KEY, () => storeApi.listOrders(100));
   const formatOrderAmount = (order: StoreOrder) => {
     const cnyRate = exchangeRate.data?.cny_per_usd;
     if (!cnyRate) return "--";
-    const cents = order.payment_currency === "USD"
-      ? convertMinor(order.payment_minor, "USD", "CNY", cnyRate)
-      : order.payment_minor;
-    const amount = BigInt(cents);
-    return `C${(amount / 100n).toString()}.${(amount % 100n).toString().padStart(2, "0")}`;
+    return <CoinAmount value={formatCoinFromMinorForCurrency(order.payment_minor, order.payment_currency, currency, cnyRate)} />;
   };
 
   useEffect(() => {
