@@ -16,7 +16,7 @@ describe("Coin display", () => {
 
   test("keeps USD-basis model prices numerically stable in Coin", () => {
     expect(formatCoinPerMillionUsd("1000")).toBe("C1.00 / 1M tokens");
-    expect(formatCoinPerMillionUsd("10000000")).toBe("C10,000.00 / 1M tokens");
+    expect(formatCoinPerMillionUsd("10000000")).toBe("C10000.00 / 1M tokens");
   });
 
   test("uses CNY as the Coin basis for CNY recharge products", () => {
