@@ -2366,6 +2366,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             get(crate::dashboard_handlers::get_store_entitlement),
         )
         .route(
+            "/dashboard/wallet/ledger",
+            get(crate::dashboard_handlers::list_wallet_ledger),
+        )
+        .route(
             "/dashboard/store/orders",
             get(crate::dashboard_handlers::list_store_orders),
         )

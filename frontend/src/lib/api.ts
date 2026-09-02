@@ -134,6 +134,15 @@ export interface ApiKeyChannelBinding {
   channel_id: string;
 }
 
+export interface BillingLedgerEntry {
+  id: string;
+  kind: string;
+  delta_nano_usd: string;
+  balance_after_nano_usd: string | null;
+  meta: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface ApiKeyChannelConflict {
   group_id: string;
   group_name: string;
@@ -1338,6 +1347,10 @@ class ApiClient {
 
   async getMyLiveUsage(): Promise<UserLiveUsage> {
     return this.request("/me/live-usage");
+  }
+
+  async listWalletLedger(limit = 50): Promise<BillingLedgerEntry[]> {
+    return this.request(`/wallet/ledger?limit=${Math.min(Math.max(limit, 1), 50)}`);
   }
 
   async getAdminOverview(): Promise<AdminOverview> {

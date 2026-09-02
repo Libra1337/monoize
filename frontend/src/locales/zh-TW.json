@@ -245,7 +245,9 @@
 		"monthlyUsage": "本月用量",
 		"currentPlan": "目前方案",
 		"redemptionTitle": "兌換碼",
-		"orders": "訂單記錄"
+		"recordsTitle": "餘額記錄",
+		"tabs": { "ledger": "帳單明細", "orders": "訂單記錄" },
+		"ledger": { "empty": "目前沒有餘額記錄", "loadFailed": "無法載入餘額記錄", "kinds": { "store_recharge": "儲值入帳", "redemption_credit": "兌換碼入帳", "request_charge": "API 用量扣費", "admin_adjustment": "管理員調整", "admin_sub_account_adjustment": "管理員調整", "sub_account_refund": "子帳戶退回", "sub_account_debt_transfer": "子帳戶轉移", "plan_grant": "方案贈送" } }
 	},
 	"store": {
 		"ui": {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   formatCoinFromNanoUsd,
   formatCoinPerMillionUsd,
@@ -6,6 +7,8 @@ import {
 } from "../src/lib/store-money";
 
 describe("Coin display", () => {
+  const walletSource = readFileSync(new URL("../src/pages/wallet.tsx", import.meta.url), "utf8");
+
   test("converts wallet nano-USD balances through the CNY/USD snapshot", () => {
     expect(formatCoinFromNanoUsd("1000000000", "7.2")).toBe("C7.20");
   });
@@ -21,5 +24,11 @@ describe("Coin display", () => {
 
   test("converts USD recharge products to equivalent Coin at the quote rate", () => {
     expect(formatCoinFromMinor("1000", "USD", "7.2")).toBe("C72.00");
+  });
+
+  test("wallet exposes a user-scoped ledger and Coin mark", () => {
+    expect(walletSource).toContain("/api/dashboard/wallet/ledger");
+    expect(walletSource).toContain("CoinAmount");
+    expect(walletSource).toContain("const ledger = useSWR");
   });
 });

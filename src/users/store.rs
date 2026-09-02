@@ -2,7 +2,8 @@ use super::utils::parse_nano_usd;
 use super::{
     AdminUpdateUserInput, ApiKey, ApiKeyChannelBinding, BillingError, BillingErrorKind,
     CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule, RESERVED_INTERNAL_USER_PREFIX,
-    RegisterUserError, RequestCaptureMode, Session, UpdateApiKeyInput, User, UserBalance, UserRole,
+    BillingLedgerEntry, RegisterUserError, RequestCaptureMode, Session, UpdateApiKeyInput, User,
+    UserBalance, UserRole,
     UserStore, canonicalize_channel_bindings, canonicalize_group_ids, compile_model_redirects,
     validate_model_redirects,
 };
@@ -724,6 +725,57 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         rows.iter().map(|row| self.row_to_user(row)).collect()
+    }
+
+    pub async fn list_billing_ledger(
+        &self,
+        user_id: &str,
+        limit: u64,
+    ) -> Result<Vec<BillingLedgerEntry>, String> {
+        let limit = limit.clamp(1, 50) as i64;
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at
+                 FROM billing_ledger
+                 WHERE user_id = $1
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT $2",
+                vec![user_id.into(), limit.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+
+        rows.into_iter()
+            .map(|row| {
+                let created_at = row
+                    .try_get::<String>("", "created_at")
+                    .map_err(|error| error.to_string())?
+                    .parse::<DateTime<Utc>>()
+                    .map_err(|error| error.to_string())?;
+                let meta_json = row
+                    .try_get::<String>("", "meta_json")
+                    .map_err(|error| error.to_string())?;
+                let meta = serde_json::from_str(&meta_json).map_err(|error| error.to_string())?;
+                Ok(BillingLedgerEntry {
+                    id: row
+                        .try_get("", "id")
+                        .map_err(|error| error.to_string())?,
+                    kind: row
+                        .try_get("", "kind")
+                        .map_err(|error| error.to_string())?,
+                    delta_nano_usd: row
+                        .try_get("", "delta_nano_usd")
+                        .map_err(|error| error.to_string())?,
+                    balance_after_nano_usd: row
+                        .try_get("", "balance_after_nano_usd")
+                        .map_err(|error| error.to_string())?,
+                    meta,
+                    created_at,
+                })
+            })
+            .collect()
     }
 
     pub async fn update_usage_ranking_anonymous(&self, id: &str, anonymous: bool) -> Result<(), String> {

@@ -96,6 +96,16 @@ pub struct UserBalance {
     pub balance_unlimited: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BillingLedgerEntry {
+    pub id: String,
+    pub kind: String,
+    pub delta_nano_usd: String,
+    pub balance_after_nano_usd: Option<String>,
+    pub meta: Value,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BillingErrorKind {
     NotFound,

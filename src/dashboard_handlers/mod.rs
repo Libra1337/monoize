@@ -81,6 +81,7 @@ pub use store_billing::{
     list_all_store_orders_admin,
     list_store_orders, list_store_payment_capabilities_admin, list_store_payment_channels_admin,
     list_store_privacy_records_admin, list_store_products_admin, list_store_redemption_codes_admin,
+    list_wallet_ledger,
     put_store_channel_readiness_admin, put_store_payment_capability_admin, query_store_order_admin,
     query_store_refund_admin, redeem_store_code, replace_store_payment_credential_admin,
     reprocess_store_provider_event_admin, reveal_store_redemption_codes_admin,

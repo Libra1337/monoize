@@ -1204,6 +1204,19 @@ pub async fn get_store_retention_admin(
     Ok((no_store_headers(), Json(overview)))
 }
 
+pub async fn list_wallet_ledger(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let entries = state
+        .user_store
+        .list_billing_ledger(&user.id, 50)
+        .await
+        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?;
+    Ok(Json(entries))
+}
+
 pub async fn get_store_primary_status_admin(
     State(state): State<AppState>,
     headers: HeaderMap,

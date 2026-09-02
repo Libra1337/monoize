@@ -28,6 +28,16 @@ CN-9. `/dashboard/wallet` is an authenticated child page. It contains available 
 
 CN-10. `/dashboard/store` contains only balance top-up and plan purchase flows. It MUST NOT render account summary, redemption entry, or order history.
 
+CN-13. `/api/dashboard/wallet/ledger` MUST require an authenticated user and return at most 50 entries for that user, ordered by `created_at` descending and `id` descending.
+
+CN-14. Each ledger entry MUST include `id`, `kind`, signed `delta_nano_usd`, optional `balance_after_nano_usd`, `meta`, and RFC 3339 `created_at`. The endpoint MUST never return another user's entry.
+
+CN-15. The Wallet page MUST render ledger entries as a chronological balance statement. It MUST distinguish positive and negative deltas, show the entry kind and timestamp, and convert amounts to Coin using the current exchange-rate snapshot.
+
+CN-16. Coin amounts MUST use a graphical Coin mark component. User-facing balance, ledger, Store, Marketplace, Dashboard, and Usage values MUST NOT use a plain `C` character as the currency logo.
+
+CN-17. Redemption input MUST be a single compact action row without a nested card. Order history MUST be available through its own Wallet tab and MUST not be mixed into the ledger list.
+
 ## Sidebar
 
 CN-11. The desktop sidebar provides one persistent toggle that animates between expanded and collapsed widths. Collapsed navigation preserves icon actions and exposes labels through tooltips.

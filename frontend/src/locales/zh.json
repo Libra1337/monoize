@@ -245,7 +245,9 @@
 		"monthlyUsage": "本月用量",
 		"currentPlan": "当前套餐",
 		"redemptionTitle": "兑换码",
-		"orders": "订单记录"
+		"recordsTitle": "余额记录",
+		"tabs": { "ledger": "账单明细", "orders": "订单记录" },
+		"ledger": { "empty": "暂无余额记录", "loadFailed": "余额记录加载失败", "kinds": { "store_recharge": "充值到账", "redemption_credit": "兑换码到账", "request_charge": "API 用量扣费", "admin_adjustment": "管理员调整", "admin_sub_account_adjustment": "管理员调整", "sub_account_refund": "子账户退回", "sub_account_debt_transfer": "子账户转移", "plan_grant": "套餐赠送" } }
 	},
 	"store": {
 		"ui": {

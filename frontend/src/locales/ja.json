@@ -245,7 +245,9 @@
 		"monthlyUsage": "今月の使用量",
 		"currentPlan": "現在のプラン",
 		"redemptionTitle": "コードを引き換える",
-		"orders": "注文履歴"
+		"recordsTitle": "残高履歴",
+		"tabs": { "ledger": "明細", "orders": "注文" },
+		"ledger": { "empty": "残高履歴はありません", "loadFailed": "残高履歴を読み込めませんでした", "kinds": { "store_recharge": "チャージ", "redemption_credit": "コード交換", "request_charge": "API 使用量", "admin_adjustment": "管理者調整", "admin_sub_account_adjustment": "管理者調整", "sub_account_refund": "サブアカウント返却", "sub_account_debt_transfer": "サブアカウント移動", "plan_grant": "プラン付与" } }
 	},
 	"store": {
 		"ui": {
