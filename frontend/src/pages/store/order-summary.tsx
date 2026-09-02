@@ -1,6 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { CoinAmount } from "@/components/coin-amount";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { StorePaymentChannel, StoreProduct } from "@/lib/store-api";
 import { addMinor, formatCoinFromMinor, type StoreCurrency } from "@/lib/store-money";
@@ -51,13 +52,13 @@ export function OrderSummary({
             <div className="flex items-start justify-between gap-4">
               <dt className="text-muted-foreground">{t("store.summary.actualReceived")}</dt>
               <dd className="text-right font-medium">
-                {customRechargeMinor !== null
+                <CoinAmount value={customRechargeMinor !== null
                   ? formatCoinFromMinor(customRechargeMinor, currency, cnyPerUsd)
                   : formatCoinFromMinor(
                       addMinor(product.balance.recharge_minor, product.balance.bonus_minor),
                       product.price_currency,
                       cnyPerUsd,
-                    )}
+                    )} />
               </dd>
             </div>
           )}
@@ -66,7 +67,7 @@ export function OrderSummary({
           <div>
             <p className="text-xs text-muted-foreground">{t("store.summary.total")}</p>
             <p className="text-xl font-semibold">
-              {totalCoin ?? "-"}
+              {totalCoin ? <CoinAmount value={totalCoin} /> : "-"}
             </p>
           </div>
           <Button

@@ -8,6 +8,7 @@ import {
 
 describe("Coin display", () => {
   const walletSource = readFileSync(new URL("../src/pages/wallet.tsx", import.meta.url), "utf8");
+  const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
 
   test("converts wallet nano-USD balances through the CNY/USD snapshot", () => {
     expect(formatCoinFromNanoUsd("1000000000", "7.2")).toBe("C7.20");
@@ -27,8 +28,10 @@ describe("Coin display", () => {
   });
 
   test("wallet exposes a user-scoped ledger and Coin mark", () => {
-    expect(walletSource).toContain("/api/dashboard/wallet/ledger");
-    expect(walletSource).toContain("CoinAmount");
     expect(walletSource).toContain("const ledger = useSWR");
+    expect(walletSource).toContain("useSWR(\"/api/dashboard/wallet/ledger\", () => api.listWalletLedger())");
+    expect(apiSource).toContain('this.request(`/wallet/ledger?limit=');
+    expect(apiSource).not.toContain('this.request(`/dashboard/wallet/ledger?limit=');
+    expect(walletSource).toContain("CoinAmount");
   });
 });

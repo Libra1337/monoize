@@ -29,7 +29,7 @@ export function WalletPage() {
     return new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   }, []);
   const monthlyUsage = useSWR(["wallet-monthly-usage", monthStart], () => api.listRequestLogs(1, 0, { time_from: monthStart }));
-  const ledger = useSWR("/api/dashboard/wallet/ledger", api.listWalletLedger);
+  const ledger = useSWR("/api/dashboard/wallet/ledger", () => api.listWalletLedger());
   const rate = exchangeRate.data?.cny_per_usd;
   const formatCoin = (value: string | null | undefined) => rate ? formatCoinFromNanoUsd(value ?? "0", rate) : "--";
   const ledgerLabel = (entry: BillingLedgerEntry) => t(`wallet.ledger.kinds.${entry.kind}`, { defaultValue: entry.kind });

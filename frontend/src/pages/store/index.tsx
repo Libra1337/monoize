@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { QRCodeSVG } from "qrcode.react";
 import useSWR, { mutate } from "swr";
 import { Button } from "@/components/ui/button";
+import { CoinAmount } from "@/components/coin-amount";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -216,19 +217,19 @@ function ProductPicker({
                   {selected && <Check className="size-5 shrink-0" />}
                 </span>
                 <span className="mt-4 text-xl font-semibold">
-                  {formatCoinFromMinor(product.price_minor, product.price_currency, cnyPerUsd)}
+                  <CoinAmount value={formatCoinFromMinor(product.price_minor, product.price_currency, cnyPerUsd)} />
                 </span>
                 {product.balance && (
                   <span className="mt-3 grid gap-1 text-xs text-muted-foreground">
                     <span>
-                      {t("store.balanceProduct.bonus")}: {formatCoinFromMinor(product.balance.bonus_minor, product.price_currency, cnyPerUsd)}
+                      {t("store.balanceProduct.bonus")}: <CoinAmount value={formatCoinFromMinor(product.balance.bonus_minor, product.price_currency, cnyPerUsd)} />
                     </span>
                     <span className="font-medium text-foreground">
-                      {t("store.balanceProduct.actualReceived")}: {formatCoinFromMinor(
+                      {t("store.balanceProduct.actualReceived")}: <CoinAmount value={formatCoinFromMinor(
                         addMinor(product.balance.recharge_minor, product.balance.bonus_minor),
                         product.price_currency,
                         cnyPerUsd,
-                      )}
+                      )} />
                     </span>
                   </span>
                 )}
@@ -236,7 +237,7 @@ function ProductPicker({
                   <span className="mt-3 grid gap-1 text-xs text-muted-foreground">
                     {product.quotas.map((quota) => (
                       <span key={quota.id}>
-                        {quota.window_kind}: {formatPlanQuotaCoin(quota.quota_fen_cny)}
+                        {quota.window_kind}: <CoinAmount value={formatPlanQuotaCoin(quota.quota_fen_cny)} />
                       </span>
                     ))}
                   </span>

@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CoinAmount } from "@/components/coin-amount";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,7 +32,7 @@ function OverviewCard({
   index,
 }: {
   title: string;
-  rows: Array<{ label: string; value: string }>;
+  rows: Array<{ label: string; value: ReactNode }>;
   index: number;
 }) {
   return (
@@ -114,6 +115,10 @@ export function DashboardPage() {
   const displayMoney = (nanoUsd: string | null | undefined) => {
     return cnyPerUsd ? formatCoinFromNanoUsd(nanoUsd ?? "0", cnyPerUsd) : "—";
   };
+  const displayCoin = (nanoUsd: string | null | undefined) => {
+    const value = displayMoney(nanoUsd);
+    return value === "—" ? value : <CoinAmount value={value} />;
+  };
   const summaryTotals = summary.data ? aggregateTokenTotals(summary.data.buckets) : undefined;
   const overview = [
     {
@@ -121,11 +126,11 @@ export function DashboardPage() {
       rows: [
         {
           label: t("dashboard.cards.currentBalance"),
-          value: user?.balance_unlimited ? t("users.unlimited") : displayMoney(user?.balance_nano_usd),
+          value: user?.balance_unlimited ? t("users.unlimited") : displayCoin(user?.balance_nano_usd),
         },
         {
           label: t("dashboard.cards.subscription"),
-          value: plan ? `${plan.name} · ${displayMoney(plan.grant_amount_nano_usd)}/${plan.schedule}` : t("dashboard.cards.noPlan"),
+          value: plan ? <><span>{plan.name} · </span>{displayCoin(plan.grant_amount_nano_usd)}<span>/{plan.schedule}</span></> : t("dashboard.cards.noPlan"),
         },
       ],
     },
@@ -139,8 +144,8 @@ export function DashboardPage() {
     {
       title: t("dashboard.cards.costOverview"),
       rows: [
-        { label: t("dashboard.cards.totalSpend"), value: displayMoney(summary.data?.total_cost_nano_usd) },
-        { label: t("dashboard.cards.todaySpend"), value: displayMoney(summary.data?.today_cost_nano_usd) },
+        { label: t("dashboard.cards.totalSpend"), value: displayCoin(summary.data?.total_cost_nano_usd) },
+        { label: t("dashboard.cards.todaySpend"), value: displayCoin(summary.data?.today_cost_nano_usd) },
       ],
     },
     {

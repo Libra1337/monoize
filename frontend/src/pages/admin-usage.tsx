@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { AlertTriangle, ArrowUpRight, Coins, MousePointerClick, RefreshCw } from "lucide-react";
 
 import { RefreshStatusLogo } from "@/components/admin/refresh-status-logo";
+import { CoinAmount } from "@/components/coin-amount";
 import { AnimatedTokenValue } from "@/components/usage/token-summary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -155,7 +156,7 @@ export function AdminUsagePage() {
       <div className={cn("grid rounded-xl border bg-card sm:divide-x", isAdmin ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
         <div className="flex items-center gap-3 p-4"><MousePointerClick className="size-5 text-primary" /><div><p className="text-xs text-muted-foreground">{t("adminUsage.calls")}</p><p className="font-mono text-lg font-semibold">{data.total_calls.toLocaleString("en-US")}</p></div></div>
         {isAdmin ? (
-          <div className="flex items-center gap-3 border-t p-4 sm:border-t-0"><Coins className="size-5 text-warning" /><div><p className="text-xs text-muted-foreground">{t("adminUsage.cost")}</p>{moneyLoading ? <Skeleton className="mt-1 h-6 w-20" /> : <p className="font-mono text-lg font-semibold">{formatCost(data.total_cost_nano_usd)}</p>}</div></div>
+          <div className="flex items-center gap-3 border-t p-4 sm:border-t-0"><Coins className="size-5 text-warning" /><div><p className="text-xs text-muted-foreground">{t("adminUsage.cost")}</p>{moneyLoading ? <Skeleton className="mt-1 h-6 w-20" /> : <p className="font-mono text-lg font-semibold"><CoinAmount value={formatCost(data.total_cost_nano_usd)} /></p>}</div></div>
         ) : null}
         <div className="flex items-center gap-3 border-t p-4 sm:border-t-0"><ArrowUpRight className="size-5 text-success" /><div><p className="text-xs text-muted-foreground">{rankingSummaryLabel}</p><p className="font-mono text-lg font-semibold">{rankingSummaryValue}</p></div></div>
       </div>
@@ -201,7 +202,7 @@ export function AdminUsagePage() {
             <table className="w-full min-w-[620px] text-sm">
               <thead className="sticky top-0 bg-background"><tr className="border-b text-left text-xs text-muted-foreground"><th className="px-4 py-3 font-medium">{t("adminUsage.model")}</th><th className="px-3 py-3 text-right font-medium">Tokens</th><th className="px-3 py-3 text-right font-medium">{t("adminUsage.calls")}</th>{isAdmin ? <th className="px-4 py-3 text-right font-medium">{t("adminUsage.cost")}</th> : null}</tr></thead>
               <tbody>{selected?.models?.map((model) => (
-                <tr key={model.model} className="border-b last:border-b-0"><td className="max-w-72 truncate px-4 py-3 font-mono">{model.model}</td><td className="px-3 py-3 text-right font-mono">{formatInteger(totalTokens(model))}</td><td className="px-3 py-3 text-right font-mono">{model.call_count.toLocaleString("en-US")}</td>{isAdmin ? <td className="px-4 py-3 text-right font-mono">{moneyLoading ? <Skeleton className="ml-auto h-4 w-20" /> : formatCost(model.cost_nano_usd)}</td> : null}</tr>
+                <tr key={model.model} className="border-b last:border-b-0"><td className="max-w-72 truncate px-4 py-3 font-mono">{model.model}</td><td className="px-3 py-3 text-right font-mono">{formatInteger(totalTokens(model))}</td><td className="px-3 py-3 text-right font-mono">{model.call_count.toLocaleString("en-US")}</td>{isAdmin ? <td className="px-4 py-3 text-right font-mono">{moneyLoading ? <Skeleton className="ml-auto h-4 w-20" /> : <CoinAmount value={formatCost(model.cost_nano_usd)} />}</td> : null}</tr>
               ))}</tbody>
             </table>
           </div>
