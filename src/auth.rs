@@ -1,6 +1,6 @@
 use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
-use crate::users::{RequestCaptureMode, UserStore, resolve_effective_groups};
+use crate::users::{RequestCaptureMode, UserStore, resolve_effective_groups, restrict_effective_groups};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InternalRequestSource {
@@ -67,9 +67,23 @@ impl AuthState {
                     Ok(Some((api_key, user, plan_group_ids))) => {
                         // GR-I4: API-key auth always yields a concrete ordered list;
                         // `None` is reserved for internal system traffic.
-                        let effective_groups = Some(resolve_effective_groups(
+                        let resolved_groups = resolve_effective_groups(
                             &api_key.group_ids,
                             plan_group_ids.as_deref(),
+                        );
+                        let accessible_groups = match store
+                            .accessible_group_ids(&user.id, user.role)
+                            .await
+                        {
+                            Ok(groups) => groups,
+                            Err(error) => {
+                                tracing::error!(%error, "failed to resolve Group visibility");
+                                return None;
+                            }
+                        };
+                        let effective_groups = Some(restrict_effective_groups(
+                            &resolved_groups,
+                            &accessible_groups,
                         ));
                         return Some(AuthResult {
                             tenant_id: user.id.clone(),

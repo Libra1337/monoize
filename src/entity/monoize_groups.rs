@@ -12,6 +12,7 @@ pub struct Model {
     pub description: String,
     pub is_default: i32,
     pub user_selectable: i32,
+    pub is_public: i32,
     pub sort_order: i32,
     #[sea_orm(column_type = "Text")]
     pub created_at: String,

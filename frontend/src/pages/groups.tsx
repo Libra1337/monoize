@@ -132,7 +132,7 @@ export function GroupsPage() {
     setSaving(true);
     try {
       await createGroupOptimistic(
-        { ...validated, user_selectable: form.user_selectable },
+        { ...validated, is_public: form.user_selectable },
         groups,
         (error) => toast.error(error.message)
       );
@@ -153,7 +153,7 @@ export function GroupsPage() {
     try {
       await updateGroupOptimistic(
         editTarget.id,
-        { ...validated, user_selectable: form.user_selectable },
+        { ...validated, is_public: form.user_selectable },
         groups,
         (error) => toast.error(error.message)
       );
@@ -183,7 +183,7 @@ export function GroupsPage() {
   const toggleUserSelectable = async (group: Group, userSelectable: boolean) => {
     await updateGroupOptimistic(
       group.id,
-      { user_selectable: userSelectable },
+      { is_public: userSelectable },
       groups,
       (error) => toast.error(error.message)
     ).catch(() => undefined);
@@ -353,9 +353,6 @@ export function GroupsPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <span className="font-medium">{group.name}</span>
-                        {group.is_default && (
-                          <Badge variant="secondary">{t("groups.defaultBadge")}</Badge>
-                        )}
                       </div>
                     </td>
                     <td className="max-w-[20rem] px-4 py-3">
@@ -365,7 +362,7 @@ export function GroupsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <Switch
-                        checked={group.user_selectable}
+                        checked={group.is_public}
                         onCheckedChange={(checked) => toggleUserSelectable(group, checked)}
                       />
                     </td>
@@ -437,8 +434,6 @@ export function GroupsPage() {
                           size="icon"
                           className="size-11 touch-manipulation sm:size-9"
                           aria-label={t("common.delete")}
-                          disabled={group.is_default}
-                          title={group.is_default ? t("groups.cannotDeleteDefault") : undefined}
                           onClick={() => setDeleteTarget(group)}
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />

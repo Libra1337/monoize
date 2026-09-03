@@ -499,6 +499,7 @@ export async function createGroupOptimistic(
     description: (input.description ?? "").trim(),
     is_default: false,
     user_selectable: input.user_selectable ?? false,
+    is_public: input.is_public ?? true,
     sort_order: input.sort_order ?? 0,
     created_at: now,
     updated_at: now,
@@ -532,6 +533,7 @@ export async function updateGroupOptimistic(
             name: input.name ?? g.name,
             description: input.description ?? g.description,
             user_selectable: input.user_selectable ?? g.user_selectable,
+            is_public: input.is_public ?? g.is_public,
             sort_order: input.sort_order ?? g.sort_order,
             updated_at: new Date().toISOString(),
           }

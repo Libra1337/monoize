@@ -232,6 +232,33 @@ fn decode_request_capture_mode(row: &QueryResult) -> Result<RequestCaptureMode, 
 }
 
 impl UserStore {
+    pub(crate) async fn validate_api_key_group_selection_for_user(
+        &self,
+        user_id: &str,
+        group_ids: &[String],
+        is_admin: bool,
+    ) -> Result<(), String> {
+        if group_ids.len() > MAX_GROUP_IDS {
+            return Err(format!("at most {MAX_GROUP_IDS} groups can be selected"));
+        }
+        for id in group_ids {
+            let group = self
+                .get_group_by_id(id)
+                .await?
+                .ok_or_else(|| format!("unknown group id: {id}"))?;
+            if !is_admin && !group.is_public {
+                let granted = self.db.read().query_one(self.db.stmt(
+                    "SELECT 1 AS present FROM user_group_grants WHERE user_id = $1 AND group_id = $2 LIMIT 1",
+                    vec![user_id.into(), id.clone().into()],
+                )).await.map_err(|e| e.to_string())?.is_some();
+                if !granted {
+                    return Err(format!("group is not accessible: {}", group.name));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn api_key_batch_delete_max_ids() -> usize {
         api_key_batch_delete_max_ids()
     }
@@ -1428,14 +1455,9 @@ impl UserStore {
                     .to_string(),
             );
         }
-        let owner_group_id = self
-            .get_user_by_id(user_id)
-            .await?
-            .map(|user| user.group_id)
-            .unwrap_or_default();
         let group_ids = canonicalize_group_ids(&input.group_ids);
         if !group_ids.is_empty() {
-            self.validate_api_key_group_selection(&owner_group_id, &group_ids, is_admin)
+            self.validate_api_key_group_selection_for_user(user_id, &group_ids, is_admin)
                 .await?;
         }
         let channel_bindings = canonicalize_channel_bindings(&input.channel_bindings)?;
@@ -2597,12 +2619,7 @@ impl UserStore {
         }
 
         if group_fields_changed && !effective_group_ids.is_empty() {
-            let owner_group_id = self
-                .get_user_by_id(&existing_key.user_id)
-                .await?
-                .map(|user| user.group_id)
-                .unwrap_or_default();
-            self.validate_api_key_group_selection(&owner_group_id, &effective_group_ids, is_admin)
+            self.validate_api_key_group_selection_for_user(&existing_key.user_id, &effective_group_ids, is_admin)
                 .await?;
         }
 

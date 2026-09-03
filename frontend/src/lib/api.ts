@@ -23,6 +23,7 @@ export interface Group {
   description: string;
   is_default: boolean;
   user_selectable: boolean;
+  is_public: boolean;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -33,6 +34,7 @@ export interface CreateGroupInput {
   confirm_public_exposure?: boolean;
   description?: string;
   user_selectable?: boolean;
+  is_public?: boolean;
   sort_order?: number;
 }
 
@@ -41,6 +43,7 @@ export interface UpdateGroupInput {
   confirm_public_exposure?: boolean;
   description?: string;
   user_selectable?: boolean;
+  is_public?: boolean;
   sort_order?: number;
 }
 

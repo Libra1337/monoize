@@ -64,6 +64,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260829_000059_store_released_schema_repair::Migration),
             Box::new(m20260829_000060_api_key_channel_bindings::Migration),
             Box::new(m20260830_000061_usage_ranking_privacy::Migration),
+            Box::new(m20260904_000062_group_visibility::Migration),
         ]
     }
 }
@@ -257,6 +258,7 @@ mod m20260828_000058_store_retention_runtime;
 mod m20260829_000059_store_released_schema_repair;
 mod m20260829_000060_api_key_channel_bindings;
 mod m20260830_000061_usage_ranking_privacy;
+mod m20260904_000062_group_visibility;
 
 #[cfg(test)]
 mod tests {

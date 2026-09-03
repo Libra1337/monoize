@@ -5,6 +5,8 @@ use sea_orm::{ConnectionTrait, QueryResult, TransactionTrait, Value as SeaValue}
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+fn default_public() -> bool { true }
+
 /// One `monoize_groups` registry row (`groups-registry.spec.md` §1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Group {
@@ -13,6 +15,7 @@ pub struct Group {
     pub description: String,
     pub is_default: bool,
     pub user_selectable: bool,
+    pub is_public: bool,
     pub sort_order: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -25,7 +28,8 @@ pub struct CreateGroupInput {
     pub confirm_public_exposure: bool,
     #[serde(default)]
     pub description: String,
-    #[serde(default)]
+    #[serde(default = "default_public")]
+    #[serde(rename = "is_public", alias = "user_selectable")]
     pub user_selectable: bool,
     #[serde(default)]
     pub sort_order: i32,
@@ -37,6 +41,7 @@ pub struct UpdateGroupInput {
     #[serde(default)]
     pub confirm_public_exposure: bool,
     pub description: Option<String>,
+    #[serde(rename = "is_public", alias = "user_selectable")]
     pub user_selectable: Option<bool>,
     pub sort_order: Option<i32>,
 }
@@ -60,7 +65,7 @@ pub enum GroupStoreError {
 }
 
 const GROUP_COLUMNS: &str =
-    "id, name, description, is_default, user_selectable, sort_order, created_at, updated_at";
+    "id, name, description, is_default, user_selectable, is_public, sort_order, created_at, updated_at";
 
 fn storage(error: impl std::fmt::Display) -> GroupStoreError {
     GroupStoreError::Storage(error.to_string())
@@ -94,6 +99,7 @@ fn row_to_group(row: &QueryResult) -> Result<Group, GroupStoreError> {
         description: row.try_get("", "description").map_err(storage)?,
         is_default: row.try_get::<i32>("", "is_default").map_err(storage)? != 0,
         user_selectable: row.try_get::<i32>("", "user_selectable").map_err(storage)? != 0,
+        is_public: row.try_get::<i32>("", "is_public").map_err(storage)? != 0,
         sort_order: row.try_get("", "sort_order").map_err(storage)?,
         created_at: parse_time(row, "created_at")?,
         updated_at: parse_time(row, "updated_at")?,
@@ -124,6 +130,43 @@ impl UserStore {
         rows.iter()
             .map(|row| row_to_group(row).map_err(|error| format!("{error:?}")))
             .collect()
+    }
+
+    pub async fn list_groups_for_user(&self, user_id: &str, role: crate::users::UserRole) -> Result<Vec<Group>, String> {
+        if role.can_manage_users() {
+            return self.list_groups().await;
+        }
+        let rows = self.db.read().query_all(self.db.stmt(
+            &format!("SELECT {GROUP_COLUMNS} FROM monoize_groups g WHERE g.is_public = 1 OR EXISTS (SELECT 1 FROM user_group_grants ug WHERE ug.user_id = $1 AND ug.group_id = g.id) ORDER BY sort_order ASC, created_at ASC, id ASC"),
+            vec![user_id.into()],
+        )).await.map_err(|e| e.to_string())?;
+        rows.iter().map(|row| row_to_group(row).map_err(|e| format!("{e:?}"))).collect()
+    }
+
+    pub async fn accessible_group_ids(&self, user_id: &str, role: crate::users::UserRole) -> Result<Vec<String>, String> {
+        let groups = self.list_groups_for_user(user_id, role).await?;
+        Ok(groups.into_iter().map(|group| group.id).collect())
+    }
+
+    pub async fn grant_group_access(&self, user_id: &str, group_id: &str) -> Result<(), String> {
+        if self.get_group_by_id(group_id).await?.is_none() {
+            return Err("unknown group id".to_string());
+        }
+        self.db.write().await.execute(self.db.stmt(
+            "INSERT INTO user_group_grants (user_id, group_id, created_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, group_id) DO NOTHING",
+            vec![user_id.into(), group_id.into(), Utc::now().to_rfc3339().into()],
+        )).await.map_err(|e| e.to_string())?;
+        self.api_key_cache.invalidate_all();
+        Ok(())
+    }
+
+    pub async fn revoke_group_access(&self, user_id: &str, group_id: &str) -> Result<(), String> {
+        self.db.write().await.execute(self.db.stmt(
+            "DELETE FROM user_group_grants WHERE user_id = $1 AND group_id = $2",
+            vec![user_id.into(), group_id.into()],
+        )).await.map_err(|e| e.to_string())?;
+        self.api_key_cache.invalidate_all();
+        Ok(())
     }
 
     pub async fn get_group_by_id(&self, id: &str) -> Result<Option<Group>, String> {
@@ -185,19 +228,21 @@ impl UserStore {
         if self.group_name_exists(None, &name).await? {
             return Err(GroupStoreError::PublicNameConflict(name));
         }
+        let is_public = input.user_selectable;
         let result = self
             .db
             .write()
             .await
             .execute(self.db.stmt(
-                "INSERT INTO monoize_groups (id, name, public_name, public_name_key, description, is_default, user_selectable, sort_order, created_at, updated_at) \
-                 VALUES ($1, $2, $2, $3, $4, 0, $5, $6, $7, $7)",
+                "INSERT INTO monoize_groups (id, name, public_name, public_name_key, description, is_default, user_selectable, is_public, sort_order, created_at, updated_at) \
+                 VALUES ($1, $2, $2, $3, $4, 0, $5, $6, $7, $8, $8)",
                 vec![
                     id.clone().into(),
                     name.clone().into(),
                     SeaValue::Bytes(Some(Box::new(public_name.key))),
                     description.clone().into(),
                     SeaValue::Int(Some(if input.user_selectable { 1 } else { 0 })),
+                    SeaValue::Int(Some(if is_public { 1 } else { 0 })),
                     SeaValue::Int(Some(input.sort_order)),
                     now.to_rfc3339().into(),
                 ],
@@ -217,6 +262,7 @@ impl UserStore {
             description,
             is_default: false,
             user_selectable: input.user_selectable,
+            is_public,
             sort_order: input.sort_order,
             created_at: now,
             updated_at: now,
@@ -276,6 +322,9 @@ impl UserStore {
             set_clauses.push(format!("user_selectable = ${idx}"));
             values.push(SeaValue::Int(Some(if user_selectable { 1 } else { 0 })));
             idx += 1;
+            set_clauses.push(format!("is_public = ${idx}"));
+            values.push(SeaValue::Int(Some(if user_selectable { 1 } else { 0 })));
+            idx += 1;
         }
         if let Some(sort_order) = input.sort_order {
             set_clauses.push(format!("sort_order = ${idx}"));
@@ -322,6 +371,7 @@ impl UserStore {
             description: description.unwrap_or(existing.description),
             is_default: existing.is_default,
             user_selectable: input.user_selectable.unwrap_or(existing.user_selectable),
+            is_public: input.user_selectable.unwrap_or(existing.is_public),
             sort_order: input.sort_order.unwrap_or(existing.sort_order),
             created_at: existing.created_at,
             updated_at: now,

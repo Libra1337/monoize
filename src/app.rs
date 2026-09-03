@@ -2569,6 +2569,11 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             axum::routing::delete(crate::dashboard_handlers::delete_group),
         )
         .route(
+            "/dashboard/users/{user_id}/groups/{group_id}",
+            post(crate::dashboard_handlers::grant_user_group)
+                .delete(crate::dashboard_handlers::revoke_user_group),
+        )
+        .route(
             "/dashboard/providers",
             get(crate::dashboard_handlers::list_providers),
         )

@@ -2,6 +2,28 @@
 
 ## 0A. LynShen migration release
 
+## 0B. Public and private Group visibility
+
+The registry no longer exposes a default Group concept to users or administrators.
+Every Group is public after the visibility migration unless an administrator explicitly
+sets `is_public = false`. A private Group is visible and routable only for administrators
+and users with an explicit `user_group_grants` row.
+
+`GET /api/dashboard/groups` returns all Groups for administrators and only Groups that are
+public or granted to the authenticated user for normal users. Group creation defaults to
+`is_public = true`; the create and update APIs accept `is_public` and do not accept or
+return `is_default` or `user_selectable` as behavioral controls.
+
+An API key keeps its stored `group_ids` and channel bindings when a Group becomes private.
+Authentication removes inaccessible Groups from the effective routing set immediately. If
+the user later receives a grant, the saved API-key selection becomes effective again without
+editing the key. An empty API-key `group_ids` list means all Groups accessible to its owner,
+not all private Groups globally.
+
+`user_group_grants(user_id, group_id)` has a unique composite key. Grant and revoke writes
+invalidate API-key authentication caches and routing configuration. Billing-plan Group lists
+remain ceilings; a plan never grants access to a private Group.
+
 GR-MIG-1. After the destructive migration in `provider-pricing.spec.md` commits,
 `monoize_providers.group_ids` is removed and `monoize_providers.group_id` is a non-null
 foreign key to `monoize_groups.id`. User, API-key, and billing-plan Group fields retain
@@ -114,16 +136,15 @@ or non-string element MUST fail the read with a storage error; it MUST NOT decod
   "name": "default",
   "description": "",
   "is_default": true,
-  "user_selectable": true,
+  "is_public": true,
   "sort_order": 0,
   "created_at": "2026-08-25T00:00:00Z",
   "updated_at": "2026-08-25T00:00:00Z"
 }
 ```
 
-GR-A1. The list MUST contain every registry row in the canonical order of GR-D5 for every
-authenticated caller, admin or not. Group names and descriptions are not confidential; the
-legacy suggestions endpoint already exposed all labels to any authenticated session.
+GR-A1. Administrators MUST receive every registry row. Normal users MUST receive only rows
+where `is_public = 1` or an explicit `user_group_grants` row exists for that user.
 
 GR-A2. The endpoint is read-only and MUST NOT create or modify rows.
 
@@ -131,8 +152,8 @@ GR-A2. The endpoint is read-only and MUST NOT create or modify rows.
 
 - Endpoint: `POST /api/dashboard/groups`
 - Authorization: admin (`role` is `admin` or `super_admin`).
-- Request body: `{ "name": string, "description"?: string, "user_selectable"?: boolean, "sort_order"?: integer }`
-  with defaults `description = ""`, `user_selectable = false`, `sort_order = 0`.
+- Request body: `{ "name": string, "description"?: string, "is_public"?: boolean, "sort_order"?: integer }`
+  with defaults `description = ""`, `is_public = true`, `sort_order = 0`.
 - Response: `201` + created `Group` object with server-generated UUID v4 `id` and
   `is_default = false`.
 
@@ -147,14 +168,14 @@ GR-A4. If another row exists whose `lower(trim(name))` equals the new name's
 
 - Endpoint: `PUT /api/dashboard/groups/{group_id}`
 - Authorization: admin.
-- Request body: partial; each of `name`, `description`, `user_selectable`, `sort_order` is
+- Request body: partial; each of `name`, `description`, `is_public`, `sort_order` is
   optional and, when present, replaces the stored value. Omitted fields are unchanged.
 - Response: `200` + updated `Group` object.
 - Errors: `404 not_found` for an unknown id; GR-A3/GR-A4 apply to present fields (name
   uniqueness compares against every other row).
 
-GR-A5. `is_default` MUST NOT be changeable through this endpoint; a request body containing
-`is_default` MUST be treated as if the field were absent.
+GR-A5. `is_default` and `user_selectable` MUST NOT be changeable through this endpoint; a
+request body containing either field MUST be treated as if the field were absent.
 
 GR-A6. A successful update MUST set `updated_at` to the current time and MUST invalidate
 the process-local API-key authentication cache (group semantics are embedded in cached

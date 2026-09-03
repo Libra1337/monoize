@@ -433,6 +433,21 @@ pub fn resolve_effective_groups(
     canonicalize_group_ids(&filtered)
 }
 
+/// Restrict a key/plan result to the Groups visible to the key owner.
+pub fn restrict_effective_groups(
+    effective_groups: &[String],
+    accessible_groups: &[String],
+) -> Vec<String> {
+    if effective_groups.is_empty() {
+        return canonicalize_group_ids(accessible_groups);
+    }
+    effective_groups
+        .iter()
+        .filter(|id| accessible_groups.iter().any(|allowed| allowed == *id))
+        .cloned()
+        .collect()
+}
+
 /// R-GRP-1 eligibility: `None` means internal system traffic (all Providers
 /// eligible); otherwise the Provider's Group must occur in `effective_groups`.
 pub fn is_provider_group_eligible(
@@ -848,6 +863,7 @@ mod tests {
     use super::{
         MAX_MODEL_REDIRECT_PATTERN_BYTES, ModelRedirectRule, canonicalize_group_ids,
         is_provider_group_eligible, provider_group_rank, resolve_effective_groups,
+        restrict_effective_groups,
         validate_model_redirects,
     };
 
@@ -894,6 +910,18 @@ mod tests {
         assert_eq!(
             resolve_effective_groups(&[], Some(&ids(&["g-other"]))),
             ids(&["g-other"])
+        );
+    }
+
+    #[test]
+    fn private_groups_are_removed_without_erasing_saved_key_scope() {
+        assert_eq!(
+            restrict_effective_groups(&[], &ids(&["public", "granted"])),
+            ids(&["public", "granted"])
+        );
+        assert_eq!(
+            restrict_effective_groups(&ids(&["private", "public"]), &ids(&["public"])),
+            ids(&["public"])
         );
     }
 
