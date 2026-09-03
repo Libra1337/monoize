@@ -759,11 +759,6 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 &mut resp,
                                 reasoning_envelope_provider_type(attempt.provider_type),
                                 &req_attempt.model,
-                        if auth.reasoning_envelope_enabled {
-                            urp::wrap_reasoning_envelopes_in_response(
-                                &mut resp,
-                                reasoning_envelope_provider_type(attempt.provider_type),
-                                &req_attempt.model,
                             );
                         }
                         if let Err(err) = apply_transform_rules_response(
