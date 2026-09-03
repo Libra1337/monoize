@@ -134,6 +134,7 @@ async fn shutdown_signal(background_shutdown: Arc<AtomicBool>) {
     let signal = tokio::select! {
         _ = ctrl_c => "SIGINT",
         _ = terminate => "SIGTERM",
+        _ = monoize::store_billing::availability::wait_for_background_shutdown(background_shutdown.clone()) => "internal failure",
     };
     background_shutdown.store(true, Ordering::Release);
     tracing::info!(signal, "received shutdown signal");

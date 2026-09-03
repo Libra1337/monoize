@@ -14,6 +14,8 @@ pub const STORE_PRIMARY_LEASE_SECONDS: i64 = 15;
 pub const STORE_PRIMARY_RENEWAL_SECONDS: u64 = 5;
 const STORE_PRIMARY_RENEWAL_SAFETY_SECONDS: i64 = 5;
 const STORE_PRIMARY_RETRY_DELAYS_MS: [u64; 3] = [100, 250, 500];
+const STORE_PRIMARY_RENEWAL_ROUND_TIMEOUT_MS: u64 = 2_000;
+const BACKGROUND_SHUTDOWN_POLL_MS: u64 = 50;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum StorePrimaryLeaseError {
@@ -310,7 +312,7 @@ impl StorePrimaryLease {
                     break;
                 }
                 if let Err(error) = renew_with_retry(&lease, &shutdown).await {
-                    lease.renewal_failed.store(true, Ordering::Release);
+                    request_shutdown_after_renewal_failure(&lease.renewal_failed, &shutdown);
                     tracing::error!(error = %error, "Store Primary lease renewal failed; lease marked lost");
                     break;
                 }
@@ -319,7 +321,30 @@ impl StorePrimaryLease {
     }
 }
 
+fn request_shutdown_after_renewal_failure(lease_lost: &AtomicBool, shutdown: &AtomicBool) {
+    lease_lost.store(true, Ordering::Release);
+    shutdown.store(true, Ordering::Release);
+}
+
+pub async fn wait_for_background_shutdown(shutdown: Arc<AtomicBool>) {
+    while !shutdown.load(Ordering::Acquire) {
+        tokio::time::sleep(StdDuration::from_millis(BACKGROUND_SHUTDOWN_POLL_MS)).await;
+    }
+}
+
 async fn renew_with_retry(
+    lease: &StorePrimaryLease,
+    shutdown: &AtomicBool,
+) -> Result<(), StorePrimaryLeaseError> {
+    tokio::time::timeout(
+        StdDuration::from_millis(STORE_PRIMARY_RENEWAL_ROUND_TIMEOUT_MS),
+        renew_attempts(lease, shutdown),
+    )
+    .await
+    .unwrap_or(Err(StorePrimaryLeaseError::RenewalFailed))
+}
+
+async fn renew_attempts(
     lease: &StorePrimaryLease,
     shutdown: &AtomicBool,
 ) -> Result<(), StorePrimaryLeaseError> {
@@ -563,11 +588,67 @@ fn is_unique_conflict(error: &DbErr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::lease_select_sql;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration as StdDuration;
+
+    use sea_orm_migration::MigratorTrait;
+
+    use super::{
+        StorePrimaryLease, StorePrimaryLeaseError, lease_select_sql, renew_with_retry,
+        request_shutdown_after_renewal_failure, wait_for_background_shutdown,
+    };
+    use crate::db::DbPool;
+    use crate::migration::Migrator;
 
     #[test]
     fn postgres_mutations_lock_the_lease_row() {
         assert!(lease_select_sql(true).ends_with("FOR UPDATE"));
         assert!(!lease_select_sql(false).contains("FOR UPDATE"));
+    }
+
+    #[test]
+    fn terminal_renewal_failure_requests_application_shutdown() {
+        let lease_lost = AtomicBool::new(false);
+        let shutdown = AtomicBool::new(false);
+
+        request_shutdown_after_renewal_failure(&lease_lost, &shutdown);
+
+        assert!(lease_lost.load(Ordering::Acquire));
+        assert!(shutdown.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn background_shutdown_waiter_observes_an_existing_request() {
+        let shutdown = Arc::new(AtomicBool::new(true));
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            wait_for_background_shutdown(shutdown),
+        )
+        .await
+        .expect("shutdown waiter must return within the specified bound");
+    }
+
+    #[tokio::test]
+    async fn renewal_round_times_out_while_the_sqlite_writer_is_stalled() {
+        let db = DbPool::connect("sqlite::memory:").await.expect("database");
+        Migrator::up(&*db.write().await, None)
+            .await
+            .expect("migrations");
+        let lease = StorePrimaryLease::acquire(db.clone(), "owner-a")
+            .await
+            .expect("lease");
+        let _blocked_writer = db.begin_write().await.expect("blocking transaction");
+        let shutdown = AtomicBool::new(false);
+
+        let result = tokio::time::timeout(
+            StdDuration::from_millis(2_500),
+            renew_with_retry(&lease, &shutdown),
+        )
+        .await
+        .expect("renewal round must have its own timeout");
+
+        assert_eq!(result.unwrap_err(), StorePrimaryLeaseError::RenewalFailed);
     }
 }
