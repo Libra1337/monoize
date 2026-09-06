@@ -60,6 +60,8 @@ curl http://localhost:8080/v1/responses \
 - `GET /v1/responses` 會升級為 WebSocket 傳輸，供使用該傳輸的用戶端呼叫。
 - `POST /v1/responses/compact` 壓縮一段會話。
 
+向 Responses 上游轉送請求時，Monoize 保留明確傳入的 `include` 和 `reasoning.summary`。它不會自動加入 `reasoning.encrypted_content` 或預設摘要設定。
+
 ## Anthropic Messages
 
 ```bash

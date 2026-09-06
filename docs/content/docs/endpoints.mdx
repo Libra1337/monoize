@@ -60,6 +60,8 @@ Notes:
 - `GET /v1/responses` upgrades to a WebSocket transport for clients that use it.
 - `POST /v1/responses/compact` compacts a conversation.
 
+For Responses upstreams, Monoize preserves explicit `include` and `reasoning.summary` values. It does not add `reasoning.encrypted_content` or a default summary setting.
+
 ## Anthropic Messages
 
 ```bash

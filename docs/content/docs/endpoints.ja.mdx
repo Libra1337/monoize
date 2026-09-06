@@ -60,6 +60,8 @@ curl http://localhost:8080/v1/responses \
 - `GET /v1/responses` は WebSocket トランスポートにアップグレードされます。
 - `POST /v1/responses/compact` は会話をコンパクト化します。
 
+Responses 上流へのリクエストでは、Monoize は明示された `include` と `reasoning.summary` の値を保持します。`reasoning.encrypted_content` や既定の要約設定は自動で追加しません。
+
 ## Anthropic Messages
 
 ```bash
