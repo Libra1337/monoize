@@ -74,7 +74,10 @@ on this repository, each quoted from CodeRabbit's comment at the time:
   reviewed.
 - **Non-default base branch.** The notice says auto reviews are disabled for a base other than
   the default branch, so every stacked pull request must be triggered manually.
-- **Rate limited.** The trigger returns "Review rate limited" and performs nothing. Retry it.
+- **Rate limited.** The trigger returns "Review rate limited" and performs nothing. The notice
+  names the wait before the next included review. Wait that long and trigger again; do not
+  read the silence as a clean review. Triggering several pull requests in quick succession
+  reaches this limit, so trigger them one at a time and confirm each review before moving on.
 
 Treat any other skip reason the same way: read the notice, satisfy the stated condition, and
 trigger again.
