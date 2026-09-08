@@ -136,12 +136,10 @@ export function validateReadinessInput(
     && input.valid_for_days <= 90;
 
   if (!metadataValid) return false;
-  if (adapterKind === "alipay") {
-    return currencies.length === 1 && currencies[0] === "CNY" && actions.length === 1 && actions[0] === "form";
-  }
-  if (adapterKind === "wechat") {
+  if (adapterKind === "epay") {
     return currencies.length === 1
       && currencies[0] === "CNY"
+      && actions.length > 0
       && actions.every((action) => action === "qr" || action === "redirect");
   }
   if (adapterKind === "stripe") {

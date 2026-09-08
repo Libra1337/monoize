@@ -22,7 +22,7 @@ Monoize 最多每 15 分钟刷新一次美元兑人民币汇率。刷新失败�
 
 Monoize 在联系 Provider 前保存支付尝试。Stripe 随后打开其托管的 Checkout 页面。
 
-支付宝提交已签名的官方支付表单。微信 Native 显示可扫描的二维码。微信 H5 打开官方移动支付页面。
+易支付按所选方式返回一个动作。二维码内容在支付对话框中显示为可扫描的二维码。支付链接显示一个动作，选择后跳转。易支付只接受人民币订单。美元订单使用 Stripe。
 
 Provider 结果未知时，不要创建另一个支付尝试。等待 Monoize 对账现有支付尝试。
 
@@ -38,17 +38,17 @@ Monoize 仅在验证渠道支付后发放余额。管理员不能把未支付订
 
 订阅 `checkout.session.completed` 和 `checkout.session.async_payment_succeeded`。把端点签名密钥保存到加密的 Stripe 凭据中。
 
-## 配置支付宝回调
+## 配置易支付
 
-把支付宝异步通知地址设为 `https://lynshen.org/api/store/callbacks/{channel_id}`。使用支付宝 Channel ID 替换 `{channel_id}`。
+一个易支付 Channel 同时提供支付宝方式和微信支付方式。
 
-在商店管理中保存支付宝应用 ID、卖家 ID、商户私钥、支付宝公钥和环境。Monoize 验证 RSA2，并仅在保存已验证事件后返回 `success`。
+把易支付异步通知地址设为 `https://lynshen.org/api/store/callbacks/{channel_id}`。使用易支付 Channel ID 替换 `{channel_id}`。该端点接受文档规定的 `GET` 通知。
 
-## 配置微信支付回调
+在商店管理中保存网关根地址、商户 ID 和商户密钥。启用支付宝方式、微信支付方式或两者。网关根地址必须以 `/` 结尾，且不能指向回环地址、链路本地地址或私有地址。
 
-把微信支付通知地址设为 `https://lynshen.org/api/store/callbacks/{channel_id}`。使用微信支付 Channel ID 替换 `{channel_id}`。
+Monoize 对每个请求签名：排除 `sign`、`sign_type` 和空值，按 ASCII 排序字段，计算小写 MD5。只有在验证签名、商户 ID、订单号、以分为单位的人民币金额和预期方式，并且支付状态转换提交之后，才返回 `success`。
 
-保存商户号、应用 ID、API v3 密钥、商户证书序列号、商户私钥、平台证书序列号和平台公钥。Monoize 在履约前验证平台签名并解密支付资源。
+在 Channel 行上打开**易支付方式**，设置每种方式的对外名称、排序和启用状态。在此处停用的方式不会出现在商店中。
 
 ## 购买套餐
 
@@ -83,13 +83,14 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 管理员打开 `/dashboard/store-admin`。使用四个标签管理商品、支付 Channel、订单和兑换码。
 
 - 分别设置人民币和美元的自定义充值范围。
-- 添加支付宝、微信支付、Stripe 或 HTTP 草稿 Channel。使用内置图标、HTTPS 图片链接或上传图片。
-- 打开一个现有的官方 Channel。填写全部凭据字段和当前管理员密码。选择**替换凭据**。Monoize 加密新版本、停用旧版本并禁用此 Channel。
+- 添加易支付、Stripe 或 HTTP 草稿 Channel。使用内置图标、HTTPS 图片链接或上传图片。
+- 打开一个现有的易支付或 Stripe Channel。填写全部凭据字段和当前管理员密码。选择**替换凭据**。Monoize 加密新版本、停用旧版本并禁用此 Channel。
+- 在易支付 Channel 行上打开 **Governance** 并选择**易支付方式**，配置支付宝方式和微信支付方式。
 - 在 Milestone 1 中保持 HTTP Channel 停用。
 - 分别查看支付状态和履约状态。不要使用人工完成操作。
 - 一次生成 1 至 20 个单次兑换码。Monoize 显示明文时立即保存。
 - 在**支付渠道**标签页顶部打开**隐私记录**和**数据保留**。
-- 在支付宝、微信支付或 Stripe 的 Channel 行上打开 **Governance**。选择**支付合规**、**商户能力**或**渠道就绪状态**。HTTP Channel 行不显示该控件。
+- 在易支付或 Stripe 的 Channel 行上打开 **Governance**。选择**支付合规**、**商户能力**、**渠道就绪状态**或**易支付方式**。HTTP Channel 行不显示该控件。
 
 ## 查看隐私记录
 
@@ -124,7 +125,7 @@ Monoize 设置复审人、批准时间和下次复审日期。Monoize 还固定�
 
 ![商店支付渠道](/images/zh/store-governance.webp)
 
-在支付宝、微信支付或 Stripe 的 Channel 行上打开 **Governance**。
+在易支付或 Stripe 的 Channel 行上打开 **Governance**。
 
 1. 选择**支付合规**。审阅当前商店支付条款。用管理员密码确认条款。Monoize 获取一个 scope 为 `compliance_confirm` 的五分钟重认证授权。
 2. 选择**商户能力**。为每项所需商户能力记录状态、环境、渠道商品、证据摘要和到期时间。

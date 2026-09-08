@@ -148,6 +148,18 @@ function Sidebar({
     { to: "/dashboard/orders", icon: ReceiptText, label: t("nav.orders") },
   ];
 
+  const enterpriseNavItems = [
+    { to: "/dashboard/wallet", icon: WalletCards, label: t("nav.wallet") },
+    { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
+    { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
+    { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
+    { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
+    { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
+  ];
+  const visibleNavItems = user?.account_class === "enterprise"
+    ? enterpriseNavItems
+    : navItems;
+
   const adminNavItems = [
     { to: "/dashboard/admin", icon: Gauge, label: t("nav.adminDashboard"), exact: true },
     { to: "/dashboard/admin/runtime", icon: HeartPulse, label: t("nav.adminRuntime") },
@@ -199,7 +211,7 @@ function Sidebar({
         <Separator className="my-3" />
 
         <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <NavLink
               key={item.to}
               {...item}

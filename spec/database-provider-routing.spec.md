@@ -261,3 +261,15 @@ R-DASH-2. The request MUST load metadata pricing profiles for all unique normali
 R-DASH-3. After the two set queries in R-DASH-2, pricing-profile selection, Provider-type filtering, model-pattern matching, and rate-matrix completeness checks MUST run in process memory. The request MUST NOT execute a metadata or billing-rate query per model, Channel, Provider, or pair.
 
 R-DASH-4. Provider dashboard pricing availability MUST use request-local data only. It MUST NOT create a cross-request full-table metadata or billing-rate cache.
+
+## 9. Account-Class Routing Boundary
+
+R-ENT-1. Each authenticated request MUST resolve one user account class before model discovery or routing.
+
+R-ENT-2. The eligible Provider query MUST require the Provider Group account class to equal the authenticated user account class.
+
+R-ENT-3. The available-model query, Channel-binding validation, affinity lookup, retry selection, and failback selection MUST use only Channels below Providers admitted by R-ENT-2.
+
+R-ENT-4. If no eligible model exists in the authenticated account class, routing MUST return the existing unavailable-model result. It MUST NOT query or route through the other account class.
+
+R-ENT-5. Price estimation and final charge calculation MUST use the rate attached to the selected in-class Provider and Channel. A standard rate MUST NOT charge an Enterprise request, and an Enterprise rate MUST NOT charge a standard request.

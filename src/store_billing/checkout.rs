@@ -6,16 +6,12 @@ use sea_orm::{ConnectionTrait, QueryResult};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use super::adapters::alipay::{
-    AlipayCheckoutResult, AlipayCredential, AlipayProduct,
-    prepare_checkout as prepare_alipay_checkout,
+use super::adapters::epay::{
+    EpayCheckoutResult, EpayCredential, EpayDevice, EpayMethod,
+    create_checkout as create_epay_checkout,
 };
 use super::adapters::stripe::{
     StripeCheckoutResult, StripeCredential, create_checkout as create_stripe_checkout,
-};
-use super::adapters::wechat::{
-    WechatCheckoutResult, WechatCredential, WechatProduct,
-    create_checkout as create_wechat_checkout,
 };
 use super::crypto::{EncryptedSecret, PaymentKeyRing};
 use super::order::{
@@ -52,24 +48,15 @@ pub trait CheckoutProvider: Send + Sync {
         request: &CheckoutRequest,
     ) -> Result<StripeCheckoutResult, AdapterError>;
 
-    async fn create_alipay_checkout(
+    async fn create_epay_checkout(
         &self,
-        _credential: &AlipayCredential,
+        _credential: &EpayCredential,
         _request: &CheckoutRequest,
-        _product: AlipayProduct,
+        _method: EpayMethod,
         _notify_url: Url,
-    ) -> Result<AlipayCheckoutResult, AdapterError> {
-        Err(AdapterError::Unsupported)
-    }
-
-    async fn create_wechat_checkout(
-        &self,
-        _credential: &WechatCredential,
-        _request: &CheckoutRequest,
-        _product: WechatProduct,
-        _notify_url: Url,
+        _device: EpayDevice,
         _client_ip: Option<IpAddr>,
-    ) -> Result<WechatCheckoutResult, AdapterError> {
+    ) -> Result<EpayCheckoutResult, AdapterError> {
         Err(AdapterError::Unsupported)
     }
 }
@@ -95,30 +82,22 @@ impl CheckoutProvider for ReqwestCheckoutProvider {
         create_stripe_checkout(&self.client, credential, request).await
     }
 
-    async fn create_alipay_checkout(
+    async fn create_epay_checkout(
         &self,
-        credential: &AlipayCredential,
+        credential: &EpayCredential,
         request: &CheckoutRequest,
-        product: AlipayProduct,
+        method: EpayMethod,
         notify_url: Url,
-    ) -> Result<AlipayCheckoutResult, AdapterError> {
-        prepare_alipay_checkout(credential, request, product, notify_url, chrono::Utc::now())
-    }
-
-    async fn create_wechat_checkout(
-        &self,
-        credential: &WechatCredential,
-        request: &CheckoutRequest,
-        product: WechatProduct,
-        notify_url: Url,
+        device: EpayDevice,
         client_ip: Option<IpAddr>,
-    ) -> Result<WechatCheckoutResult, AdapterError> {
-        create_wechat_checkout(
+    ) -> Result<EpayCheckoutResult, AdapterError> {
+        create_epay_checkout(
             &self.client,
             credential,
             request,
-            product,
-            notify_url,
+            method,
+            &notify_url,
+            device,
             client_ip,
         )
         .await
@@ -132,6 +111,7 @@ pub struct CheckoutService {
     public_origin: Option<Url>,
     provider: Arc<dyn CheckoutProvider>,
     client_ip: Option<IpAddr>,
+    device: EpayDevice,
 }
 
 impl CheckoutService {
@@ -147,11 +127,17 @@ impl CheckoutService {
             public_origin,
             provider,
             client_ip: None,
+            device: EpayDevice::Pc,
         }
     }
 
     pub fn with_client_ip(mut self, client_ip: Option<IpAddr>) -> Self {
         self.client_ip = client_ip;
+        self
+    }
+
+    pub fn with_device(mut self, device: EpayDevice) -> Self {
+        self.device = device;
         self
     }
 
@@ -312,39 +298,22 @@ impl CheckoutService {
                     })
                     .map_err(map_adapter_error)
             }
-            "alipay" => {
-                let credential = AlipayCredential::from_json(&plaintext)
-                    .map_err(|_| CheckoutError::ConfigurationUnavailable)?;
-                validate_account_identity(credential.seller_id(), attempt)?;
-                let product = match attempt.expected_payment_method.as_deref() {
-                    None | Some("computer_web") => AlipayProduct::ComputerWeb,
-                    Some("mobile_web") => AlipayProduct::MobileWeb,
-                    _ => return Err(CheckoutError::ConfigurationUnavailable),
-                };
-                self.provider
-                    .create_alipay_checkout(&credential, &request, product, notify_url)
-                    .await
-                    .map(|result| ProviderCheckoutResult {
-                        provider_object_id: result.provider_object_id,
-                        action: result.action,
-                    })
-                    .map_err(map_adapter_error)
-            }
-            "wechat" => {
-                let credential = WechatCredential::from_json(&plaintext)
+            "epay" => {
+                let credential = EpayCredential::from_json(&plaintext)
                     .map_err(|_| CheckoutError::ConfigurationUnavailable)?;
                 validate_account_identity_digest(&credential.account_identity_digest(), attempt)?;
-                let product = match attempt.expected_payment_method.as_deref() {
-                    None | Some("native") => WechatProduct::Native,
-                    Some("h5") => WechatProduct::H5,
-                    _ => return Err(CheckoutError::ConfigurationUnavailable),
-                };
+                let method = attempt
+                    .expected_payment_method
+                    .as_deref()
+                    .and_then(EpayMethod::from_str)
+                    .ok_or(CheckoutError::ConfigurationUnavailable)?;
                 self.provider
-                    .create_wechat_checkout(
+                    .create_epay_checkout(
                         &credential,
                         &request,
-                        product,
+                        method,
                         notify_url,
+                        self.device,
                         self.client_ip,
                     )
                     .await

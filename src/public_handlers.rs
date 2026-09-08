@@ -441,7 +441,7 @@ fn groups_by_id(
             .db_pool
             .read()
             .query_all(state.db_pool.stmt(
-                "SELECT id, public_name AS group_public_name FROM monoize_groups",
+                "SELECT id, public_name AS group_public_name FROM monoize_groups WHERE account_class = 'standard'",
                 vec![],
             ))
             .await
@@ -601,6 +601,9 @@ pub async fn list_marketplace(
         if !provider.enabled {
             continue;
         }
+        if !groups.contains_key(&provider.group_id) {
+            continue;
+        }
         let public_names = public_names_for_provider(&public_provider_names, &provider)
             .ok_or_else(|| marketplace_source_error("Provider public name missing"))?;
         let group_names = provider_group_names(&provider, &groups);
@@ -731,6 +734,9 @@ pub async fn marketplace_offers(
     let mut offers = Vec::new();
     for provider in providers {
         if !provider.enabled {
+            continue;
+        }
+        if !groups.contains_key(&provider.group_id) {
             continue;
         }
         let public_names = public_names_for_provider(&public_provider_names, &provider)
@@ -877,6 +883,9 @@ pub async fn public_status(
         if !provider.enabled || !provider.channel.enabled {
             continue;
         }
+        if !groups.contains_key(&provider.group_id) {
+            continue;
+        }
         let public_names = public_names_for_provider(&public_provider_names, &provider)
             .ok_or_else(|| status_source_error("Provider public name missing"))?;
         let group_public_name = groups
@@ -966,7 +975,10 @@ pub async fn public_status(
     }
 
     let mut output = Vec::new();
-    for group_row in group_order {
+    for group_row in group_order
+        .into_iter()
+        .filter(|group| group.account_class == crate::users::AccountClass::Standard)
+    {
         let Some(group) = group_accumulators.remove(&group_row.id) else {
             continue;
         };

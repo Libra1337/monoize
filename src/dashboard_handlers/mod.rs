@@ -27,8 +27,8 @@ pub use analytics_request_logs::{
 pub use api_keys::{
     ApiKeyCreatedResponse, ApiKeyResponse, BatchDeleteApiKeysRequest, CreateApiKeyRequest,
     TransferToSubAccountRequest, UpdateApiKeyRequest, batch_delete_api_keys, create_api_key,
-    delete_api_key, get_api_key, get_apikey_presets, list_api_key_channel_conflicts,
-    list_my_api_keys, transfer_to_sub_account, update_api_key,
+    delete_api_key, get_api_key, get_api_key_analytics, get_apikey_presets,
+    list_api_key_channel_conflicts, list_my_api_keys, transfer_to_sub_account, update_api_key,
 };
 pub use auth::{
     AuthResponse, ChangePasswordRequest, LoginRequest, RegisterRequest, UpdateMeRequest,
@@ -46,8 +46,8 @@ pub use billing_rates::{
 };
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
 pub use groups::{
-    DashboardGroupsResponse, create_group, delete_group, list_dashboard_groups, reorder_groups,
-    update_group, grant_user_group, revoke_user_group,
+    DashboardGroupsResponse, create_group, delete_group, grant_user_group, list_dashboard_groups,
+    reorder_groups, revoke_user_group, update_group,
 };
 pub use model_registry::{
     create_model, delete_model, delete_model_metadata, get_model, get_model_metadata,
@@ -78,11 +78,10 @@ pub use store_billing::{
     get_store_order, get_store_order_admin, get_store_payment_availability_admin,
     get_store_payment_compliance_admin, get_store_payment_icon, get_store_primary_status_admin,
     get_store_refund_admin, get_store_retention_admin, get_store_settings_admin,
-    list_all_store_orders_admin,
-    list_store_orders, list_store_payment_capabilities_admin, list_store_payment_channels_admin,
-    list_store_privacy_records_admin, list_store_products_admin, list_store_redemption_codes_admin,
-    list_wallet_ledger,
-    put_store_channel_readiness_admin, put_store_payment_capability_admin, query_store_order_admin,
+    list_all_store_orders_admin, list_store_orders, list_store_payment_capabilities_admin,
+    list_store_payment_channels_admin, list_store_privacy_records_admin, list_store_products_admin,
+    list_store_redemption_codes_admin, list_wallet_ledger, put_store_channel_readiness_admin,
+    put_store_epay_method_admin, put_store_payment_capability_admin, query_store_order_admin,
     query_store_refund_admin, redeem_store_code, replace_store_payment_credential_admin,
     reprocess_store_provider_event_admin, reveal_store_redemption_codes_admin,
     revoke_store_redemption_code_admin, run_store_retention_admin,
@@ -90,6 +89,6 @@ pub use store_billing::{
     upload_store_payment_icon_admin,
 };
 pub use users::{
-    CreateUserRequest, UpdateUserRequest, create_user, delete_user, get_user, list_users,
-    update_user,
+    CreateUserRequest, UpdateAccountClassRequest, UpdateUserRequest, create_user, delete_user,
+    get_user, list_users, update_user, update_user_account_class,
 };

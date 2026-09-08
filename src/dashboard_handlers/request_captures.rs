@@ -57,9 +57,7 @@ fn redact_transform_chains_for_user(dump: &mut Value) {
         let mut hidden = 0usize;
         if let Some(Value::Array(chain)) = attempt_obj.get_mut("transform_chain") {
             let before = chain.len();
-            chain.retain(|entry| {
-                entry.get("scope").and_then(Value::as_str) == Some("api_key")
-            });
+            chain.retain(|entry| entry.get("scope").and_then(Value::as_str) == Some("api_key"));
             hidden = before - chain.len();
         }
         attempt_obj.insert("hidden_transforms".to_string(), json!(hidden));
@@ -163,6 +161,7 @@ mod tests {
             username: format!("{id}-name"),
             password_hash: String::new(),
             role,
+            account_class: Default::default(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_login_at: None,

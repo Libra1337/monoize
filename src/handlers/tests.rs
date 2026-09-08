@@ -497,6 +497,7 @@ fn build_test_auth_with_role(
         user_id: None,
         username: None,
         user_role,
+        account_class: crate::users::AccountClass::Standard,
         api_key_id: None,
         api_key_name: None,
         internal_source: None,
@@ -1968,7 +1969,9 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
         .expect("provider created");
 
     let mut req = build_test_urp_request("gpt-5-mini-thinking");
-    resolve_model_suffix(&state, &mut req).await.unwrap();
+    resolve_model_suffix(&state, &mut req, crate::users::AccountClass::Standard)
+        .await
+        .unwrap();
     let original_req = req.clone();
 
     assert_eq!(original_req.model, "gpt-5-mini");
@@ -1985,9 +1988,13 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
         effort: Some("low".to_string()),
         extra_body: std::collections::HashMap::new(),
     });
-    resolve_model_suffix(&state, &mut explicitly_configured_req)
-        .await
-        .unwrap();
+    resolve_model_suffix(
+        &state,
+        &mut explicitly_configured_req,
+        crate::users::AccountClass::Standard,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(explicitly_configured_req.model, "gpt-5-mini");
     assert_eq!(
@@ -2536,6 +2543,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             description: String::new(),
             user_selectable: true,
             sort_order: 1,
+            account_class: Default::default(),
         })
         .await
         .expect("team-a group created");
@@ -2547,6 +2555,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             description: String::new(),
             user_selectable: true,
             sort_order: 2,
+            account_class: Default::default(),
         })
         .await
         .expect("team-b group created");
@@ -2694,10 +2703,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         attempt_channel_names(&unrestricted),
         BTreeSet::from(["public", "team-a", "team-b"])
     );
-    assert_eq!(
-        attempt_channel_names(&team_a),
-        BTreeSet::from(["team-a"])
-    );
+    assert_eq!(attempt_channel_names(&team_a), BTreeSet::from(["team-a"]));
     assert_eq!(
         attempt_channel_names(&default_only),
         BTreeSet::from(["public"])
@@ -2723,6 +2729,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
             description: String::new(),
             user_selectable: true,
             sort_order: 1,
+            account_class: Default::default(),
         })
         .await
         .expect("team-a group created");
@@ -2734,6 +2741,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
             description: String::new(),
             user_selectable: true,
             sort_order: 2,
+            account_class: Default::default(),
         })
         .await
         .expect("team-b group created");

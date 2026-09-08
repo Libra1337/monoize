@@ -4,7 +4,7 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, ORIGIN};
 use axum::http::{Method, Request, StatusCode};
 use chrono::{TimeZone, Utc};
 use http_body_util::BodyExt;
-use monoize::store_billing::adapters::wechat::WechatCredential;
+use monoize::store_billing::adapters::epay::EpayCredential;
 use monoize::store_billing::credentials::CredentialStore;
 use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::{
@@ -304,27 +304,25 @@ async fn raw_request_with_reauth(
 }
 
 #[tokio::test]
-async fn wechat_credential_replacement_persists_the_merchant_side_identity_digest() {
+async fn epay_credential_replacement_persists_the_merchant_side_identity_digest() {
     let mut ctx = setup().await;
-    let admin = dashboard_session(&ctx, "wechat_credential_admin", UserRole::Admin).await;
+    let admin = dashboard_session(&ctx, "epay_credential_admin", UserRole::Admin).await;
     ctx.state.payment_keys = Some(Arc::new(
         PaymentKeyRing::new(
-            PaymentKey::new("wechat-credential-key", [37_u8; 32]).unwrap(),
+            PaymentKey::new("epay-credential-key", [37_u8; 32]).unwrap(),
             vec![],
         )
         .unwrap(),
     ));
     ctx.router = monoize::app::build_app(ctx.state.clone());
     let credential = json!({
-        "merchant_id":"1900000109",
-        "app_id":"wx1234567890",
-        "api_v3_key":"0123456789abcdef0123456789abcdef",
-        "merchant_certificate_serial":"merchant-certificate-1",
-        "merchant_private_key_pem":"merchant-private-key-1",
-        "platform_certificate_serial":"platform-certificate-1",
-        "platform_public_key_pem":"platform-public-key-1"
+        "gateway_base_url":"https://pay.example.com/",
+        "merchant_id":"1001",
+        "merchant_key":"89unJUB8HZ54Hj7x4nUj56HN4nUzUJ8i",
+        "alipay_enabled":true,
+        "wxpay_enabled":true
     });
-    let expected_digest = WechatCredential::from_json(credential.to_string().as_bytes())
+    let expected_digest = EpayCredential::from_json(credential.to_string().as_bytes())
         .unwrap()
         .account_identity_digest();
     let (status, grant, _) = json_request_with_reauth(
@@ -340,7 +338,7 @@ async fn wechat_credential_replacement_persists_the_merchant_side_identity_diges
     let (status, saved, _) = json_request_with_reauth(
         &ctx,
         Method::PUT,
-        "/api/dashboard/store/admin/payment-channels/store-channel-wechat/credential",
+        "/api/dashboard/store/admin/payment-channels/store-channel-epay/credential",
         &admin,
         grant["token"].as_str(),
         credential,
@@ -348,15 +346,18 @@ async fn wechat_credential_replacement_persists_the_merchant_side_identity_diges
     .await;
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["account_identity_digest"], expected_digest);
-    assert!(!saved.to_string().contains("0123456789abcdef"));
-    assert!(!saved.to_string().contains("merchant-private-key-1"));
+    assert!(
+        !saved
+            .to_string()
+            .contains("89unJUB8HZ54Hj7x4nUj56HN4nUzUJ8i")
+    );
     let persisted = ctx
         .state
         .db_pool
         .read()
         .query_one(ctx.state.db_pool.stmt(
             "SELECT account_identity_digest FROM store_channel_credentials
-             WHERE channel_id = 'store-channel-wechat' AND status = 'active'",
+             WHERE channel_id = 'store-channel-epay' AND status = 'active'",
             vec![],
         ))
         .await
@@ -1005,8 +1006,7 @@ async fn redemption_reveal_export_and_revocation_use_scoped_reauth_and_no_store_
     .await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert!(listed.as_array().unwrap().iter().all(|record| {
-        record["can_reveal"] == json!(true)
-            && record["reveal_unavailable_reason"] == Value::Null
+        record["can_reveal"] == json!(true) && record["reveal_unavailable_reason"] == Value::Null
     }));
 
     let (status, error, _) = json_request_with_reauth(
@@ -2633,9 +2633,7 @@ fn postgres_governance_writers_lock_the_same_channel_row() {
 fn governance_admin_reads_use_cross_database_flags_and_one_readiness_snapshot() {
     let governance = include_str!("../../src/store_billing/governance.rs");
     assert!(!governance.contains("try_get::<i64>(\"\", \"accepted\")"));
-    assert!(!governance.contains(
-        "try_get::<i64>(\"\", \"callback_verification_passed\")"
-    ));
+    assert!(!governance.contains("try_get::<i64>(\"\", \"callback_verification_passed\")"));
 
     let readiness_start = governance
         .find("pub async fn readiness(")
@@ -2686,10 +2684,7 @@ fn catalog_and_admin_channel_lists_use_the_fixed_query_batch_evaluator() {
         .find("pub async fn evaluate_channels<")
         .map(|offset| evaluate_start + offset)
         .expect("single Channel evaluator must have a bounded body");
-    assert!(
-        governance[evaluate_start..evaluate_end]
-            .contains("load_scoped_governance_snapshot")
-    );
+    assert!(governance[evaluate_start..evaluate_end].contains("load_scoped_governance_snapshot"));
     let scoped_start = governance
         .find("async fn load_scoped_governance_snapshot")
         .expect("scoped loader must exist");
@@ -2719,7 +2714,7 @@ async fn batch_and_single_channel_availability_match_for_two_channels() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{channels}");
-    for channel_id in ["store-channel-stripe", "store-channel-alipay"] {
+    for channel_id in ["store-channel-stripe", "store-channel-epay"] {
         let listed = channels
             .as_array()
             .unwrap()
@@ -2729,9 +2724,7 @@ async fn batch_and_single_channel_availability_match_for_two_channels() {
         let (status, single, _) = json_request_with_reauth(
             &ctx,
             Method::GET,
-            &format!(
-                "/api/dashboard/store/admin/payment-channels/{channel_id}/availability"
-            ),
+            &format!("/api/dashboard/store/admin/payment-channels/{channel_id}/availability"),
             &admin,
             None,
             json!({}),

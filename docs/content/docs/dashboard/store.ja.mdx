@@ -22,7 +22,7 @@ Monoize は USD/CNY レートを最大 15 分間隔で更新します。更新�
 
 Monoize は Provider に接続する前に支払い試行を保存します。Stripe はホスト型 Checkout ページを開きます。
 
-Alipay は署名済みの公式支払いフォームを送信します。WeChat Native は読み取り可能な QR コードを表示します。WeChat H5 は公式モバイル支払いページを開きます。
+EPay は選択した決済方式ごとに 1 つのアクションを返します。QR ペイロードは支払いダイアログに読み取り可能なコードを表示します。支払い URL は、選択後に遷移するアクションを表示します。EPay は CNY の注文のみを受け付けます。USD の注文には Stripe を使用します。
 
 Provider の結果が不明な場合は、別の支払い試行を作成しないでください。Monoize が既存の支払い試行を照合するまで待ちます。
 
@@ -38,17 +38,17 @@ Stripe Webhook エンドポイントを `https://lynshen.org/api/store/callbacks
 
 `checkout.session.completed` と `checkout.session.async_payment_succeeded` を購読します。エンドポイント署名シークレットを暗号化された Stripe 認証情報に保存します。
 
-## Alipay コールバックを設定する
+## EPay を設定する
 
-Alipay 非同期通知 URL を `https://lynshen.org/api/store/callbacks/{channel_id}` に設定します。`{channel_id}` を Alipay Channel ID に置き換えます。
+1 つの EPay Channel が Alipay 方式と WeChat Pay 方式の両方を提供します。
 
-Store Management で Alipay アプリ ID、販売者 ID、加盟店秘密鍵、Alipay 公開鍵、環境を保存します。Monoize は RSA2 を検証し、検証済みイベントを保存した後だけ `success` を返します。
+EPay 非同期通知 URL を `https://lynshen.org/api/store/callbacks/{channel_id}` に設定します。`{channel_id}` を EPay Channel ID に置き換えます。このエンドポイントは仕様どおりの `GET` 通知を受け付けます。
 
-## WeChat Pay コールバックを設定する
+Store Management でゲートウェイのベース URL、加盟店 ID、加盟店キーを保存します。Alipay 方式、WeChat Pay 方式、またはその両方を有効にします。ゲートウェイのベース URL は `/` で終わる必要があり、ループバック、リンクローカル、プライベートアドレスを指してはいけません。
 
-WeChat Pay 通知 URL を `https://lynshen.org/api/store/callbacks/{channel_id}` に設定します。`{channel_id}` を WeChat Pay Channel ID に置き換えます。
+Monoize は各リクエストに署名します。`sign`、`sign_type`、空の値を除外し、フィールドを ASCII 順に並べ、小文字の MD5 を計算します。署名、加盟店 ID、注文番号、CNY の分単位の金額、期待する決済方式を検証し、支払い状態の遷移がコミットされた後だけ `success` を返します。
 
-加盟店 ID、アプリ ID、API v3 キー、加盟店証明書シリアル、加盟店秘密鍵、プラットフォーム証明書シリアル、プラットフォーム公開鍵を保存します。Monoize は履行前にプラットフォーム署名を検証し、支払いリソースを復号します。
+Channel 行で **EPay の決済方式**を開き、各方式の公開名、並び順、有効状態を設定します。ここで無効にした方式は Store に表示されません。
 
 ## プランを購入する
 
@@ -83,13 +83,14 @@ monoize-store-ops quota-gate promote --expected-fingerprint <fingerprint>
 管理者は `/dashboard/store-admin` を開きます。4 つのタブで商品、支払い Channel、注文、引き換えコードを管理します。
 
 - CNY と USD のカスタムチャージ範囲を個別に設定します。
-- Alipay、WeChat Pay、Stripe、または HTTP 下書き Channel を追加します。組み込みアイコン、HTTPS 画像 URL、またはアップロード画像を使用します。
-- 既存の公式 Channel を開きます。すべての認証情報と現在の管理者パスワードを入力します。**認証情報を置換**を選択します。Monoize は新しいバージョンを暗号化し、以前のバージョンと Channel を無効にします。
+- EPay、Stripe、または HTTP 下書き Channel を追加します。組み込みアイコン、HTTPS 画像 URL、またはアップロード画像を使用します。
+- 既存の EPay または Stripe Channel を開きます。すべての認証情報と現在の管理者パスワードを入力します。**認証情報を置換**を選択します。Monoize は新しいバージョンを暗号化し、以前のバージョンと Channel を無効にします。
+- EPay Channel 行で **Governance** を開き、**EPay の決済方式**を選んで Alipay 方式と WeChat Pay 方式を設定します。
 - Milestone 1 では HTTP Channel を無効のままにします。
 - 支払い状態と履行状態を個別に確認します。手動完了操作は使用しません。
 - 1 回に 1 から 20 個の単回使用コードを生成します。Monoize が平文コードを表示したときに保存します。
 - **支払いチャネル**タブの上部から**プライバシー記録**と**データ保持**を開きます。
-- Alipay、WeChat Pay、または Stripe の Channel 行で **Governance** を開きます。**決済コンプライアンス**、**加盟店ケイパビリティ**、または**チャネル準備状況**を選びます。HTTP Channel 行にこの操作はありません。
+- EPay または Stripe の Channel 行で **Governance** を開きます。**決済コンプライアンス**、**加盟店ケイパビリティ**、**チャネル準備状況**、または **EPay の決済方式**を選びます。HTTP Channel 行にこの操作はありません。
 
 ## プライバシー記録を確認する
 
@@ -124,7 +125,7 @@ Monoize は審査者、承認時刻、次回の再審査日を設定します。
 
 ![Store payment Channels](/images/en/store-governance.webp)
 
-Alipay、WeChat Pay、または Stripe の Channel 行で **Governance** を開きます。
+EPay または Stripe の Channel 行で **Governance** を開きます。
 
 1. **決済コンプライアンス**を選択します。現行の Store 決済条件を確認し、管理者パスワードで確定します。Monoize はスコープ `compliance_confirm` の 5 分間の再認証許可を取得します。
 2. **加盟店ケイパビリティ**を選択します。必要な各ケイパビリティについて、状態、環境、Provider 商品、証跡ダイジェスト、有効期限を記録します。

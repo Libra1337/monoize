@@ -59,6 +59,7 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import type {
+	AccountClass,
 	CreateProviderInput,
 	AffinityFailbackMode,
 	FetchChannelModelsInput,
@@ -215,7 +216,8 @@ export function ProviderDialog({
 	transformRegistryLoading,
 	modelMetadata,
 	reasoningSuffixMap,
-	settings
+	settings,
+	accountClass
 }: {
 	open: boolean
 	onOpenChange: (open: boolean) => void
@@ -227,6 +229,7 @@ export function ProviderDialog({
 	modelMetadata: ModelMetadataRecord[]
 	reasoningSuffixMap: Record<string, string>
 	settings?: SystemSettings
+	accountClass: AccountClass
 }) {
 	const { i18n, t } = useTranslation()
 	const zh = i18n.language.startsWith('zh')
@@ -453,7 +456,7 @@ export function ProviderDialog({
 											}}
 										/>
 									) : section === 'provider' ? (
-										<ProviderBasics form={form} setForm={setForm} pricingProfiles={pricingProfiles} publicExposureConfirmed={publicExposureConfirmed} setPublicExposureConfirmed={setPublicExposureConfirmed} publicExposureLabel={t('groups.providerPublicExposureConfirm')} c={c} />
+										<ProviderBasics form={form} setForm={setForm} pricingProfiles={pricingProfiles} publicExposureConfirmed={publicExposureConfirmed} setPublicExposureConfirmed={setPublicExposureConfirmed} publicExposureLabel={t('groups.providerPublicExposureConfirm')} accountClass={accountClass} c={c} />
 									) : section === 'routing' ? (
 										<RoutingSettings form={form} setForm={setForm} settings={settings} c={c} />
 									) : section === 'transforms' ? (
@@ -516,8 +519,9 @@ function Field({ label, hint, children, className }: { label: string; hint?: str
 	return <div className={cn('flex flex-col gap-2', className)}><Label>{label}</Label>{children}{hint ? <p className='text-xs text-muted-foreground'>{hint}</p> : null}</div>
 }
 
-function ProviderBasics({ form, setForm, pricingProfiles, publicExposureConfirmed, setPublicExposureConfirmed, publicExposureLabel, c }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>>; pricingProfiles: string[]; publicExposureConfirmed: boolean; setPublicExposureConfirmed: (value: boolean) => void; publicExposureLabel: string; c: (zh: string, en: string) => string }) {
+function ProviderBasics({ form, setForm, pricingProfiles, publicExposureConfirmed, setPublicExposureConfirmed, publicExposureLabel, accountClass, c }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>>; pricingProfiles: string[]; publicExposureConfirmed: boolean; setPublicExposureConfirmed: (value: boolean) => void; publicExposureLabel: string; accountClass: AccountClass; c: (zh: string, en: string) => string }) {
 	const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups()
+	const availableGroups = groups.filter(group => group.account_class === accountClass)
 	return <div className='mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 sm:p-6'>
 		<SectionHeading title={c('Provider 基础信息', 'Provider basics')} description={c('Provider 负责公共路由策略；模型和上游地址在 Channel 中配置。', 'Providers own shared routing policy. Models and upstream endpoints are configured per channel.')} />
 		<div className='grid gap-5 rounded-xl border bg-card p-4 sm:grid-cols-2 sm:p-5'>
@@ -525,7 +529,7 @@ function ProviderBasics({ form, setForm, pricingProfiles, publicExposureConfirme
 			<Field label={c('服务分组', 'Serving groups')} hint={c('留空保存时自动绑定系统默认分组。', 'Empty selections are bound to the system default group on save.')} className='sm:col-span-2'>
 				<GroupSingleSelect
 					value={form.group_id}
-					groups={groups}
+					groups={availableGroups}
 					loading={groupsLoading}
 					onChange={group_id => setForm(previous => ({ ...previous, group_id }))}
 				/>

@@ -1282,6 +1282,7 @@ async fn authenticate_playground_session(
         user_id: Some(user.id),
         username: Some(user.username),
         user_role: user.role,
+        account_class: user.account_class,
         api_key_id: None,
         api_key_name: None,
         internal_source: Some(crate::auth::InternalRequestSource::Playground),

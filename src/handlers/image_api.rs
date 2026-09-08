@@ -569,7 +569,7 @@ async fn execute_stream_collected_image_typed(
     task_state: &AdmittedRequestTaskState,
 ) -> AppResult<(urp::UrpResponse, String)> {
     let started_at = task_state.started_at();
-    let transform_match_model = resolve_model_suffix(state, &mut req).await?;
+    let transform_match_model = resolve_model_suffix(state, &mut req, auth.account_class).await?;
     let original_req = req.clone();
     let logical_model = req.model.clone();
     let routing_stub = build_routing_stub(&req, max_multiplier);

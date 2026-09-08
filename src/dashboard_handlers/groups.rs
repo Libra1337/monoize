@@ -147,7 +147,10 @@ pub async fn grant_user_group(
     Path((user_id, group_id)): Path<(String, String)>,
 ) -> AppResult<Json<Value>> {
     require_admin(&headers, &state).await?;
-    state.user_store.grant_group_access(&user_id, &group_id).await
+    state
+        .user_store
+        .grant_group_access(&user_id, &group_id)
+        .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
     state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
     Ok(Json(json!({ "success": true })))
@@ -159,7 +162,10 @@ pub async fn revoke_user_group(
     Path((user_id, group_id)): Path<(String, String)>,
 ) -> AppResult<Json<Value>> {
     require_admin(&headers, &state).await?;
-    state.user_store.revoke_group_access(&user_id, &group_id).await
+    state
+        .user_store
+        .revoke_group_access(&user_id, &group_id)
+        .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
     state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
     Ok(Json(json!({ "success": true })))
@@ -230,6 +236,7 @@ mod tests {
                 description: " premium routing ".to_string(),
                 user_selectable: true,
                 sort_order: 5,
+                account_class: Default::default(),
             }),
         )
         .await
@@ -281,6 +288,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 0,
+                account_class: Default::default(),
             }),
         )
         .await
@@ -297,6 +305,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 0,
+                account_class: Default::default(),
             }),
         )
         .await

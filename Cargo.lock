@@ -2596,6 +2596,7 @@ dependencies = [
  "ipnet",
  "jsonwebtoken",
  "jxl-sys",
+ "md-5",
  "metrics",
  "metrics-exporter-prometheus",
  "mime",

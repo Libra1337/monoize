@@ -4,6 +4,8 @@ import { api } from "./api";
 import type {
   User,
   ApiKey,
+  ApiKeyAnalytics,
+  ApiKeyAnalyticsRange,
   DashboardStats,
   DashboardAnalytics,
   AdminOverview,
@@ -35,6 +37,7 @@ import type {
   UpdateGroupInput,
   UserLiveUsage,
   ApiKeyChannelConflict,
+  AccountClass,
 } from "./api";
 
 // SWR fetcher functions
@@ -119,6 +122,23 @@ export function useApiKeys(config?: SWRConfiguration) {
     ...defaultConfig,
     ...config,
   });
+}
+
+export function useApiKeyAnalytics(
+  keyId: string | null,
+  range: ApiKeyAnalyticsRange,
+  config?: SWRConfiguration<ApiKeyAnalytics>,
+) {
+  return useSWR<ApiKeyAnalytics>(
+    keyId ? ["api-key-analytics", keyId, range] : null,
+    () => api.getApiKeyAnalytics(keyId!, range),
+    {
+      ...defaultConfig,
+      keepPreviousData: true,
+      refreshInterval: 2_000,
+      ...config,
+    },
+  );
 }
 
 export function useApiKeyChannelConflicts(config?: SWRConfiguration) {
@@ -452,6 +472,36 @@ export async function updateUserOptimistic(
   }
 }
 
+export async function updateUserAccountClassOptimistic(
+  userId: string,
+  accountClass: AccountClass,
+  currentUsers: User[],
+  onError?: (error: Error) => void,
+) {
+  const optimistic = currentUsers.map((user) =>
+    user.id === userId ? { ...user, account_class: accountClass } : user,
+  );
+  mutate(SWR_KEYS.USERS, optimistic, false);
+  try {
+    const updated = await api.updateUserAccountClass(userId, accountClass);
+    await Promise.all([
+      mutate(SWR_KEYS.USERS),
+      mutate(SWR_KEYS.ME),
+      mutate(SWR_KEYS.API_KEYS),
+      mutate(SWR_KEYS.DASHBOARD_GROUPS),
+      mutate(SWR_KEYS.PROVIDERS),
+      mutate(SWR_KEYS.MARKETPLACE_MODELS),
+      mutate(SWR_KEYS.STATS),
+      mutate(SWR_KEYS.ANALYTICS),
+    ]);
+    return updated;
+  } catch (error) {
+    mutate(SWR_KEYS.USERS, currentUsers, false);
+    if (onError && error instanceof Error) onError(error);
+    throw error;
+  }
+}
+
 export async function deleteUserOptimistic(
   userId: string,
   currentUsers: User[],
@@ -503,6 +553,7 @@ export async function createGroupOptimistic(
     sort_order: input.sort_order ?? 0,
     created_at: now,
     updated_at: now,
+    account_class: input.account_class ?? "standard",
   };
   mutate(SWR_KEYS.DASHBOARD_GROUPS, sortGroups([...currentGroups, tempGroup]), false);
 
@@ -562,12 +613,17 @@ export async function reorderGroupsOptimistic(
 ) {
   const groupsById = new Map(currentGroups.map((group) => [group.id, group]));
   const updatedAt = new Date().toISOString();
-  const optimistic = groupIds.flatMap((groupId, sortOrder) => {
+  const reordered = groupIds.flatMap((groupId, sortOrder) => {
     const group = groupsById.get(groupId);
     return group
       ? [{ ...group, sort_order: sortOrder, updated_at: updatedAt }]
       : [];
   });
+  const reorderedIds = new Set(groupIds);
+  const optimistic = sortGroups([
+    ...currentGroups.filter((group) => !reorderedIds.has(group.id)),
+    ...reordered,
+  ]);
   mutate(SWR_KEYS.DASHBOARD_GROUPS, optimistic, false);
 
   try {

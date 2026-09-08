@@ -14,6 +14,31 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountClass {
+    #[default]
+    Standard,
+    Enterprise,
+}
+
+impl AccountClass {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "standard" => Some(Self::Standard),
+            "enterprise" => Some(Self::Enterprise),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Enterprise => "enterprise",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserRole {
@@ -65,6 +90,8 @@ pub struct User {
     #[serde(skip_serializing)]
     pub password_hash: String,
     pub role: UserRole,
+    #[serde(default)]
+    pub account_class: AccountClass,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -863,8 +890,7 @@ mod tests {
     use super::{
         MAX_MODEL_REDIRECT_PATTERN_BYTES, ModelRedirectRule, canonicalize_group_ids,
         is_provider_group_eligible, provider_group_rank, resolve_effective_groups,
-        restrict_effective_groups,
-        validate_model_redirects,
+        restrict_effective_groups, validate_model_redirects,
     };
 
     fn ids(values: &[&str]) -> Vec<String> {
@@ -884,10 +910,7 @@ mod tests {
     #[test]
     fn resolve_effective_groups_follows_akg5() {
         // Empty key groups mean every Group.
-        assert_eq!(
-            resolve_effective_groups(&[], None),
-            Vec::<String>::new()
-        );
+        assert_eq!(resolve_effective_groups(&[], None), Vec::<String>::new());
         // Explicit ordered selection preserves order.
         assert_eq!(
             resolve_effective_groups(&ids(&["g-2", "g-1"]), None),
@@ -895,10 +918,7 @@ mod tests {
         );
         // Non-empty plan layer filters by membership in base order.
         assert_eq!(
-            resolve_effective_groups(
-                &ids(&["g-2", "g-1", "g-3"]),
-                Some(&ids(&["g-3", "g-2"]))
-            ),
+            resolve_effective_groups(&ids(&["g-2", "g-1", "g-3"]), Some(&ids(&["g-3", "g-2"]))),
             ids(&["g-2", "g-3"])
         );
         // Empty plan layer is unrestricted.
@@ -932,10 +952,7 @@ mod tests {
         assert_eq!(provider_group_rank("g-1", &None), 0);
 
         // Empty effective groups mean every Group for API-key traffic.
-        assert!(is_provider_group_eligible(
-            "g-1",
-            &Some(Vec::new())
-        ));
+        assert!(is_provider_group_eligible("g-1", &Some(Vec::new())));
         assert_eq!(provider_group_rank("g-1", &Some(Vec::new())), 0);
 
         let effective = Some(ids(&["g-2", "g-1"]));

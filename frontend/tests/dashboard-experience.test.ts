@@ -23,6 +23,8 @@ const publicUsageRankingSource = source("../src/pages/public-usage-ranking.tsx")
 const apiSource = source("../src/lib/api.ts");
 const userCenterSource = source("../src/components/user-center-menu.tsx");
 const currencySource = source("../src/hooks/use-store-currency.tsx");
+const storeSource = source("../src/pages/store/index.tsx");
+const layoutSourceForWallet = source("../src/pages/layout.tsx");
 const locales = ["en", "zh", "zh-TW", "ja"].map((locale) =>
   JSON.parse(source(`../src/locales/${locale}.json`)),
 );
@@ -96,6 +98,14 @@ describe("Dashboard navigation", () => {
     expect(adminUsageSource).toContain('const isAdmin = user?.role === "super_admin" || user?.role === "admin"');
     expect(adminUsageSource).toContain('useStoreExchangeRate(currency === "CNY" && isAdmin)');
     expect(adminUsageSource).toContain("{isAdmin ? (");
+  });
+
+  test("supports selected ranges for authenticated rankings and a dedicated wallet page", () => {
+    expect(apiSource).toContain("getAdminUsageRanking(range: UsageRankingRange = \"24h\")");
+    expect(apiSource).toContain("range=${encodeURIComponent(range)}");
+    expect(layoutSourceForWallet).toContain('to: "/dashboard/wallet"');
+    expect(appSource).toContain('path="wallet"');
+    expect(storeSource).not.toContain('t("store.account.balance")');
   });
 
   test("supports mutually consented ranking identity disclosure", () => {

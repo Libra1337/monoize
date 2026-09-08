@@ -243,7 +243,7 @@ pub(super) async fn forward_stream_typed(
     let started_at = std::time::Instant::now();
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
-    let transform_match_model = resolve_model_suffix(&state, &mut req).await?;
+    let transform_match_model = resolve_model_suffix(&state, &mut req, auth.account_class).await?;
     // Preserve the suffix-normalized request so each per-attempt iteration can
     // re-derive the transformed request from a pristine base (see the matching
     // comment in `execute_nonstream_typed`).

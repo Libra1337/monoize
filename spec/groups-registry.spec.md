@@ -200,13 +200,16 @@ one row and GR-D2 cannot be violated by deletion.
 - Request body: `{ "group_ids": string[] }`.
 - Response: `{ "success": true }`.
 
-GR-A8. `group_ids` MUST contain every current group id exactly once. A duplicate id, an
-unknown id, a missing current id, or more than 199 ids MUST return HTTP `400` with code
-`invalid_request`. Validation MUST complete before any `sort_order` value changes.
+GR-A8. `group_ids` MUST contain every current Group id of exactly one `account_class` exactly
+once. The server MUST infer the class from the first id. An empty array, a duplicate id, an
+unknown id, ids from both classes, a missing id from the inferred class, or more than 199 ids
+MUST return HTTP `400` with code `invalid_request`. Validation MUST complete before any
+`sort_order` value changes. Groups of the other class MUST NOT be included.
 
-GR-A9. For a valid request, the group at zero-based array index `i` MUST receive
-`sort_order = i`. All `sort_order` and `updated_at` writes MUST execute atomically in one
-database transaction, and every row MUST receive the same `updated_at` value. A successful
+GR-A9. For a valid request, the Group at zero-based array index `i` MUST receive
+`sort_order = i`. The transaction MUST NOT update a Group of the other account class. All
+selected `sort_order` and `updated_at` writes MUST execute atomically in one database
+transaction, and every selected row MUST receive the same `updated_at` value. A successful
 reorder MUST invalidate the process-local API-key authentication cache.
 
 ## 3. Deletion cascade
@@ -295,3 +298,17 @@ GR-I3. An API key stores an ordered `group_ids` array. An empty array means ever
 
 GR-I4. API-key Group resolution follows `api-key-authentication.spec.md` section 4. A
 non-empty billing-plan Group ceiling still restricts an API key whose own list is empty.
+
+## 6. Account-Class Isolation
+
+GR-E1. Every `users` row and every `monoize_groups` row MUST contain `account_class` equal to `standard` or `enterprise`.
+
+GR-E2. Migration `m20260908_000063_enterprise_account_class` MUST set `account_class = standard` for every existing user and Group.
+
+GR-E3. A user MAY access a Group only when the Group account class equals the user account class and GR-U1 or GR-U2 permits access.
+
+GR-E4. A Provider, Channel, model mapping, and Provider price inherit the account class of the Provider Group. A mutation MUST reject a relation whose resources resolve to different account classes.
+
+GR-E5. Admin Group and Provider list endpoints MUST accept an optional `account_class` filter. When present, every returned row MUST have that class. A response MUST NOT combine both classes when the filter is present.
+
+GR-E6. An account-class mismatch MUST use the same unavailable response as an absent Group. The response MUST NOT reveal a Group from the other account class.

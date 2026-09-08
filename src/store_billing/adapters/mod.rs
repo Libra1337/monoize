@@ -1,3 +1,2 @@
-pub mod alipay;
+pub mod epay;
 pub mod stripe;
-pub mod wechat;

@@ -2,22 +2,22 @@ import { useState } from "react";
 import { SiAlipay, SiStripe, SiWechat } from "@icons-pack/react-simple-icons";
 import { CreditCard } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { StorePaymentChannel } from "@/lib/store-api";
 import { cn } from "@/lib/utils";
+import type { StorePaymentOption } from "./store-selection";
 
 interface PaymentMethodsProps {
-  channels: StorePaymentChannel[];
+  options: StorePaymentOption[];
   selectedId: string | null;
-  onSelect: (channel: StorePaymentChannel) => void;
+  onSelect: (option: StorePaymentOption) => void;
 }
 
-function ChannelIcon({ channel }: { channel: StorePaymentChannel }) {
+function OptionIcon({ option }: { option: StorePaymentOption }) {
   const [imageFailed, setImageFailed] = useState(false);
 
-  if (channel.icon_kind !== "builtin" && channel.icon_value && !imageFailed) {
+  if (option.iconKind !== "builtin" && option.iconValue && !imageFailed) {
     return (
       <img
-        src={channel.icon_value}
+        src={option.iconValue}
         alt=""
         className="size-5 object-contain"
         aria-hidden="true"
@@ -25,13 +25,15 @@ function ChannelIcon({ channel }: { channel: StorePaymentChannel }) {
       />
     );
   }
-  if (channel.adapter_kind === "alipay") return <SiAlipay className="size-5 text-[#1677ff]" />;
-  if (channel.adapter_kind === "wechat") return <SiWechat className="size-5 text-[#07c160]" />;
-  if (channel.adapter_kind === "stripe") return <SiStripe className="size-5 text-[#635bff]" />;
+  if (option.method === "alipay") return <SiAlipay className="size-5 text-[#1677ff]" />;
+  if (option.method === "wxpay") return <SiWechat className="size-5 text-[#07c160]" />;
+  if (option.channel.adapter_kind === "stripe") {
+    return <SiStripe className="size-5 text-[#635bff]" />;
+  }
   return <CreditCard className="size-5" />;
 }
 
-export function PaymentMethods({ channels, selectedId, onSelect }: PaymentMethodsProps) {
+export function PaymentMethods({ options, selectedId, onSelect }: PaymentMethodsProps) {
   const { t } = useTranslation();
 
   return (
@@ -39,26 +41,26 @@ export function PaymentMethods({ channels, selectedId, onSelect }: PaymentMethod
       <h2 id="store-payment-title" className="mb-3 text-sm font-semibold">
         {t("store.payment.title")}
       </h2>
-      {channels.length === 0 ? (
+      {options.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("store.payment.empty")}</p>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {channels.map((channel) => (
+          {options.map((option) => (
             <button
-              key={channel.id}
+              key={option.id}
               type="button"
-              aria-pressed={selectedId === channel.id}
-              aria-label={t("store.payment.select", { name: channel.name })}
-              onClick={() => onSelect(channel)}
+              aria-pressed={selectedId === option.id}
+              aria-label={t("store.payment.select", { name: option.label })}
+              onClick={() => onSelect(option)}
               className={cn(
                 "flex min-h-11 items-center gap-3 rounded-xl border bg-card px-4 py-3 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                selectedId === channel.id
+                selectedId === option.id
                   ? "border-foreground bg-accent"
                   : "hover:border-foreground/30 hover:bg-accent/50",
               )}
             >
-              <ChannelIcon key={channel.icon_value ?? channel.id} channel={channel} />
-              <span className="min-w-0 truncate">{channel.name}</span>
+              <OptionIcon key={option.iconValue ?? option.id} option={option} />
+              <span className="min-w-0 truncate">{option.label}</span>
             </button>
           ))}
         </div>

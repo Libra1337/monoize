@@ -1,6 +1,8 @@
 use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
-use crate::users::{RequestCaptureMode, UserStore, resolve_effective_groups, restrict_effective_groups};
+use crate::users::{
+    RequestCaptureMode, UserStore, resolve_effective_groups, restrict_effective_groups,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InternalRequestSource {
@@ -22,6 +24,7 @@ pub struct AuthResult {
     pub user_id: Option<String>,
     pub username: Option<String>,
     pub user_role: crate::users::UserRole,
+    pub account_class: crate::users::AccountClass,
     pub api_key_id: Option<String>,
     pub api_key_name: Option<String>,
     pub internal_source: Option<InternalRequestSource>,
@@ -67,20 +70,16 @@ impl AuthState {
                     Ok(Some((api_key, user, plan_group_ids))) => {
                         // GR-I4: API-key auth always yields a concrete ordered list;
                         // `None` is reserved for internal system traffic.
-                        let resolved_groups = resolve_effective_groups(
-                            &api_key.group_ids,
-                            plan_group_ids.as_deref(),
-                        );
-                        let accessible_groups = match store
-                            .accessible_group_ids(&user.id, user.role)
-                            .await
-                        {
-                            Ok(groups) => groups,
-                            Err(error) => {
-                                tracing::error!(%error, "failed to resolve Group visibility");
-                                return None;
-                            }
-                        };
+                        let resolved_groups =
+                            resolve_effective_groups(&api_key.group_ids, plan_group_ids.as_deref());
+                        let accessible_groups =
+                            match store.accessible_group_ids(&user.id, user.role).await {
+                                Ok(groups) => groups,
+                                Err(error) => {
+                                    tracing::error!(%error, "failed to resolve Group visibility");
+                                    return None;
+                                }
+                            };
                         let effective_groups = Some(restrict_effective_groups(
                             &resolved_groups,
                             &accessible_groups,
@@ -90,6 +89,7 @@ impl AuthState {
                             user_id: Some(user.id),
                             username: Some(user.username.clone()),
                             user_role: user.role,
+                            account_class: user.account_class,
                             api_key_id: Some(api_key.id),
                             api_key_name: Some(api_key.name),
                             internal_source: None,
@@ -160,9 +160,33 @@ mod tests {
         }
     }
 
+    /// An empty API-key selection means every Group accessible to the owner, never every
+    /// private Group in the registry.
     #[tokio::test]
-    async fn authenticate_token_uses_all_groups_for_empty_key_selection() {
+    async fn authenticate_token_uses_accessible_groups_for_empty_key_selection() {
         let store = make_user_store().await;
+        let public = store
+            .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "public-team".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 3,
+                account_class: Default::default(),
+            })
+            .await
+            .expect("public group created");
+        let private = store
+            .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "private-team".to_string(),
+                description: String::new(),
+                user_selectable: false,
+                sort_order: 4,
+                account_class: Default::default(),
+            })
+            .await
+            .expect("private group created");
         let user = store
             .create_user("alice", "password123", UserRole::User, None)
             .await
@@ -178,7 +202,27 @@ mod tests {
             .expect("auth succeeds");
 
         assert_eq!(auth.user_id.as_deref(), Some(user.id.as_str()));
-        assert_eq!(auth.effective_groups, Some(Vec::new()));
+        let groups = auth
+            .effective_groups
+            .clone()
+            .expect("api keys resolve groups");
+        assert!(groups.contains(&public.id));
+        assert!(!groups.contains(&private.id));
+
+        // A grant makes the private Group part of the same empty selection.
+        store
+            .grant_group_access(&user.id, &private.id)
+            .await
+            .expect("grant created");
+        let auth = AuthState::new()
+            .authenticate_token(&token, Some(&store))
+            .await
+            .expect("auth succeeds");
+        assert!(
+            auth.effective_groups
+                .expect("api keys resolve groups")
+                .contains(&private.id)
+        );
     }
 
     #[tokio::test]
@@ -189,8 +233,9 @@ mod tests {
                 confirm_public_exposure: true,
                 name: "team-a".to_string(),
                 description: String::new(),
-                user_selectable: false,
+                user_selectable: true,
                 sort_order: 1,
+                account_class: Default::default(),
             })
             .await
             .expect("group created");
@@ -199,8 +244,9 @@ mod tests {
                 confirm_public_exposure: true,
                 name: "team-b".to_string(),
                 description: String::new(),
-                user_selectable: false,
+                user_selectable: true,
                 sort_order: 2,
+                account_class: Default::default(),
             })
             .await
             .expect("group created");

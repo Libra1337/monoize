@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Plus, Server } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -13,7 +14,7 @@ import {
 	AlertDialogTitle
 } from '@/components/ui/alert-dialog'
 import { toast } from 'sonner'
-import type { Provider } from '@/lib/api'
+import type { AccountClass, Provider } from '@/lib/api'
 import {
 	useProviders,
 	useModelMetadata,
@@ -21,7 +22,8 @@ import {
 	useTransformRegistry,
 	deleteProviderOptimistic,
 	updateProviderOptimistic,
-	reorderProviders
+	reorderProviders,
+	useDashboardGroups
 } from '@/lib/swr'
 import { AnimatedButton, PageWrapper, motion, transitions } from '@/components/ui/motion'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -35,6 +37,13 @@ export function ProvidersPage() {
 	const { t } = useTranslation()
 	const { data: providersData, error: providersError, isLoading, mutate: reloadProviders } = useProviders()
 	const providers = providersData ?? []
+	const { data: groups = [] } = useDashboardGroups()
+	const [accountClass, setAccountClass] = useState<AccountClass>("standard")
+	const groupById = useMemo(() => new Map(groups.map(group => [group.id, group])), [groups])
+	const visibleProviders = useMemo(
+		() => providers.filter(provider => groupById.get(provider.group_id)?.account_class === accountClass),
+		[accountClass, groupById, providers]
+	)
 	const { data: settings } = useSettings()
 	const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
 		useTransformRegistry()
@@ -56,12 +65,12 @@ export function ProvidersPage() {
 	}
 
 	const moveProvider = async (from: number, to: number) => {
-		if (to < 0 || to >= providers.length || from === to) {
+		if (to < 0 || to >= visibleProviders.length || from === to) {
 			return
 		}
-		const groupId = providers[from]?.group_id
-		if (!groupId || providers[to]?.group_id !== groupId) return
-		const next = [...providers]
+		const groupId = visibleProviders[from]?.group_id
+		if (!groupId || visibleProviders[to]?.group_id !== groupId) return
+		const next = [...visibleProviders]
 		const [item] = next.splice(from, 1)
 		next.splice(to, 0, item)
 		await applyReorder(
@@ -74,7 +83,7 @@ export function ProvidersPage() {
 		if (!draggingProviderId || draggingProviderId === targetProviderId) {
 			return
 		}
-		const next = [...providers]
+		const next = [...visibleProviders]
 		const from = next.findIndex(provider => provider.id === draggingProviderId)
 		const to = next.findIndex(provider => provider.id === targetProviderId)
 		if (from < 0 || to < 0) {
@@ -166,8 +175,18 @@ export function ProvidersPage() {
 				)} />
 			</motion.div>
 
+			<div className='flex flex-col gap-2 rounded-xl border bg-card p-3 sm:flex-row sm:items-center sm:justify-between'>
+				<div><p className='text-sm font-medium'>{t('providers.accountClass')}</p><p className='text-xs text-muted-foreground'>{t('providers.accountClassDescription')}</p></div>
+				<Tabs value={accountClass} onValueChange={value => setAccountClass(value as AccountClass)}>
+					<TabsList className='grid w-full grid-cols-2 rounded-lg sm:w-64'>
+						<TabsTrigger value='standard'>{t('accountClass.standard')}</TabsTrigger>
+						<TabsTrigger value='enterprise'>{t('accountClass.enterprise')}</TabsTrigger>
+					</TabsList>
+				</Tabs>
+			</div>
+
 			<div className='space-y-4'>
-				{providers.length === 0 && (
+				{visibleProviders.length === 0 && (
 					<motion.div
 						initial={{ opacity: 0, scale: 0.95 }}
 						animate={{ opacity: 1, scale: 1 }}
@@ -183,12 +202,12 @@ export function ProvidersPage() {
 					</motion.div>
 				)}
 
-				{providers.map((provider, index) => (
+				{visibleProviders.map((provider, index) => (
 					<ProviderCard
 						key={provider.id}
 						provider={provider}
 						index={index}
-						total={providers.length}
+						total={visibleProviders.length}
 						onEdit={setEditProvider}
 						onDelete={handleDelete}
 						onMove={moveProvider}
@@ -211,6 +230,7 @@ export function ProvidersPage() {
 				modelMetadata={modelMetadata}
 				reasoningSuffixMap={reasoningSuffixMap}
 				settings={settings}
+				accountClass={accountClass}
 			/>
 
 			<ProviderDialog
@@ -228,6 +248,7 @@ export function ProvidersPage() {
 				modelMetadata={modelMetadata}
 				reasoningSuffixMap={reasoningSuffixMap}
 				settings={settings}
+				accountClass={accountClass}
 			/>
 
 			<AlertDialog open={!!deleteTarget} onOpenChange={open => { if (!open) setDeleteTarget(null) }}>

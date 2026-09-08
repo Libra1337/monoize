@@ -5,13 +5,10 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use monoize::db::DbPool;
 use monoize::migration::Migrator;
-use monoize::store_billing::adapters::alipay::{
-    AlipayCheckoutResult, AlipayCredential, AlipayProduct,
+use monoize::store_billing::adapters::epay::{
+    EpayCheckoutResult, EpayCredential, EpayDevice, EpayMethod,
 };
 use monoize::store_billing::adapters::stripe::{StripeCheckoutResult, StripeCredential};
-use monoize::store_billing::adapters::wechat::{
-    WechatCheckoutResult, WechatCredential, WechatProduct,
-};
 use monoize::store_billing::checkout::{CheckoutError, CheckoutProvider, CheckoutService};
 use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
@@ -42,13 +39,13 @@ struct RejectedProvider {
 }
 
 #[derive(Clone, Default)]
-struct OfficialChannelProvider {
+struct EpayChannelProvider {
     alipay_calls: Arc<AtomicUsize>,
-    wechat_calls: Arc<AtomicUsize>,
+    wxpay_calls: Arc<AtomicUsize>,
 }
 
 #[async_trait]
-impl CheckoutProvider for OfficialChannelProvider {
+impl CheckoutProvider for EpayChannelProvider {
     async fn create_stripe_checkout(
         &self,
         _credential: &StripeCredential,
@@ -57,43 +54,41 @@ impl CheckoutProvider for OfficialChannelProvider {
         Err(AdapterError::Unsupported)
     }
 
-    async fn create_alipay_checkout(
+    async fn create_epay_checkout(
         &self,
-        _credential: &AlipayCredential,
+        _credential: &EpayCredential,
         request: &CheckoutRequest,
-        product: AlipayProduct,
-        _notify_url: Url,
-    ) -> Result<AlipayCheckoutResult, AdapterError> {
-        self.alipay_calls.fetch_add(1, Ordering::SeqCst);
-        assert_eq!(product, AlipayProduct::ComputerWeb);
-        Ok(AlipayCheckoutResult {
-            provider_object_id: request.order_number.clone(),
-            action: CheckoutAction::Form {
-                action: "https://openapi.alipay.com/gateway.do".to_string(),
-                fields: vec![("sign".to_string(), "signed".to_string())],
-                expires_at: "2026-08-28T01:00:00Z".to_string(),
-            },
-        })
-    }
-
-    async fn create_wechat_checkout(
-        &self,
-        _credential: &WechatCredential,
-        request: &CheckoutRequest,
-        product: WechatProduct,
-        _notify_url: Url,
+        method: EpayMethod,
+        notify_url: Url,
+        device: EpayDevice,
         client_ip: Option<std::net::IpAddr>,
-    ) -> Result<WechatCheckoutResult, AdapterError> {
-        self.wechat_calls.fetch_add(1, Ordering::SeqCst);
-        assert_eq!(product, WechatProduct::H5);
-        assert_eq!(client_ip, Some("203.0.113.9".parse().unwrap()));
-        Ok(WechatCheckoutResult {
+    ) -> Result<EpayCheckoutResult, AdapterError> {
+        assert_eq!(
+            notify_url.as_str(),
+            "https://lynshen.org/api/store/callbacks/store-channel-stripe"
+        );
+        let action = match method {
+            EpayMethod::Alipay => {
+                self.alipay_calls.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(device, EpayDevice::Pc);
+                CheckoutAction::Redirect {
+                    url: "https://pay.example.com/pay/alipay/202010903/".to_string(),
+                    expires_at: "2026-08-28T01:00:00Z".to_string(),
+                }
+            }
+            EpayMethod::Wxpay => {
+                self.wxpay_calls.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(device, EpayDevice::Mobile);
+                assert_eq!(client_ip, Some("203.0.113.9".parse().unwrap()));
+                CheckoutAction::Qr {
+                    payload: "weixin://wxpay/bizpayurl?pr=04IPMKM".to_string(),
+                    expires_at: "2026-08-28T01:00:00Z".to_string(),
+                }
+            }
+        };
+        Ok(EpayCheckoutResult {
             provider_object_id: request.order_number.clone(),
-            action: CheckoutAction::Redirect {
-                url: "https://wx.tenpay.com/cgi-bin/mmpayweb-bin/checkmweb?prepay_id=test"
-                    .to_string(),
-                expires_at: "2026-08-28T01:00:00Z".to_string(),
-            },
+            action,
         })
     }
 }
@@ -326,8 +321,8 @@ async fn replace_checkout_adapter(
             credential_json,
         )
         .unwrap();
-    let digest = if adapter_kind == "wechat" {
-        WechatCredential::from_json(credential_json)
+    let digest = if adapter_kind == "epay" {
+        EpayCredential::from_json(credential_json)
             .unwrap()
             .account_identity_digest()
     } else {
@@ -344,6 +339,22 @@ async fn replace_checkout_adapter(
         ))
         .await
         .unwrap();
+    if adapter_kind == "epay" {
+        for (method, sort_order) in [("alipay", 10), ("wxpay", 20)] {
+            write
+                .execute(db.stmt(
+                    "INSERT INTO store_epay_methods
+                        (channel_id, method, label, icon_kind, icon_value, sort_order,
+                         enabled, created_at, updated_at)
+                     VALUES ('store-channel-stripe', $1, $1, 'builtin', $1, $2, 1,
+                             '2026-09-08T00:00:00Z', '2026-09-08T00:00:00Z')
+                     ON CONFLICT (channel_id, method) DO UPDATE SET enabled = 1",
+                    vec![method.into(), sort_order.into()],
+                ))
+                .await
+                .unwrap();
+        }
+    }
     write
         .execute(db.stmt(
             "UPDATE store_channel_credentials
@@ -364,12 +375,7 @@ async fn replace_checkout_adapter(
         .await
         .unwrap();
     let (currencies, limits, actions) = match adapter_kind {
-        "alipay" => (
-            "[\"CNY\"]",
-            "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
-            "[\"form\"]",
-        ),
-        "wechat" => (
+        "epay" => (
             "[\"CNY\"]",
             "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
             "[\"qr\",\"redirect\"]",
@@ -406,22 +412,19 @@ async fn replace_checkout_adapter(
         .unwrap();
 }
 
+const EPAY_CREDENTIAL: &[u8] = br#"{
+    "gateway_base_url":"https://pay.example.com/",
+    "merchant_id":"1001",
+    "merchant_key":"89unJUB8HZ54Hj7x4nUj56HN4nUzUJ8i",
+    "alipay_enabled":true,
+    "wxpay_enabled":true
+}"#;
+
 #[tokio::test]
-async fn checkout_dispatches_alipay_and_wechat_credentials() {
+async fn checkout_dispatches_both_epay_methods_from_one_channel() {
     let (db, key_ring, order_id) = checkout_fixture().await;
-    let provider = OfficialChannelProvider::default();
-    replace_checkout_adapter(
-        &db,
-        &key_ring,
-        "alipay",
-        "2088000000000001",
-        br#"{
-            "app_id":"2026000000000001","seller_id":"2088000000000001",
-            "merchant_private_key_pem":"private","alipay_public_key_pem":"public",
-            "environment":"production"
-        }"#,
-    )
-    .await;
+    let provider = EpayChannelProvider::default();
+    replace_checkout_adapter(&db, &key_ring, "epay", "1001", EPAY_CREDENTIAL).await;
     let alipay = CheckoutService::new(
         db.clone(),
         Some(Arc::new(key_ring)),
@@ -432,50 +435,66 @@ async fn checkout_dispatches_alipay_and_wechat_credentials() {
         "checkout-user",
         &order_id,
         CreatePaymentAttemptInput {
-            idempotency_key: "checkout-alipay".to_string(),
-            expected_payment_method: Some("computer_web".to_string()),
+            idempotency_key: "checkout-epay-alipay".to_string(),
+            expected_payment_method: Some("alipay".to_string()),
         },
     )
     .await
     .unwrap();
-    assert!(matches!(alipay.action, CheckoutAction::Form { .. }));
+    assert!(matches!(alipay.action, CheckoutAction::Redirect { .. }));
     assert_eq!(provider.alipay_calls.load(Ordering::SeqCst), 1);
 
     let (db, key_ring, order_id) = checkout_fixture().await;
-    replace_checkout_adapter(
-        &db,
-        &key_ring,
-        "wechat",
-        "1900000109",
-        br#"{
-            "merchant_id":"1900000109","app_id":"wx1234567890",
-            "api_v3_key":"0123456789abcdef0123456789abcdef",
-            "merchant_certificate_serial":"7777777777777777777777777777777777777777",
-            "merchant_private_key_pem":"private",
-            "platform_certificate_serial":"PLATFORM-CERTIFICATE-1",
-            "platform_public_key_pem":"public"
-        }"#,
-    )
-    .await;
-    let wechat = CheckoutService::new(
+    replace_checkout_adapter(&db, &key_ring, "epay", "1001", EPAY_CREDENTIAL).await;
+    let wxpay = CheckoutService::new(
         db,
         Some(Arc::new(key_ring)),
         Some(Url::parse("https://lynshen.org").unwrap()),
         Arc::new(provider.clone()),
     )
     .with_client_ip(Some("203.0.113.9".parse().unwrap()))
+    .with_device(EpayDevice::Mobile)
     .create_attempt(
         "checkout-user",
         &order_id,
         CreatePaymentAttemptInput {
-            idempotency_key: "checkout-wechat".to_string(),
-            expected_payment_method: Some("h5".to_string()),
+            idempotency_key: "checkout-epay-wxpay".to_string(),
+            expected_payment_method: Some("wxpay".to_string()),
         },
     )
     .await
     .unwrap();
-    assert!(matches!(wechat.action, CheckoutAction::Redirect { .. }));
-    assert_eq!(provider.wechat_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(wxpay.action, CheckoutAction::Qr { .. }));
+    assert_eq!(provider.wxpay_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn epay_checkout_rejects_an_unknown_payment_method() {
+    let (db, key_ring, order_id) = checkout_fixture().await;
+    let provider = EpayChannelProvider::default();
+    replace_checkout_adapter(&db, &key_ring, "epay", "1001", EPAY_CREDENTIAL).await;
+    let error = CheckoutService::new(
+        db,
+        Some(Arc::new(key_ring)),
+        Some(Url::parse("https://lynshen.org").unwrap()),
+        Arc::new(provider.clone()),
+    )
+    .create_attempt(
+        "checkout-user",
+        &order_id,
+        CreatePaymentAttemptInput {
+            idempotency_key: "checkout-epay-unknown".to_string(),
+            expected_payment_method: Some("qqpay".to_string()),
+        },
+    )
+    .await
+    .expect_err("unknown EPay method must not create an attempt");
+    assert!(matches!(
+        error,
+        CheckoutError::Order(monoize::store_billing::order::PaymentOrderError::ChannelUnavailable)
+    ));
+    assert_eq!(provider.alipay_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(provider.wxpay_calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

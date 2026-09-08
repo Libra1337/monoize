@@ -1,10 +1,10 @@
 use super::utils::parse_nano_usd;
 use super::{
-    AdminUpdateUserInput, ApiKey, ApiKeyChannelBinding, BillingError, BillingErrorKind,
-    CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule, RESERVED_INTERNAL_USER_PREFIX,
-    BillingLedgerEntry, RegisterUserError, RequestCaptureMode, Session, UpdateApiKeyInput, User,
-    UserBalance, UserRole,
-    UserStore, canonicalize_channel_bindings, canonicalize_group_ids, compile_model_redirects,
+    AccountClass, AdminUpdateUserInput, ApiKey, ApiKeyChannelBinding, BillingError,
+    BillingErrorKind, BillingLedgerEntry, CreateApiKeyInput, CreateApiKeyWithLimitError,
+    ModelRedirectRule, RESERVED_INTERNAL_USER_PREFIX, RegisterUserError, RequestCaptureMode,
+    Session, UpdateApiKeyInput, User, UserBalance, UserRole, UserStore,
+    canonicalize_channel_bindings, canonicalize_group_ids, compile_model_redirects,
     validate_model_redirects,
 };
 use crate::transforms::{
@@ -241,11 +241,21 @@ impl UserStore {
         if group_ids.len() > MAX_GROUP_IDS {
             return Err(format!("at most {MAX_GROUP_IDS} groups can be selected"));
         }
+        let owner = self
+            .get_user_by_id(user_id)
+            .await?
+            .ok_or_else(|| "user not found".to_string())?;
         for id in group_ids {
             let group = self
                 .get_group_by_id(id)
                 .await?
                 .ok_or_else(|| format!("unknown group id: {id}"))?;
+            if group.account_class != owner.account_class {
+                return Err(format!(
+                    "group account class does not match user: {}",
+                    group.name
+                ));
+            }
             if !is_admin && !group.is_public {
                 let granted = self.db.read().query_one(self.db.stmt(
                     "SELECT 1 AS present FROM user_group_grants WHERE user_id = $1 AND group_id = $2 LIMIT 1",
@@ -284,32 +294,6 @@ pub(crate) fn serialize_channel_bindings_json(
 }
 
 pub(crate) const MAX_GROUP_IDS: usize = 32;
-
-impl UserStore {
-    /// TM-GRP-3/TM-GRP-5 validation for an already canonicalized group-id list:
-    /// bounded length, every id registered, and non-admin callers limited to
-    /// `user_selectable` groups plus the owner's own current group.
-    pub(crate) async fn validate_api_key_group_selection(
-        &self,
-        owner_group_id: &str,
-        group_ids: &[String],
-        is_admin: bool,
-    ) -> Result<(), String> {
-        if group_ids.len() > MAX_GROUP_IDS {
-            return Err(format!("at most {MAX_GROUP_IDS} groups can be selected"));
-        }
-        for id in group_ids {
-            let group = self
-                .get_group_by_id(id)
-                .await?
-                .ok_or_else(|| format!("unknown group id: {id}"))?;
-            if !is_admin && !group.user_selectable && id != owner_group_id {
-                return Err(format!("group is not selectable: {}", group.name));
-            }
-        }
-        Ok(())
-    }
-}
 
 impl UserStore {
     pub fn is_reserved_internal_username(username: &str) -> bool {
@@ -664,6 +648,7 @@ impl UserStore {
             username: username.to_string(),
             password_hash,
             role,
+            account_class: AccountClass::Standard,
             created_at: now,
             updated_at: now,
             last_login_at: None,
@@ -713,7 +698,7 @@ impl UserStore {
     pub async fn get_user_by_id(&self, id: &str) -> Result<Option<User>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE id = $1",
+                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE id = $1",
                 vec![id.into()],
             ))
             .await
@@ -729,7 +714,7 @@ impl UserStore {
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE username = $1",
+                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE username = $1",
                 vec![username.into()],
             ))
             .await
@@ -745,7 +730,7 @@ impl UserStore {
     pub async fn list_users(&self) -> Result<Vec<User>, String> {
         let rows = self.db.read()
             .query_all(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
+                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
                 vec![],
             ))
             .await
@@ -786,12 +771,8 @@ impl UserStore {
                     .map_err(|error| error.to_string())?;
                 let meta = serde_json::from_str(&meta_json).map_err(|error| error.to_string())?;
                 Ok(BillingLedgerEntry {
-                    id: row
-                        .try_get("", "id")
-                        .map_err(|error| error.to_string())?,
-                    kind: row
-                        .try_get("", "kind")
-                        .map_err(|error| error.to_string())?,
+                    id: row.try_get("", "id").map_err(|error| error.to_string())?,
+                    kind: row.try_get("", "kind").map_err(|error| error.to_string())?,
                     delta_nano_usd: row
                         .try_get("", "delta_nano_usd")
                         .map_err(|error| error.to_string())?,
@@ -805,15 +786,24 @@ impl UserStore {
             .collect()
     }
 
-    pub async fn update_usage_ranking_anonymous(&self, id: &str, anonymous: bool) -> Result<(), String> {
-        self.db.write().await.execute(self.db.stmt(
-            "UPDATE users SET usage_ranking_anonymous = $1, updated_at = $2 WHERE id = $3",
-            vec![
-                SeaValue::Int(Some(if anonymous { 1 } else { 0 })),
-                Utc::now().to_rfc3339().into(),
-                id.into(),
-            ],
-        )).await.map_err(|error| error.to_string())?;
+    pub async fn update_usage_ranking_anonymous(
+        &self,
+        id: &str,
+        anonymous: bool,
+    ) -> Result<(), String> {
+        self.db
+            .write()
+            .await
+            .execute(self.db.stmt(
+                "UPDATE users SET usage_ranking_anonymous = $1, updated_at = $2 WHERE id = $3",
+                vec![
+                    SeaValue::Int(Some(if anonymous { 1 } else { 0 })),
+                    Utc::now().to_rfc3339().into(),
+                    id.into(),
+                ],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -1157,6 +1147,152 @@ impl UserStore {
             // Cached auth results embed the plan's group restriction layer.
             self.api_key_cache.invalidate_by_user_id(id);
         }
+        Ok(())
+    }
+
+    pub async fn change_user_account_class(
+        &self,
+        user_id: &str,
+        target: AccountClass,
+        actor_user_id: &str,
+    ) -> Result<(), String> {
+        let write = self.db.write().await;
+        let tx = write.begin().await.map_err(|error| error.to_string())?;
+        let user_lock_sql = if self.db.is_postgres() {
+            "SELECT account_class, balance_nano_usd, balance_unlimited FROM users WHERE id = $1 FOR UPDATE"
+        } else {
+            "SELECT account_class, balance_nano_usd, balance_unlimited FROM users WHERE id = $1"
+        };
+        let user = tx
+            .query_one(self.db.stmt(user_lock_sql, vec![user_id.into()]))
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "user not found".to_string())?;
+        let current_raw: String = user
+            .try_get("", "account_class")
+            .map_err(|error| error.to_string())?;
+        let current = AccountClass::from_str(&current_raw)
+            .ok_or_else(|| format!("invalid persisted users.account_class: {current_raw:?}"))?;
+        if current == target {
+            tx.commit().await.map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+
+        let target_group = tx
+            .query_one(self.db.stmt(
+                "SELECT id FROM monoize_groups WHERE account_class = $1 ORDER BY is_default DESC, sort_order ASC, created_at ASC, id ASC LIMIT 1",
+                vec![target.as_str().into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "target account class has no Group".to_string())?;
+        let target_group_id: String = target_group
+            .try_get("", "id")
+            .map_err(|error| error.to_string())?;
+
+        let key_lock_suffix = if self.db.is_postgres() {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
+        let key_rows = tx
+            .query_all(self.db.stmt(
+                &format!(
+                    "SELECT id, name, key_prefix, sub_account_balance_nano FROM api_keys WHERE user_id = $1 ORDER BY id{key_lock_suffix}"
+                ),
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut balance: i128 = parse_nano_usd(
+            &user
+                .try_get::<String>("", "balance_nano_usd")
+                .map_err(|error| error.to_string())?,
+        )?;
+        let unlimited = user
+            .try_get::<i32>("", "balance_unlimited")
+            .map_err(|error| error.to_string())?
+            == 1;
+        let now = Utc::now().to_rfc3339();
+        let mut deleted_keys = Vec::with_capacity(key_rows.len());
+        let mut settlements = Vec::new();
+        for row in &key_rows {
+            let key_id: String = row.try_get("", "id").map_err(|error| error.to_string())?;
+            let key_balance = parse_nano_usd(
+                &row.try_get::<String>("", "sub_account_balance_nano")
+                    .map_err(|error| error.to_string())?,
+            )?;
+            deleted_keys.push(serde_json::json!({
+                "id": key_id,
+                "name": row.try_get::<String>("", "name").map_err(|error| error.to_string())?,
+                "key_prefix": row.try_get::<String>("", "key_prefix").map_err(|error| error.to_string())?,
+            }));
+            if key_balance != 0 {
+                let balance_after = if unlimited {
+                    None
+                } else {
+                    balance = balance
+                        .checked_add(key_balance)
+                        .ok_or_else(|| "sub-account delete settlement overflow".to_string())?;
+                    Some(balance)
+                };
+                settlements.push((key_id, key_balance, balance_after));
+            }
+        }
+
+        for (key_id, delta, balance_after) in settlements {
+            self.insert_billing_ledger_tx(
+                &tx,
+                user_id,
+                "sub_account_delete_settlement",
+                delta,
+                balance_after,
+                &serde_json::json!({
+                    "api_key_id": key_id,
+                    "reason": "account_class_change",
+                    "actor_user_id": actor_user_id,
+                }),
+                &now,
+            )
+            .await
+            .map_err(|error| error.message)?;
+        }
+        tx.execute(self.db.stmt(
+            "DELETE FROM api_keys WHERE user_id = $1",
+            vec![user_id.into()],
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+        tx.execute(self.db.stmt(
+            "UPDATE users SET account_class = $1, group_id = $2, balance_nano_usd = $3, updated_at = $4 WHERE id = $5",
+            vec![
+                target.as_str().into(),
+                target_group_id.into(),
+                balance.to_string().into(),
+                now.clone().into(),
+                user_id.into(),
+            ],
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+        tx.execute(self.db.stmt(
+            "INSERT INTO user_account_class_audits (id, user_id, actor_user_id, from_account_class, to_account_class, deleted_api_key_count, deleted_api_keys_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            vec![
+                uuid::Uuid::new_v4().to_string().into(),
+                user_id.into(),
+                actor_user_id.into(),
+                current.as_str().into(),
+                target.as_str().into(),
+                SeaValue::BigInt(Some(deleted_keys.len() as i64)),
+                serde_json::to_string(&deleted_keys).map_err(|error| error.to_string())?.into(),
+                now.into(),
+            ],
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+        tx.commit().await.map_err(|error| error.to_string())?;
+        self.api_key_cache.invalidate_by_user_id(user_id);
+        self.balance_cache.invalidate(user_id);
         Ok(())
     }
 
@@ -1634,6 +1770,7 @@ impl UserStore {
                         a.model_redirects, a.reasoning_envelope_enabled,
                         a.request_capture_enabled, a.request_capture_mode,
                         u.role AS owner_role,
+                        u.account_class AS owner_account_class,
                         u.id AS owner_id, u.username AS owner_username,
                         u.password_hash AS owner_password_hash,
                         u.created_at AS owner_created_at, u.updated_at AS owner_updated_at,
@@ -1660,6 +1797,12 @@ impl UserStore {
         let api_key = self.row_to_api_key(&row).await?;
         let role_raw: String = row.try_get("", "owner_role").map_err(|e| e.to_string())?;
         let role = UserRole::from_str(&role_raw).ok_or_else(|| "invalid role".to_string())?;
+        let account_class_raw: String = row
+            .try_get("", "owner_account_class")
+            .map_err(|e| e.to_string())?;
+        let account_class = AccountClass::from_str(&account_class_raw).ok_or_else(|| {
+            format!("invalid persisted users.account_class: {account_class_raw:?}")
+        })?;
         let parse_time = |column: &str| -> Result<DateTime<Utc>, String> {
             DateTime::parse_from_rfc3339(
                 &row.try_get::<String>("", column)
@@ -1692,6 +1835,7 @@ impl UserStore {
                 .try_get("", "owner_password_hash")
                 .map_err(|e| e.to_string())?,
             role,
+            account_class,
             created_at: parse_time("owner_created_at")?,
             updated_at: parse_time("owner_updated_at")?,
             last_login_at,
@@ -2260,6 +2404,12 @@ impl UserStore {
     pub(crate) fn row_to_user(&self, row: &QueryResult) -> Result<User, String> {
         let role_str: String = row.try_get("", "role").map_err(|e| e.to_string())?;
         let role = UserRole::from_str(&role_str).ok_or_else(|| "invalid role".to_string())?;
+        let account_class_raw: String = row
+            .try_get("", "account_class")
+            .map_err(|e| e.to_string())?;
+        let account_class = AccountClass::from_str(&account_class_raw).ok_or_else(|| {
+            format!("invalid persisted users.account_class: {account_class_raw:?}")
+        })?;
 
         let last_login_at: Option<String> = row
             .try_get("", "last_login_at")
@@ -2300,6 +2450,7 @@ impl UserStore {
                 .try_get("", "password_hash")
                 .map_err(|e| e.to_string())?,
             role,
+            account_class,
             created_at: DateTime::parse_from_rfc3339(
                 &row.try_get::<String>("", "created_at")
                     .map_err(|e| e.to_string())?,
@@ -2371,10 +2522,8 @@ impl UserStore {
         let channel_bindings_raw: String = row
             .try_get("", "channel_bindings")
             .map_err(|error| format!("invalid persisted api_keys.channel_bindings: {error}"))?;
-        let channel_bindings = parse_channel_bindings_json(
-            &channel_bindings_raw,
-            "api_keys.channel_bindings",
-        )?;
+        let channel_bindings =
+            parse_channel_bindings_json(&channel_bindings_raw, "api_keys.channel_bindings")?;
 
         let max_multiplier = row
             .try_get::<Option<String>>("", "max_multiplier")
@@ -2619,8 +2768,12 @@ impl UserStore {
         }
 
         if group_fields_changed && !effective_group_ids.is_empty() {
-            self.validate_api_key_group_selection_for_user(&existing_key.user_id, &effective_group_ids, is_admin)
-                .await?;
+            self.validate_api_key_group_selection_for_user(
+                &existing_key.user_id,
+                &effective_group_ids,
+                is_admin,
+            )
+            .await?;
         }
 
         values.push(key_id.into());
@@ -3285,8 +3438,8 @@ mod tests {
     use super::{
         DEFAULT_SESSION_CLEANUP_INTERVAL_SECS, canonicalize_ip_whitelist,
         parse_api_key_batch_delete_limit, parse_group_ids_json, parse_positive_limit,
-        parse_session_cleanup_interval_secs, sanitize_api_key_transforms,
-        serialize_group_ids_json, validate_api_key_transforms,
+        parse_session_cleanup_interval_secs, sanitize_api_key_transforms, serialize_group_ids_json,
+        validate_api_key_transforms,
     };
     use crate::db::DbPool;
     use crate::migration::Migrator;
@@ -3417,7 +3570,10 @@ mod tests {
             let raw: String = row.try_get("", "transforms").expect("transforms decode");
             let transforms: Vec<TransformRuleConfig> =
                 serde_json::from_str(&raw).expect("transforms parse");
-            assert_eq!(transforms[0].transform, "prompt_strip_anthropic_billing_header");
+            assert_eq!(
+                transforms[0].transform,
+                "prompt_strip_anthropic_billing_header"
+            );
         }
         let markers = db
             .read()
@@ -3510,11 +3666,7 @@ mod tests {
                 r#"["not-an-ip"]"#.to_string().into(),
                 "[]".to_string().into(),
             ),
-            (
-                "group_ids",
-                "{".to_string().into(),
-                "[]".to_string().into(),
-            ),
+            ("group_ids", "{".to_string().into(), "[]".to_string().into()),
             (
                 "transforms",
                 "{".to_string().into(),
@@ -3577,11 +3729,9 @@ mod tests {
 
         // users.group_id needs no corruption case here: it is NOT NULL at the
         // schema level and any stored text decodes as an opaque id.
-        for (column, invalid, valid) in [(
-            "enabled",
-            SeaValue::Int(Some(2)),
-            SeaValue::Int(Some(1)),
-        )] {
+        for (column, invalid, valid) in
+            [("enabled", SeaValue::Int(Some(2)), SeaValue::Int(Some(1)))]
+        {
             db.write()
                 .await
                 .execute(db.stmt(
@@ -4267,7 +4417,10 @@ mod tests {
         let sanitized = sanitize_api_key_transforms(transforms, false);
 
         assert_eq!(sanitized.len(), 1);
-        assert_eq!(sanitized[0].transform, "prompt_strip_anthropic_billing_header");
+        assert_eq!(
+            sanitized[0].transform,
+            "prompt_strip_anthropic_billing_header"
+        );
     }
 
     #[test]
@@ -4372,18 +4525,14 @@ mod tests {
             vec!["g-b".to_string(), "g-a".to_string()]
         );
         assert_eq!(
-            serialize_group_ids_json(&[
-                " g-b ".to_string(),
-                "g-a".to_string(),
-                "g-b".to_string(),
-            ])
-            .expect("serialize group ids"),
+            serialize_group_ids_json(&[" g-b ".to_string(), "g-a".to_string(), "g-b".to_string(),])
+                .expect("serialize group ids"),
             r#"["g-b","g-a"]"#
         );
     }
 
     #[tokio::test]
-    async fn api_key_group_selection_rejects_unknown_and_non_selectable_groups() {
+    async fn api_key_group_selection_rejects_unknown_and_inaccessible_groups() {
         let db = DbPool::connect("sqlite::memory:")
             .await
             .expect("db connects");
@@ -4395,54 +4544,69 @@ mod tests {
         let store = UserStore::new(db, log_broadcast)
             .await
             .expect("store creates");
-        let default_id = store.default_group_id().await.expect("default exists");
 
-        let hidden = store
+        let private = store
             .create_group(CreateGroupInput {
                 confirm_public_exposure: true,
-                name: "hidden".to_string(),
+                name: "private".to_string(),
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 5,
+                account_class: Default::default(),
             })
             .await
-            .expect("hidden group created");
-        let open = store
+            .expect("private group created");
+        let public = store
             .create_group(CreateGroupInput {
                 confirm_public_exposure: true,
-                name: "open".to_string(),
+                name: "public".to_string(),
                 description: String::new(),
                 user_selectable: true,
                 sort_order: 6,
+                account_class: Default::default(),
             })
             .await
-            .expect("open group created");
+            .expect("public group created");
+        let user = store
+            .create_user(
+                "selector",
+                "password123",
+                crate::users::UserRole::User,
+                None,
+            )
+            .await
+            .expect("user created");
 
-        // Admin may select any registered group.
+        // An Admin caller may select any registered Group of the owner account class.
         store
-            .validate_api_key_group_selection(&default_id, &[hidden.id.clone()], true)
+            .validate_api_key_group_selection_for_user(&user.id, &[private.id.clone()], true)
             .await
-            .expect("admin selects non-selectable group");
-        // Non-admin may select user_selectable groups and their own group.
+            .expect("admin selects a private group");
+        // A normal caller may select a public Group.
         store
-            .validate_api_key_group_selection(&default_id, &[open.id.clone()], false)
+            .validate_api_key_group_selection_for_user(&user.id, &[public.id.clone()], false)
             .await
-            .expect("non-admin selects user_selectable group");
-        store
-            .validate_api_key_group_selection(&hidden.id, &[hidden.id.clone()], false)
-            .await
-            .expect("non-admin keeps own group");
-        // Non-admin may not select other non-selectable groups.
+            .expect("non-admin selects a public group");
+        // A normal caller may not select a private Group without a grant.
         let err = store
-            .validate_api_key_group_selection(&default_id, &[hidden.id.clone()], false)
+            .validate_api_key_group_selection_for_user(&user.id, &[private.id.clone()], false)
             .await
-            .expect_err("non-selectable group rejected");
-        assert!(err.contains("not selectable"));
+            .expect_err("ungranted private group rejected");
+        assert!(err.contains("not accessible"), "{err}");
+        // The same selection succeeds after an explicit grant.
+        store
+            .grant_group_access(&user.id, &private.id)
+            .await
+            .expect("grant created");
+        store
+            .validate_api_key_group_selection_for_user(&user.id, &[private.id.clone()], false)
+            .await
+            .expect("granted private group accepted");
         // Unknown ids are always rejected.
         let err = store
-            .validate_api_key_group_selection(&default_id, &["missing".to_string()], false)
+            .validate_api_key_group_selection_for_user(&user.id, &["missing".to_string()], false)
             .await
             .expect_err("unknown group rejected");
-        assert!(err.contains("unknown group id"));
+        assert!(err.contains("unknown group id"), "{err}");
     }
 }

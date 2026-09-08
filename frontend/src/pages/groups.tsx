@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -38,7 +39,7 @@ import {
   reorderGroupsOptimistic,
   deleteGroupOptimistic,
 } from "@/lib/swr";
-import type { Group } from "@/lib/api";
+import type { AccountClass, Group } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 interface GroupFormState {
@@ -87,6 +88,11 @@ export function GroupsPage() {
   const { t } = useTranslation();
   const { data, isLoading } = useDashboardGroups();
   const groups = useMemo(() => data ?? [], [data]);
+  const [accountClass, setAccountClass] = useState<AccountClass>("standard");
+  const visibleGroups = useMemo(
+    () => groups.filter((group) => group.account_class === accountClass),
+    [accountClass, groups],
+  );
 
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<GroupFormState>(EMPTY_FORM);
@@ -98,7 +104,7 @@ export function GroupsPage() {
   const canDrag = useFinePointer();
 
   const openCreate = () => {
-    setForm({ ...EMPTY_FORM, sort_order: String(groups.length) });
+    setForm({ ...EMPTY_FORM, sort_order: String(visibleGroups.length) });
     setCreateOpen(true);
   };
 
@@ -132,7 +138,7 @@ export function GroupsPage() {
     setSaving(true);
     try {
       await createGroupOptimistic(
-        { ...validated, is_public: form.user_selectable },
+        { ...validated, is_public: form.user_selectable, account_class: accountClass },
         groups,
         (error) => toast.error(error.message)
       );
@@ -208,8 +214,8 @@ export function GroupsPage() {
   };
 
   const moveGroup = async (from: number, to: number) => {
-    if (to < 0 || to >= groups.length || from === to || reordering) return;
-    const next = [...groups];
+    if (to < 0 || to >= visibleGroups.length || from === to || reordering) return;
+    const next = [...visibleGroups];
     const [group] = next.splice(from, 1);
     next.splice(to, 0, group);
     await applyReorder(next);
@@ -220,7 +226,7 @@ export function GroupsPage() {
       setDraggingGroupId(null);
       return;
     }
-    const next = [...groups];
+    const next = [...visibleGroups];
     const from = next.findIndex((group) => group.id === draggingGroupId);
     const to = next.findIndex((group) => group.id === targetGroupId);
     if (from < 0 || to < 0) {
@@ -313,9 +319,22 @@ export function GroupsPage() {
           }
         />
 
+        <div className="flex flex-col gap-2 rounded-xl border bg-card p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium">{t("groups.accountClass")}</p>
+            <p className="text-xs text-muted-foreground">{t("groups.accountClassDescription")}</p>
+          </div>
+          <Tabs value={accountClass} onValueChange={(value) => setAccountClass(value as AccountClass)}>
+            <TabsList className="grid w-full grid-cols-2 rounded-lg sm:w-64">
+              <TabsTrigger value="standard">{t("accountClass.standard")}</TabsTrigger>
+              <TabsTrigger value="enterprise">{t("accountClass.enterprise")}</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
+
         {isLoading ? (
           <TablePageSkeleton />
-        ) : groups.length === 0 ? (
+        ) : visibleGroups.length === 0 ? (
           <EmptyState
             variant="card"
             icon={<Boxes className="h-10 w-10 text-muted-foreground" />}
@@ -335,7 +354,7 @@ export function GroupsPage() {
                 </tr>
               </thead>
               <tbody>
-                {groups.map((group, index) => (
+                {visibleGroups.map((group, index) => (
                   <tr
                     key={group.id}
                     className={cn(
@@ -406,7 +425,7 @@ export function GroupsPage() {
                           variant="ghost"
                           size="icon"
                           className="size-11 touch-manipulation sm:size-8"
-                          disabled={index === groups.length - 1 || reordering}
+                          disabled={index === visibleGroups.length - 1 || reordering}
                           aria-label={t("groups.moveDown")}
                           title={t("groups.moveDown")}
                           onClick={() => void moveGroup(index, index + 1)}

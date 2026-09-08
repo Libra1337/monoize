@@ -282,11 +282,8 @@ impl PaymentCallbackStore {
             Ok(evidence) => evidence,
             Err(error) => audited_reject!(error),
         };
-        let verification_credential_version_id = evidence
-            .verification_credential_version_id
-            .as_deref()
-            .unwrap_or(&credential_version_id)
-            .to_string();
+        // Every supported adapter verifies with the credential that recorded the event.
+        let verification_credential_version_id = credential_version_id.clone();
         let verification_credential = tx
             .query_one(self.db.stmt(
                 "SELECT channel_id, adapter_kind, account_identity_digest
@@ -396,7 +393,6 @@ impl PaymentCallbackStore {
             audited_reject!(ReprocessProviderEventError::IdentityConflict);
         };
         if let Err(error) = validate_reprocess_contract(
-            &event_kind,
             &adapter_kind,
             &channel_id,
             &credential_version_id,
@@ -708,18 +704,10 @@ impl PaymentCallbackStore {
         let channel_id = row_string(&row, "channel_id")?;
         let callback_requires_unique_binding = input.event_kind == "payment_succeeded"
             && input.raw_body.is_some()
-            && matches!(adapter_kind.as_str(), "alipay" | "wechat");
+            && adapter_kind == "epay";
         if callback_requires_unique_binding {
-            let identity_column = if adapter_kind == "alipay" {
-                "credential_version_id"
-            } else {
-                "merchant_account_identity"
-            };
-            let identity = if adapter_kind == "alipay" {
-                &input.credential_version_id
-            } else {
-                &input.merchant_account_identity
-            };
+            let identity_column = "credential_version_id";
+            let identity = &input.credential_version_id;
             let candidates = tx
                 .query_all(self.db.stmt(
                     &format!(
@@ -825,7 +813,7 @@ impl PaymentCallbackStore {
         }
 
         let absent_provider_object_may_bind = if stored_provider_object.is_none()
-            && matches!(adapter_kind.as_str(), "alipay" | "wechat")
+            && adapter_kind == "epay"
             && input.provider_object_id == input.order_number
             && matches!(
                 (
@@ -1202,7 +1190,6 @@ struct StoredReprocessEvidence {
     amount_minor: String,
     currency: String,
     account_identity: Option<String>,
-    verification_credential_version_id: Option<String>,
 }
 
 fn stored_attempt_id(event: &QueryResult) -> Option<String> {
@@ -1236,7 +1223,6 @@ fn parse_stored_evidence(
             amount_minor: String::new(),
             currency: String::new(),
             account_identity: None,
-            verification_credential_version_id: None,
         });
     }
     if event_kind == "payment_query_succeeded" {
@@ -1279,7 +1265,6 @@ fn parse_stored_evidence(
             amount_minor: required_json_string(object, "amount_minor")?,
             currency: required_json_string(object, "currency")?,
             account_identity: None,
-            verification_credential_version_id: None,
         });
     }
 
@@ -1300,11 +1285,12 @@ fn parse_stored_evidence(
             "checkout_session_id",
             "payment_intent_id",
         ),
-        "alipay" => (
+        "epay" => (
             &[
                 "event_id",
                 "event_kind",
                 "trade_no",
+                "method",
                 "order_number",
                 "amount_minor",
                 "currency",
@@ -1312,20 +1298,6 @@ fn parse_stored_evidence(
             ][..],
             "order_number",
             "trade_no",
-        ),
-        "wechat" => (
-            &[
-                "event_id",
-                "event_kind",
-                "transaction_id",
-                "order_number",
-                "amount_minor",
-                "currency",
-                "account_identity",
-                "verification_credential_version_id",
-            ][..],
-            "order_number",
-            "transaction_id",
         ),
         _ => return Err(ReprocessProviderEventError::NotReprocessable),
     };
@@ -1348,10 +1320,6 @@ fn parse_stored_evidence(
         amount_minor: required_json_string(object, "amount_minor")?,
         currency: required_json_string(object, "currency")?,
         account_identity: Some(required_json_string(object, "account_identity")?),
-        verification_credential_version_id: optional_json_string(
-            object,
-            "verification_credential_version_id",
-        )?,
     })
 }
 
@@ -1451,19 +1419,18 @@ async fn select_reprocess_candidate<C: ConnectionTrait>(
             attempt_id: attempt_id.clone(),
         });
     }
-    if event_kind != "payment_succeeded" || !matches!(adapter_kind, "alipay" | "wechat") {
+    if event_kind != "payment_succeeded" || adapter_kind != "epay" {
         return Err(ReprocessProviderEventError::ProviderQueryRequired);
     }
     let account_identity = evidence
         .account_identity
         .as_deref()
         .ok_or(ReprocessProviderEventError::IdentityConflict)?;
-    let (sql, values) = if adapter_kind == "alipay" {
-        (
-            "SELECT a.id AS attempt_id, a.order_id
+    let (sql, values) = (
+        "SELECT a.id AS attempt_id, a.order_id
          FROM store_payment_attempts a
          JOIN store_orders o ON o.id = a.order_id
-         WHERE o.order_number = $1 AND a.channel_id = $2 AND a.adapter_kind = 'alipay'
+         WHERE o.order_number = $1 AND a.channel_id = $2 AND a.adapter_kind = 'epay'
            AND a.credential_version_id = $3
            AND a.merchant_account_identity = $4
            AND (a.provider_object_id = $1
@@ -1471,32 +1438,13 @@ async fn select_reprocess_candidate<C: ConnectionTrait>(
                     AND (a.state = 'created'
                          OR (a.state = 'failed' AND a.failure_kind = 'provider_rejected'))))
          ORDER BY a.created_at DESC, a.id DESC LIMIT 2",
-            vec![
-                evidence.order_number.clone().into(),
-                channel_id.into(),
-                credential_version_id.into(),
-                account_identity.into(),
-            ],
-        )
-    } else {
-        (
-            "SELECT a.id AS attempt_id, a.order_id
-         FROM store_payment_attempts a
-         JOIN store_orders o ON o.id = a.order_id
-         WHERE o.order_number = $1 AND a.channel_id = $2 AND a.adapter_kind = 'wechat'
-           AND a.merchant_account_identity = $3
-           AND (a.provider_object_id = $1
-                OR (a.provider_object_id IS NULL
-                    AND (a.state = 'created'
-                         OR (a.state = 'failed' AND a.failure_kind = 'provider_rejected'))))
-         ORDER BY a.created_at DESC, a.id DESC LIMIT 2",
-            vec![
-                evidence.order_number.clone().into(),
-                channel_id.into(),
-                account_identity.into(),
-            ],
-        )
-    };
+        vec![
+            evidence.order_number.clone().into(),
+            channel_id.into(),
+            credential_version_id.into(),
+            account_identity.into(),
+        ],
+    );
     let candidates = connection
         .query_all(db.stmt(sql, values))
         .await
@@ -1511,7 +1459,6 @@ async fn select_reprocess_candidate<C: ConnectionTrait>(
 }
 
 fn validate_reprocess_contract(
-    event_kind: &str,
     adapter_kind: &str,
     channel_id: &str,
     event_credential_version_id: &str,
@@ -1528,16 +1475,8 @@ fn validate_reprocess_contract(
         .account_identity
         .as_deref()
         .unwrap_or(&merchant_identity);
-    let credential_ids_match =
-        if event_kind == "payment_query_succeeded" || adapter_kind != "wechat" {
-            event_credential_version_id == attempt_credential_version_id
-                && verification_credential_version_id == event_credential_version_id
-        } else {
-            evidence.verification_credential_version_id.as_deref()
-                == Some(verification_credential_version_id)
-                && (event_credential_version_id == attempt_credential_version_id
-                    || event_credential_version_id == verification_credential_version_id)
-        };
+    let credential_ids_match = event_credential_version_id == attempt_credential_version_id
+        && verification_credential_version_id == event_credential_version_id;
     let credential_rows_match = [
         event_credential,
         verification_credential,
@@ -1552,7 +1491,7 @@ fn validate_reprocess_contract(
     });
     let stored_provider_object = reprocess_row_optional_string(contract, "provider_object_id")?;
     let absent_object_may_bind = stored_provider_object.is_none()
-        && matches!(adapter_kind, "alipay" | "wechat")
+        && adapter_kind == "epay"
         && evidence.provider_object_id == evidence.order_number
         && matches!(
             (

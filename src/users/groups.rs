@@ -1,11 +1,13 @@
-use super::UserStore;
 use super::store::parse_group_ids_json;
+use super::{AccountClass, UserStore};
 use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, QueryResult, TransactionTrait, Value as SeaValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-fn default_public() -> bool { true }
+fn default_public() -> bool {
+    true
+}
 
 /// One `monoize_groups` registry row (`groups-registry.spec.md` §1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +18,8 @@ pub struct Group {
     pub is_default: bool,
     pub user_selectable: bool,
     pub is_public: bool,
+    #[serde(default)]
+    pub account_class: AccountClass,
     pub sort_order: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -33,6 +37,8 @@ pub struct CreateGroupInput {
     pub user_selectable: bool,
     #[serde(default)]
     pub sort_order: i32,
+    #[serde(default)]
+    pub account_class: AccountClass,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -64,8 +70,8 @@ pub enum GroupStoreError {
     Storage(String),
 }
 
-const GROUP_COLUMNS: &str =
-    "id, name, description, is_default, user_selectable, is_public, sort_order, created_at, updated_at";
+const GROUP_COLUMNS: &str = "id, name, description, is_default, user_selectable, is_public, account_class, sort_order, created_at, updated_at";
+const QUALIFIED_GROUP_COLUMNS: &str = "g.id, g.name, g.description, g.is_default, g.user_selectable, g.is_public, g.account_class, g.sort_order, g.created_at, g.updated_at";
 
 fn storage(error: impl std::fmt::Display) -> GroupStoreError {
     GroupStoreError::Storage(error.to_string())
@@ -93,6 +99,12 @@ fn parse_time(row: &QueryResult, column: &str) -> Result<DateTime<Utc>, GroupSto
 }
 
 fn row_to_group(row: &QueryResult) -> Result<Group, GroupStoreError> {
+    let account_class_raw: String = row.try_get("", "account_class").map_err(storage)?;
+    let account_class = AccountClass::from_str(&account_class_raw).ok_or_else(|| {
+        GroupStoreError::Storage(format!(
+            "invalid persisted monoize_groups.account_class: {account_class_raw:?}"
+        ))
+    })?;
     Ok(Group {
         id: row.try_get("", "id").map_err(storage)?,
         name: row.try_get("", "name").map_err(storage)?,
@@ -100,6 +112,7 @@ fn row_to_group(row: &QueryResult) -> Result<Group, GroupStoreError> {
         is_default: row.try_get::<i32>("", "is_default").map_err(storage)? != 0,
         user_selectable: row.try_get::<i32>("", "user_selectable").map_err(storage)? != 0,
         is_public: row.try_get::<i32>("", "is_public").map_err(storage)? != 0,
+        account_class,
         sort_order: row.try_get("", "sort_order").map_err(storage)?,
         created_at: parse_time(row, "created_at")?,
         updated_at: parse_time(row, "updated_at")?,
@@ -132,24 +145,76 @@ impl UserStore {
             .collect()
     }
 
-    pub async fn list_groups_for_user(&self, user_id: &str, role: crate::users::UserRole) -> Result<Vec<Group>, String> {
+    pub async fn list_groups_for_user(
+        &self,
+        user_id: &str,
+        role: crate::users::UserRole,
+    ) -> Result<Vec<Group>, String> {
         if role.can_manage_users() {
             return self.list_groups().await;
         }
         let rows = self.db.read().query_all(self.db.stmt(
-            &format!("SELECT {GROUP_COLUMNS} FROM monoize_groups g WHERE g.is_public = 1 OR EXISTS (SELECT 1 FROM user_group_grants ug WHERE ug.user_id = $1 AND ug.group_id = g.id) ORDER BY sort_order ASC, created_at ASC, id ASC"),
+            &format!("SELECT {QUALIFIED_GROUP_COLUMNS} FROM monoize_groups g JOIN users u ON u.id = $1 AND u.account_class = g.account_class WHERE g.is_public = 1 OR EXISTS (SELECT 1 FROM user_group_grants ug WHERE ug.user_id = u.id AND ug.group_id = g.id) ORDER BY g.sort_order ASC, g.created_at ASC, g.id ASC"),
             vec![user_id.into()],
         )).await.map_err(|e| e.to_string())?;
-        rows.iter().map(|row| row_to_group(row).map_err(|e| format!("{e:?}"))).collect()
+        rows.iter()
+            .map(|row| row_to_group(row).map_err(|e| format!("{e:?}")))
+            .collect()
     }
 
-    pub async fn accessible_group_ids(&self, user_id: &str, role: crate::users::UserRole) -> Result<Vec<String>, String> {
-        let groups = self.list_groups_for_user(user_id, role).await?;
-        Ok(groups.into_iter().map(|group| group.id).collect())
+    pub async fn accessible_group_ids(
+        &self,
+        user_id: &str,
+        role: crate::users::UserRole,
+    ) -> Result<Vec<String>, String> {
+        let visibility = if role.can_manage_users() {
+            "1 = 1"
+        } else {
+            "g.is_public = 1 OR EXISTS (SELECT 1 FROM user_group_grants ug WHERE ug.user_id = u.id AND ug.group_id = g.id)"
+        };
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                &format!(
+                    "SELECT g.id FROM monoize_groups g JOIN users u ON u.id = $1 AND u.account_class = g.account_class WHERE {visibility} ORDER BY g.sort_order ASC, g.created_at ASC, g.id ASC"
+                ),
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        rows.into_iter()
+            .map(|row| row.try_get("", "id").map_err(|error| error.to_string()))
+            .collect()
+    }
+
+    pub async fn list_groups_by_account_class(
+        &self,
+        account_class: AccountClass,
+    ) -> Result<Vec<Group>, String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                &format!(
+                    "SELECT {GROUP_COLUMNS} FROM monoize_groups WHERE account_class = $1 \
+                     ORDER BY sort_order ASC, created_at ASC, id ASC"
+                ),
+                vec![account_class.as_str().into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        rows.iter()
+            .map(|row| row_to_group(row).map_err(|error| format!("{error:?}")))
+            .collect()
     }
 
     pub async fn grant_group_access(&self, user_id: &str, group_id: &str) -> Result<(), String> {
-        if self.get_group_by_id(group_id).await?.is_none() {
+        let matches = self.db.read().query_one(self.db.stmt(
+            "SELECT 1 AS one FROM users u JOIN monoize_groups g ON g.id = $2 AND g.account_class = u.account_class WHERE u.id = $1",
+            vec![user_id.into(), group_id.into()],
+        )).await.map_err(|error| error.to_string())?;
+        if matches.is_none() {
             return Err("unknown group id".to_string());
         }
         self.db.write().await.execute(self.db.stmt(
@@ -161,10 +226,15 @@ impl UserStore {
     }
 
     pub async fn revoke_group_access(&self, user_id: &str, group_id: &str) -> Result<(), String> {
-        self.db.write().await.execute(self.db.stmt(
-            "DELETE FROM user_group_grants WHERE user_id = $1 AND group_id = $2",
-            vec![user_id.into(), group_id.into()],
-        )).await.map_err(|e| e.to_string())?;
+        self.db
+            .write()
+            .await
+            .execute(self.db.stmt(
+                "DELETE FROM user_group_grants WHERE user_id = $1 AND group_id = $2",
+                vec![user_id.into(), group_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
         self.api_key_cache.invalidate_all();
         Ok(())
     }
@@ -234,8 +304,8 @@ impl UserStore {
             .write()
             .await
             .execute(self.db.stmt(
-                "INSERT INTO monoize_groups (id, name, public_name, public_name_key, description, is_default, user_selectable, is_public, sort_order, created_at, updated_at) \
-                 VALUES ($1, $2, $2, $3, $4, 0, $5, $6, $7, $8, $8)",
+                "INSERT INTO monoize_groups (id, name, public_name, public_name_key, description, is_default, user_selectable, is_public, account_class, sort_order, created_at, updated_at) \
+                 VALUES ($1, $2, $2, $3, $4, 0, $5, $6, $7, $8, $9, $9)",
                 vec![
                     id.clone().into(),
                     name.clone().into(),
@@ -243,6 +313,7 @@ impl UserStore {
                     description.clone().into(),
                     SeaValue::Int(Some(if input.user_selectable { 1 } else { 0 })),
                     SeaValue::Int(Some(if is_public { 1 } else { 0 })),
+                    input.account_class.as_str().into(),
                     SeaValue::Int(Some(input.sort_order)),
                     now.to_rfc3339().into(),
                 ],
@@ -263,6 +334,7 @@ impl UserStore {
             is_default: false,
             user_selectable: input.user_selectable,
             is_public,
+            account_class: input.account_class,
             sort_order: input.sort_order,
             created_at: now,
             updated_at: now,
@@ -372,6 +444,7 @@ impl UserStore {
             is_default: existing.is_default,
             user_selectable: input.user_selectable.unwrap_or(existing.user_selectable),
             is_public: input.user_selectable.unwrap_or(existing.is_public),
+            account_class: existing.account_class,
             sort_order: input.sort_order.unwrap_or(existing.sort_order),
             created_at: existing.created_at,
             updated_at: now,
@@ -402,30 +475,38 @@ impl UserStore {
                 .map_err(storage)?;
         }
 
-        let rows = tx
-            .query_all(
-                self.db
-                    .stmt("SELECT id FROM monoize_groups ORDER BY id", vec![]),
-            )
-            .await
-            .map_err(storage)?;
-        if rows.len() != input.group_ids.len() {
+        if input.group_ids.is_empty() {
             return Err(GroupStoreError::InvalidReorder(
-                "group_ids must contain all groups exactly once".to_string(),
+                "group_ids must contain one account class".to_string(),
             ));
         }
+
+        let first = tx
+            .query_one(self.db.stmt(
+                "SELECT account_class FROM monoize_groups WHERE id = $1",
+                vec![input.group_ids[0].clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or_else(|| {
+                GroupStoreError::InvalidReorder("group_ids contains an unknown id".to_string())
+            })?;
+        let account_class: String = first.try_get("", "account_class").map_err(storage)?;
+        let rows = tx
+            .query_all(self.db.stmt(
+                "SELECT id FROM monoize_groups WHERE account_class = $1 ORDER BY id",
+                vec![account_class.into()],
+            ))
+            .await
+            .map_err(storage)?;
         let existing_ids: HashSet<String> = rows
             .into_iter()
             .map(|row| row.try_get("", "id").map_err(storage))
             .collect::<Result<_, _>>()?;
-        if existing_ids != unique_ids {
+        if existing_ids.len() != input.group_ids.len() || existing_ids != unique_ids {
             return Err(GroupStoreError::InvalidReorder(
-                "group_ids must contain all groups exactly once".to_string(),
+                "group_ids must contain every group of one account class exactly once".to_string(),
             ));
-        }
-        if input.group_ids.is_empty() {
-            tx.commit().await.map_err(storage)?;
-            return Ok(());
         }
 
         let mut values = Vec::with_capacity(input.group_ids.len() * 2 + 1);
@@ -441,10 +522,15 @@ impl UserStore {
         values.push(Utc::now().to_rfc3339().into());
         tx.execute(self.db.stmt(
             &format!(
-                "UPDATE monoize_groups \
-                 SET sort_order = CASE id {} END, updated_at = ${updated_at_index}",
-                cases.join(" ")
-            ),
+                    "UPDATE monoize_groups \
+                 SET sort_order = CASE id {} END, updated_at = ${updated_at_index} \
+                 WHERE id IN ({})",
+                    cases.join(" "),
+                    (1..=input.group_ids.len())
+                        .map(|index| format!("${}", index * 2 - 1))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             values,
         ))
         .await
@@ -492,10 +578,7 @@ impl UserStore {
 
         // GR-X2: drop the id from key selections. An empty list permits all Groups.
         let rows = tx
-            .query_all(self.db.stmt(
-                "SELECT id, group_ids FROM api_keys",
-                vec![],
-            ))
+            .query_all(self.db.stmt("SELECT id, group_ids FROM api_keys", vec![]))
             .await
             .map_err(storage)?;
         for row in rows {

@@ -446,3 +446,12 @@ cache and meter rates, missing rates, maximum integers, and exact PP-G5 equality
 
 PP-V5. UI tests MUST verify singular Group and Channel controls, public-exposure
 confirmation, optimistic rollback, revalidation, warnings, and Skeletons.
+## Account-Class Price Isolation
+
+PP-ENT1. Every price resolution MUST include the account class inherited from the selected Provider Group.
+
+PP-ENT2. A price candidate whose account class differs from the authenticated user account class MUST be ineligible.
+
+PP-ENT3. A missing in-class price MUST fail price resolution. Resolution MUST NOT fall back to a candidate from the other account class.
+
+PP-ENT4. Enterprise and standard rates MAY contain different values for the same normalized model, API type, usage class, context tier, service tier, modality, and cache TTL.

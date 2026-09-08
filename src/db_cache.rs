@@ -2195,6 +2195,7 @@ mod tests {
             username: format!("user-{id}"),
             password_hash: String::new(),
             role: UserRole::User,
+            account_class: Default::default(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_login_at: None,
