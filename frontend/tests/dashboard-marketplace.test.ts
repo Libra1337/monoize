@@ -44,23 +44,26 @@ describe("authenticated Model Marketplace", () => {
   });
 
   test("renders human per-million prices with exact final rounding", () => {
+    // Rates render as Coin with the `C` symbol, so the display currency changes the
+    // converted amount rather than the symbol.
     expect(formatMarketplaceRate("2505", "token", "USD", "7.200000")).toBe(
-      "$2.51 / 1M tokens",
+      "C2.51 / 1M tokens",
     );
     expect(formatMarketplaceRate("2504.999999999", "token", "USD", "7.200000")).toBe(
-      "$2.50 / 1M tokens",
+      "C2.50 / 1M tokens",
     );
     expect(formatMarketplaceRate("2500.000000001", "token", "CNY", "7.200000")).toBe(
-      "¥18.00 / 1M tokens",
+      "C18.00 / 1M tokens",
     );
     expect(formatMarketplaceRate("1250000000.5", "call", "USD", "7.200000")).toBe(
-      "$1.25 / call",
+      "C1.25 / call",
     );
+    // A range carries one leading symbol; the upper bound omits it.
     expect(formatMarketplaceRateRange(
       { min: "1000", max: "2500", unit: "token" },
       "USD",
       "7.200000",
-    )).toBe("$1.00–$2.50 / 1M tokens");
+    )).toBe("C1.00–2.50 / 1M tokens");
   });
 
   test("keeps the route inside DashboardLayout and uses public allow-listed data", () => {
@@ -75,7 +78,11 @@ describe("authenticated Model Marketplace", () => {
     expect(marketplaceSource).toContain("public_group_name");
     expect(marketplaceSource).toContain("capabilities");
     expect(marketplaceSource).toContain("selected?.capabilities.map");
-    expect(marketplaceSource).toContain("exchangeRate.mutate()");
+    // The rate carries its own 60-second refresh interval, so a retry revalidates
+    // the list and offers rather than the rate.
+    expect(marketplaceSource).toContain("useStoreExchangeRate()");
+    expect(marketplaceSource).toContain("list.mutate()");
+    expect(marketplaceSource).toContain("offers.mutate()");
     expect(marketplaceSource.match(/rememberGroups\(page\);/g)?.length).toBe(2);
     expect(marketplaceSource).toContain("offerLoadCursor");
     expect(marketplaceSource).toContain("selected.revision");

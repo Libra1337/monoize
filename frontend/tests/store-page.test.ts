@@ -19,6 +19,8 @@ const moneySource = readSource("../src/lib/store-money.ts");
 const zhSource = readSource("../src/locales/zh.json");
 const currencySource = readSource("../src/hooks/use-store-currency.tsx");
 const appSource = readSource("../src/App.tsx");
+// Redemption and balance moved onto the dedicated wallet page.
+const walletSource = readSource("../src/pages/wallet.tsx");
 
 describe("Store user pages", () => {
   test("renders three Store tabs with one animated shared indicator", () => {
@@ -52,7 +54,8 @@ describe("Store user pages", () => {
 
   test("does not mount payment methods or a summary for redemption", () => {
     expect(storeSource).toContain('activeTab !== "redeem"');
-    expect(storeSource).toContain("<RedemptionPanel");
+    expect(walletSource).toContain("<RedemptionPanel");
+    expect(storeSource).not.toContain("<RedemptionPanel");
   });
 
   test("uses one CNY or USD state for balance and plan presentation", () => {
@@ -116,7 +119,7 @@ describe("Store user pages", () => {
     expect(storeSource).toContain("storeApi.getOrder(pollingOrderId)");
     expect(storeSource).toContain("2_000");
     expect(storeSource).toContain("refreshUser()");
-    expect(storeSource).toContain("entitlement.mutate()");
+    expect(storeSource).toContain("catalog.mutate()");
     expect(storeSource).toContain("shouldContinueCheckoutPolling({");
     expect(storeSource).toContain("paymentState: order.payment_state");
     expect(ordersSource).toContain("isPaymentPollingTerminal(current.payment_state)");
@@ -133,9 +136,13 @@ describe("Store user pages", () => {
   });
 
   test("renders an optimistic redemption status before the API finishes", () => {
-    expect(storeSource).toContain("REDEMPTION_STATUS_KEY");
-    expect(storeSource).toContain('optimisticData: { state: "redeeming"');
-    expect(storeSource).toContain("redeeming={redeeming}");
+    // The wallet page owns the redemption flow and revalidates the balance and
+    // entitlement once the call resolves.
+    expect(walletSource).toContain("setRedeeming(true)");
+    expect(walletSource).toContain("storeApi.redeem(code)");
+    expect(walletSource).toContain("refreshUser()");
+    expect(walletSource).toContain("entitlement.mutate()");
+    expect(walletSource).toContain("redeeming={redeeming}");
     expect(redemptionSource).toContain('role="status"');
   });
 

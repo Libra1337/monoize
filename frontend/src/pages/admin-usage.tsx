@@ -61,8 +61,11 @@ export function AdminUsagePage() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
-  const exchangeRate = useStoreExchangeRate(true);
   const { currency } = useStoreCurrency();
+  // UR-2: the rate is consumed only by the administrator-only cost columns, and a
+  // non-admin session must not request an administrator endpoint. It is also only
+  // needed to convert into CNY.
+  const exchangeRate = useStoreExchangeRate(currency === "CNY" && isAdmin);
   const [range, setRange] = useState<UsageRankingRange>("24h");
   const { data, error, isLoading, isValidating, mutate } = useAdminUsageRanking(range);
   const [selected, setSelected] = useState<AdminUsageUserRow | null>(null);
