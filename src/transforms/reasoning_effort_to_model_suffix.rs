@@ -1,0 +1,146 @@
+use crate::transforms::{
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState, UrpData, model_glob_match,
+};
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::any::Any;
+
+#[derive(Debug, Deserialize)]
+struct SuffixRule {
+    pattern: String,
+    suffix: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Config {
+    rules: Vec<SuffixRule>,
+}
+
+impl TransformConfig for Config {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub struct ReasoningEffortToModelSuffixTransform;
+
+fn supported_reasoning_effort(effort: Option<&str>) -> Option<&str> {
+    match effort {
+        Some(e @ ("none" | "minimum" | "low" | "medium" | "high" | "xhigh" | "max")) => Some(e),
+        _ => None,
+    }
+}
+
+#[async_trait]
+impl Transform for ReasoningEffortToModelSuffixTransform {
+    fn type_id(&self) -> &'static str {
+        "reasoning_effort_to_model_suffix"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Reasoning: effort to model suffix"), ("zh", "推理：effort 转模型后缀")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Appends a pattern-matched suffix containing the resolved reasoning effort to the upstream model name."),
+            ("zh", "按规则匹配将解析出的推理力度以后缀形式追加到上游模型名。"),
+        ]
+    }
+
+    fn supported_phases(&self) -> &'static [Phase] {
+        &[Phase::Request]
+    }
+
+    fn config_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": { "type": "string", "minLength": 1 },
+                            "suffix": { "type": "string", "minLength": 1 }
+                        },
+                        "required": ["pattern", "suffix"],
+                        "additionalProperties": false
+                    },
+                    "minItems": 1
+                }
+            },
+            "required": ["rules"],
+            "additionalProperties": false
+        })
+    }
+
+    fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
+        let cfg: Config = serde_json::from_value(raw)
+            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        if cfg.rules.is_empty() {
+            return Err(TransformError::InvalidConfig(
+                "rules must not be empty".to_string(),
+            ));
+        }
+        Ok(Box::new(cfg))
+    }
+
+    fn init_state(&self) -> Box<dyn TransformState> {
+        Box::new(NoState)
+    }
+
+    async fn apply(
+        &self,
+        data: UrpData<'_>,
+        _phase: Phase,
+        _context: &TransformRuntimeContext,
+        config: &dyn TransformConfig,
+        _state: &mut dyn TransformState,
+    ) -> Result<(), TransformError> {
+        let cfg = config
+            .as_any()
+            .downcast_ref::<Config>()
+            .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
+        let UrpData::Request(req) = data else {
+            return Ok(());
+        };
+        let Some(effort) =
+            supported_reasoning_effort(req.reasoning.as_ref().and_then(|r| r.effort.as_deref()))
+        else {
+            return Ok(());
+        };
+        for rule in &cfg.rules {
+            if model_glob_match(&rule.pattern, &req.model) {
+                let suffix = rule.suffix.replace("{effort}", &effort);
+                req.model.push_str(&suffix);
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+}
+
+inventory::submit!(TransformEntry {
+    factory: || Box::new(ReasoningEffortToModelSuffixTransform),
+});
+
+#[cfg(test)]
+mod tests {
+    use super::supported_reasoning_effort;
+
+    #[test]
+    fn supported_reasoning_effort_accepts_full_effort_domain() {
+        for effort in ["none", "minimum", "low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(supported_reasoning_effort(Some(effort)), Some(effort));
+        }
+    }
+
+    #[test]
+    fn supported_reasoning_effort_rejects_unknown_values() {
+        assert_eq!(supported_reasoning_effort(None), None);
+        assert_eq!(supported_reasoning_effort(Some("ultra")), None);
+    }
+}
