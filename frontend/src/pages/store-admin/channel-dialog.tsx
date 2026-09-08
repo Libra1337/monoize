@@ -21,7 +21,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import {
   storeApi,
   type PaymentAdapterKind,
@@ -45,41 +44,31 @@ interface ChannelDialogProps {
 }
 
 interface CredentialDraft {
-  appId: string;
-  sellerId: string;
-  merchantId: string;
   secretKey: string;
   publishableKey: string;
   webhookSigningSecret: string;
   apiVersion: string;
   accountId: string;
-  apiV3Key: string;
-  certificateSerial: string;
-  merchantPrivateKeyPem: string;
-  platformCertificateSerial: string;
-  platformPublicKeyPem: string;
-  alipayPublicKeyPem: string;
-  environment: "production" | "sandbox";
   liveMode: boolean;
+  gatewayBaseUrl: string;
+  merchantId: string;
+  merchantKey: string;
+  alipayEnabled: boolean;
+  wxpayEnabled: boolean;
 }
 
 const EMPTY_CREDENTIAL: CredentialDraft = {
-  appId: "",
-  sellerId: "",
-  merchantId: "",
   secretKey: "",
   publishableKey: "",
   webhookSigningSecret: "",
   apiVersion: "",
   accountId: "",
-  apiV3Key: "",
-  certificateSerial: "",
-  merchantPrivateKeyPem: "",
-  platformCertificateSerial: "",
-  platformPublicKeyPem: "",
-  alipayPublicKeyPem: "",
-  environment: "sandbox",
   liveMode: false,
+  gatewayBaseUrl: "",
+  merchantId: "",
+  merchantKey: "",
+  alipayEnabled: false,
+  wxpayEnabled: false,
 };
 
 function buildCredential(
@@ -104,49 +93,35 @@ function buildCredential(
       live_mode: draft.liveMode,
     };
   }
-  if (adapterKind === "alipay") {
-    const values = [
-      draft.appId,
-      draft.sellerId,
-      draft.merchantPrivateKeyPem,
-      draft.alipayPublicKeyPem,
-    ].map((value) => value.trim());
+  if (adapterKind === "epay") {
+    const values = [draft.gatewayBaseUrl, draft.merchantId, draft.merchantKey]
+      .map((value) => value.trim());
     if (values.some((value) => !value)) return null;
+    // The gateway must be an absolute origin with a trailing slash so `mapi.php` and
+    // `api.php` resolve against it.
+    const gateway = values[0].endsWith("/") ? values[0] : `${values[0]}/`;
+    if (!/^https?:\/\/[^/?#]+\/$/.test(gateway)) return null;
+    if (!draft.alipayEnabled && !draft.wxpayEnabled) return null;
     return {
-      app_id: values[0],
-      seller_id: values[1],
-      merchant_private_key_pem: values[2],
-      alipay_public_key_pem: values[3],
-      environment: draft.environment,
-    };
-  }
-  if (adapterKind === "wechat") {
-    const values = [
-      draft.merchantId,
-      draft.appId,
-      draft.apiV3Key,
-      draft.certificateSerial,
-      draft.merchantPrivateKeyPem,
-      draft.platformCertificateSerial,
-      draft.platformPublicKeyPem,
-    ].map((value) => value.trim());
-    if (values.some((value) => !value)) return null;
-    return {
-      merchant_id: values[0],
-      app_id: values[1],
-      api_v3_key: values[2],
-      merchant_certificate_serial: values[3],
-      merchant_private_key_pem: values[4],
-      platform_certificate_serial: values[5],
-      platform_public_key_pem: values[6],
+      gateway_base_url: gateway,
+      merchant_id: values[1],
+      merchant_key: values[2],
+      alipay_enabled: draft.alipayEnabled,
+      wxpay_enabled: draft.wxpayEnabled,
     };
   }
   return null;
 }
 
 function ChannelMark({ adapterKind }: { adapterKind: PaymentAdapterKind }) {
-  if (adapterKind === "alipay") return <SiAlipay className="size-6 text-[#1677ff]" />;
-  if (adapterKind === "wechat") return <SiWechat className="size-6 text-[#07c160]" />;
+  if (adapterKind === "epay") {
+    return (
+      <span className="flex items-center gap-1">
+        <SiAlipay className="size-5 text-[#1677ff]" />
+        <SiWechat className="size-5 text-[#07c160]" />
+      </span>
+    );
+  }
   if (adapterKind === "stripe") return <SiStripe className="size-6 text-[#635bff]" />;
   return <ImageOff className="size-6 text-muted-foreground" />;
 }
@@ -276,7 +251,7 @@ export function ChannelDialog({ open, channel, saving, onOpenChange, onSave, onS
               <Label>{t("store.admin.channels.kind")}</Label>
               <Select value={adapterKind} disabled={Boolean(channel)} onValueChange={(value) => setAdapterKind(value as PaymentAdapterKind)}>
                 <SelectTrigger className="min-h-11 rounded-xl"><SelectValue /></SelectTrigger>
-                <SelectContent>{["alipay", "wechat", "stripe", "http"].map((value) => <SelectItem key={value} value={value}>{t(`store.admin.channels.kinds.${value}`)}</SelectItem>)}</SelectContent>
+                <SelectContent>{["epay", "stripe", "http"].map((value) => <SelectItem key={value} value={value}>{t(`store.admin.channels.kinds.${value}`)}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="grid gap-2"><Label htmlFor="store-channel-name">{t("store.admin.channels.name")}</Label><Input id="store-channel-name" className="min-h-11 rounded-xl" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></div>
@@ -324,25 +299,14 @@ export function ChannelDialog({ open, channel, saving, onOpenChange, onSave, onS
                 </div>
               )}
 
-              {adapterKind === "alipay" && (
+              {adapterKind === "epay" && (
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="grid gap-2"><Label htmlFor="store-alipay-app">{t("store.admin.channels.credential.appId")}</Label><Input id="store-alipay-app" className="min-h-11 rounded-xl" value={credential.appId} onChange={(event) => updateCredential("appId", event.target.value)} /></div>
-                  <div className="grid gap-2"><Label htmlFor="store-alipay-seller">{t("store.admin.channels.credential.sellerId")}</Label><Input id="store-alipay-seller" className="min-h-11 rounded-xl" value={credential.sellerId} onChange={(event) => updateCredential("sellerId", event.target.value)} /></div>
-                  <div className="grid gap-2 sm:col-span-2"><Label>{t("store.admin.channels.credential.environment")}</Label><Select value={credential.environment} onValueChange={(value) => updateCredential("environment", value as "production" | "sandbox")}><SelectTrigger className="min-h-11 rounded-xl"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="sandbox">{t("store.admin.channels.credential.sandbox")}</SelectItem><SelectItem value="production">{t("store.admin.channels.credential.production")}</SelectItem></SelectContent></Select></div>
-                  <div className="grid gap-2 sm:col-span-2"><Label htmlFor="store-alipay-private">{t("store.admin.channels.credential.merchantPrivateKey")}</Label><Textarea id="store-alipay-private" className="min-h-28 rounded-xl font-mono text-xs" value={credential.merchantPrivateKeyPem} onChange={(event) => updateCredential("merchantPrivateKeyPem", event.target.value)} /></div>
-                  <div className="grid gap-2 sm:col-span-2"><Label htmlFor="store-alipay-public">{t("store.admin.channels.credential.alipayPublicKey")}</Label><Textarea id="store-alipay-public" className="min-h-28 rounded-xl font-mono text-xs" value={credential.alipayPublicKeyPem} onChange={(event) => updateCredential("alipayPublicKeyPem", event.target.value)} /></div>
-                </div>
-              )}
-
-              {adapterKind === "wechat" && (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="grid gap-2"><Label htmlFor="store-wechat-merchant">{t("store.admin.channels.credential.merchantId")}</Label><Input id="store-wechat-merchant" className="min-h-11 rounded-xl" value={credential.merchantId} onChange={(event) => updateCredential("merchantId", event.target.value)} /></div>
-                  <div className="grid gap-2"><Label htmlFor="store-wechat-app">{t("store.admin.channels.credential.appId")}</Label><Input id="store-wechat-app" className="min-h-11 rounded-xl" value={credential.appId} onChange={(event) => updateCredential("appId", event.target.value)} /></div>
-                  <div className="grid gap-2"><Label htmlFor="store-wechat-serial">{t("store.admin.channels.credential.merchantCertificateSerial")}</Label><Input id="store-wechat-serial" className="min-h-11 rounded-xl" value={credential.certificateSerial} onChange={(event) => updateCredential("certificateSerial", event.target.value)} /></div>
-                  <div className="grid gap-2"><Label htmlFor="store-wechat-v3">{t("store.admin.channels.credential.apiV3Key")}</Label><Input id="store-wechat-v3" className="min-h-11 rounded-xl" type="password" autoComplete="new-password" value={credential.apiV3Key} onChange={(event) => updateCredential("apiV3Key", event.target.value)} /></div>
-                  <div className="grid gap-2 sm:col-span-2"><Label htmlFor="store-wechat-private">{t("store.admin.channels.credential.merchantPrivateKey")}</Label><Textarea id="store-wechat-private" className="min-h-28 rounded-xl font-mono text-xs" value={credential.merchantPrivateKeyPem} onChange={(event) => updateCredential("merchantPrivateKeyPem", event.target.value)} /></div>
-                  <div className="grid gap-2"><Label htmlFor="store-wechat-platform-serial">{t("store.admin.channels.credential.platformCertificateSerial")}</Label><Input id="store-wechat-platform-serial" className="min-h-11 rounded-xl" value={credential.platformCertificateSerial} onChange={(event) => updateCredential("platformCertificateSerial", event.target.value)} /></div>
-                  <div className="grid gap-2 sm:col-span-2"><Label htmlFor="store-wechat-platform-public">{t("store.admin.channels.credential.platformPublicKey")}</Label><Textarea id="store-wechat-platform-public" className="min-h-28 rounded-xl font-mono text-xs" value={credential.platformPublicKeyPem} onChange={(event) => updateCredential("platformPublicKeyPem", event.target.value)} /></div>
+                  <div className="grid gap-2 sm:col-span-2"><Label htmlFor="store-epay-gateway">{t("store.admin.channels.credential.gatewayBaseUrl")}</Label><Input id="store-epay-gateway" className="min-h-11 rounded-xl" placeholder="https://pay.example.com/" value={credential.gatewayBaseUrl} onChange={(event) => updateCredential("gatewayBaseUrl", event.target.value)} /></div>
+                  <div className="grid gap-2"><Label htmlFor="store-epay-merchant">{t("store.admin.channels.credential.merchantId")}</Label><Input id="store-epay-merchant" className="min-h-11 rounded-xl" value={credential.merchantId} onChange={(event) => updateCredential("merchantId", event.target.value)} /></div>
+                  <div className="grid gap-2"><Label htmlFor="store-epay-key">{t("store.admin.channels.credential.merchantKey")}</Label><Input id="store-epay-key" className="min-h-11 rounded-xl" type="password" autoComplete="new-password" value={credential.merchantKey} onChange={(event) => updateCredential("merchantKey", event.target.value)} /></div>
+                  <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-xl border px-3"><span className="text-sm font-medium">{t("store.admin.channels.credential.alipayEnabled")}</span><Switch checked={credential.alipayEnabled} onCheckedChange={(value) => updateCredential("alipayEnabled", value)} /></label>
+                  <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-xl border px-3"><span className="text-sm font-medium">{t("store.admin.channels.credential.wxpayEnabled")}</span><Switch checked={credential.wxpayEnabled} onCheckedChange={(value) => updateCredential("wxpayEnabled", value)} /></label>
+                  <p className="text-xs text-muted-foreground sm:col-span-2">{t("store.admin.channels.credential.epayCnyOnly")}</p>
                 </div>
               )}
 

@@ -3,7 +3,8 @@ import type { StoreCurrency } from "@/lib/store-money";
 const STORE_API_BASE = "/api/dashboard/store";
 
 export type ProductKind = "balance" | "plan";
-export type PaymentAdapterKind = "alipay" | "wechat" | "stripe" | "http";
+export type PaymentAdapterKind = "epay" | "stripe" | "http";
+export type EpayMethodKind = "alipay" | "wxpay";
 export type OfficialPaymentAdapterKind = Exclude<PaymentAdapterKind, "http">;
 export type PaymentChannelIconKind = "builtin" | "url" | "upload";
 export type StoreCheckoutActionKind = "redirect" | "qr" | "form";
@@ -79,6 +80,17 @@ export interface StoreAmountLimit {
   max_minor: string;
 }
 
+export interface EpayMethodConfig {
+  method: EpayMethodKind;
+  label: string;
+  icon_kind: PaymentChannelIconKind;
+  icon_value: string | null;
+  sort_order: number;
+  enabled: boolean;
+}
+
+export type UpdateEpayMethodInput = Omit<EpayMethodConfig, "method">;
+
 export interface StorePaymentChannel {
   id: string;
   adapter_kind: PaymentAdapterKind;
@@ -93,6 +105,8 @@ export interface StorePaymentChannel {
   supported_currencies: StoreCurrency[];
   amount_limits: Partial<Record<StoreCurrency, StoreAmountLimit>>;
   checkout_action_kinds: StoreCheckoutActionKind[];
+  /** Empty for every adapter kind other than `epay`. */
+  epay_methods: EpayMethodConfig[];
   created_at: string;
   updated_at: string;
 }
@@ -258,28 +272,17 @@ export type PaymentCredentialInput =
       live_mode: boolean;
     }
   | {
-      adapter_kind: "alipay";
-      app_id: string;
-      seller_id: string;
-      merchant_private_key_pem: string;
-      alipay_public_key_pem: string;
-      environment: "production" | "sandbox";
-    }
-  | {
-      adapter_kind: "wechat";
+      adapter_kind: "epay";
+      gateway_base_url: string;
       merchant_id: string;
-      app_id: string;
-      api_v3_key: string;
-      merchant_certificate_serial: string;
-      merchant_private_key_pem: string;
-      platform_certificate_serial: string;
-      platform_public_key_pem: string;
+      merchant_key: string;
+      alipay_enabled: boolean;
+      wxpay_enabled: boolean;
     };
 
 export type PaymentCredentialPayload =
   | Omit<Extract<PaymentCredentialInput, { adapter_kind: "stripe" }>, "adapter_kind">
-  | Omit<Extract<PaymentCredentialInput, { adapter_kind: "alipay" }>, "adapter_kind">
-  | Omit<Extract<PaymentCredentialInput, { adapter_kind: "wechat" }>, "adapter_kind">;
+  | Omit<Extract<PaymentCredentialInput, { adapter_kind: "epay" }>, "adapter_kind">;
 
 export type MerchantCapabilityKind =
   | "payment_query"
@@ -659,6 +662,12 @@ export const storeApi = {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({}),
         },
+      ),
+    putEpayMethod: (id: string, method: EpayMethodKind, input: UpdateEpayMethodInput) =>
+      jsonMutation<StorePaymentChannel>(
+        `/admin/payment-channels/${encodeURIComponent(id)}/epay-methods/${encodeURIComponent(method)}`,
+        "PUT",
+        input,
       ),
     listPrivacyRecords: () =>
       storeRequest<StorePrivacyRecordsView>("/admin/privacy-records"),

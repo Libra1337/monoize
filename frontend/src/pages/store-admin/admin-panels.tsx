@@ -157,8 +157,14 @@ function ChannelIcon({ channel }: { channel: StorePaymentChannel }) {
   if (channel.icon_kind !== "builtin" && channel.icon_value && channel.icon_value !== failedIconValue) {
     return <img src={channel.icon_value} alt="" className="size-7 rounded-lg object-contain" onError={() => setFailedIconValue(channel.icon_value)} />;
   }
-  if (channel.adapter_kind === "alipay") return <SiAlipay className="size-6 text-[#1677ff]" />;
-  if (channel.adapter_kind === "wechat") return <SiWechat className="size-6 text-[#07c160]" />;
+  if (channel.adapter_kind === "epay") {
+    return (
+      <span className="flex items-center gap-1">
+        <SiAlipay className="size-5 text-[#1677ff]" />
+        <SiWechat className="size-5 text-[#07c160]" />
+      </span>
+    );
+  }
   if (channel.adapter_kind === "stripe") return <SiStripe className="size-6 text-[#635bff]" />;
   return <CreditCard className="size-6 text-muted-foreground" />;
 }
@@ -171,6 +177,7 @@ export function ChannelsPanel({
   onCompliance,
   onCapabilities,
   onReadiness,
+  onEpayMethods,
   onEdit,
   onDelete,
 }: {
@@ -181,6 +188,7 @@ export function ChannelsPanel({
   onCompliance: (channel: StorePaymentChannel) => void;
   onCapabilities: (channel: StorePaymentChannel) => void;
   onReadiness: (channel: StorePaymentChannel) => void;
+  onEpayMethods: (channel: StorePaymentChannel) => void;
   onEdit: (channel: StorePaymentChannel) => void;
   onDelete: (channel: StorePaymentChannel) => void;
 }) {
@@ -272,6 +280,12 @@ export function ChannelsPanel({
                         <ShieldCheck className="size-4" />
                         {t("store.admin.governance.readiness.action")}
                       </DropdownMenuItem>
+                      {channel.adapter_kind === "epay" && (
+                        <DropdownMenuItem className="min-h-11 gap-2 rounded-lg" onClick={() => onEpayMethods(channel)}>
+                          <CreditCard className="size-4" />
+                          {t("store.admin.epayMethods.action")}
+                        </DropdownMenuItem>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )}

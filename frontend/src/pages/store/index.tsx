@@ -40,6 +40,8 @@ import { cn } from "@/lib/utils";
 import { OrderSummary } from "./order-summary";
 import { PaymentMethods } from "./payment-methods";
 import {
+  expandPaymentOptions,
+  expectedPaymentMethod,
   filterCompatiblePaymentChannels,
   selectStoreProduct,
   validateCustomAmount,
@@ -59,7 +61,6 @@ import {
 
 const CATALOG_KEY = "/api/dashboard/store/catalog";
 const ORDERS_KEY = "/api/dashboard/store/orders";
-const MOBILE_CHECKOUT_QUERY = "(max-width: 767px)";
 
 function optimisticOrder(
   product: StoreProduct,
@@ -290,11 +291,8 @@ export function StorePage() {
   const { currency, setCurrency } = useStoreCurrency();
   const [activeTab, setActiveTab] = useState<StoreTab>("balance");
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  const [selectedPaymentOptionId, setSelectedPaymentOptionId] = useState<string | null>(null);
   const [customAmount, setCustomAmount] = useState("");
-  const [mobileCheckout, setMobileCheckout] = useState(() => (
-    typeof window !== "undefined" && window.matchMedia(MOBILE_CHECKOUT_QUERY).matches
-  ));
   const [submitting, setSubmitting] = useState(false);
   const [pollingOrderId, setPollingOrderId] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
@@ -333,15 +331,13 @@ export function StorePage() {
           rate,
         )
     : null;
-  const compatibleChannels = filterCompatiblePaymentChannels(
-    channels,
-    currency,
-    paymentMinor,
-    mobileCheckout ? "mobile" : "desktop",
-  );
-  const selectedChannel = compatibleChannels.find((channel) => channel.id === selectedChannelId)
-    ?? compatibleChannels[0]
+  const compatibleChannels = filterCompatiblePaymentChannels(channels, currency, paymentMinor);
+  const paymentOptions = expandPaymentOptions(compatibleChannels);
+  const selectedPaymentOption =
+    paymentOptions.find((option) => option.id === selectedPaymentOptionId)
+    ?? paymentOptions[0]
     ?? null;
+  const selectedChannel = selectedPaymentOption?.channel ?? null;
   const customMinimumMinor = currency === "CNY"
     ? settings?.custom_recharge_cny_min_minor ?? "0"
     : settings?.custom_recharge_usd_min_minor ?? "0";
@@ -353,13 +349,6 @@ export function StorePage() {
     catalog.mutate(),
     exchangeRate.mutate(),
   ]);
-
-  useEffect(() => {
-    const media = window.matchMedia(MOBILE_CHECKOUT_QUERY);
-    const handleViewportChange = (event: MediaQueryListEvent) => setMobileCheckout(event.matches);
-    media.addEventListener("change", handleViewportChange);
-    return () => media.removeEventListener("change", handleViewportChange);
-  }, []);
 
   useEffect(() => {
     if (!pollingOrderId) return;
@@ -415,18 +404,23 @@ export function StorePage() {
   };
 
   const handleCreateOrder = async () => {
-    if (!user || !selectedProduct || !selectedChannel || customAmountInvalid || paymentMinor === null) return;
-    const currentViewport = window.matchMedia(MOBILE_CHECKOUT_QUERY).matches ? "mobile" : "desktop";
-    const validatedChannel = filterCompatiblePaymentChannels(
-      channels,
-      currency,
-      paymentMinor,
-      currentViewport,
-    ).find((channel) => channel.id === selectedChannel.id);
-    if (!validatedChannel) {
+    if (
+      !user
+      || !selectedProduct
+      || !selectedPaymentOption
+      || customAmountInvalid
+      || paymentMinor === null
+    ) {
+      return;
+    }
+    const validatedOption = expandPaymentOptions(
+      filterCompatiblePaymentChannels(channels, currency, paymentMinor),
+    ).find((option) => option.id === selectedPaymentOption.id);
+    if (!validatedOption) {
       toast.error(t("store.payment.empty"));
       return;
     }
+    const validatedChannel = validatedOption.channel;
     const pending = optimisticOrder(
       selectedProduct,
       validatedChannel,
@@ -466,18 +460,10 @@ export function StorePage() {
       );
       const createdOrder = updatedOrders?.[0];
       if (!createdOrder) throw new Error(t("store.ui.orderFailed"));
-      const expectedPaymentMethod = validatedChannel.adapter_kind === "wechat"
-        ? (currentViewport === "mobile" ? "h5" : "native")
-        : validatedChannel.adapter_kind === "alipay"
-          ? (currentViewport === "mobile" ? "mobile_web" : "computer_web")
-          : {
-            stripe: "card",
-            http: null,
-          }[validatedChannel.adapter_kind];
       const checkout = await storeApi.createPaymentAttempt(
         createdOrder.id,
         pendingCheckout.attemptIdempotencyKey,
-        expectedPaymentMethod,
+        expectedPaymentMethod(validatedOption),
       );
       if (checkout.action.kind === "redirect") {
         window.location.assign(checkout.action.url);
@@ -594,9 +580,9 @@ export function StorePage() {
                 />
               </div>
               <PaymentMethods
-                channels={compatibleChannels}
-                selectedId={selectedChannel?.id ?? null}
-                onSelect={(channel) => setSelectedChannelId(channel.id)}
+                options={paymentOptions}
+                selectedId={selectedPaymentOption?.id ?? null}
+                onSelect={(option) => setSelectedPaymentOptionId(option.id)}
               />
               </>
             )}

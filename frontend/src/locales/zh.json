@@ -19,7 +19,11 @@
 			"title": "用量排行",
 			"description": "查看所选时间范围内的匿名用户和模型 Token 用量。",
 			"rangeLabel": "排行时间范围",
-			"ranges": { "24h": "24 小时", "7d": "7 天", "30d": "30 天" },
+			"ranges": {
+				"24h": "24 小时",
+				"7d": "7 天",
+				"30d": "30 天"
+			},
 			"totalTokens": "总 Tokens",
 			"totalCalls": "调用次数",
 			"currentRanking": "当前排名",
@@ -246,8 +250,25 @@
 		"currentPlan": "当前套餐",
 		"redemptionTitle": "兑换码",
 		"recordsTitle": "余额记录",
-		"tabs": { "ledger": "账单明细", "orders": "订单记录" },
-		"ledger": { "limit": "显示条数", "empty": "暂无余额记录", "loadFailed": "余额记录加载失败", "kinds": { "store_recharge": "充值到账", "redemption_credit": "兑换码到账", "request_charge": "API 用量扣费", "admin_adjustment": "管理员调整", "admin_sub_account_adjustment": "管理员调整", "sub_account_refund": "子账户退回", "sub_account_debt_transfer": "子账户转移", "plan_grant": "套餐赠送" } }
+		"tabs": {
+			"ledger": "账单明细",
+			"orders": "订单记录"
+		},
+		"ledger": {
+			"limit": "显示条数",
+			"empty": "暂无余额记录",
+			"loadFailed": "余额记录加载失败",
+			"kinds": {
+				"store_recharge": "充值到账",
+				"redemption_credit": "兑换码到账",
+				"request_charge": "API 用量扣费",
+				"admin_adjustment": "管理员调整",
+				"admin_sub_account_adjustment": "管理员调整",
+				"sub_account_refund": "子账户退回",
+				"sub_account_debt_transfer": "子账户转移",
+				"plan_grant": "套餐赠送"
+			}
+		}
 	},
 	"store": {
 		"ui": {
@@ -575,8 +596,7 @@
 				"dialogDescription": "设置支付适配器和用户可见图标。",
 				"kind": "支付适配器",
 				"kinds": {
-					"alipay": "支付宝",
-					"wechat": "微信支付",
+					"epay": "易支付",
 					"stripe": "Stripe",
 					"http": "HTTP 适配器"
 				},
@@ -603,23 +623,16 @@
 					"secretKey": "密钥",
 					"webhookSecret": "Webhook 签名密钥",
 					"liveMode": "生产模式",
-					"appId": "应用 ID",
-					"sellerId": "卖家 ID",
 					"merchantId": "商户号",
-					"environment": "环境",
-					"sandbox": "沙盒",
-					"production": "生产",
-					"merchantPrivateKey": "商户私钥（PEM）",
-					"alipayPublicKey": "支付宝公钥（PEM）",
-					"certificateSerial": "证书序列号",
-					"merchantCertificateSerial": "商户证书序列号",
-					"platformCertificateSerial": "平台证书序列号",
-					"platformPublicKey": "平台公钥（PEM）",
-					"apiV3Key": "API v3 密钥",
 					"currentPassword": "当前 Admin 密码",
 					"replace": "替换凭据",
 					"invalid": "请填写全部凭据字段和当前 Admin 密码。",
-					"saved": "支付凭据已保存，渠道已禁用。"
+					"saved": "支付凭据已保存，渠道已禁用。",
+					"gatewayBaseUrl": "网关根地址",
+					"merchantKey": "商户密钥",
+					"alipayEnabled": "启用支付宝方式",
+					"wxpayEnabled": "启用微信支付方式",
+					"epayCnyOnly": "易支付仅接受人民币订单。美元结账请使用 Stripe。"
 				},
 				"deleteConfirm": "确认删除 {{name}}？"
 			},
@@ -727,6 +740,20 @@
 				"usdMin": "美元最小金额",
 				"usdMax": "美元最大金额",
 				"invalid": "每项限制必须为正数，且最小金额不能大于最大金额。"
+			},
+			"epayMethods": {
+				"action": "易支付方式",
+				"title": "易支付方式",
+				"description": "设置每种易支付方式的对外名称、排序和启用状态。",
+				"label": "对外名称",
+				"sortOrder": "排序",
+				"enabled": "启用",
+				"saved": "已保存易支付方式",
+				"saveFailed": "保存易支付方式失败",
+				"methods": {
+					"alipay": "支付宝",
+					"wxpay": "微信支付"
+				}
 			}
 		},
 		"fields": {
@@ -898,7 +925,13 @@
 		"todaySummary": "今日 {{spend}} · {{calls}} 次调用",
 		"viewLogs": "查看日志",
 		"group": "分组",
-		"groupHelp": "每个用户只属于一个分组，决定可用的 Provider 范围。"
+		"groupHelp": "每个用户只属于一个分组，决定可用的 Provider 范围。",
+		"accountClassConfirmTitle": "确认切换账户类型？",
+		"accountClassConfirmAction": "删除 Key 并切换",
+		"accountClassDeleteKeysWarning": "将 {{username}} 切换为{{accountClass}}。此操作会永久删除该用户现有的全部 API Key。",
+		"accountClassChanged": "账户类型已切换",
+		"accountClass": "账户类型",
+		"accountClassDescription": "切换类型会将用户迁移到相互隔离的模型目录。"
 	},
 	"apiKeys": {
 		"title": "令牌管理",
@@ -977,7 +1010,23 @@
 		"channelSelectionHelp": "同一分组内多个 Provider 提供相同模型时，请选择一个 Channel。",
 		"selectChannel": "选择 Channel",
 		"channelSelectionRequired": "请为剩余 {{count}} 个冲突选择 Channel。",
-		"channelSelectionLoadError": "暂时无法读取 Channel 冲突。请重试后再保存。"
+		"channelSelectionLoadError": "暂时无法读取 Channel 冲突。请重试后再保存。",
+		"analyticsTitle": "API Key 用量",
+		"analyticsDescription": "查看此 API Key 的准确 Tokens、调用次数、Coin 消耗、余额、趋势和模型用量。",
+		"analyticsRange": "用量范围",
+		"analyticsAll": "全部",
+		"analyticsTokens": "总 Tokens",
+		"analyticsInput": "输入",
+		"analyticsCache": "缓存读取",
+		"analyticsOutput": "输出",
+		"analyticsRequests": "调用次数",
+		"analyticsRequestsUnit": "次调用",
+		"analyticsCost": "Coin 消耗",
+		"analyticsModels": "模型用量",
+		"analyticsWalletBalance": "跟随钱包余额",
+		"analyticsIndependentBalance": "Key 余额",
+		"analyticsLoadFailed": "API Key 用量加载失败",
+		"analyticsEmpty": "此时间范围内暂无用量。"
 	},
 	"settings": {
 		"title": "系统设置",
@@ -1283,7 +1332,9 @@
 		},
 		"apiTypeOverrides": "API 类型覆盖规则",
 		"apiTypeOverridesDesc": "将特定模型模式路由到不同的 API 类型。规则按顺序匹配，首个匹配生效。未匹配的模型使用上方默认类型。",
-		"addOverride": "添加规则"
+		"addOverride": "添加规则",
+		"accountClass": "目录范围",
+		"accountClassDescription": "仅显示属于当前账户类型 Group 的 Provider。"
 	},
 	"transforms": {
 		"titleProvider": "上游 Transform",
@@ -1941,7 +1992,9 @@
 		"emptyDescription": "系统会在初始化时创建默认分组。",
 		"invalidName": "名称须为 1-64 个字符",
 		"invalidDescription": "描述最多 256 个字符",
-		"invalidSortOrder": "排序必须是整数"
+		"invalidSortOrder": "排序必须是整数",
+		"accountClass": "目录范围",
+		"accountClassDescription": "在单个账户类型内创建、查看和排序 Group。"
 	},
 	"groupPicker": {
 		"selectPlaceholder": "选择分组",
@@ -1949,5 +2002,9 @@
 		"dragHint": "拖动调整顺序：第 1 位优先参与路由。",
 		"noOptions": "没有可选择的分组",
 		"unknownGroup": "未知分组"
+	},
+	"accountClass": {
+		"standard": "普通用户",
+		"enterprise": "企业用户"
 	}
 }

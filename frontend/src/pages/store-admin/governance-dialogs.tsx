@@ -284,7 +284,6 @@ function adapterDefaults(channel: StorePaymentChannel): {
   actions: StoreCheckoutActionKind[];
 } {
   if (channel.adapter_kind === "stripe") return { currencies: ["CNY", "USD"], actions: ["redirect"] };
-  if (channel.adapter_kind === "alipay") return { currencies: ["CNY"], actions: ["form"] };
   return { currencies: ["CNY"], actions: ["qr", "redirect"] };
 }
 
@@ -347,7 +346,7 @@ function ReadinessForm({
   };
 
   const currencyOptions: StoreCurrency[] = channel.adapter_kind === "stripe" ? ["CNY", "USD"] : ["CNY"];
-  const actionOptions: StoreCheckoutActionKind[] = channel.adapter_kind === "wechat" ? ["qr", "redirect"] : defaults.actions;
+  const actionOptions: StoreCheckoutActionKind[] = channel.adapter_kind === "epay" ? ["qr", "redirect"] : defaults.actions;
 
   if (privacyRecords.length === 0) {
     return (
@@ -376,7 +375,7 @@ function ReadinessForm({
         <div className="grid gap-2 sm:col-span-2"><Label>{t("store.admin.governance.fields.privacyRecord")}</Label><Select value={privacyId} onValueChange={setPrivacyId}><SelectTrigger className="min-h-11 rounded-xl"><SelectValue placeholder={t("store.admin.governance.readiness.selectPrivacy")} /></SelectTrigger><SelectContent>{privacyRecords.map((record) => <SelectItem key={record.id} value={record.id}>{record.policy_version} · {record.jurisdiction}</SelectItem>)}</SelectContent></Select></div>
         <div className="flex min-h-11 items-center justify-between gap-3 rounded-xl border p-3 sm:col-span-2"><div><Label htmlFor="readiness-callback">{t("store.admin.governance.fields.callbackVerification")}</Label><p className="text-xs text-muted-foreground">{t("store.admin.governance.readiness.callbackHelp")}</p></div><Switch id="readiness-callback" checked={callbackPassed} onCheckedChange={setCallbackPassed} /></div>
         <fieldset className="grid gap-3 rounded-xl border p-3"><legend className="px-1 text-sm font-medium">{t("store.admin.governance.fields.currencies")}</legend>{currencyOptions.map((currency) => <label key={currency} className="flex min-h-9 items-center gap-3 text-sm"><Checkbox checked={currencies.includes(currency)} disabled={channel.adapter_kind !== "stripe"} onCheckedChange={(checked) => toggleCurrency(currency, checked === true)} />{currency}</label>)}</fieldset>
-        <fieldset className="grid gap-3 rounded-xl border p-3"><legend className="px-1 text-sm font-medium">{t("store.admin.governance.fields.actions")}</legend>{actionOptions.map((action) => <label key={action} className="flex min-h-9 items-center gap-3 text-sm"><Checkbox checked={actions.includes(action)} disabled={channel.adapter_kind !== "wechat"} onCheckedChange={(checked) => toggleAction(action, checked === true)} />{t(`store.admin.governance.actions.${action}`)}</label>)}</fieldset>
+        <fieldset className="grid gap-3 rounded-xl border p-3"><legend className="px-1 text-sm font-medium">{t("store.admin.governance.fields.actions")}</legend>{actionOptions.map((action) => <label key={action} className="flex min-h-9 items-center gap-3 text-sm"><Checkbox checked={actions.includes(action)} disabled={channel.adapter_kind !== "epay"} onCheckedChange={(checked) => toggleAction(action, checked === true)} />{t(`store.admin.governance.actions.${action}`)}</label>)}</fieldset>
         {currencies.map((currency) => <div key={currency} className="grid gap-3 rounded-xl border p-3 sm:col-span-2"><p className="text-sm font-medium">{t("store.admin.governance.readiness.amountRange", { currency })}</p><div className="grid gap-3 sm:grid-cols-2"><div className="grid gap-2"><Label htmlFor={`readiness-${currency}-min`}>{t("store.admin.governance.fields.minimumMinor")}</Label><Input id={`readiness-${currency}-min`} className="min-h-11 rounded-xl" inputMode="numeric" value={limits[currency]?.min_minor ?? ""} onChange={(event) => updateLimit(currency, "min_minor", event.target.value)} /></div><div className="grid gap-2"><Label htmlFor={`readiness-${currency}-max`}>{t("store.admin.governance.fields.maximumMinor")}</Label><Input id={`readiness-${currency}-max`} className="min-h-11 rounded-xl" inputMode="numeric" value={limits[currency]?.max_minor ?? ""} onChange={(event) => updateLimit(currency, "max_minor", event.target.value)} /></div></div></div>)}
         {(["license", "runtime", "availability"] as const).map((kind) => <div key={kind} className="grid gap-2 sm:col-span-2"><Label htmlFor={`readiness-${kind}`}>{t(`store.admin.governance.fields.${kind}Evidence`)}</Label><Input id={`readiness-${kind}`} className="min-h-11 rounded-xl font-mono text-xs" value={kind === "license" ? licenseDigest : kind === "runtime" ? runtimeDigest : availabilityDigest} onChange={(event) => { if (kind === "license") setLicenseDigest(event.target.value); else if (kind === "runtime") setRuntimeDigest(event.target.value); else setAvailabilityDigest(event.target.value); }} /></div>)}
         <div className="grid gap-2"><Label htmlFor="readiness-valid-days">{t("store.admin.governance.fields.validDays")}</Label><Input id="readiness-valid-days" className="min-h-11 rounded-xl" type="number" min={1} max={90} value={validDays} onChange={(event) => setValidDays(event.target.value)} /></div>

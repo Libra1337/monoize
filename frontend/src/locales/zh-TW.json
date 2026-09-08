@@ -19,7 +19,11 @@
 			"title": "用量排行",
 			"description": "查看所選期間內的匿名使用者和模型 Token 用量。",
 			"rangeLabel": "排行期間",
-			"ranges": { "24h": "24 小時", "7d": "7 天", "30d": "30 天" },
+			"ranges": {
+				"24h": "24 小時",
+				"7d": "7 天",
+				"30d": "30 天"
+			},
 			"totalTokens": "總 Tokens",
 			"totalCalls": "呼叫次數",
 			"currentRanking": "目前排名",
@@ -246,8 +250,25 @@
 		"currentPlan": "目前方案",
 		"redemptionTitle": "兌換碼",
 		"recordsTitle": "餘額記錄",
-		"tabs": { "ledger": "帳單明細", "orders": "訂單記錄" },
-		"ledger": { "limit": "顯示筆數", "empty": "目前沒有餘額記錄", "loadFailed": "無法載入餘額記錄", "kinds": { "store_recharge": "儲值入帳", "redemption_credit": "兌換碼入帳", "request_charge": "API 用量扣費", "admin_adjustment": "管理員調整", "admin_sub_account_adjustment": "管理員調整", "sub_account_refund": "子帳戶退回", "sub_account_debt_transfer": "子帳戶轉移", "plan_grant": "方案贈送" } }
+		"tabs": {
+			"ledger": "帳單明細",
+			"orders": "訂單記錄"
+		},
+		"ledger": {
+			"limit": "顯示筆數",
+			"empty": "目前沒有餘額記錄",
+			"loadFailed": "無法載入餘額記錄",
+			"kinds": {
+				"store_recharge": "儲值入帳",
+				"redemption_credit": "兌換碼入帳",
+				"request_charge": "API 用量扣費",
+				"admin_adjustment": "管理員調整",
+				"admin_sub_account_adjustment": "管理員調整",
+				"sub_account_refund": "子帳戶退回",
+				"sub_account_debt_transfer": "子帳戶轉移",
+				"plan_grant": "方案贈送"
+			}
+		}
 	},
 	"store": {
 		"ui": {
@@ -575,8 +596,7 @@
 				"dialogDescription": "設定付款適配器和使用者可見圖示。",
 				"kind": "付款適配器",
 				"kinds": {
-					"alipay": "支付寶",
-					"wechat": "微信支付",
+					"epay": "易支付",
 					"stripe": "Stripe",
 					"http": "HTTP 適配器"
 				},
@@ -603,23 +623,16 @@
 					"secretKey": "密鑰",
 					"webhookSecret": "Webhook 簽章密鑰",
 					"liveMode": "正式模式",
-					"appId": "應用程式 ID",
-					"sellerId": "賣家 ID",
 					"merchantId": "商戶號",
-					"environment": "環境",
-					"sandbox": "沙盒",
-					"production": "正式",
-					"merchantPrivateKey": "商戶私鑰（PEM）",
-					"alipayPublicKey": "支付寶公鑰（PEM）",
-					"certificateSerial": "憑證序號",
-					"merchantCertificateSerial": "商戶憑證序號",
-					"platformCertificateSerial": "平台憑證序號",
-					"platformPublicKey": "平台公開金鑰（PEM）",
-					"apiV3Key": "API v3 密鑰",
 					"currentPassword": "目前 Admin 密碼",
 					"replace": "替換憑證",
 					"invalid": "請填寫全部憑證欄位和目前 Admin 密碼。",
-					"saved": "付款憑證已儲存，管道已停用。"
+					"saved": "付款憑證已儲存，管道已停用。",
+					"gatewayBaseUrl": "閘道根位址",
+					"merchantKey": "商戶金鑰",
+					"alipayEnabled": "啟用支付寶方式",
+					"wxpayEnabled": "啟用微信支付方式",
+					"epayCnyOnly": "易支付僅接受人民幣訂單。美元結帳請使用 Stripe。"
 				},
 				"deleteConfirm": "確定刪除 {{name}}？"
 			},
@@ -727,6 +740,20 @@
 				"usdMin": "美元最小金額",
 				"usdMax": "美元最大金額",
 				"invalid": "每項限制必須為正數，且最小金額不能大於最大金額。"
+			},
+			"epayMethods": {
+				"action": "易支付方式",
+				"title": "易支付方式",
+				"description": "設定每種易支付方式的對外名稱、排序與啟用狀態。",
+				"label": "對外名稱",
+				"sortOrder": "排序",
+				"enabled": "啟用",
+				"saved": "已儲存易支付方式",
+				"saveFailed": "儲存易支付方式失敗",
+				"methods": {
+					"alipay": "支付寶",
+					"wxpay": "微信支付"
+				}
 			}
 		},
 		"fields": {
@@ -898,7 +925,13 @@
 		"todaySummary": "今日 {{spend}} · {{calls}} 次呼叫",
 		"viewLogs": "查看日誌",
 		"group": "群組",
-		"groupHelp": "每位使用者只屬於一個群組，決定可用的 Provider 範圍。"
+		"groupHelp": "每位使用者只屬於一個群組，決定可用的 Provider 範圍。",
+		"accountClassConfirmTitle": "確認切換帳戶類型？",
+		"accountClassConfirmAction": "刪除 Key 並切換",
+		"accountClassDeleteKeysWarning": "將 {{username}} 切換為{{accountClass}}。此操作會永久刪除該使用者現有的全部 API Key。",
+		"accountClassChanged": "帳戶類型已切換",
+		"accountClass": "帳戶類型",
+		"accountClassDescription": "切換類型會將使用者移到相互隔離的模型目錄。"
 	},
 	"apiKeys": {
 		"title": "Token 管理",
@@ -974,7 +1007,23 @@
 		"channelSelectionHelp": "同一群組內多個 Provider 提供相同模型時，請選擇一個 Channel。",
 		"selectChannel": "選擇 Channel",
 		"channelSelectionRequired": "請為剩餘 {{count}} 個衝突選擇 Channel。",
-		"channelSelectionLoadError": "暫時無法讀取 Channel 衝突。請重試後再儲存。"
+		"channelSelectionLoadError": "暫時無法讀取 Channel 衝突。請重試後再儲存。",
+		"analyticsTitle": "API Key 用量",
+		"analyticsDescription": "查看此 API Key 的準確 Tokens、呼叫次數、Coin 消耗、餘額、趨勢和模型用量。",
+		"analyticsRange": "用量範圍",
+		"analyticsAll": "全部",
+		"analyticsTokens": "總 Tokens",
+		"analyticsInput": "輸入",
+		"analyticsCache": "快取讀取",
+		"analyticsOutput": "輸出",
+		"analyticsRequests": "呼叫次數",
+		"analyticsRequestsUnit": "次呼叫",
+		"analyticsCost": "Coin 消耗",
+		"analyticsModels": "模型用量",
+		"analyticsWalletBalance": "跟隨錢包餘額",
+		"analyticsIndependentBalance": "Key 餘額",
+		"analyticsLoadFailed": "API Key 用量載入失敗",
+		"analyticsEmpty": "此時間範圍內尚無用量。"
 	},
 	"settings": {
 		"title": "系統設定",
@@ -1280,7 +1329,9 @@
 		},
 		"apiTypeOverrides": "API 類型覆蓋規則",
 		"apiTypeOverridesDesc": "將特定模型模式路由至不同的 API 類型。規則依序比對，首個匹配生效。未匹配的模型使用上方預設類型。",
-		"addOverride": "新增規則"
+		"addOverride": "新增規則",
+		"accountClass": "目錄範圍",
+		"accountClassDescription": "只顯示屬於目前帳戶類型 Group 的 Provider。"
 	},
 	"transforms": {
 		"titleProvider": "上游 Transform",
@@ -1938,7 +1989,9 @@
 		"emptyDescription": "系統會在初始化時建立預設群組。",
 		"invalidName": "名稱須為 1-64 個字元",
 		"invalidDescription": "描述最多 256 個字元",
-		"invalidSortOrder": "排序必須是整數"
+		"invalidSortOrder": "排序必須是整數",
+		"accountClass": "目錄範圍",
+		"accountClassDescription": "在單一帳戶類型內建立、檢視及排序 Group。"
 	},
 	"groupPicker": {
 		"selectPlaceholder": "選擇群組",
@@ -1946,5 +1999,9 @@
 		"dragHint": "拖曳調整順序：第 1 位優先參與路由。",
 		"noOptions": "沒有可選擇的群組",
 		"unknownGroup": "未知群組"
+	},
+	"accountClass": {
+		"standard": "一般使用者",
+		"enterprise": "企業使用者"
 	}
 }

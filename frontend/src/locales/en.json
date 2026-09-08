@@ -19,7 +19,11 @@
 			"title": "Usage ranking",
 			"description": "Review anonymous user and model Token usage for the selected period.",
 			"rangeLabel": "Ranking period",
-			"ranges": { "24h": "24h", "7d": "7 days", "30d": "30 days" },
+			"ranges": {
+				"24h": "24h",
+				"7d": "7 days",
+				"30d": "30 days"
+			},
 			"totalTokens": "Total Tokens",
 			"totalCalls": "Calls",
 			"currentRanking": "Current ranking",
@@ -246,8 +250,25 @@
 		"currentPlan": "Current plan",
 		"redemptionTitle": "Redeem a code",
 		"recordsTitle": "Balance activity",
-		"tabs": { "ledger": "Ledger", "orders": "Orders" },
-		"ledger": { "limit": "Show entries", "empty": "No balance activity", "loadFailed": "Balance activity could not be loaded", "kinds": { "store_recharge": "Recharge", "redemption_credit": "Redemption credit", "request_charge": "API usage", "admin_adjustment": "Admin adjustment", "admin_sub_account_adjustment": "Admin adjustment", "sub_account_refund": "Sub-account refund", "sub_account_debt_transfer": "Sub-account transfer", "plan_grant": "Plan grant" } }
+		"tabs": {
+			"ledger": "Ledger",
+			"orders": "Orders"
+		},
+		"ledger": {
+			"limit": "Show entries",
+			"empty": "No balance activity",
+			"loadFailed": "Balance activity could not be loaded",
+			"kinds": {
+				"store_recharge": "Recharge",
+				"redemption_credit": "Redemption credit",
+				"request_charge": "API usage",
+				"admin_adjustment": "Admin adjustment",
+				"admin_sub_account_adjustment": "Admin adjustment",
+				"sub_account_refund": "Sub-account refund",
+				"sub_account_debt_transfer": "Sub-account transfer",
+				"plan_grant": "Plan grant"
+			}
+		}
 	},
 	"store": {
 		"ui": {
@@ -575,8 +596,7 @@
 				"dialogDescription": "Set the adapter and customer-facing icon.",
 				"kind": "Adapter",
 				"kinds": {
-					"alipay": "Alipay",
-					"wechat": "WeChat Pay",
+					"epay": "EPay",
 					"stripe": "Stripe",
 					"http": "HTTP adapter"
 				},
@@ -603,23 +623,16 @@
 					"secretKey": "Secret key",
 					"webhookSecret": "Webhook signing secret",
 					"liveMode": "Live mode",
-					"appId": "App ID",
-					"sellerId": "Seller ID",
 					"merchantId": "Merchant ID",
-					"environment": "Environment",
-					"sandbox": "Sandbox",
-					"production": "Production",
-					"merchantPrivateKey": "Merchant private key (PEM)",
-					"alipayPublicKey": "Alipay public key (PEM)",
-					"certificateSerial": "Certificate serial",
-					"merchantCertificateSerial": "Merchant certificate serial",
-					"platformCertificateSerial": "Platform certificate serial",
-					"platformPublicKey": "Platform public key (PEM)",
-					"apiV3Key": "API v3 key",
 					"currentPassword": "Current Admin password",
 					"replace": "Replace credential",
 					"invalid": "Enter every credential field and the current Admin password.",
-					"saved": "Payment credential saved. The Channel is disabled."
+					"saved": "Payment credential saved. The Channel is disabled.",
+					"gatewayBaseUrl": "Gateway base URL",
+					"merchantKey": "Merchant key",
+					"alipayEnabled": "Enable Alipay method",
+					"wxpayEnabled": "Enable WeChat Pay method",
+					"epayCnyOnly": "EPay accepts CNY orders only. Use Stripe for USD checkout."
 				},
 				"deleteConfirm": "Delete {{name}}?"
 			},
@@ -727,6 +740,20 @@
 				"usdMin": "USD minimum",
 				"usdMax": "USD maximum",
 				"invalid": "Each limit must be positive and each minimum cannot exceed its maximum."
+			},
+			"epayMethods": {
+				"action": "EPay methods",
+				"title": "EPay methods",
+				"description": "Set the public label, order, and enabled state of each EPay method.",
+				"label": "Public label",
+				"sortOrder": "Sort order",
+				"enabled": "Enabled",
+				"saved": "EPay method saved",
+				"saveFailed": "Failed to save the EPay method",
+				"methods": {
+					"alipay": "Alipay",
+					"wxpay": "WeChat Pay"
+				}
 			}
 		},
 		"fields": {
@@ -898,7 +925,13 @@
 		"todaySummary": "Today {{spend}} · {{calls}} calls",
 		"viewLogs": "View logs",
 		"group": "Group",
-		"groupHelp": "Each user belongs to exactly one group, which determines the available providers."
+		"groupHelp": "Each user belongs to exactly one group, which determines the available providers.",
+		"accountClassConfirmTitle": "Change account class?",
+		"accountClassConfirmAction": "Delete Keys and change",
+		"accountClassDeleteKeysWarning": "Change {{username}} to {{accountClass}}. This action permanently deletes every existing API Key for this user.",
+		"accountClassChanged": "Account class changed",
+		"accountClass": "Account class",
+		"accountClassDescription": "Changing the class moves this user to an isolated catalog."
 	},
 	"apiKeys": {
 		"title": "Token Management",
@@ -977,7 +1010,23 @@
 		"channelSelectionHelp": "Select one Channel when multiple Providers expose the same model in one Group.",
 		"selectChannel": "Select Channel",
 		"channelSelectionRequired": "Select a Channel for all {{count}} remaining conflicts.",
-		"channelSelectionLoadError": "Channel conflicts are unavailable. Try again before saving."
+		"channelSelectionLoadError": "Channel conflicts are unavailable. Try again before saving.",
+		"analyticsTitle": "API Key usage",
+		"analyticsDescription": "Inspect exact Tokens, calls, Coin usage, balance, trends, and models for this API Key.",
+		"analyticsRange": "Usage range",
+		"analyticsAll": "All",
+		"analyticsTokens": "Total Tokens",
+		"analyticsInput": "Input",
+		"analyticsCache": "Cache read",
+		"analyticsOutput": "Output",
+		"analyticsRequests": "Calls",
+		"analyticsRequestsUnit": "calls",
+		"analyticsCost": "Coin used",
+		"analyticsModels": "Model usage",
+		"analyticsWalletBalance": "Follows wallet balance",
+		"analyticsIndependentBalance": "Key balance",
+		"analyticsLoadFailed": "Failed to load API Key usage",
+		"analyticsEmpty": "No usage in this range."
 	},
 	"settings": {
 		"title": "Settings",
@@ -1283,7 +1332,9 @@
 		},
 		"apiTypeOverrides": "API Type Overrides",
 		"apiTypeOverridesDesc": "Route specific model patterns to different API types. Rules are evaluated in order; first match wins. Unmatched models use the default Type above.",
-		"addOverride": "Add Rule"
+		"addOverride": "Add Rule",
+		"accountClass": "Catalog scope",
+		"accountClassDescription": "Show Providers that belong to Groups in one account class."
 	},
 	"transforms": {
 		"titleProvider": "Upstream Transforms",
@@ -1941,7 +1992,9 @@
 		"emptyDescription": "The system creates the default group during initialization.",
 		"invalidName": "Name must be 1-64 characters",
 		"invalidDescription": "Description must be at most 256 characters",
-		"invalidSortOrder": "Sort order must be an integer"
+		"invalidSortOrder": "Sort order must be an integer",
+		"accountClass": "Catalog scope",
+		"accountClassDescription": "Create, view, and reorder Groups inside one account class."
 	},
 	"groupPicker": {
 		"selectPlaceholder": "Select a group",
@@ -1949,5 +2002,9 @@
 		"dragHint": "Drag to reorder; position 1 routes first.",
 		"noOptions": "No groups available",
 		"unknownGroup": "Unknown group"
+	},
+	"accountClass": {
+		"standard": "Standard",
+		"enterprise": "Enterprise"
 	}
 }

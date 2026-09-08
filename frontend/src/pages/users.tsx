@@ -51,8 +51,9 @@ import {
   createUserOptimistic,
   updateUserOptimistic,
   deleteUserOptimistic,
+  updateUserAccountClassOptimistic,
 } from "@/lib/swr";
-import type { User } from "@/lib/api";
+import type { AccountClass, User } from "@/lib/api";
 import { formatNanoUsd, formatUsdDecimal, isSignedIntegerString } from "@/lib/exact-decimal";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { getGravatarUrl } from "@/lib/utils";
@@ -148,6 +149,10 @@ export function UsersPage() {
   const [balanceAddAmount, setBalanceAddAmount] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [accountClassTarget, setAccountClassTarget] = useState<{
+    user: User;
+    next: AccountClass;
+  } | null>(null);
 
   const handleCreate = async () => {
     if (!formData.username.trim() || !formData.password) return;
@@ -281,6 +286,26 @@ export function UsersPage() {
       toast.error(error instanceof Error ? error.message : t("users.failedDelete"));
     } finally {
       setDeleteTargetId(null);
+    }
+  };
+
+  const confirmAccountClassChange = async () => {
+    if (!accountClassTarget || saving) return;
+    setSaving(true);
+    try {
+      const updated = await updateUserAccountClassOptimistic(
+        accountClassTarget.user.id,
+        accountClassTarget.next,
+        users,
+      );
+      setEditUser(updated);
+      setFormData((current) => ({ ...current, groupId: updated.group_id }));
+      setAccountClassTarget(null);
+      toast.success(t("users.accountClassChanged"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("users.failedUpdate"));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -444,6 +469,38 @@ export function UsersPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog
+        open={accountClassTarget !== null}
+        onOpenChange={(open) => { if (!open && !saving) setAccountClassTarget(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("users.accountClassConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("users.accountClassDeleteKeysWarning", {
+                username: accountClassTarget?.user.username,
+                accountClass: accountClassTarget
+                  ? t(`accountClass.${accountClassTarget.next}`)
+                  : "",
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={saving}
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmAccountClassChange();
+              }}
+            >
+              {saving ? t("common.saving") : t("users.accountClassConfirmAction")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <Dialog open={!!editUser} onOpenChange={(open) => !open && setEditUser(null)}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]">
           <div className="flex min-h-0 flex-col p-6">
@@ -512,12 +569,39 @@ export function UsersPage() {
                     </DropdownMenu>
                   </div>
                 )}
+                {editUser?.role !== "super_admin" && (
+                  <div className="space-y-2 rounded-xl border bg-muted/20 p-4">
+                    <div>
+                      <Label>{t("users.accountClass")}</Label>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t("users.accountClassDescription")}
+                      </p>
+                    </div>
+                    <Tabs value={editUser.account_class}>
+                      <TabsList className="grid h-10 w-full grid-cols-2 rounded-lg">
+                        {(["standard", "enterprise"] as const).map((accountClass) => (
+                          <TabsTrigger
+                            key={accountClass}
+                            value={accountClass}
+                            onClick={() => {
+                              if (accountClass !== editUser.account_class) {
+                                setAccountClassTarget({ user: editUser, next: accountClass });
+                              }
+                            }}
+                          >
+                            {t(`accountClass.${accountClass}`)}
+                          </TabsTrigger>
+                        ))}
+                      </TabsList>
+                    </Tabs>
+                  </div>
+                )}
                 <div className="space-y-2">
                   <Label htmlFor="edit-user-group">{t("users.group")}</Label>
                   <GroupSingleSelect
                     id="edit-user-group"
                     value={formData.groupId}
-                    groups={groups}
+                    groups={groups.filter((group) => group.account_class === editUser?.account_class)}
                     loading={groupsLoading}
                     onChange={(groupId) => setFormData({ ...formData, groupId })}
                   />

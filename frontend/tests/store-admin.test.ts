@@ -86,11 +86,11 @@ describe("Store admin page", () => {
     expect(productSource).toContain("quota_minor_cny");
   });
 
-  test("supports official and HTTP payment adapters with URL or uploaded icons", () => {
-    expect(channelSource).toContain('"alipay"');
-    expect(channelSource).toContain('"wechat"');
+  test("supports EPay, Stripe, and HTTP payment adapters with URL or uploaded icons", () => {
+    expect(channelSource).toContain('"epay"');
     expect(channelSource).toContain('"stripe"');
     expect(channelSource).toContain('"http"');
+    expect(channelSource).not.toContain('"wechat"');
     expect(channelSource).not.toContain("config_secret");
     expect(channelSource).toContain('type="file"');
     expect(channelSource).toContain("uploadIcon");
@@ -241,13 +241,13 @@ describe("Store admin page", () => {
     expect(apiSource).toContain("expected_revision");
     expect(channelSource).toContain("onSaveCredential");
     expect(channelSource).toContain('type="password"');
-    expect(channelSource).toContain("merchant_private_key_pem");
     expect(channelSource).toContain("webhook_signing_secret");
-    expect(channelSource).toContain("api_v3_key");
-    expect(channelSource).toContain("platform_certificate_serial");
-    expect(channelSource).toContain("platform_public_key_pem");
-    expect(apiSource).toContain("platform_certificate_serial");
-    expect(apiSource).toContain("platform_public_key_pem");
+    expect(channelSource).toContain("merchant_key");
+    expect(channelSource).toContain("gateway_base_url");
+    expect(apiSource).toContain("merchant_key");
+    expect(apiSource).toContain("gateway_base_url");
+    // The merchant secret is never echoed back by any API response type.
+    expect(apiSource).not.toContain("platform_public_key_pem");
     expect(channelSource).not.toContain("credential_version_id");
     expect(pageSource).toContain("saveChannelCredential");
     expect(pageSource).toContain("revalidate: true");
