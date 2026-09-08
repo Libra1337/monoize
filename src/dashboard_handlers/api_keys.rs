@@ -504,6 +504,33 @@ pub async fn get_api_key(
     }))
 }
 
+/// TM-AN5a bucket alignment. Each helper truncates a UTC instant down to the start
+/// of its bucket unit so a bucket label names the interval the bucket covers.
+fn align_down_to_hour(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    use chrono::Timelike;
+    value
+        .with_minute(0)
+        .and_then(|value| value.with_second(0))
+        .and_then(|value| value.with_nanosecond(0))
+        .unwrap_or(value)
+}
+
+fn align_down_to_day(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    value
+        .date_naive()
+        .and_time(chrono::NaiveTime::MIN)
+        .and_utc()
+}
+
+fn align_down_to_month(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    use chrono::Datelike;
+    let date = value.date_naive();
+    date.with_day(1)
+        .unwrap_or(date)
+        .and_time(chrono::NaiveTime::MIN)
+        .and_utc()
+}
+
 pub async fn get_api_key_analytics(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -521,9 +548,24 @@ pub async fn get_api_key_analytics(
 
     let now = chrono::Utc::now();
     let (time_from, bucket_count, label_format) = match query.range.as_str() {
-        "24h" => (now - chrono::Duration::hours(24), 24_i64, "%m-%d %H:00"),
-        "7d" => (now - chrono::Duration::days(7), 7_i64, "%m-%d"),
-        "30d" => (now - chrono::Duration::days(30), 30_i64, "%m-%d"),
+        // TM-AN5a: the range start is aligned down to the bucket unit so each label
+        // names the interval its bucket actually covers. Without alignment a range
+        // starting at 10:37 yields a first bucket labelled `10:00`.
+        "24h" => (
+            align_down_to_hour(now - chrono::Duration::hours(24)),
+            24_i64,
+            "%m-%d %H:00",
+        ),
+        "7d" => (
+            align_down_to_day(now - chrono::Duration::days(7)),
+            7_i64,
+            "%m-%d",
+        ),
+        "30d" => (
+            align_down_to_day(now - chrono::Duration::days(30)),
+            30_i64,
+            "%m-%d",
+        ),
         "all" => {
             let first_ms = state
                 .user_store
@@ -538,9 +580,13 @@ pub async fn get_api_key_analytics(
             let retained_days = (now - first).num_days().max(0);
             if retained_days > 90 {
                 let months = (retained_days / 30 + 1).clamp(1, 120);
-                (first, months, "%Y-%m")
+                (align_down_to_month(first), months, "%Y-%m")
             } else {
-                (first, (retained_days + 1).clamp(1, 90), "%m-%d")
+                (
+                    align_down_to_day(first),
+                    (retained_days + 1).clamp(1, 90),
+                    "%m-%d",
+                )
             }
         }
         _ => {
@@ -917,7 +963,9 @@ pub async fn transfer_to_sub_account(
 
 #[cfg(test)]
 mod tests {
-    use super::current_channel_conflicts;
+    use super::{
+        align_down_to_day, align_down_to_hour, align_down_to_month, current_channel_conflicts,
+    };
     use crate::app::{RuntimeConfig, load_state_with_runtime};
     use crate::billing_rate_store::UpsertBillingRateInput;
     use crate::monoize_routing::CreateMonoizeProviderInput;
@@ -1005,5 +1053,35 @@ mod tests {
             .await
             .expect("conflicts load");
         assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn analytics_bucket_starts_align_to_their_labelled_unit() {
+        // TM-AN5a: a mid-period instant must truncate down, otherwise a bucket
+        // covering 10:37-11:37 would carry the label `10:00`.
+        let mid = chrono::DateTime::parse_from_rfc3339("2026-09-08T10:37:41.523Z")
+            .expect("fixed instant")
+            .with_timezone(&chrono::Utc);
+
+        assert_eq!(
+            align_down_to_hour(mid).to_rfc3339(),
+            "2026-09-08T10:00:00+00:00"
+        );
+        assert_eq!(
+            align_down_to_day(mid).to_rfc3339(),
+            "2026-09-08T00:00:00+00:00"
+        );
+        assert_eq!(
+            align_down_to_month(mid).to_rfc3339(),
+            "2026-09-01T00:00:00+00:00"
+        );
+
+        // An already-aligned instant is unchanged, so alignment is idempotent.
+        let aligned = align_down_to_hour(mid);
+        assert_eq!(align_down_to_hour(aligned), aligned);
+        let day = align_down_to_day(mid);
+        assert_eq!(align_down_to_day(day), day);
+        let month = align_down_to_month(mid);
+        assert_eq!(align_down_to_month(month), month);
     }
 }

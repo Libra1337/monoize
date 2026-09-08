@@ -477,7 +477,7 @@ impl UserStore {
 
         if input.group_ids.is_empty() {
             return Err(GroupStoreError::InvalidReorder(
-                "group_ids must contain one account class".to_string(),
+                "group_ids must not be empty".to_string(),
             ));
         }
 

@@ -11,8 +11,16 @@ and users with an explicit `user_group_grants` row.
 
 `GET /api/dashboard/groups` returns all Groups for administrators and only Groups that are
 public or granted to the authenticated user for normal users. Group creation defaults to
-`is_public = true`; the create and update APIs accept `is_public` and do not accept or
-return `is_default` or `user_selectable` as behavioral controls.
+`is_public = true`.
+
+`is_public` is the single behavioral control for Group visibility. The create and update
+APIs accept `is_public`, and they also accept `user_selectable` as a deprecated request
+alias that maps onto `is_public`. Neither `is_default` nor `user_selectable` is a behavioral
+control: `is_default` marks the single default Group (GR-D2) and does not affect visibility,
+and a `user_selectable` request value is only an alias for `is_public`. The Group response
+still serializes `is_default`, `user_selectable`, and `is_public`; `is_default` and
+`user_selectable` are read-only response fields retained for compatibility, and a client
+MUST read `is_public` to determine visibility.
 
 An API key keeps its stored `group_ids` and channel bindings when a Group becomes private.
 Authentication removes inaccessible Groups from the effective routing set immediately. If
@@ -294,7 +302,12 @@ GR-I1. Every `users.group_id` references an existing group (write validation + c
 GR-I2. Every `monoize_providers.group_id` references one existing Group. The former public
 Provider concept no longer exists. A Provider belongs to exactly one Group.
 
-GR-I3. An API key stores an ordered `group_ids` array. An empty array means every Group.
+GR-I3. An API key stores an ordered `group_ids` array. An empty array selects every Group the
+owner can access, not every Group that exists. Visibility and account-class filtering
+(section 0B) apply before the empty selection expands, so an empty selection never reaches a
+private Group the owner was not granted or a Group of the other account class. When the
+expansion yields no Group, authentication fails closed under
+`api-key-authentication.spec.md` AKG5b.
 
 GR-I4. API-key Group resolution follows `api-key-authentication.spec.md` section 4. A
 non-empty billing-plan Group ceiling still restricts an API key whose own list is empty.

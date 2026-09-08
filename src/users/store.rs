@@ -618,8 +618,15 @@ impl UserStore {
         let now = Utc::now();
         let group_id = match group_id.map(str::trim).filter(|value| !value.is_empty()) {
             Some(value) => {
-                if self.get_group_by_id(value).await?.is_none() {
-                    return Err(format!("unknown group id: {value}"));
+                // A new user is always Standard, so an Enterprise Group here would
+                // store a cross-class binding that every later Group-access and
+                // API-key check rejects. Refuse it at creation instead.
+                let group = self
+                    .get_group_by_id(value)
+                    .await?
+                    .ok_or_else(|| format!("unknown group id: {value}"))?;
+                if group.account_class != AccountClass::Standard {
+                    return Err(format!("group account class mismatch: {value}"));
                 }
                 value.to_string()
             }

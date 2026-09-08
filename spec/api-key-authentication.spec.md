@@ -107,6 +107,30 @@ revoked. The Group stops routing immediately and starts routing again without ed
 key once the owner is granted access. An empty stored selection never routes to a private
 Group the owner cannot access.
 
+AKG5b. An empty `resolved` and an empty restriction result are distinct states and MUST NOT
+produce the same `effective_groups`.
+
+- `resolved` empty means the key selects every Group. Step 5 replaces it with
+  `accessible_groups`.
+- `resolved` non-empty whose restriction against `accessible_groups` removes every id means
+  the key selects only Groups the owner cannot access. This is an empty authorization, not
+  an absent restriction.
+
+When step 5 produces an empty array from a non-empty `resolved`, authentication MUST fail
+closed. It MUST NOT attach `effective_groups = []`, because
+`database-provider-routing.spec.md` R-GRP-1a treats `[]` as every Provider being
+group-eligible, which would route the request to Providers in Groups the owner cannot
+access.
+
+AKG5c. A request rejected under AKG5b MUST return the same response as an API key with no
+routable Group. It MUST NOT disclose which Groups the key selected, which Groups the owner
+can access, or that a visibility change caused the rejection.
+
+AKG5d. `accessible_groups` MUST be empty only when the owner can access no Group of the
+owner's `account_class`. In that state every API key of that owner MUST fail closed under
+AKG5b regardless of its stored selection, because step 5 yields an empty array in both
+branches.
+
 AKG6. The attached array MUST be deduplicated preserving first occurrence order. Elements
 MUST NOT be lowercased, sorted, or otherwise rewritten; group ids are opaque and their
 order defines routing preference (`database-provider-routing.spec.md` R-GRP-2).

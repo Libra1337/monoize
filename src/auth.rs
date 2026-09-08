@@ -80,10 +80,16 @@ impl AuthState {
                                     return None;
                                 }
                             };
-                        let effective_groups = Some(restrict_effective_groups(
-                            &resolved_groups,
-                            &accessible_groups,
-                        ));
+                        // AKG5b: an empty restriction result means the key selects
+                        // only Groups the owner cannot access. Attaching `[]` here
+                        // would make every Provider group-eligible under R-GRP-1a,
+                        // so authentication fails closed instead.
+                        let Some(restricted_groups) =
+                            restrict_effective_groups(&resolved_groups, &accessible_groups)
+                        else {
+                            return None;
+                        };
+                        let effective_groups = Some(restricted_groups);
                         return Some(AuthResult {
                             tenant_id: user.id.clone(),
                             user_id: Some(user.id),

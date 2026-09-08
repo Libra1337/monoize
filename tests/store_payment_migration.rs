@@ -807,3 +807,37 @@ async fn admission_migration_installs_token_receipt_and_key_shape_guards() {
         "published key shape must reject activation and encrypted seed"
     );
 }
+
+#[tokio::test]
+async fn migration_064_keeps_the_payment_channel_catalog_index_after_rebuilding_the_table() {
+    let db = migrated_database().await;
+    let indexes = sqlite_names(&db, "index").await;
+
+    // Migration 064 rebuilds store_payment_channels to change its adapter-kind
+    // constraint. `RENAME TO` carries the migration-049 index onto the old table,
+    // so dropping that table would take the index with it and degrade the catalog
+    // query to a full table scan.
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_store_payment_channels_catalog"),
+        "the catalog index must survive the adapter-kind rebuild, found: {indexes:?}"
+    );
+
+    let adapter_kinds: Vec<String> = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT DISTINCT adapter_kind FROM store_payment_channels".to_string(),
+        ))
+        .await
+        .expect("read adapter kinds")
+        .iter()
+        .map(|row| String::try_get(row, "", "adapter_kind").expect("adapter_kind"))
+        .collect();
+    assert!(
+        adapter_kinds
+            .iter()
+            .all(|kind| matches!(kind.as_str(), "epay" | "stripe" | "http")),
+        "only epay, stripe, and http remain: {adapter_kinds:?}"
+    );
+}

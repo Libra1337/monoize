@@ -734,10 +734,15 @@ impl PaymentOrderStore {
         )
         .await
         .map_err(storage)?;
+        // Every action the adapter may return must be declared, so `all` rather than
+        // `any`. EPay answers a creation with either a QR payload or a payment URL,
+        // and `present_attempt` validates only the action's shape, so `any` would let
+        // a Channel declaring just one of them return the undeclared kind. Stripe
+        // declares only `Redirect`, so this does not tighten the Stripe path.
         if !availability.effective_available
             || !admissible_actions
                 .iter()
-                .any(|action| availability.checkout_action_kinds.contains(action))
+                .all(|action| availability.checkout_action_kinds.contains(action))
         {
             return Err(PaymentOrderError::ChannelUnavailable);
         }

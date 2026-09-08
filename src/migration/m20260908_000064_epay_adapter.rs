@@ -256,20 +256,15 @@ impl Migration {
             ),
         ))
         .await?;
-        if backend == DbBackend::Postgres {
-            tx.execute(Statement::from_string(
-                backend,
-                "UPDATE store_payment_channels SET adapter_kind = 'alipay', enabled = 0
-                 WHERE adapter_kind = 'epay'"
-                    .to_string(),
-            ))
-            .await?;
-        }
         if backend == DbBackend::Sqlite {
             for sql in sqlite_restore_statements() {
                 tx.execute_unprepared(&sql).await?;
             }
         } else {
+            // A row-level CHECK is evaluated immediately and cannot be deferred, so
+            // the constraint must accept 'alipay' before any row is mapped back to
+            // it. Mapping first would abort the transaction on the still-active
+            // `epay|stripe|http` constraint and leave `down` unable to complete.
             tx.execute(Statement::from_string(
                 backend,
                 "ALTER TABLE store_payment_channels
@@ -282,6 +277,13 @@ impl Migration {
                 "ALTER TABLE store_payment_channels
                  ADD CONSTRAINT ck_store_payment_channels_adapter
                  CHECK (adapter_kind IN ('alipay', 'wechat', 'stripe', 'http'))"
+                    .to_string(),
+            ))
+            .await?;
+            tx.execute(Statement::from_string(
+                backend,
+                "UPDATE store_payment_channels SET adapter_kind = 'alipay', enabled = 0
+                 WHERE adapter_kind = 'epay'"
                     .to_string(),
             ))
             .await?;
@@ -349,8 +351,15 @@ fn sqlite_rebuild_statements() -> Vec<String> {
              FROM store_payment_channels_old"
         ),
         "DROP TABLE store_payment_channels_old".to_string(),
+        // `RENAME TO` moves the migration-049 index onto the old table, so dropping
+        // that table takes the index with it. Without recreating it the catalog
+        // query degrades to a full table scan.
+        CHANNEL_CATALOG_INDEX.to_string(),
     ]
 }
+
+/// Recreated after every table rebuild; the definition matches migration 049.
+const CHANNEL_CATALOG_INDEX: &str = "CREATE INDEX IF NOT EXISTS idx_store_payment_channels_catalog ON store_payment_channels (enabled, sort_order, created_at, id)";
 
 fn sqlite_restore_statements() -> Vec<String> {
     vec![
@@ -370,6 +379,7 @@ fn sqlite_restore_statements() -> Vec<String> {
          FROM store_payment_channels_old"
             .to_string(),
         "DROP TABLE store_payment_channels_old".to_string(),
+        CHANNEL_CATALOG_INDEX.to_string(),
     ]
 }
 

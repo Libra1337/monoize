@@ -446,6 +446,7 @@ cache and meter rates, missing rates, maximum integers, and exact PP-G5 equality
 
 PP-V5. UI tests MUST verify singular Group and Channel controls, public-exposure
 confirmation, optimistic rollback, revalidation, warnings, and Skeletons.
+
 ## Account-Class Price Isolation
 
 PP-ENT1. Every price resolution MUST include the account class inherited from the selected Provider Group.
@@ -455,3 +456,15 @@ PP-ENT2. A price candidate whose account class differs from the authenticated us
 PP-ENT3. A missing in-class price MUST fail price resolution. Resolution MUST NOT fall back to a candidate from the other account class.
 
 PP-ENT4. Enterprise and standard rates MAY contain different values for the same normalized model, API type, usage class, context tier, service tier, modality, and cache TTL.
+
+PP-ENT5. PP-ENT1 through PP-ENT4 are enforced through the effective Profile, not through an
+account-class column on billing-rate records. Rate lookup is keyed by `effective_profile`,
+and `effective_profile` derives from the selected Provider or Channel (PP-M8), whose account
+class is already restricted to the authenticated user account class. An Enterprise request
+therefore reaches only Enterprise Providers and resolves only their Profiles.
+
+PP-ENT6. Required invariant that PP-ENT5 depends on: one Profile name MUST NOT be reachable
+from Providers of both account classes. A shared Profile name would make one set of
+billing-rate records resolve for both classes and would defeat PP-ENT2 and PP-ENT3, even
+though every routing query filters by account class. Enterprise and standard Providers
+therefore MUST use disjoint Profile names.

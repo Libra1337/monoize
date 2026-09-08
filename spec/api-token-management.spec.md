@@ -291,6 +291,8 @@ TM-AN4. Consumed Coin MUST equal the sum of persisted canonical `charge_nano_usd
 
 TM-AN5. `24h` MUST use hourly buckets. `7d` and `30d` MUST use daily buckets. `all` MUST use daily buckets when retained history spans at most 90 days and calendar-month buckets otherwise.
 
+TM-AN5a. Each bucket boundary MUST align to the start of its own bucket unit in UTC. An hourly bucket MUST start at minute zero and second zero. A daily bucket MUST start at midnight. A calendar-month bucket MUST start on day one at midnight. The queried range start MUST be aligned down to that unit before bucket boundaries are derived, so a bucket label always names the interval the bucket actually covers. A label MUST NOT round a boundary that the bucket does not start at; for example, a bucket covering `10:37` to `11:37` MUST NOT be labelled `10:00`.
+
 TM-AN6. Each model row MUST contain model, total Tokens, request count, and consumed Coin. Rows MUST sort by total Tokens descending and model ascending.
 
 TM-AN7. A Key with `sub_account_enabled = false` MUST return `balance_mode = wallet` and no independent balance. A Key with `sub_account_enabled = true` MUST return `balance_mode = independent` and its signed stored balance.

@@ -202,7 +202,9 @@ impl fmt::Debug for EpayCredential {
 /// and destinations that a request must never reach from the server.
 pub fn validate_gateway_url(raw: &str) -> Result<Url, AdapterError> {
     let url = Url::parse(raw).map_err(|_| AdapterError::InvalidConfiguration)?;
-    if !matches!(url.scheme(), "http" | "https")
+    // SB-EP-11A: the query endpoints send the merchant secret as the `key` query
+    // parameter, so a plaintext gateway would expose it to every intermediate node.
+    if url.scheme() != "https"
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
@@ -729,10 +731,15 @@ pub fn parse_refund_response(
     }
     let response: RefundResponse =
         serde_json::from_slice(body).map_err(|_| AdapterError::Verification)?;
+    // SB-EP-10A: the protocol documents only "1 means success, any other value means
+    // failure" and defines no error-code taxonomy, so a non-1 code cannot be proven
+    // terminal. "System busy", an unsynchronized order, and a duplicate refund all
+    // arrive as non-1. Treating those as Failed would reject the refund permanently
+    // and abandon money, so an undocumented code stays ambiguous for the reconciler.
     let state = if response.code == 1 {
         ProviderRefundState::Succeeded
     } else {
-        ProviderRefundState::Failed
+        ProviderRefundState::Ambiguous
     };
     Ok(EpayRefundResult {
         state,
@@ -1039,6 +1046,9 @@ mod tests {
             "ftp://pay.example.com/",
             "https://pay.example.com/?a=b",
             "https://pay.example.com/path",
+            // SB-EP-11A: plaintext transport would expose the merchant secret,
+            // which the query endpoints send as the `key` query parameter.
+            "http://pay.example.com/",
         ] {
             assert!(
                 EpayCredential::from_json(&credential_json(gateway)).is_err(),
@@ -1426,14 +1436,24 @@ mod tests {
         )
         .expect("succeeded");
         assert_eq!(succeeded.state, ProviderRefundState::Succeeded);
-        let failed = parse_refund_response(
+        // SB-EP-10A: the protocol defines no error-code taxonomy, so a non-1 code
+        // stays reconcilable instead of permanently rejecting a refundable amount.
+        let undocumented = parse_refund_response(
             reqwest::StatusCode::OK,
             br#"{"code":0,"msg":"refund disabled"}"#,
             &credential,
             &request,
         )
-        .expect("failed");
-        assert_eq!(failed.state, ProviderRefundState::Failed);
+        .expect("parsed");
+        assert_eq!(undocumented.state, ProviderRefundState::Ambiguous);
+        let busy = parse_refund_response(
+            reqwest::StatusCode::OK,
+            br#"{"code":-1,"msg":"system busy"}"#,
+            &credential,
+            &request,
+        )
+        .expect("parsed");
+        assert_eq!(busy.state, ProviderRefundState::Ambiguous);
         assert_eq!(
             parse_refund_response(
                 reqwest::StatusCode::GATEWAY_TIMEOUT,

@@ -460,19 +460,31 @@ pub fn resolve_effective_groups(
     canonicalize_group_ids(&filtered)
 }
 
-/// Restrict a key/plan result to the Groups visible to the key owner.
+/// AKG5b: restricting a key/plan result to the Groups visible to the owner can
+/// legitimately yield nothing, and that is an empty authorization rather than an
+/// absent one. Returning a bare `Vec` would collapse it into `[]`, which
+/// `is_provider_group_eligible` reads as "no restriction" under R-GRP-1a, so the
+/// two states are kept apart in the type.
+///
+/// `None` means the key selects only Groups the owner cannot access; the caller
+/// MUST fail authentication closed instead of attaching `[]`.
 pub fn restrict_effective_groups(
     effective_groups: &[String],
     accessible_groups: &[String],
-) -> Vec<String> {
+) -> Option<Vec<String>> {
     if effective_groups.is_empty() {
-        return canonicalize_group_ids(accessible_groups);
+        let accessible = canonicalize_group_ids(accessible_groups);
+        // AKG5d: an owner who can access no Group has no routable Group for any
+        // key, so an empty selection fails closed just like an empty
+        // intersection.
+        return (!accessible.is_empty()).then_some(accessible);
     }
-    effective_groups
+    let restricted: Vec<String> = effective_groups
         .iter()
         .filter(|id| accessible_groups.iter().any(|allowed| allowed == *id))
         .cloned()
-        .collect()
+        .collect();
+    (!restricted.is_empty()).then_some(restricted)
 }
 
 /// R-GRP-1 eligibility: `None` means internal system traffic (all Providers
@@ -937,12 +949,34 @@ mod tests {
     fn private_groups_are_removed_without_erasing_saved_key_scope() {
         assert_eq!(
             restrict_effective_groups(&[], &ids(&["public", "granted"])),
-            ids(&["public", "granted"])
+            Some(ids(&["public", "granted"]))
         );
         assert_eq!(
             restrict_effective_groups(&ids(&["private", "public"]), &ids(&["public"])),
-            ids(&["public"])
+            Some(ids(&["public"]))
         );
+    }
+
+    #[test]
+    fn empty_restriction_never_degrades_into_unrestricted_routing() {
+        // AKG5b: a selection that survives no visibility check is an empty
+        // authorization. Returning `[]` would make R-GRP-1a treat every Provider
+        // as eligible, so the owner would reach Groups they cannot access.
+        assert_eq!(
+            restrict_effective_groups(&ids(&["private-a", "private-b"]), &ids(&["public"])),
+            None
+        );
+
+        // AKG5d: an owner with no accessible Group fails closed for both an
+        // explicit selection and an empty one.
+        assert_eq!(restrict_effective_groups(&ids(&["g-1"]), &[]), None);
+        assert_eq!(restrict_effective_groups(&[], &[]), None);
+
+        // The bypass this guards against: `[]` is "every Provider is eligible".
+        assert!(is_provider_group_eligible(
+            "g-not-accessible",
+            &Some(Vec::new())
+        ));
     }
 
     #[test]
