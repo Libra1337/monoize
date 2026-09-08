@@ -6,6 +6,7 @@ mod utils;
 
 pub use groups::{CreateGroupInput, Group, GroupStoreError, ReorderGroupsInput, UpdateGroupInput};
 pub use plans::{BillingPlan, BillingPlanInput};
+pub use request_logs::AnalyticsBucketing;
 
 use crate::db::DbPool;
 use crate::exact_decimal::Multiplier;

@@ -285,16 +285,49 @@ fn decode_charge_aggregate(
     Ok(total.to_string())
 }
 
-fn analytics_bucket_expr(is_sqlite: bool) -> &'static str {
-    if is_sqlite {
-        "CAST(((rl.created_at_unix_ms - $1) * $2) / $3 AS BIGINT)"
-    } else {
-        "FLOOR(((rl.created_at_unix_ms - $1)::NUMERIC * $2) / $3)::BIGINT"
+/// How `get_dashboard_analytics_bucketed` divides the requested window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalyticsBucketing {
+    /// `bucket_count` buckets of equal duration over `[time_from, time_to)`.
+    /// Bind `$1` = window start in milliseconds, `$2` = bucket count, `$3` = window length.
+    EqualIntervals,
+    /// One bucket per calendar month, starting at the month containing `time_from`.
+    /// Calendar months have unequal lengths, so an equal-duration split would label a bucket
+    /// with a month it does not cover. Bind `$1` = first month index, `$2` = bucket count,
+    /// `$3` = last month index, where a month index is `year * 12 + month - 1`.
+    CalendarMonths,
+}
+
+fn analytics_bucket_expr(is_sqlite: bool, bucketing: AnalyticsBucketing) -> &'static str {
+    match (bucketing, is_sqlite) {
+        (AnalyticsBucketing::EqualIntervals, true) => {
+            "CAST(((rl.created_at_unix_ms - $1) * $2) / $3 AS BIGINT)"
+        }
+        (AnalyticsBucketing::EqualIntervals, false) => {
+            "FLOOR(((rl.created_at_unix_ms - $1)::NUMERIC * $2) / $3)::BIGINT"
+        }
+        (AnalyticsBucketing::CalendarMonths, true) => {
+            "CAST(MIN(MAX((CAST(strftime('%Y', rl.created_at_unix_ms / 1000, 'unixepoch') AS INTEGER) * 12               + CAST(strftime('%m', rl.created_at_unix_ms / 1000, 'unixepoch') AS INTEGER) - 1) - $1, 0),               MIN($2 - 1, $3 - $1)) AS BIGINT)"
+        }
+        (AnalyticsBucketing::CalendarMonths, false) => {
+            "LEAST(GREATEST((EXTRACT(YEAR FROM to_timestamp(rl.created_at_unix_ms / 1000.0))::BIGINT * 12               + EXTRACT(MONTH FROM to_timestamp(rl.created_at_unix_ms / 1000.0))::BIGINT - 1) - $1, 0),               LEAST($2 - 1, $3 - $1))::BIGINT"
+        }
     }
 }
 
-fn analytics_model_bucket_sql(is_sqlite: bool, user_scoped: bool, api_key_scoped: bool) -> String {
-    let bucket_expr = analytics_bucket_expr(is_sqlite);
+/// The calendar month index used by `AnalyticsBucketing::CalendarMonths`.
+pub fn analytics_month_index(value: chrono::DateTime<chrono::Utc>) -> i64 {
+    use chrono::Datelike;
+    i64::from(value.year()) * 12 + i64::from(value.month()) - 1
+}
+
+fn analytics_model_bucket_sql(
+    is_sqlite: bool,
+    user_scoped: bool,
+    api_key_scoped: bool,
+    bucketing: AnalyticsBucketing,
+) -> String {
+    let bucket_expr = analytics_bucket_expr(is_sqlite, bucketing);
     let model_expr =
         "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')";
     let charge_columns = charge_aggregate_columns(!is_sqlite);
@@ -348,11 +381,11 @@ fn decode_token_aggregate(row: &sea_orm::QueryResult, column: &str) -> Result<i1
 #[cfg(test)]
 mod tests {
     use super::{
-        analytics_bucket_expr, analytics_model_bucket_sql, append_request_log_filters,
-        ascii_folded_like_pattern, charge_aggregate_select, decode_charge_aggregate,
-        decode_token_aggregate, enrich_tried_providers_names, escape_like_literal,
-        request_log_model_filter_max_terms_from_raw, tried_providers_need_name_enrichment,
-        validate_request_log_model_filter_with_limit,
+        AnalyticsBucketing, analytics_bucket_expr, analytics_model_bucket_sql,
+        append_request_log_filters, ascii_folded_like_pattern, charge_aggregate_select,
+        decode_charge_aggregate, decode_token_aggregate, enrich_tried_providers_names,
+        escape_like_literal, request_log_model_filter_max_terms_from_raw,
+        tried_providers_need_name_enrichment, validate_request_log_model_filter_with_limit,
     };
     use crate::db::DbPool;
     use sea_orm::{ConnectionTrait, TransactionTrait, Value as SeaValue};
@@ -678,7 +711,7 @@ mod tests {
                 .unwrap();
         }
 
-        let sql = analytics_model_bucket_sql(true, true, false);
+        let sql = analytics_model_bucket_sql(true, true, false, AnalyticsBucketing::EqualIntervals);
         assert!(sql.contains(
             "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')"
         ));
@@ -882,7 +915,7 @@ mod tests {
             .query_one(db.stmt(
                 &format!(
                     "SELECT {} AS bucket_idx FROM request_logs rl WHERE model = $4",
-                    analytics_bucket_expr(true)
+                    analytics_bucket_expr(true, AnalyticsBucketing::EqualIntervals)
                 ),
                 vec![
                     1_704_067_199_400_i64.into(),
@@ -1044,7 +1077,7 @@ mod tests {
 
         let bucket_sql = format!(
             "SELECT {} AS bucket_idx FROM request_logs rl WHERE model = $4",
-            analytics_bucket_expr(false)
+            analytics_bucket_expr(false, AnalyticsBucketing::EqualIntervals)
         );
         let bucket = txn
             .query_one(db.stmt(
@@ -1088,7 +1121,7 @@ mod tests {
         }
         let analytics_rows = txn
             .query_all(db.stmt(
-                &analytics_model_bucket_sql(false, true, false),
+                &analytics_model_bucket_sql(false, true, false, AnalyticsBucketing::EqualIntervals),
                 vec![
                     1_704_067_199_000_i64.into(),
                     2_i64.into(),
@@ -1825,6 +1858,28 @@ impl UserStore {
         today_start: &str,
         bucket_count: i64,
     ) -> Result<DashboardAnalyticsRaw, String> {
+        self.get_dashboard_analytics_bucketed(
+            user_id,
+            api_key_id,
+            time_from,
+            time_to,
+            today_start,
+            bucket_count,
+            AnalyticsBucketing::EqualIntervals,
+        )
+        .await
+    }
+
+    pub async fn get_dashboard_analytics_bucketed(
+        &self,
+        user_id: Option<&str>,
+        api_key_id: Option<&str>,
+        time_from: &str,
+        time_to: &str,
+        today_start: &str,
+        bucket_count: i64,
+        bucketing: AnalyticsBucketing,
+    ) -> Result<DashboardAnalyticsRaw, String> {
         let is_sqlite = self.db.is_sqlite();
         let time_from_unix_ms = chrono::DateTime::parse_from_rfc3339(time_from)
             .map_err(|e| e.to_string())?
@@ -1839,12 +1894,31 @@ impl UserStore {
             return Err("analytics time range and bucket count must be positive".to_string());
         }
 
-        let model_sql =
-            analytics_model_bucket_sql(is_sqlite, user_id.is_some(), api_key_id.is_some());
+        let model_sql = analytics_model_bucket_sql(
+            is_sqlite,
+            user_id.is_some(),
+            api_key_id.is_some(),
+            bucketing,
+        );
+        // The three bucket parameters carry a different meaning per mode; see
+        // `AnalyticsBucketing`. Every mode must reference all three, because a supplied but
+        // unreferenced parameter is a bind error on PostgreSQL.
+        let (bucket_anchor, bucket_bound) = match bucketing {
+            AnalyticsBucketing::EqualIntervals => (time_from_unix_ms, range_ms),
+            AnalyticsBucketing::CalendarMonths => {
+                let from = chrono::DateTime::from_timestamp_millis(time_from_unix_ms)
+                    .ok_or_else(|| "analytics month range is out of bounds".to_string())?;
+                // `time_to` is the exclusive end of the last bucket, so the last covered
+                // month is the one before it.
+                let last = chrono::DateTime::from_timestamp_millis(time_to_unix_ms - 1)
+                    .ok_or_else(|| "analytics month range is out of bounds".to_string())?;
+                (analytics_month_index(from), analytics_month_index(last))
+            }
+        };
         let mut model_values: Vec<SeaValue> = vec![
-            time_from_unix_ms.into(),
+            bucket_anchor.into(),
             bucket_count.into(),
-            range_ms.into(),
+            bucket_bound.into(),
             time_from_unix_ms.into(),
             time_to_unix_ms.into(),
         ];
@@ -1886,7 +1960,7 @@ impl UserStore {
             })
             .collect::<Result<Vec<_>, String>>()?;
 
-        let bucket_expr = analytics_bucket_expr(is_sqlite);
+        let bucket_expr = analytics_bucket_expr(is_sqlite, bucketing);
 
         // 2. Provider bucketed aggregation (calls only)
         let mut prov_sql = format!(
@@ -1901,9 +1975,9 @@ impl UserStore {
         );
         prov_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
         let mut prov_values: Vec<SeaValue> = vec![
-            time_from_unix_ms.into(),
+            bucket_anchor.into(),
             bucket_count.into(),
-            range_ms.into(),
+            bucket_bound.into(),
             time_from_unix_ms.into(),
             time_to_unix_ms.into(),
         ];

@@ -1318,6 +1318,64 @@ impl MonoizeRoutingStore {
             .collect()
     }
 
+    /// PP-ENT6: reports every account class that already reaches each named pricing Profile,
+    /// through a Provider-level Profile or a model-level override. `exclude_provider_id` skips
+    /// the Provider being updated, so keeping its own Profile is never a conflict.
+    pub async fn pricing_profile_account_classes(
+        &self,
+        profiles: &[String],
+        exclude_provider_id: Option<&str>,
+    ) -> Result<Vec<(String, crate::users::AccountClass)>, String> {
+        if profiles.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut values: Vec<sea_orm::Value> = Vec::with_capacity(profiles.len() * 2 + 2);
+        let provider_placeholders = (0..profiles.len())
+            .map(|index| format!("${}", index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        values.extend(profiles.iter().cloned().map(Into::into));
+        let model_placeholders = (0..profiles.len())
+            .map(|index| format!("${}", profiles.len() + index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        values.extend(profiles.iter().cloned().map(Into::into));
+
+        let exclude_index = profiles.len() * 2 + 1;
+        let (provider_filter, model_filter) = match exclude_provider_id {
+            Some(id) => {
+                values.push(id.into());
+                values.push(id.into());
+                (
+                    format!(" AND p.id <> ${exclude_index}"),
+                    format!(" AND p.id <> ${}", exclude_index + 1),
+                )
+            }
+            None => (String::new(), String::new()),
+        };
+
+        let sql = format!(
+            "SELECT p.pricing_profile AS profile, g.account_class AS account_class              FROM monoize_providers p JOIN monoize_groups g ON g.id = p.group_id              WHERE p.pricing_profile IN ({provider_placeholders}){provider_filter}              UNION              SELECT pm.pricing_profile_override AS profile, g.account_class AS account_class              FROM monoize_provider_models pm              JOIN monoize_providers p ON p.id = pm.provider_id              JOIN monoize_groups g ON g.id = p.group_id              WHERE pm.pricing_profile_mode = 'override'                AND pm.pricing_profile_override IN ({model_placeholders}){model_filter}"
+        );
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(&sql, values))
+            .await
+            .map_err(|error| error.to_string())?;
+        rows.into_iter()
+            .map(|row| {
+                let profile: String = row.try_get("", "profile").map_err(|e| e.to_string())?;
+                let raw: String = row
+                    .try_get("", "account_class")
+                    .map_err(|e| e.to_string())?;
+                let account_class = crate::users::AccountClass::from_str(&raw)
+                    .ok_or_else(|| format!("invalid persisted account_class: {raw:?}"))?;
+                Ok((profile, account_class))
+            })
+            .collect()
+    }
+
     pub async fn list_providers_by_account_class(
         &self,
         account_class: crate::users::AccountClass,

@@ -468,3 +468,13 @@ from Providers of both account classes. A shared Profile name would make one set
 billing-rate records resolve for both classes and would defeat PP-ENT2 and PP-ENT3, even
 though every routing query filters by account class. Enterprise and standard Providers
 therefore MUST use disjoint Profile names.
+
+PP-ENT7. Provider create and Provider update MUST enforce PP-ENT6 before the write commits.
+The account class is the class of the Group the write targets, which is the requested Group
+when the write moves the Provider and the current Group otherwise. A Profile name is
+reachable from an account class when a Provider of that class names it as its Provider
+Profile or a model entry of that Provider overrides its Profile to that name. A write whose
+requested Profile name, including every model-level override, is reachable from the other
+account class MUST fail with HTTP `409` and code `pricing_profile_account_class_conflict`,
+and MUST NOT change any row. The Provider being updated is excluded from the reachability
+check, so keeping its own Profile is never a conflict.
