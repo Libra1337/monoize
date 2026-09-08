@@ -9,11 +9,63 @@ use crate::users::{
     parse_nano_usd,
 };
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Deserialize)]
+pub struct ApiKeyAnalyticsQuery {
+    #[serde(default = "default_api_key_analytics_range")]
+    pub range: String,
+}
+
+fn default_api_key_analytics_range() -> String {
+    "24h".to_string()
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiKeyAnalyticsTrendPoint {
+    pub label: String,
+    pub input_tokens: String,
+    pub cache_read_tokens: String,
+    pub output_tokens: String,
+    pub total_tokens: String,
+    pub request_count: i64,
+    pub consumed_coin_nano: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiKeyAnalyticsModelRow {
+    pub model: String,
+    pub input_tokens: String,
+    pub cache_read_tokens: String,
+    pub output_tokens: String,
+    pub total_tokens: String,
+    pub request_count: i64,
+    pub consumed_coin_nano: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiKeyAnalyticsResponse {
+    pub key_id: String,
+    pub key_name: String,
+    pub range: String,
+    pub time_from: String,
+    pub time_to: String,
+    pub total_tokens: String,
+    pub total_input_tokens: String,
+    pub total_cache_read_tokens: String,
+    pub total_output_tokens: String,
+    pub request_count: i64,
+    pub consumed_coin_nano: String,
+    pub balance_mode: &'static str,
+    pub independent_balance_nano: Option<String>,
+    pub trend: Vec<ApiKeyAnalyticsTrendPoint>,
+    pub models: Vec<ApiKeyAnalyticsModelRow>,
+}
 
 pub(super) fn nano_balance_fields(nano_str: &str) -> Result<(String, String), String> {
     let nano = parse_nano_usd(nano_str)?;
@@ -147,10 +199,8 @@ async fn current_channel_conflicts(
         .map(|group| (group.id, group.name))
         .collect::<std::collections::BTreeMap<_, _>>();
     let providers = state.monoize_store.list_providers().await?;
-    let mut by_scope = std::collections::BTreeMap::<
-        (String, String),
-        Vec<ApiKeyChannelOptionResponse>,
-    >::new();
+    let mut by_scope =
+        std::collections::BTreeMap::<(String, String), Vec<ApiKeyChannelOptionResponse>>::new();
     for provider in providers {
         if !provider.enabled || !provider.channel.enabled {
             continue;
@@ -178,15 +228,17 @@ async fn current_channel_conflicts(
     Ok(by_scope
         .into_iter()
         .filter(|(_, options)| options.len() > 1)
-        .map(|((group_id, model), options)| ApiKeyChannelConflictResponse {
-            group_name: group_names
-                .get(&group_id)
-                .cloned()
-                .unwrap_or_else(|| group_id.clone()),
-            group_id,
-            model,
-            options,
-        })
+        .map(
+            |((group_id, model), options)| ApiKeyChannelConflictResponse {
+                group_name: group_names
+                    .get(&group_id)
+                    .cloned()
+                    .unwrap_or_else(|| group_id.clone()),
+                group_id,
+                model,
+                options,
+            },
+        )
         .collect())
 }
 
@@ -237,9 +289,9 @@ pub async fn list_api_key_channel_conflicts(
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     get_current_user(&headers, &state).await?;
-    let conflicts = current_channel_conflicts(&state)
-        .await
-        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?;
+    let conflicts = current_channel_conflicts(&state).await.map_err(|error| {
+        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+    })?;
     Ok(Json(conflicts))
 }
 
@@ -395,11 +447,8 @@ pub async fn delete_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    api_key.ok_or_else(|| AppError::new(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "API key not found",
-        ))?;
+    api_key
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "API key not found"))?;
 
     user_store
         .delete_api_key(&key_id)
@@ -455,6 +504,217 @@ pub async fn get_api_key(
     }))
 }
 
+pub async fn get_api_key_analytics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+    Query(query): Query<ApiKeyAnalyticsQuery>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let api_key = state
+        .user_store
+        .get_api_key_by_id(&key_id)
+        .await
+        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
+        .filter(|key| key.user_id == user.id || user.role.can_manage_users())
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "API key not found"))?;
+
+    let now = chrono::Utc::now();
+    let (time_from, bucket_count, label_format) = match query.range.as_str() {
+        "24h" => (now - chrono::Duration::hours(24), 24_i64, "%m-%d %H:00"),
+        "7d" => (now - chrono::Duration::days(7), 7_i64, "%m-%d"),
+        "30d" => (now - chrono::Duration::days(30), 30_i64, "%m-%d"),
+        "all" => {
+            let first_ms = state
+                .user_store
+                .get_api_key_analytics_start(&api_key.user_id, &api_key.id)
+                .await
+                .map_err(|error| {
+                    AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+                })?;
+            let first = first_ms
+                .and_then(chrono::DateTime::from_timestamp_millis)
+                .unwrap_or(api_key.created_at);
+            let retained_days = (now - first).num_days().max(0);
+            if retained_days > 90 {
+                let months = (retained_days / 30 + 1).clamp(1, 120);
+                (first, months, "%Y-%m")
+            } else {
+                (first, (retained_days + 1).clamp(1, 90), "%m-%d")
+            }
+        }
+        _ => {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "range must equal 24h, 7d, 30d, or all",
+            )
+            .with_param("range"));
+        }
+    };
+    let time_to = now;
+    let today_start = now.date_naive().and_time(chrono::NaiveTime::MIN).and_utc();
+    let raw = state
+        .user_store
+        .get_dashboard_analytics(
+            Some(&api_key.user_id),
+            Some(&api_key.id),
+            &time_from.to_rfc3339(),
+            &time_to.to_rfc3339(),
+            &today_start.to_rfc3339(),
+            bucket_count,
+        )
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
+
+    let range_ms = time_to
+        .timestamp_millis()
+        .checked_sub(time_from.timestamp_millis())
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics range overflow",
+            )
+        })?;
+    let bucket_ms = (range_ms / bucket_count).max(1);
+    let mut trend = (0..bucket_count)
+        .map(|index| {
+            let timestamp = time_from.timestamp_millis() + index * bucket_ms;
+            let label = chrono::DateTime::from_timestamp_millis(timestamp)
+                .unwrap_or(time_from)
+                .format(label_format)
+                .to_string();
+            ApiKeyAnalyticsTrendPoint {
+                label,
+                input_tokens: "0".to_string(),
+                cache_read_tokens: "0".to_string(),
+                output_tokens: "0".to_string(),
+                total_tokens: "0".to_string(),
+                request_count: 0,
+                consumed_coin_nano: "0".to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut models = BTreeMap::<String, (i128, i128, i128, i64, i128)>::new();
+    for row in &raw.model_buckets {
+        let index = row.bucket_idx.clamp(0, bucket_count - 1) as usize;
+        let point = &mut trend[index];
+        let input = point.input_tokens.parse::<i128>().unwrap_or(0) + row.input_tokens;
+        let cache = point.cache_read_tokens.parse::<i128>().unwrap_or(0) + row.cache_read_tokens;
+        let output = point.output_tokens.parse::<i128>().unwrap_or(0) + row.output_tokens;
+        let cost = point.consumed_coin_nano.parse::<i128>().unwrap_or(0) + row.cost_nano;
+        point.input_tokens = input.to_string();
+        point.cache_read_tokens = cache.to_string();
+        point.output_tokens = output.to_string();
+        point.total_tokens = input
+            .checked_add(output)
+            .ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "API key analytics token aggregate overflow",
+                )
+            })?
+            .to_string();
+        point.request_count = point
+            .request_count
+            .checked_add(row.call_count)
+            .ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "API key analytics request aggregate overflow",
+                )
+            })?;
+        point.consumed_coin_nano = cost.to_string();
+
+        let entry = models.entry(row.model.clone()).or_insert((0, 0, 0, 0, 0));
+        entry.0 = entry.0.checked_add(row.input_tokens).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics input aggregate overflow",
+            )
+        })?;
+        entry.1 = entry.1.checked_add(row.cache_read_tokens).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics cache aggregate overflow",
+            )
+        })?;
+        entry.2 = entry.2.checked_add(row.output_tokens).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics output aggregate overflow",
+            )
+        })?;
+        entry.3 = entry.3.checked_add(row.call_count).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics call aggregate overflow",
+            )
+        })?;
+        entry.4 = entry.4.checked_add(row.cost_nano).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics cost aggregate overflow",
+            )
+        })?;
+    }
+    let mut model_rows = models
+        .into_iter()
+        .map(
+            |(model, (input, cache, output, calls, cost))| ApiKeyAnalyticsModelRow {
+                model,
+                input_tokens: input.to_string(),
+                cache_read_tokens: cache.to_string(),
+                output_tokens: output.to_string(),
+                total_tokens: input.checked_add(output).unwrap_or(i128::MAX).to_string(),
+                request_count: calls,
+                consumed_coin_nano: cost.to_string(),
+            },
+        )
+        .collect::<Vec<_>>();
+    model_rows.sort_by(|left, right| {
+        let left_total = left.total_tokens.parse::<i128>().unwrap_or(0);
+        let right_total = right.total_tokens.parse::<i128>().unwrap_or(0);
+        right_total
+            .cmp(&left_total)
+            .then_with(|| left.model.cmp(&right.model))
+    });
+
+    Ok(Json(ApiKeyAnalyticsResponse {
+        key_id: api_key.id,
+        key_name: api_key.name,
+        range: query.range,
+        time_from: time_from.to_rfc3339(),
+        time_to: time_to.to_rfc3339(),
+        total_tokens: raw.total_tokens.to_string(),
+        total_input_tokens: raw.total_input_tokens.to_string(),
+        total_cache_read_tokens: raw.total_cache_read_tokens.to_string(),
+        total_output_tokens: raw.total_output_tokens.to_string(),
+        request_count: raw.total_calls,
+        consumed_coin_nano: raw.total_cost_nano_usd.to_string(),
+        balance_mode: if api_key.sub_account_enabled {
+            "independent"
+        } else {
+            "wallet"
+        },
+        independent_balance_nano: api_key
+            .sub_account_enabled
+            .then_some(api_key.sub_account_balance_nano),
+        trend,
+        models: model_rows,
+    }))
+}
+
 pub async fn update_api_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -470,18 +730,17 @@ pub async fn update_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    let api_key = api_key.ok_or_else(|| AppError::new(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "API key not found",
-        ))?;
+    let api_key = api_key
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "API key not found"))?;
 
     validate_channel_bindings_for_scope(
         &state,
         body.group_ids.as_deref().unwrap_or(&api_key.group_ids),
         body.model_limits_enabled
             .unwrap_or(api_key.model_limits_enabled),
-        body.model_limits.as_deref().unwrap_or(&api_key.model_limits),
+        body.model_limits
+            .as_deref()
+            .unwrap_or(&api_key.model_limits),
         body.channel_bindings
             .as_deref()
             .unwrap_or(&api_key.channel_bindings),
@@ -684,6 +943,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: true,
                 sort_order: 1,
+                account_class: Default::default(),
             })
             .await
             .expect("Group creates");

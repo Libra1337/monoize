@@ -320,7 +320,9 @@ impl PaymentGovernanceStore {
             .map_err(storage)?
             .is_some();
         Ok(StoreChannelReadinessView {
-            readiness: has_readiness.then(|| readiness_profile_from_row(row)).transpose()?,
+            readiness: has_readiness
+                .then(|| readiness_profile_from_row(row))
+                .transpose()?,
         })
     }
 
@@ -821,19 +823,13 @@ fn insert_readiness_row(snapshot: &mut GovernanceSnapshot, row: &QueryResult) {
             RawReadiness {
                 active_credential_digest: row.try_get("", "active_credential_digest").ok(),
                 privacy_record_id: row.try_get("", "privacy_record_id").ok(),
-                callback_verification_passed: row
-                    .try_get("", "callback_verification_passed")
-                    .ok(),
+                callback_verification_passed: row.try_get("", "callback_verification_passed").ok(),
                 supported_currencies_json: row.try_get("", "supported_currencies_json").ok(),
                 amount_limits_json: row.try_get("", "amount_limits_json").ok(),
-                checkout_action_kinds_json: row
-                    .try_get("", "checkout_action_kinds_json")
-                    .ok(),
+                checkout_action_kinds_json: row.try_get("", "checkout_action_kinds_json").ok(),
                 license_evidence_digest: row.try_get("", "license_evidence_digest").ok(),
                 runtime_evidence_digest: row.try_get("", "runtime_evidence_digest").ok(),
-                availability_evidence_digest: row
-                    .try_get("", "availability_evidence_digest")
-                    .ok(),
+                availability_evidence_digest: row.try_get("", "availability_evidence_digest").ok(),
                 verified_at: row.try_get("", "verified_at").ok(),
                 expires_at: row.try_get("", "expires_at").ok(),
             },
@@ -880,7 +876,7 @@ fn evaluate_snapshot_channel(
     if channel.enabled != Some(1) {
         reasons.push("channel_disabled".to_string());
     }
-    if !matches!(adapter_kind, "alipay" | "wechat" | "stripe") {
+    if !matches!(adapter_kind, "epay" | "stripe") {
         reasons.push("adapter_milestone_unavailable".to_string());
     }
     let credential_digest = if let Some(credential) = snapshot.credentials.get(channel_id) {
@@ -1078,7 +1074,10 @@ fn evaluate_readiness_snapshot(
             row.license_evidence_digest.as_deref(),
             "license_gate_pending",
         ),
-        (row.runtime_evidence_digest.as_deref(), "runtime_gate_pending"),
+        (
+            row.runtime_evidence_digest.as_deref(),
+            "runtime_gate_pending",
+        ),
         (
             row.availability_evidence_digest.as_deref(),
             "availability_evidence_pending",
@@ -1148,9 +1147,7 @@ fn parse_readiness_metadata(
             _ => return Err("readiness_metadata_invalid"),
         });
     }
-    if matches!(adapter_kind, "alipay" | "wechat")
-        && currency_names != BTreeSet::from(["CNY".to_string()])
-    {
+    if adapter_kind == "epay" && currency_names != BTreeSet::from(["CNY".to_string()]) {
         return Err("readiness_metadata_invalid");
     }
 
@@ -1183,8 +1180,7 @@ fn parse_readiness_metadata(
     }
     let actions_valid = match adapter_kind {
         "stripe" => action_names == BTreeSet::from(["redirect".to_string()]),
-        "alipay" => action_names == BTreeSet::from(["form".to_string()]),
-        "wechat" => action_names
+        "epay" => action_names
             .iter()
             .all(|value| matches!(value.as_str(), "qr" | "redirect")),
         _ => false,

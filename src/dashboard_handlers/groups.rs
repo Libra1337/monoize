@@ -60,16 +60,15 @@ fn map_group_error(error: GroupStoreError) -> AppError {
     }
 }
 
-/// GR-A1: every authenticated session may read the full registry in canonical order.
+/// Normal users see public and explicitly granted Groups; administrators see all Groups.
 pub async fn list_dashboard_groups(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<DashboardGroupsResponse>> {
-    get_current_user(&headers, &state).await?;
-
+    let user = get_current_user(&headers, &state).await?;
     let groups = state
         .user_store
-        .list_groups()
+        .list_groups_for_user(&user.id, user.role)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
@@ -142,6 +141,36 @@ pub async fn delete_group(
     Ok(Json(json!({ "success": true })))
 }
 
+pub async fn grant_user_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((user_id, group_id)): Path<(String, String)>,
+) -> AppResult<Json<Value>> {
+    require_admin(&headers, &state).await?;
+    state
+        .user_store
+        .grant_group_access(&user_id, &group_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
+    state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
+    Ok(Json(json!({ "success": true })))
+}
+
+pub async fn revoke_user_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((user_id, group_id)): Path<(String, String)>,
+) -> AppResult<Json<Value>> {
+    require_admin(&headers, &state).await?;
+    state
+        .user_store
+        .revoke_group_access(&user_id, &group_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
+    state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
+    Ok(Json(json!({ "success": true })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DashboardGroupsResponse, list_dashboard_groups};
@@ -207,6 +236,7 @@ mod tests {
                 description: " premium routing ".to_string(),
                 user_selectable: true,
                 sort_order: 5,
+                account_class: Default::default(),
             }),
         )
         .await
@@ -258,6 +288,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 0,
+                account_class: Default::default(),
             }),
         )
         .await
@@ -274,6 +305,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 0,
+                account_class: Default::default(),
             }),
         )
         .await

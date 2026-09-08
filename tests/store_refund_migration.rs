@@ -34,7 +34,10 @@ async fn migration_055_preserves_grants_adds_refund_scope_and_recreates_indexes(
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(legacy.try_get::<String>("", "scope").unwrap(), "compliance_confirm");
+    assert_eq!(
+        legacy.try_get::<String>("", "scope").unwrap(),
+        "compliance_confirm"
+    );
 
     db.execute(Statement::from_string(
         DbBackend::Sqlite,

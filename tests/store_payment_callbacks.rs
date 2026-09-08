@@ -215,7 +215,7 @@ fn success_event(order_id: &str, order_number: &str, attempt_id: &str) -> ApplyP
     }
 }
 
-async fn add_null_alipay_candidate(db: &DbPool, attempt_id: &str, candidate_id: &str) {
+async fn add_null_epay_candidate(db: &DbPool, attempt_id: &str, candidate_id: &str) {
     db.write()
         .await
         .execute(db.stmt(
@@ -224,7 +224,7 @@ async fn add_null_alipay_candidate(db: &DbPool, attempt_id: &str, candidate_id: 
                  merchant_account_identity, expected_payment_method,
                  payment_contract_version, state, idempotency_key,
                  created_at, updated_at)
-             SELECT $2, order_id, channel_id, 'alipay', credential_version_id,
+             SELECT $2, order_id, channel_id, 'epay', credential_version_id,
                     merchant_account_identity, expected_payment_method,
                     payment_contract_version, 'created', $3,
                     '2026-08-27T00:00:02Z', '2026-08-27T00:00:02Z'
@@ -240,19 +240,19 @@ async fn add_null_alipay_candidate(db: &DbPool, attempt_id: &str, candidate_id: 
 }
 
 #[tokio::test]
-async fn projection_rechecks_candidates_for_a_nonnull_expired_alipay_attempt() {
+async fn projection_rechecks_candidates_for_a_nonnull_expired_epay_attempt() {
     let (db, order_id, order_number, attempt_id) = setup().await;
     db.write()
         .await
         .execute(db.stmt(
             "UPDATE store_payment_attempts
-             SET adapter_kind = 'alipay', state = 'expired'
+             SET adapter_kind = 'epay', state = 'expired'
              WHERE id = $1",
             vec![attempt_id.clone().into()],
         ))
         .await
         .unwrap();
-    add_null_alipay_candidate(&db, &attempt_id, "callback-new-null-attempt").await;
+    add_null_epay_candidate(&db, &attempt_id, "callback-new-null-attempt").await;
     let mut event = success_event(&order_id, &order_number, &attempt_id);
     event.provider_event_id = "evt-nonnull-racing-candidate".to_string();
 
@@ -275,86 +275,6 @@ async fn projection_rechecks_candidates_for_a_nonnull_expired_alipay_attempt() {
         .try_get::<String>("", "state")
         .unwrap();
     assert_eq!(selected_state, "expired");
-}
-
-#[tokio::test]
-async fn ambiguous_rotated_wechat_projection_is_idempotent_by_verification_credential() {
-    let (db, order_id, order_number, attempt_id) = setup().await;
-    db.write()
-        .await
-        .execute(db.stmt(
-            "UPDATE store_payment_attempts
-             SET adapter_kind = 'wechat', state = 'expired',
-                 merchant_account_identity = $2
-             WHERE id = $1",
-            vec![attempt_id.clone().into(), "b".repeat(64).into()],
-        ))
-        .await
-        .unwrap();
-    db.write()
-        .await
-        .execute(db.stmt(
-            "INSERT INTO store_payment_attempts
-                (id, order_id, channel_id, adapter_kind, credential_version_id,
-                 merchant_account_identity, expected_payment_method,
-                 payment_contract_version, state, idempotency_key,
-                 created_at, updated_at)
-             SELECT 'callback-wechat-null-attempt', order_id, channel_id, 'wechat',
-                    credential_version_id, merchant_account_identity,
-                    expected_payment_method, payment_contract_version, 'created',
-                    'callback-wechat-null-attempt-key',
-                    '2026-08-27T00:00:02Z', '2026-08-27T00:00:02Z'
-             FROM store_payment_attempts WHERE id = $1",
-            vec![attempt_id.clone().into()],
-        ))
-        .await
-        .unwrap();
-    let mut event = success_event(&order_id, &order_number, &attempt_id);
-    event.provider_event_id = "evt-wechat-rotated-race".to_string();
-    event.merchant_account_identity = "b".repeat(64);
-    event.verification_credential_version_id = "callback-verification-rotated".to_string();
-    let store = PaymentCallbackStore::new(db.clone());
-    for _ in 0..2 {
-        assert_eq!(
-            store.apply_verified_payment(event.clone()).await.unwrap(),
-            CallbackApplyResult::ManualReview
-        );
-    }
-    let event_counts = db
-        .read()
-        .query_one(db.stmt(
-            "SELECT
-                SUM(CASE WHEN credential_version_id = $1 THEN 1 ELSE 0 END) AS verification_count,
-                SUM(CASE WHEN credential_version_id = $2 THEN 1 ELSE 0 END) AS attempt_count
-             FROM store_provider_events WHERE provider_event_id = $3",
-            vec![
-                "callback-verification-rotated".into(),
-                "callback-credential".into(),
-                "evt-wechat-rotated-race".into(),
-            ],
-        ))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        event_counts
-            .try_get::<i64>("", "verification_count")
-            .unwrap(),
-        1
-    );
-    assert_eq!(event_counts.try_get::<i64>("", "attempt_count").unwrap(), 0);
-    let application_count = db
-        .read()
-        .query_one(db.stmt(
-            "SELECT COUNT(*) AS value FROM store_order_event_applications",
-            vec![],
-        ))
-        .await
-        .unwrap()
-        .unwrap()
-        .try_get::<i64>("", "value")
-        .unwrap();
-    assert_eq!(application_count, 0);
 }
 
 #[tokio::test]
@@ -1211,20 +1131,13 @@ async fn reprocess_requires_a_provider_query_for_refund_pending_payment() {
 }
 
 #[tokio::test]
-async fn wechat_reprocess_preserves_distinct_attempt_and_verification_credentials() {
+async fn epay_reprocess_binds_an_unbound_event_to_its_only_candidate() {
     let (db, order_id, order_number, attempt_id) = setup().await;
     for statement in [
-        "UPDATE store_payment_channels SET adapter_kind = 'wechat'
+        "UPDATE store_payment_channels SET adapter_kind = 'epay'
          WHERE id = 'store-channel-stripe'",
-        "UPDATE store_channel_credentials SET adapter_kind = 'wechat'
+        "UPDATE store_channel_credentials SET adapter_kind = 'epay'
          WHERE id = 'callback-credential'",
-        "INSERT INTO store_channel_credentials
-            (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
-             ciphertext_base64, account_identity_digest, status, created_at)
-         VALUES ('callback-wechat-verifier', 'store-channel-stripe', 'wechat', 1,
-                 'key-1', 'bm9uY2U=', 'Y2lwaGVydGV4dA==',
-                 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                 'retired', '2026-08-27T00:00:01Z')",
     ] {
         db.write()
             .await
@@ -1236,7 +1149,7 @@ async fn wechat_reprocess_preserves_distinct_attempt_and_verification_credential
         .await
         .execute(db.stmt(
             "UPDATE store_payment_attempts
-             SET adapter_kind = 'wechat', provider_object_id = NULL
+             SET adapter_kind = 'epay', provider_object_id = NULL
              WHERE id = $1",
             vec![attempt_id.clone().into()],
         ))
@@ -1248,26 +1161,26 @@ async fn wechat_reprocess_preserves_distinct_attempt_and_verification_credential
     )
     .unwrap();
     let event_row_id = uuid::Uuid::new_v4().to_string();
-    let raw = b"verified wechat callback";
+    let raw = b"verified epay callback";
     PaymentCallbackStore::new(db.clone())
         .record_unbound_verified_event(RecordUnboundProviderEventInput {
             event_row_id: event_row_id.clone(),
             credential_version_id: "callback-credential".to_string(),
-            provider_event_id: "evt-wechat-distinct-credentials".to_string(),
+            provider_event_id: "evt-epay-unbound".to_string(),
             event_kind: "payment_succeeded".to_string(),
             body_digest: sha2::Sha256::digest(raw)
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect(),
             parsed_json: serde_json::json!({
-                "event_id": "evt-wechat-distinct-credentials",
+                "event_id": "evt-epay-unbound",
                 "event_kind": "payment_succeeded",
-                "transaction_id": "wechat-transaction-distinct",
+                "trade_no": "epay-transaction-1",
+                "method": "alipay",
                 "order_number": &order_number,
                 "amount_minor": "1000",
                 "currency": "CNY",
                 "account_identity": "a".repeat(64),
-                "verification_credential_version_id": "callback-wechat-verifier",
             }),
             raw_body: key_ring
                 .encrypt(

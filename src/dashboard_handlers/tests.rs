@@ -394,6 +394,7 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
             description: String::new(),
             user_selectable: true,
             sort_order: 1,
+            account_class: Default::default(),
         })
         .await
         .expect("alpha group creates");
@@ -404,6 +405,7 @@ async fn dashboard_provider_group_id_round_trip_and_empty_value_binds_default_gr
             description: String::new(),
             user_selectable: true,
             sort_order: 2,
+            account_class: Default::default(),
         })
         .await
         .expect("beta group creates");
@@ -584,6 +586,7 @@ async fn dashboard_user_group_id_round_trip_through_store_and_response() {
             description: "team routing".to_string(),
             user_selectable: true,
             sort_order: 1,
+            account_class: Default::default(),
         })
         .await
         .expect("team group created");
@@ -667,6 +670,7 @@ fn user_response_serializes_group_id() {
         username: "alice".to_string(),
         password_hash: "hash".to_string(),
         role: UserRole::User,
+        account_class: Default::default(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
         last_login_at: None,
@@ -706,6 +710,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
             description: String::new(),
             user_selectable: true,
             sort_order: 1,
+            account_class: Default::default(),
         })
         .await
         .expect("alpha group created");
@@ -716,6 +721,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
             description: String::new(),
             user_selectable: true,
             sort_order: 2,
+            account_class: Default::default(),
         })
         .await
         .expect("beta group created");
@@ -1036,7 +1042,7 @@ async fn admin_sub_account_adjustment_records_initial_credit_and_refund() {
 }
 
 #[tokio::test]
-async fn dashboard_api_key_group_selection_enforces_registry_and_selectability() {
+async fn dashboard_api_key_group_selection_enforces_registry_and_visibility() {
     let db = DbPool::connect("sqlite::memory:")
         .await
         .expect("db connects");
@@ -1054,6 +1060,7 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
             description: String::new(),
             user_selectable: false,
             sort_order: 1,
+            account_class: Default::default(),
         })
         .await
         .expect("hidden group created");
@@ -1082,7 +1089,7 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
         }
     }
 
-    // TM-GRP-5: non-admins may not select a non-user_selectable group.
+    // TM-GRP-5: non-admins may not select a private Group without an explicit grant.
     let create_err = store
         .create_api_key_extended(
             &user.id,
@@ -1090,8 +1097,8 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
             false,
         )
         .await
-        .expect_err("create should reject non-selectable group");
-    assert!(create_err.contains("not selectable"));
+        .expect_err("create should reject an ungranted private group");
+    assert!(create_err.contains("not accessible"), "{create_err}");
 
     let (created, _) = store
         .create_api_key_extended(&user.id, key_input("baseline key", Vec::new()), false)
@@ -1121,10 +1128,10 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
             false,
         )
         .await
-        .expect_err("update should reject non-selectable group");
-    assert!(update_err.contains("not selectable"));
+        .expect_err("update should reject an ungranted private group");
+    assert!(update_err.contains("not accessible"), "{update_err}");
 
-    // Admin callers bypass the user_selectable restriction.
+    // Admin callers bypass the Group visibility restriction.
     let admin_key = store
         .create_api_key_extended(
             &user.id,

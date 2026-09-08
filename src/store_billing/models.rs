@@ -36,10 +36,13 @@ string_enum!(ProductKind {
     Plan => "plan",
 });
 string_enum!(PaymentAdapterKind {
-    Alipay => "alipay",
-    Wechat => "wechat",
+    Epay => "epay",
     Stripe => "stripe",
     Http => "http",
+});
+string_enum!(EpayMethodKind {
+    Alipay => "alipay",
+    Wxpay => "wxpay",
 });
 string_enum!(MerchantCapabilityKind {
     PaymentQuery => "payment_query",
@@ -168,6 +171,26 @@ pub struct UpdatePaymentChannelInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EpayMethodConfig {
+    pub method: EpayMethodKind,
+    pub label: String,
+    pub icon_kind: IconKind,
+    pub icon_value: Option<String>,
+    pub sort_order: i32,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateEpayMethodInput {
+    pub label: String,
+    pub icon_kind: IconKind,
+    pub icon_value: Option<String>,
+    pub sort_order: i32,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentChannel {
     pub id: String,
     pub adapter_kind: PaymentAdapterKind,
@@ -182,6 +205,8 @@ pub struct PaymentChannel {
     pub supported_currencies: Vec<Currency>,
     pub amount_limits: BTreeMap<String, StoreAmountLimit>,
     pub checkout_action_kinds: Vec<CheckoutActionKind>,
+    /// Empty for every adapter kind other than `epay`.
+    pub epay_methods: Vec<EpayMethodConfig>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

@@ -600,54 +600,78 @@ async fn attempt_creation_fails_closed_when_governance_expires_after_order_creat
 }
 
 #[tokio::test]
-async fn wechat_qr_only_readiness_rejects_h5_before_attempt_insert() {
+async fn epay_rejects_a_disabled_method_before_attempt_insert() {
     let (db, store) = setup().await;
-    db.write()
-        .await
-        .execute_unprepared(
-            "UPDATE store_payment_channels
-             SET adapter_kind = 'wechat' WHERE id = 'store-channel-stripe';
-             UPDATE store_channel_credentials
-             SET adapter_kind = 'wechat' WHERE id = 'credential-1';
-             UPDATE store_channel_readiness_profiles
-             SET supported_currencies_json = '[\"CNY\"]',
-                 amount_limits_json = '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
-                 checkout_action_kinds_json = '[\"qr\"]'
-             WHERE channel_id = 'store-channel-stripe'",
-        )
-        .await
-        .unwrap();
+    convert_channel_to_epay(&db, &["alipay"]).await;
     let order = store
-        .create_order("user-1", order_input("wechat-qr-order"), &rate())
+        .create_order("user-1", order_input("epay-method-order"), &rate())
         .await
         .unwrap();
 
+    // WeChat Pay is configured but disabled, so no attempt row may exist for it.
     assert_eq!(
         store
             .create_attempt(
                 "user-1",
                 &order.id,
                 CreatePaymentAttemptInput {
-                    idempotency_key: "wechat-h5-attempt".to_string(),
-                    expected_payment_method: Some("h5".to_string()),
+                    idempotency_key: "epay-wxpay-attempt".to_string(),
+                    expected_payment_method: Some("wxpay".to_string()),
                 },
             )
             .await
             .unwrap_err(),
         PaymentOrderError::ChannelUnavailable
     );
-    let native = store
+    let alipay = store
         .create_attempt(
             "user-1",
             &order.id,
             CreatePaymentAttemptInput {
-                idempotency_key: "wechat-native-attempt".to_string(),
-                expected_payment_method: Some("native".to_string()),
+                idempotency_key: "epay-alipay-attempt".to_string(),
+                expected_payment_method: Some("alipay".to_string()),
             },
         )
         .await
         .unwrap();
-    assert_eq!(native.expected_payment_method.as_deref(), Some("native"));
+    assert_eq!(alipay.expected_payment_method.as_deref(), Some("alipay"));
+}
+
+/// Converts the seeded Stripe Channel into an EPay Channel and enables the listed methods.
+async fn convert_channel_to_epay(db: &DbPool, enabled: &[&str]) {
+    let write = db.write().await;
+    write
+        .execute_unprepared(
+            "UPDATE store_payment_channels
+             SET adapter_kind = 'epay' WHERE id = 'store-channel-stripe';
+             UPDATE store_channel_credentials
+             SET adapter_kind = 'epay' WHERE id = 'credential-1';
+             UPDATE store_channel_readiness_profiles
+             SET supported_currencies_json = '[\"CNY\"]',
+                 amount_limits_json = '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
+                 checkout_action_kinds_json = '[\"qr\",\"redirect\"]'
+             WHERE channel_id = 'store-channel-stripe'",
+        )
+        .await
+        .unwrap();
+    for (method, sort_order) in [("alipay", 10), ("wxpay", 20)] {
+        write
+            .execute(db.stmt(
+                "INSERT INTO store_epay_methods
+                    (channel_id, method, label, icon_kind, icon_value, sort_order,
+                     enabled, created_at, updated_at)
+                 VALUES ('store-channel-stripe', $1, $1, 'builtin', $1, $2, $3,
+                         '2026-09-08T00:00:00Z', '2026-09-08T00:00:00Z')
+                 ON CONFLICT (channel_id, method) DO UPDATE SET enabled = excluded.enabled",
+                vec![
+                    method.into(),
+                    sort_order.into(),
+                    i32::from(enabled.contains(&method)).into(),
+                ],
+            ))
+            .await
+            .unwrap();
+    }
 }
 
 #[tokio::test]
@@ -830,23 +854,9 @@ async fn created_attempt_replay_rejects_a_different_active_merchant() {
 }
 
 #[tokio::test]
-async fn created_attempt_replay_uses_persisted_none_payment_method_default() {
+async fn created_attempt_replay_uses_the_persisted_payment_method() {
     let (db, store) = setup().await;
-    db.write()
-        .await
-        .execute_unprepared(
-            "UPDATE store_payment_channels
-             SET adapter_kind = 'wechat' WHERE id = 'store-channel-stripe';
-             UPDATE store_channel_credentials
-             SET adapter_kind = 'wechat' WHERE id = 'credential-1';
-             UPDATE store_channel_readiness_profiles
-             SET supported_currencies_json = '[\"CNY\"]',
-                 amount_limits_json = '{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}',
-                 checkout_action_kinds_json = '[\"qr\"]'
-             WHERE channel_id = 'store-channel-stripe'",
-        )
-        .await
-        .unwrap();
+    convert_channel_to_epay(&db, &["alipay", "wxpay"]).await;
     let order = store
         .create_order("user-1", order_input("persisted-default-order"), &rate())
         .await
@@ -857,7 +867,7 @@ async fn created_attempt_replay_uses_persisted_none_payment_method_default() {
             &order.id,
             CreatePaymentAttemptInput {
                 idempotency_key: "persisted-default-attempt".to_string(),
-                expected_payment_method: None,
+                expected_payment_method: Some("alipay".to_string()),
             },
         )
         .await
@@ -875,7 +885,7 @@ async fn created_attempt_replay_uses_persisted_none_payment_method_default() {
         .await
         .unwrap();
     assert_eq!(replay, created);
-    assert_eq!(replay.expected_payment_method, None);
+    assert_eq!(replay.expected_payment_method.as_deref(), Some("alipay"));
 }
 
 #[tokio::test]

@@ -81,17 +81,31 @@ disabled or missing plan contributes no restriction). Storage decoding follows A
 
 AKG4. The authenticated context MUST represent request-scoped group access as
 `effective_groups: string[] | null` where the array is an **ordered** list of group ids.
-For API-key authentication, an empty array means every Group. `null` is reserved for
-system-originated internal traffic.
+For API-key authentication the array is always concrete: it contains exactly the group ids
+the request may route to. `null` is reserved for system-originated internal traffic.
+
+AKG4a. `accessible_groups` is the owner's accessible Group set from
+`groups-registry.spec.md` section 0B: every Group whose `account_class` equals the owner's
+`account_class` and which is public or carries an explicit `user_group_grants` row for the
+owner. An administrator or super-administrator owner accesses every Group of that account
+class. The order is `sort_order`, then `created_at`, then `id`, all ascending.
 
 AKG5. Authentication MUST resolve `effective_groups` as follows:
 
-1. `base = api_key.group_ids` with order preserved. An empty `base` means every Group.
+1. `base = api_key.group_ids` with order preserved. An empty `base` selects every Group.
 2. If `plan_group_ids` is present and non-empty and `base` is empty, then
-   `effective_groups = plan_group_ids`.
+   `resolved = plan_group_ids`.
 3. If `plan_group_ids` is present and non-empty and `base` is non-empty, then
-   `effective_groups` is the intersection in `base` order.
-4. Otherwise `effective_groups = base`.
+   `resolved` is the intersection in `base` order.
+4. Otherwise `resolved = base`.
+5. If `resolved` is empty, then `effective_groups = accessible_groups`. Otherwise
+   `effective_groups` is `resolved` with every id absent from `accessible_groups` removed,
+   preserving `resolved` order.
+
+AKG5a. Consequence: a stored selection survives a Group becoming private or a grant being
+revoked. The Group stops routing immediately and starts routing again without editing the
+key once the owner is granted access. An empty stored selection never routes to a private
+Group the owner cannot access.
 
 AKG6. The attached array MUST be deduplicated preserving first occurrence order. Elements
 MUST NOT be lowercased, sorted, or otherwise rewritten; group ids are opaque and their

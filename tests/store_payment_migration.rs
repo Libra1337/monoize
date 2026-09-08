@@ -229,13 +229,11 @@ async fn payment_migration_replaces_legacy_store_shape() {
             )
         })
         .collect::<Vec<_>>();
+    // Migration 064 replaces the legacy Alipay and WeChat Channels with one disabled EPay
+    // Channel and keeps the disabled Stripe Channel.
     assert_eq!(
         channels,
-        vec![
-            ("alipay".to_string(), 0),
-            ("stripe".to_string(), 0),
-            ("wechat".to_string(), 0),
-        ]
+        vec![("epay".to_string(), 0), ("stripe".to_string(), 0)]
     );
 }
 
@@ -501,7 +499,7 @@ async fn migration_059_repairs_released_entitlements_and_order_expiry() {
 #[tokio::test]
 async fn migration_059_preserves_complete_current_entitlement_schema() {
     let db = migrated_database().await;
-    Migrator::down(&db, Some(2)).await.unwrap();
+    Migrator::down(&db, Some(6)).await.unwrap();
 
     let group = db
         .query_one(Statement::from_string(
@@ -568,8 +566,8 @@ async fn migration_059_preserves_complete_current_entitlement_schema() {
 #[tokio::test]
 async fn migration_059_rejects_partial_or_mixed_entitlement_schema() {
     let db = migrated_database().await;
-    // Migration 060 follows 059, so both must be rolled back before 059 can be re-executed.
-    Migrator::down(&db, Some(2)).await.unwrap();
+    // Later migrations follow 059, so each must be rolled back before 059 can be re-executed.
+    Migrator::down(&db, Some(6)).await.unwrap();
     db.execute_unprepared("DROP TABLE store_plan_entitlement_current")
         .await
         .unwrap();
@@ -620,7 +618,7 @@ async fn payment_migration_installs_transition_and_recovery_guards() {
           state_revision, expires_at, created_at, updated_at)
          VALUES
          ('order-guard', 'LS-GUARD', 'user-1', 'product-1', 'balance', 'unpaid',
-          'pending', 'none', 0, 'store-channel-alipay', 'CNY', '1000', '6.7',
+          'pending', 'none', 0, 'store-channel-epay', 'CNY', '1000', '6.7',
           '67', '10', '2026-08-27T00:00:00Z', '{}', 2, 0,
           '2026-08-27T00:30:00Z', '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z')",
     )

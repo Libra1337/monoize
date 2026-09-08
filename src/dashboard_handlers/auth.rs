@@ -5,7 +5,8 @@ use crate::dashboard_handlers::session_helpers::{
 };
 use crate::error::{AppError, AppResult};
 use crate::users::{
-    BillingPlan, RegisterUserError, User, UserRole, UserStore, UserTodayUsage, format_nano_to_usd,
+    AccountClass, BillingPlan, RegisterUserError, User, UserRole, UserStore, UserTodayUsage,
+    format_nano_to_usd,
 };
 use axum::Json;
 use axum::extract::State;
@@ -72,6 +73,7 @@ pub struct UserResponse {
     pub id: String,
     pub username: String,
     pub role: UserRole,
+    pub account_class: AccountClass,
     pub created_at: String,
     pub last_login_at: Option<String>,
     pub enabled: bool,
@@ -111,6 +113,7 @@ impl UserResponse {
             id: u.id,
             username: u.username,
             role: u.role,
+            account_class: u.account_class,
             created_at: u.created_at.to_rfc3339(),
             last_login_at: u.last_login_at.map(|d| d.to_rfc3339()),
             enabled: u.enabled,

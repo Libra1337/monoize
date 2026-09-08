@@ -1008,6 +1008,7 @@ mod tests {
             user_id: Some("user-1".to_string()),
             username: None,
             user_role: UserRole::User,
+            account_class: crate::users::AccountClass::Standard,
             api_key_id: Some("key-1".to_string()),
             api_key_name: Some("test key".to_string()),
             internal_source: None,

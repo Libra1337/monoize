@@ -24,6 +24,8 @@ pub struct Model {
     pub balance_unlimited: i32,
     pub usage_ranking_anonymous: i32,
     #[sea_orm(column_type = "Text")]
+    pub account_class: String,
+    #[sea_orm(column_type = "Text")]
     pub email: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub group_id: String,

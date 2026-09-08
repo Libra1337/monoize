@@ -2206,9 +2206,11 @@ fn build_balance_compatibility_router() -> Router<AppState> {
 }
 
 fn build_store_callback_router() -> Router<AppState> {
+    // Stripe posts a signed JSON body; EPay sends a signed GET query string.
     Router::new().route(
         "/store/callbacks/{channel_id}",
-        post(crate::store_billing::webhooks::store_payment_callback),
+        post(crate::store_billing::webhooks::store_payment_callback)
+            .get(crate::store_billing::webhooks::store_payment_callback),
     )
 }
 
@@ -2255,6 +2257,10 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/store/admin/payment-channels/{id}/credential",
             put(crate::dashboard_handlers::replace_store_payment_credential_admin),
+        )
+        .route(
+            "/dashboard/store/admin/payment-channels/{id}/epay-methods/{method}",
+            put(crate::dashboard_handlers::put_store_epay_method_admin),
         )
         .route(
             "/dashboard/store/admin/payment-channels/{id}/compliance",
@@ -2483,6 +2489,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             axum::routing::delete(crate::dashboard_handlers::delete_user),
         )
         .route(
+            "/dashboard/users/{user_id}/account-class",
+            put(crate::dashboard_handlers::update_user_account_class),
+        )
+        .route(
             "/dashboard/billing-plans",
             get(crate::dashboard_handlers::list_billing_plans)
                 .post(crate::dashboard_handlers::create_billing_plan),
@@ -2515,6 +2525,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/tokens/{key_id}",
             get(crate::dashboard_handlers::get_api_key),
+        )
+        .route(
+            "/dashboard/tokens/{key_id}/analytics",
+            get(crate::dashboard_handlers::get_api_key_analytics),
         )
         .route(
             "/dashboard/tokens/{key_id}",
@@ -2567,6 +2581,11 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/groups/{group_id}",
             axum::routing::delete(crate::dashboard_handlers::delete_group),
+        )
+        .route(
+            "/dashboard/users/{user_id}/groups/{group_id}",
+            post(crate::dashboard_handlers::grant_user_group)
+                .delete(crate::dashboard_handlers::revoke_user_group),
         )
         .route(
             "/dashboard/providers",

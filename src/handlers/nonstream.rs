@@ -219,7 +219,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
     let started_at = task_state
         .map(AdmittedRequestTaskState::started_at)
         .unwrap_or_else(std::time::Instant::now);
-    let transform_match_model = resolve_model_suffix(state, &mut req).await?;
+    let transform_match_model = resolve_model_suffix(state, &mut req, auth.account_class).await?;
     // Preserve the suffix-normalized request so each per-attempt iteration can
     // re-derive the transformed request from a pristine base. This matters
     // because cross-family strip runs BEFORE all transforms per-attempt

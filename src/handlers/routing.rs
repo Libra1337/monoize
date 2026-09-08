@@ -102,6 +102,7 @@ pub(super) fn upstream_path_for_model(
 pub(super) async fn resolve_model_suffix(
     state: &AppState,
     req: &mut urp::UrpRequest,
+    account_class: crate::users::AccountClass,
 ) -> AppResult<String> {
     let requested_model = req.model.clone();
     let settings_map = state
@@ -110,9 +111,13 @@ pub(super) async fn resolve_model_suffix(
         .await
         .reasoning_suffix_map
         .clone();
-    let normalized =
-        normalized_logical_model_for_matching_with_map(state, &requested_model, &settings_map)
-            .await?;
+    let normalized = normalized_logical_model_for_matching_with_map(
+        state,
+        &requested_model,
+        &settings_map,
+        account_class,
+    )
+    .await?;
     if normalized == requested_model {
         return Ok(normalized);
     }
@@ -154,6 +159,7 @@ async fn normalized_logical_model_for_matching_with_map(
     state: &AppState,
     requested_model: &str,
     settings_map: &std::collections::HashMap<String, String>,
+    account_class: crate::users::AccountClass,
 ) -> AppResult<String> {
     // Sort by suffix length descending so longer suffixes match first
     // (e.g. "-nothinking" before "-thinking").
@@ -176,7 +182,7 @@ async fn normalized_logical_model_for_matching_with_map(
     }
     let available = state
         .monoize_store
-        .available_model_names(&candidates)
+        .available_model_names_for_account_class(&candidates, account_class)
         .await
         .map_err(|error| {
             AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
@@ -204,7 +210,7 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
     let routing_config_revision = state.routing_config_revision.load(Ordering::Acquire);
     let mut providers = state
         .monoize_store
-        .list_providers_for_model(&urp.model)
+        .list_providers_for_model_and_account_class(&urp.model, auth.account_class)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "provider_store_error", e))?;
     // R-GRP-2: rank providers by the position of the first effective group they
@@ -357,9 +363,7 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
         for (group_id, model) in &conflicts {
             let valid_channels = allowed_attempts
                 .iter()
-                .filter(|attempt| {
-                    &attempt.group_id == group_id && &attempt.logical_model == model
-                })
+                .filter(|attempt| &attempt.group_id == group_id && &attempt.logical_model == model)
                 .map(|attempt| attempt.channel_id.as_str())
                 .collect::<std::collections::BTreeSet<_>>();
             let valid_binding = auth.channel_bindings.iter().any(|binding| {
@@ -371,9 +375,7 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
                 return Err(AppError::new(
                     StatusCode::CONFLICT,
                     "channel_selection_required",
-                    format!(
-                        "select one Channel for Group {group_id} and model {model}"
-                    ),
+                    format!("select one Channel for Group {group_id} and model {model}"),
                 ));
             }
         }

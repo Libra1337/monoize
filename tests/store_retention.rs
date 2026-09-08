@@ -1,17 +1,17 @@
 use chrono::{Duration, TimeZone, Utc};
 use monoize::db::DbPool;
 use monoize::migration::Migrator;
-use monoize::store_billing::models::StorePrivacyRetention;
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
+use monoize::store_billing::models::StorePrivacyRetention;
 use monoize::store_billing::money::Currency;
 use monoize::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentAttemptState, PaymentOrderError,
     PaymentOrderStore,
 };
 use monoize::store_billing::retention::{
-    CreateStoreLegalHoldInput, CreateStoreRetentionContainmentInput, RetentionRunActor,
-    StoreRetention, StoreRetentionDataClass, StoreRetentionError, StoreRetentionRunState,
-    RETENTION_BATCH_SIZE, retention_checkout_paused,
+    CreateStoreLegalHoldInput, CreateStoreRetentionContainmentInput, RETENTION_BATCH_SIZE,
+    RetentionRunActor, StoreRetention, StoreRetentionDataClass, StoreRetentionError,
+    StoreRetentionRunState, retention_checkout_paused,
 };
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
@@ -88,7 +88,8 @@ async fn migration_058_down_up_round_trip_recreates_retained_table_indexes() {
     Migrator::up(&*db.write().await, None)
         .await
         .expect("run migrations");
-    Migrator::down(&*db.write().await, Some(3))
+    // Migrations 059 through 064 sit above 058 and must be rolled back with it.
+    Migrator::down(&*db.write().await, Some(7))
         .await
         .expect("roll back migration 058");
 
@@ -191,11 +192,7 @@ async fn insert_closed_order(db: &DbPool, id: &str, created_at: &str) {
                      'pending', 'none', 0, 'store-channel-stripe', 'CNY', '1000', '6.0000',
                      '6', '1', '2026-01-01T00:00:00Z', '{}', 2, 0,
                      '2026-01-01T01:00:00Z', $3, $3)",
-            vec![
-                id.into(),
-                format!("ORD-{id}").into(),
-                created_at.into(),
-            ],
+            vec![id.into(), format!("ORD-{id}").into(), created_at.into()],
         ))
         .await
         .expect("insert closed order");
@@ -210,11 +207,19 @@ async fn insert_reauth_grant(db: &DbPool, id: &str, expires_at: &str) {
              VALUES ($1, 'retention-admin', $2, $3, 'credential_update',
                      '2026-01-01T00:00:00.000000Z', $4)",
             vec![
-                id.into(),
-                format!("{:0<64}", format!("session-{id}")).chars().take(64).collect::<String>().into(),
-                format!("{:0<64}", format!("token-{id}")).chars().take(64).collect::<String>().into(),
-                expires_at.into(),
-            ],
+                    id.into(),
+                    format!("{:0<64}", format!("session-{id}"))
+                        .chars()
+                        .take(64)
+                        .collect::<String>()
+                        .into(),
+                    format!("{:0<64}", format!("token-{id}"))
+                        .chars()
+                        .take(64)
+                        .collect::<String>()
+                        .into(),
+                    expires_at.into(),
+                ],
         ))
         .await
         .expect("insert reauth grant");
@@ -419,7 +424,10 @@ async fn run_clears_expired_callback_and_network_fields_idempotently() {
     assert!(event_network_present(&db, "evt-fresh").await);
 
     let second = retention
-        .run_at(instant() + Duration::seconds(1), actor("manual-retention-2"))
+        .run_at(
+            instant() + Duration::seconds(1),
+            actor("manual-retention-2"),
+        )
         .await
         .expect("second run");
     assert_eq!(second.state, StoreRetentionRunState::Succeeded);
@@ -847,9 +855,7 @@ async fn competing_owner_interrupts_active_claim() {
         "failed"
     );
     assert_eq!(
-        interrupted
-            .try_get::<String>("", "error_category")
-            .unwrap(),
+        interrupted.try_get::<String>("", "error_category").unwrap(),
         "interrupted"
     );
 }
@@ -922,7 +928,10 @@ async fn invalid_privacy_retention_document_fails_run() {
         .await
         .expect("run");
     assert_eq!(run.state, StoreRetentionRunState::Failed);
-    assert_eq!(run.error_category.as_deref(), Some("privacy_policy_invalid"));
+    assert_eq!(
+        run.error_category.as_deref(),
+        Some("privacy_policy_invalid")
+    );
 }
 
 #[tokio::test]
@@ -1051,14 +1060,7 @@ async fn legal_hold_expiry_allows_deletion_and_does_not_restore() {
 async fn financial_deletion_orders_by_global_timestamp_across_tables() {
     let db = setup().await;
     insert_privacy(&db, "v1", &retention_json(2557, 1)).await;
-    insert_provider_event(
-        &db,
-        "evt-oldest",
-        "2019-01-01T00:00:00.000000Z",
-        true,
-        true,
-    )
-    .await;
+    insert_provider_event(&db, "evt-oldest", "2019-01-01T00:00:00.000000Z", true, true).await;
     let total = RETENTION_BATCH_SIZE as usize;
     for index in 0..total {
         insert_closed_order(
@@ -1101,14 +1103,7 @@ async fn financial_deletion_orders_by_global_timestamp_across_tables() {
 async fn provider_event_not_deleted_before_network_metadata_floor() {
     let db = setup().await;
     insert_privacy(&db, "v1", &retention_json(30, 1)).await;
-    insert_provider_event(
-        &db,
-        "evt-young",
-        "2026-07-15T00:00:00.000000Z",
-        true,
-        true,
-    )
-    .await;
+    insert_provider_event(&db, "evt-young", "2026-07-15T00:00:00.000000Z", true, true).await;
 
     let retention = StoreRetention::new(db.clone(), "owner-a");
     let run = retention
@@ -1203,7 +1198,11 @@ async fn invalid_hold_extension_rolls_back_without_residue() {
         1
     );
     assert_eq!(
-        count_rows(&db, "SELECT COUNT(*) AS value FROM store_legal_hold_approvals").await,
+        count_rows(
+            &db,
+            "SELECT COUNT(*) AS value FROM store_legal_hold_approvals"
+        )
+        .await,
         1
     );
     assert_eq!(
@@ -1421,7 +1420,10 @@ async fn bounded_clearing_caps_raw_and_network_classes_at_batch_size() {
         .await
         .expect("first bounded run");
     assert_eq!(first.state, StoreRetentionRunState::Succeeded);
-    assert_eq!(first.counts.raw_callback_bodies, RETENTION_BATCH_SIZE as u64);
+    assert_eq!(
+        first.counts.raw_callback_bodies,
+        RETENTION_BATCH_SIZE as u64
+    );
     assert_eq!(first.counts.network_metadata, RETENTION_BATCH_SIZE as u64);
     assert_eq!(first.counts.financial_records, 0);
     assert_eq!(
@@ -1444,7 +1446,10 @@ async fn bounded_clearing_caps_raw_and_network_classes_at_batch_size() {
     );
 
     let second = retention
-        .run_at(instant() + Duration::seconds(1), actor("bounded-raw-network-2"))
+        .run_at(
+            instant() + Duration::seconds(1),
+            actor("bounded-raw-network-2"),
+        )
         .await
         .expect("second bounded run");
     assert_eq!(second.state, StoreRetentionRunState::Succeeded);
@@ -1480,7 +1485,14 @@ async fn run_failure_after_partial_clearing_rolls_back_cleared_data() {
     let db = setup().await;
     insert_privacy(&db, "v1", &retention_json(2557, 24)).await;
     // Eligible for both raw-callback and network-metadata clearing at instant().
-    insert_provider_event(&db, "evt-rollback", "2026-05-01T00:00:00.000000Z", true, true).await;
+    insert_provider_event(
+        &db,
+        "evt-rollback",
+        "2026-05-01T00:00:00.000000Z",
+        true,
+        true,
+    )
+    .await;
     // Expired grant that the run deletes inside its write transaction.
     insert_reauth_grant(&db, "grant-expired", "2026-01-02T00:00:00.000000Z").await;
     // The corrupt expiry sorts lexically after every RFC3339 timestamp, so the
@@ -1577,5 +1589,8 @@ async fn malformed_privacy_retention_json_fails_run() {
         .expect("run");
     assert_eq!(run.state, StoreRetentionRunState::Failed);
     assert_eq!(run.policy_version, "malformed");
-    assert_eq!(run.error_category.as_deref(), Some("privacy_policy_invalid"));
+    assert_eq!(
+        run.error_category.as_deref(),
+        Some("privacy_policy_invalid")
+    );
 }

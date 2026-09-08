@@ -2,18 +2,16 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
-use tokio::sync::Barrier;
 use monoize::db::DbPool;
 use monoize::migration::Migrator;
-use monoize::store_billing::adapters::alipay::AlipayCredential;
+use monoize::store_billing::adapters::epay::EpayCredential;
 use monoize::store_billing::adapters::stripe::StripeCredential;
-use monoize::store_billing::adapters::wechat::{WechatCredential, WechatPlatformVerifier};
 use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
 use monoize::store_billing::money::Currency;
 use monoize::store_billing::operations::{
-    AdminOrderOperationError, AdminOrderOperations, PaymentOperationsError,
-    PaymentQueryOperations, PaymentQueryProvider,
+    AdminOrderOperationError, AdminOrderOperations, PaymentOperationsError, PaymentQueryOperations,
+    PaymentQueryProvider,
 };
 use monoize::store_billing::order::{
     CreatePaymentAttemptInput, CreatePaymentOrderInput, PaymentAttemptFailureKind,
@@ -23,12 +21,12 @@ use monoize::store_billing::payment::{AdapterError, PaymentQuery, ProviderPaymen
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
 use sha2::{Digest, Sha256};
+use tokio::sync::Barrier;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RecordedQuery {
     adapter_kind: String,
     account_id: String,
-    platform_certificate_serials: Vec<String>,
     query: PaymentQuery,
 }
 
@@ -53,17 +51,10 @@ impl RecordingQueryProvider {
         }
     }
 
-    fn record(
-        &self,
-        adapter_kind: &str,
-        account_id: &str,
-        platform_certificate_serials: Vec<String>,
-        query: &PaymentQuery,
-    ) {
+    fn record(&self, adapter_kind: &str, account_id: &str, query: &PaymentQuery) {
         self.calls.lock().unwrap().push(RecordedQuery {
             adapter_kind: adapter_kind.to_string(),
             account_id: account_id.to_string(),
-            platform_certificate_serials,
             query: query.clone(),
         });
     }
@@ -96,18 +87,9 @@ impl PaymentQueryProvider for BarrierQueryProvider {
         Ok(ProviderPaymentState::Unpaid)
     }
 
-    async fn query_alipay_payment(
+    async fn query_epay_payment(
         &self,
-        _credential: &AlipayCredential,
-        _query: &PaymentQuery,
-    ) -> Result<ProviderPaymentState, AdapterError> {
-        unreachable!()
-    }
-
-    async fn query_wechat_payment(
-        &self,
-        _credential: &WechatCredential,
-        _verifiers: &[WechatPlatformVerifier],
+        _credential: &EpayCredential,
         _query: &PaymentQuery,
     ) -> Result<ProviderPaymentState, AdapterError> {
         unreachable!()
@@ -121,34 +103,16 @@ impl PaymentQueryProvider for RecordingQueryProvider {
         credential: &StripeCredential,
         query: &PaymentQuery,
     ) -> Result<ProviderPaymentState, AdapterError> {
-        self.record("stripe", credential.account_id(), vec![], query);
+        self.record("stripe", credential.account_id(), query);
         self.outcome.clone()
     }
 
-    async fn query_alipay_payment(
+    async fn query_epay_payment(
         &self,
-        credential: &AlipayCredential,
+        credential: &EpayCredential,
         query: &PaymentQuery,
     ) -> Result<ProviderPaymentState, AdapterError> {
-        self.record("alipay", credential.seller_id(), vec![], query);
-        self.outcome.clone()
-    }
-
-    async fn query_wechat_payment(
-        &self,
-        credential: &WechatCredential,
-        verifiers: &[WechatPlatformVerifier],
-        query: &PaymentQuery,
-    ) -> Result<ProviderPaymentState, AdapterError> {
-        self.record(
-            "wechat",
-            credential.merchant_id(),
-            verifiers
-                .iter()
-                .map(|verifier| verifier.certificate_serial().to_string())
-                .collect(),
-            query,
-        );
+        self.record("epay", credential.merchant_id(), query);
         self.outcome.clone()
     }
 }
@@ -163,7 +127,6 @@ struct OperationsFixture {
     provider_object_id: String,
     account_id: String,
     account_digest: String,
-    platform_certificate_serials: Vec<String>,
 }
 
 async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
@@ -207,32 +170,20 @@ async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
                 "live_mode":false
             }"#,
         ),
-        "alipay" => (
-            "2088000000000001",
+        "epay" => (
+            "1001",
             br#"{
-                "app_id":"2026000000000001",
-                "seller_id":"2088000000000001",
-                "merchant_private_key_pem":"private",
-                "alipay_public_key_pem":"public",
-                "environment":"sandbox"
-            }"#,
-        ),
-        "wechat" => (
-            "1900000109",
-            br#"{
-                "merchant_id":"1900000109",
-                "app_id":"wx1234567890",
-                "api_v3_key":"0123456789abcdef0123456789abcdef",
-                "merchant_certificate_serial":"MERCHANT-CERTIFICATE-1",
-                "merchant_private_key_pem":"private",
-                "platform_certificate_serial":"PLATFORM-CERTIFICATE-1",
-                "platform_public_key_pem":"public"
+                "gateway_base_url":"https://pay.example.com/",
+                "merchant_id":"1001",
+                "merchant_key":"89unJUB8HZ54Hj7x4nUj56HN4nUzUJ8i",
+                "alipay_enabled":true,
+                "wxpay_enabled":true
             }"#,
         ),
         _ => panic!("unsupported fixture adapter"),
     };
-    let account_digest = if adapter_kind == "wechat" {
-        WechatCredential::from_json(credential_json)
+    let account_digest = if adapter_kind == "epay" {
+        EpayCredential::from_json(credential_json)
             .unwrap()
             .account_identity_digest()
     } else {
@@ -263,6 +214,13 @@ async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
             .unwrap();
         write
             .execute(db.stmt(
+                "UPDATE store_epay_methods SET enabled = 1 WHERE channel_id = $1",
+                vec![channel_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        write
+            .execute(db.stmt(
                 "INSERT INTO store_channel_credentials
                     (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
                      ciphertext_base64, account_identity_digest, status, created_at)
@@ -287,15 +245,10 @@ async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
                 "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
                 "[\"redirect\"]",
             ),
-            "alipay" => (
+            "epay" => (
                 "[\"CNY\"]",
                 "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
-                "[\"form\"]",
-            ),
-            "wechat" => (
-                "[\"CNY\"]",
-                "{\"CNY\":{\"min_minor\":\"1\",\"max_minor\":\"100000000\"}}",
-                "[\"qr\"]",
+                "[\"qr\",\"redirect\"]",
             ),
             _ => unreachable!(),
         };
@@ -305,11 +258,19 @@ async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
                     (id, channel_id, terms_version, admin_user_id, source_ip, confirmed_at)
                  VALUES ($1, $2, '2026-08-28', 'operations-admin', '127.0.0.1',
                          '2026-08-28T00:00:00Z')",
-                vec![format!("operations-{adapter_kind}-compliance").into(), channel_id.clone().into()],
+                vec![
+                    format!("operations-{adapter_kind}-compliance").into(),
+                    channel_id.clone().into(),
+                ],
             ))
             .await
             .unwrap();
-        for capability in ["payment_query", "refund", "refund_query", "settlement_report"] {
+        for capability in [
+            "payment_query",
+            "refund",
+            "refund_query",
+            "settlement_report",
+        ] {
             write
                 .execute(db.stmt(
                     "INSERT INTO store_merchant_capabilities
@@ -392,7 +353,10 @@ async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
             &order.id,
             CreatePaymentAttemptInput {
                 idempotency_key: format!("operations-{adapter_kind}-attempt"),
-                expected_payment_method: None,
+                expected_payment_method: match adapter_kind {
+                    "epay" => Some("alipay".to_string()),
+                    _ => None,
+                },
             },
         )
         .await
@@ -419,42 +383,6 @@ async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
             ))
             .await
             .unwrap();
-        if adapter_kind == "wechat" {
-            let rotated_credential_id = "operations-wechat-credential-rotated";
-            let rotated = key_ring
-                .encrypt(
-                    &format!("store_channel_credentials:{rotated_credential_id}:secret"),
-                    br#"{
-                        "merchant_id":"1900000109",
-                        "app_id":"wx1234567890",
-                        "api_v3_key":"0123456789abcdef0123456789abcdef",
-                        "merchant_certificate_serial":"MERCHANT-CERTIFICATE-1",
-                        "merchant_private_key_pem":"private",
-                        "platform_certificate_serial":"PLATFORM-CERTIFICATE-2",
-                        "platform_public_key_pem":"public-rotated"
-                    }"#,
-                )
-                .unwrap();
-            write
-                .execute(db.stmt(
-                    "INSERT INTO store_channel_credentials
-                        (id, channel_id, adapter_kind, format_version, key_id, nonce_base64,
-                         ciphertext_base64, account_identity_digest, status, created_at)
-                     VALUES ($1, $2, 'wechat', $3, $4, $5, $6, $7, 'active', $8)",
-                    vec![
-                        rotated_credential_id.into(),
-                        channel_id.clone().into(),
-                        i32::from(rotated.version).into(),
-                        rotated.key_id.into(),
-                        rotated.nonce_base64.into(),
-                        rotated.ciphertext_base64.into(),
-                        account_digest.clone().into(),
-                        "2026-08-27T00:03:00Z".into(),
-                    ],
-                ))
-                .await
-                .unwrap();
-        }
     }
 
     OperationsFixture {
@@ -467,20 +395,12 @@ async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
         provider_object_id,
         account_id: account_id.to_string(),
         account_digest,
-        platform_certificate_serials: if adapter_kind == "wechat" {
-            vec![
-                "PLATFORM-CERTIFICATE-2".to_string(),
-                "PLATFORM-CERTIFICATE-1".to_string(),
-            ]
-        } else {
-            vec![]
-        },
     }
 }
 
 #[tokio::test]
 async fn query_attempt_dispatches_each_historical_credential_with_exact_contract() {
-    for adapter_kind in ["stripe", "alipay", "wechat"] {
+    for adapter_kind in ["stripe", "epay"] {
         let fixture = operations_fixture(adapter_kind).await;
         let expected_state = ProviderPaymentState::Paid {
             provider_transaction_id: format!("transaction-{adapter_kind}"),
@@ -512,7 +432,6 @@ async fn query_attempt_dispatches_each_historical_credential_with_exact_contract
             &[RecordedQuery {
                 adapter_kind: adapter_kind.to_string(),
                 account_id: fixture.account_id,
-                platform_certificate_serials: fixture.platform_certificate_serials,
                 query: PaymentQuery {
                     provider_object_id: result.provider_object_id,
                     merchant_order_number: result.order_number,
@@ -653,8 +572,8 @@ async fn query_attempt_rejects_a_missing_provider_object_contract() {
 }
 
 #[tokio::test]
-async fn query_attempt_uses_the_merchant_order_for_wechat_without_a_provider_object() {
-    let fixture = operations_fixture("wechat").await;
+async fn query_attempt_uses_the_merchant_order_for_epay_without_a_provider_object() {
+    let fixture = operations_fixture("epay").await;
     fixture
         .db
         .write()
@@ -825,11 +744,8 @@ async fn admin_order_detail_sorts_tied_attempts_and_refunds_by_id() {
 async fn admin_query_requires_the_attempt_to_belong_to_the_path_order() {
     let fixture = operations_fixture("stripe").await;
     let provider = RecordingQueryProvider::returning(ProviderPaymentState::Unpaid);
-    let operations = AdminOrderOperations::new(
-        fixture.db,
-        Arc::new(fixture.key_ring),
-        Arc::new(provider),
-    );
+    let operations =
+        AdminOrderOperations::new(fixture.db, Arc::new(fixture.key_ring), Arc::new(provider));
 
     assert_eq!(
         operations
@@ -857,7 +773,11 @@ async fn admin_order_identifiers_use_unicode_character_counts_and_reject_all_whi
             .unwrap_err(),
         AdminOrderOperationError::NotFound
     );
-    for invalid in ["界".repeat(129), "attempt internal".to_string(), "attempt\u{3000}id".to_string()] {
+    for invalid in [
+        "界".repeat(129),
+        "attempt internal".to_string(),
+        "attempt\u{3000}id".to_string(),
+    ] {
         assert_eq!(
             operations
                 .query(&fixture.order_id, &invalid)
@@ -1148,7 +1068,10 @@ async fn payment_query_rejects_mismatched_or_unknown_contract_before_provider_ca
             .await
             .execute(fixture.db.stmt(
                 "UPDATE store_payment_attempts SET payment_contract_version = $2 WHERE id = $1",
-                vec![fixture.attempt_id.clone().into(), attempt_contract_version.into()],
+                vec![
+                    fixture.attempt_id.clone().into(),
+                    attempt_contract_version.into(),
+                ],
             ))
             .await
             .unwrap();
@@ -1211,8 +1134,14 @@ async fn admin_query_maps_configuration_and_transport_failures_without_state_cha
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(row.try_get::<String>("", "payment_state").unwrap(), "unpaid");
-        assert_eq!(row.try_get::<String>("", "attempt_state").unwrap(), "created");
+        assert_eq!(
+            row.try_get::<String>("", "payment_state").unwrap(),
+            "unpaid"
+        );
+        assert_eq!(
+            row.try_get::<String>("", "attempt_state").unwrap(),
+            "created"
+        );
     }
 }
 

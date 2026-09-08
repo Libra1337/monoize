@@ -354,6 +354,7 @@ pub async fn get_dashboard_analytics(
         .user_store
         .get_dashboard_analytics(
             user_id_filter.as_deref(),
+            None,
             &time_from,
             &time_to,
             &today_start,
