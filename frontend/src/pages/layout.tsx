@@ -1,0 +1,309 @@
+import { Navigate, Outlet, Link, useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import {
+  LayoutDashboard,
+  Users,
+  Key,
+  Settings,
+  Server,
+  Menu,
+  MessageSquareCode,
+  ScrollText,
+  Database,
+  Store,
+  CalendarClock,
+  Gauge,
+  Boxes,
+  ShoppingBag,
+  ReceiptText,
+  WalletCards,
+  BadgeDollarSign,
+  ChartNoAxesCombined,
+  BookOpenText,
+  ChartSpline,
+  HeartPulse,
+  Activity,
+  PanelLeftClose,
+  PanelLeftOpen,
+} from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { useState } from "react";
+import { motion } from "framer-motion";
+import { cn } from "@/lib/utils";
+import { MonoizeLogo } from "@/components/MonoizeLogo";
+import { UserCenterMenu } from "@/components/user-center-menu";
+import { springs } from "@/components/ui/motion";
+import { usePublicSiteSettings } from "@/lib/swr";
+
+const navTransition = springs.snappy;
+
+function NavLink({
+  to,
+  icon: Icon,
+  label,
+  onClick,
+  layoutId = "nav-active",
+  disableLayoutAnimation = false,
+  collapsed = false,
+  exact = false,
+}: {
+  to: string;
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  onClick?: () => void;
+  layoutId?: string;
+  disableLayoutAnimation?: boolean;
+  collapsed?: boolean;
+  exact?: boolean;
+}) {
+  const location = useLocation();
+  const isActive = exact
+    ? location.pathname === to
+    : location.pathname === to || location.pathname.startsWith(to + "/");
+
+  const link = (
+    <Link
+      to={to}
+      onClick={onClick}
+      className={cn(
+        "relative flex items-center rounded-md text-sm font-medium transition-colors duration-150",
+        collapsed ? "justify-center px-2 py-2" : "gap-3 px-2.5 py-1.5",
+        isActive
+          ? "text-foreground"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+      )}
+    >
+      {isActive && (
+        disableLayoutAnimation ? (
+          <div className="absolute inset-0 rounded-md bg-accent" />
+        ) : (
+          <motion.div
+            layoutId={layoutId}
+            className="absolute inset-0 rounded-md bg-accent"
+            transition={navTransition}
+          />
+        )
+      )}
+      <span className={cn("relative z-10 flex items-center", collapsed ? "" : "gap-3")}>
+        <Icon className={cn("h-4 w-4 shrink-0", isActive && "text-primary")} />
+        {!collapsed && label}
+      </span>
+    </Link>
+  );
+
+  if (collapsed) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{link}</TooltipTrigger>
+        <TooltipContent side="right" sideOffset={8}>
+          {label}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return link;
+}
+
+function Sidebar({
+  onNavigate,
+  layoutId = "nav-active",
+  disableLayoutAnimation = false,
+  collapsed = false,
+  onToggle,
+}: {
+  onNavigate?: () => void;
+  layoutId?: string;
+  disableLayoutAnimation?: boolean;
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
+  const { user } = useAuth();
+  const { t } = useTranslation();
+  const isAdmin = user?.role === "super_admin" || user?.role === "admin";
+  const { data: publicSite } = usePublicSiteSettings();
+  const siteName = publicSite?.site_name || "LynShen Console";
+
+  const navItems = [
+    { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard"), exact: true },
+    { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
+    { to: "/dashboard/usage-ranking", icon: ChartSpline, label: t("nav.usageRanking") },
+    { to: "/dashboard/status", icon: Activity, label: t("nav.runtimeStatus") },
+    { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
+    { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
+    { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
+    { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
+    { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
+    { to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") },
+    { to: "/dashboard/wallet", icon: WalletCards, label: t("nav.wallet") },
+    { to: "/dashboard/orders", icon: ReceiptText, label: t("nav.orders") },
+  ];
+
+  const adminNavItems = [
+    { to: "/dashboard/admin", icon: Gauge, label: t("nav.adminDashboard"), exact: true },
+    { to: "/dashboard/admin/runtime", icon: HeartPulse, label: t("nav.adminRuntime") },
+    { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
+    { to: "/dashboard/models", icon: Database, label: t("nav.models") },
+    { to: "/dashboard/plans", icon: CalendarClock, label: t("nav.billingPlans") },
+    { to: "/dashboard/users", icon: Users, label: t("nav.users") },
+    { to: "/dashboard/groups", icon: Boxes, label: t("nav.groups") },
+    { to: "/dashboard/store-admin", icon: BadgeDollarSign, label: t("nav.storeManagement") },
+    { to: "/dashboard/admin-settings", icon: Settings, label: t("nav.settings") },
+  ];
+
+  return (
+    <TooltipProvider delayDuration={0}>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.2 }}
+        className={cn("flex h-full flex-col p-3", collapsed ? "items-center" : "")}
+      >
+        <Link
+          to="/"
+          onClick={onNavigate}
+          className={cn(
+            "group flex items-center rounded-lg transition-colors hover:bg-accent/50",
+            collapsed ? "justify-center p-2" : "gap-3 px-2.5 py-2.5"
+          )}
+        >
+          <motion.div
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            transition={springs.snappy}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-foreground text-background shadow-sm"
+          >
+            <MonoizeLogo className="h-full w-full" />
+          </motion.div>
+          {!collapsed && (
+            <span className="truncate font-display text-sm font-semibold tracking-tight">{siteName}</span>
+          )}
+        </Link>
+
+        {onToggle && (
+          <button type="button" onClick={onToggle} className={cn("mt-2 flex min-h-9 items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground", collapsed ? "mx-auto justify-center px-2" : "w-full gap-2 px-2.5")} aria-label={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}>
+            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+            {!collapsed && <span className="text-xs">{t("nav.collapseSidebar")}</span>}
+          </button>
+        )}
+
+        <Separator className="my-3" />
+
+        <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              {...item}
+              onClick={onNavigate}
+              layoutId={layoutId}
+              disableLayoutAnimation={disableLayoutAnimation}
+              collapsed={collapsed}
+            />
+          ))}
+
+          {isAdmin && (
+            <>
+              <Separator className="my-2" />
+              {!collapsed && (
+                <p className="px-2.5 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  {t("nav.admin")}
+                </p>
+              )}
+              {adminNavItems.map((item) => (
+                <NavLink
+                  key={item.to}
+                  {...item}
+                  onClick={onNavigate}
+                  layoutId={layoutId}
+                  disableLayoutAnimation={disableLayoutAnimation}
+                  collapsed={collapsed}
+                />
+              ))}
+            </>
+          )}
+        </nav>
+
+        {/* Account menu (dashboard-ui-layout.spec.md DL3a-DL3g) */}
+        <div className="mt-auto pt-3">
+          <Separator className="mb-3" />
+          <UserCenterMenu collapsed={collapsed} onNavigate={onNavigate} />
+        </div>
+      </motion.div>
+    </TooltipProvider>
+  );
+}
+
+export function DashboardLayout() {
+  const { user, loading } = useAuth();
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("lynshen-sidebar-collapsed") === "1";
+  });
+  const toggleCollapsed = () => setCollapsed((value) => {
+    const next = !value;
+    window.localStorage.setItem("lynshen-sidebar-collapsed", next ? "1" : "0");
+    return next;
+  });
+
+  if (loading) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-background">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="text-muted-foreground"
+        >
+          {t("common.loading")}
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return (
+    <div className="flex h-dvh overflow-hidden bg-background">
+      {/* Mobile: floating menu button + sheet */}
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetTrigger asChild>
+          <Button
+            variant="outline"
+            size="icon"
+            className="fixed left-4 top-4 z-50 lg:hidden"
+          >
+            <Menu className="h-5 w-5" />
+            <span className="sr-only">Toggle menu</span>
+          </Button>
+        </SheetTrigger>
+        <SheetContent side="left" className="w-64 border-r bg-background p-0 shadow-none">
+          <Sidebar onNavigate={() => setOpen(false)} disableLayoutAnimation />
+        </SheetContent>
+      </Sheet>
+
+      {/* Desktop sidebar: full-bleed, responsive collapse */}
+      <motion.aside animate={{ width: collapsed ? 64 : 256 }} transition={{ duration: 0.35, ease: "easeInOut" }} className="hidden h-dvh shrink-0 border-r lg:block">
+        <Sidebar collapsed={collapsed} onToggle={toggleCollapsed} />
+        </motion.aside>
+
+      {/* Main content area */}
+      <div className="min-h-0 min-w-0 flex flex-1 flex-col overflow-y-auto px-6 py-6 pt-16 lg:px-8 lg:pt-6">
+        <main className="mx-auto min-w-0 w-full max-w-6xl flex-1">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  );
+}

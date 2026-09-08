@@ -1,0 +1,1196 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(Users::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(Users::Id).text().not_null().primary_key())
+                    .col(ColumnDef::new(Users::Username).text().not_null())
+                    .col(ColumnDef::new(Users::PasswordHash).text().not_null())
+                    .col(ColumnDef::new(Users::Role).text().not_null())
+                    .col(ColumnDef::new(Users::CreatedAt).text().not_null())
+                    .col(ColumnDef::new(Users::UpdatedAt).text().not_null())
+                    .col(ColumnDef::new(Users::LastLoginAt).text())
+                    .col(
+                        ColumnDef::new(Users::Enabled)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(
+                        ColumnDef::new(Users::BalanceNanoUsd)
+                            .text()
+                            .not_null()
+                            .default("0"),
+                    )
+                    .col(
+                        ColumnDef::new(Users::BalanceUnlimited)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(ColumnDef::new(Users::Email).text())
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(Sessions::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(Sessions::Id).text().not_null().primary_key())
+                    .col(ColumnDef::new(Sessions::UserId).text().not_null())
+                    .col(ColumnDef::new(Sessions::Token).text().not_null())
+                    .col(ColumnDef::new(Sessions::CreatedAt).text().not_null())
+                    .col(ColumnDef::new(Sessions::ExpiresAt).text().not_null())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk_sessions_user_id")
+                            .from(Sessions::Table, Sessions::UserId)
+                            .to(Users::Table, Users::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(ApiKeys::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(ApiKeys::Id).text().not_null().primary_key())
+                    .col(ColumnDef::new(ApiKeys::UserId).text().not_null())
+                    .col(ColumnDef::new(ApiKeys::Name).text().not_null())
+                    .col(ColumnDef::new(ApiKeys::KeyPrefix).text().not_null())
+                    .col(ColumnDef::new(ApiKeys::Key).text().not_null())
+                    .col(ColumnDef::new(ApiKeys::CreatedAt).text().not_null())
+                    .col(ColumnDef::new(ApiKeys::ExpiresAt).text())
+                    .col(ColumnDef::new(ApiKeys::LastUsedAt).text())
+                    .col(
+                        ColumnDef::new(ApiKeys::Enabled)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(ColumnDef::new(ApiKeys::QuotaRemaining).integer())
+                    .col(
+                        ColumnDef::new(ApiKeys::QuotaUnlimited)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(ApiKeys::ModelLimitsEnabled)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(ApiKeys::ModelLimits)
+                            .text()
+                            .not_null()
+                            .default("{}"),
+                    )
+                    .col(
+                        ColumnDef::new(ApiKeys::IpWhitelist)
+                            .text()
+                            .not_null()
+                            .default("[]"),
+                    )
+                    .col(
+                        ColumnDef::new(ApiKeys::TokenGroup)
+                            .text()
+                            .not_null()
+                            .default("default"),
+                    )
+                    .col(ColumnDef::new(ApiKeys::MaxMultiplier).double())
+                    .col(
+                        ColumnDef::new(ApiKeys::Transforms)
+                            .text()
+                            .not_null()
+                            .default("[]"),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk_api_keys_user_id")
+                            .from(ApiKeys::Table, ApiKeys::UserId)
+                            .to(Users::Table, Users::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(BillingLedger::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(BillingLedger::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(BillingLedger::UserId).text().not_null())
+                    .col(ColumnDef::new(BillingLedger::Kind).text().not_null())
+                    .col(
+                        ColumnDef::new(BillingLedger::DeltaNanoUsd)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(BillingLedger::BalanceAfterNanoUsd).text())
+                    .col(ColumnDef::new(BillingLedger::MetaJson).text().not_null())
+                    .col(ColumnDef::new(BillingLedger::CreatedAt).text().not_null())
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(RequestLogs::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(RequestLogs::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(RequestLogs::RequestId).text())
+                    .col(ColumnDef::new(RequestLogs::UserId).text().not_null())
+                    .col(ColumnDef::new(RequestLogs::ApiKeyId).text())
+                    .col(ColumnDef::new(RequestLogs::Model).text().not_null())
+                    .col(ColumnDef::new(RequestLogs::ProviderId).text())
+                    .col(ColumnDef::new(RequestLogs::UpstreamModel).text())
+                    .col(ColumnDef::new(RequestLogs::ChannelId).text())
+                    .col(
+                        ColumnDef::new(RequestLogs::IsStream)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(ColumnDef::new(RequestLogs::InputTokens).big_integer())
+                    .col(ColumnDef::new(RequestLogs::OutputTokens).big_integer())
+                    .col(ColumnDef::new(RequestLogs::CacheReadTokens).big_integer())
+                    .col(ColumnDef::new(RequestLogs::CacheCreationTokens).big_integer())
+                    .col(ColumnDef::new(RequestLogs::ToolPromptTokens).big_integer())
+                    .col(ColumnDef::new(RequestLogs::ReasoningTokens).big_integer())
+                    .col(ColumnDef::new(RequestLogs::AcceptedPredictionTokens).big_integer())
+                    .col(ColumnDef::new(RequestLogs::RejectedPredictionTokens).big_integer())
+                    .col(ColumnDef::new(RequestLogs::ProviderMultiplier).text())
+                    .col(ColumnDef::new(RequestLogs::ChargeNanoUsd).text())
+                    .col(ColumnDef::new(RequestLogs::Status).text().not_null())
+                    .col(ColumnDef::new(RequestLogs::UsageBreakdownJson).text())
+                    .col(ColumnDef::new(RequestLogs::BillingBreakdownJson).text())
+                    .col(ColumnDef::new(RequestLogs::ErrorCode).text())
+                    .col(ColumnDef::new(RequestLogs::ErrorMessage).text())
+                    .col(ColumnDef::new(RequestLogs::ErrorHttpStatus).big_integer())
+                    .col(ColumnDef::new(RequestLogs::DurationMs).big_integer())
+                    .col(ColumnDef::new(RequestLogs::TtfbMs).big_integer())
+                    .col(ColumnDef::new(RequestLogs::FirstVisibleOutputMs).big_integer())
+                    .col(ColumnDef::new(RequestLogs::LastVisibleOutputMs).big_integer())
+                    .col(ColumnDef::new(RequestLogs::VisibleGenerationMs).big_integer())
+                    .col(ColumnDef::new(RequestLogs::VisibleOutputTokens).big_integer())
+                    .col(ColumnDef::new(RequestLogs::TpsMode).text())
+                    .col(ColumnDef::new(RequestLogs::RequestIp).text())
+                    .col(ColumnDef::new(RequestLogs::ReasoningEffort).text())
+                    .col(ColumnDef::new(RequestLogs::TriedProvidersJson).text())
+                    .col(ColumnDef::new(RequestLogs::RequestKind).text())
+                    .col(ColumnDef::new(RequestLogs::EffectiveProviderType).text())
+                    .col(ColumnDef::new(RequestLogs::AffinityHit).integer())
+                    .col(ColumnDef::new(RequestLogs::AffinityKeyHash).text())
+                    .col(ColumnDef::new(RequestLogs::AffinityTarget).text())
+                    .col(ColumnDef::new(RequestLogs::CreatedAt).text().not_null())
+                    .col(ColumnDef::new(RequestLogs::CreatedAtUnixMs).big_integer())
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(SystemSettings::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(SystemSettings::Key)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(SystemSettings::Value).text().not_null())
+                    .col(ColumnDef::new(SystemSettings::UpdatedAt).text().not_null())
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(ModelRegistryRecords::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::LogicalModel)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::ProviderId)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::UpstreamModel)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::CapabilitiesJson)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::Enabled)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::Priority)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::CreatedAt)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::UpdatedAt)
+                            .text()
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(ModelMetadataRecords::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(ModelMetadataRecords::ModelId)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(ModelMetadataRecords::ModelsDevProvider).text())
+                    .col(ColumnDef::new(ModelMetadataRecords::Mode).text())
+                    .col(ColumnDef::new(ModelMetadataRecords::InputCostPerTokenNano).text())
+                    .col(ColumnDef::new(ModelMetadataRecords::OutputCostPerTokenNano).text())
+                    .col(
+                        ColumnDef::new(ModelMetadataRecords::CacheReadInputCostPerTokenNano).text(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelMetadataRecords::CacheCreationInputCostPerTokenNano)
+                            .text(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelMetadataRecords::OutputCostPerReasoningTokenNano)
+                            .text(),
+                    )
+                    .col(ColumnDef::new(ModelMetadataRecords::MaxInputTokens).big_integer())
+                    .col(ColumnDef::new(ModelMetadataRecords::MaxOutputTokens).big_integer())
+                    .col(ColumnDef::new(ModelMetadataRecords::MaxTokens).big_integer())
+                    .col(
+                        ColumnDef::new(ModelMetadataRecords::RawJson)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelMetadataRecords::Source)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelMetadataRecords::UpdatedAt)
+                            .text()
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(BillingRateRecords::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(BillingRateRecords::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(BillingRateRecords::Source).text().not_null())
+                    .col(
+                        ColumnDef::new(BillingRateRecords::PricingProfile)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(BillingRateRecords::ModelPattern).text())
+                    .col(ColumnDef::new(BillingRateRecords::ProviderType).text())
+                    .col(
+                        ColumnDef::new(BillingRateRecords::RateKind)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(BillingRateRecords::UsageClass)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(BillingRateRecords::Unit).text().not_null())
+                    .col(
+                        ColumnDef::new(BillingRateRecords::UnitPriceNanoUsd)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(BillingRateRecords::ContextTier).text())
+                    .col(ColumnDef::new(BillingRateRecords::ServiceTier).text())
+                    .col(ColumnDef::new(BillingRateRecords::Modality).text())
+                    .col(ColumnDef::new(BillingRateRecords::CacheTtl).text())
+                    .col(
+                        ColumnDef::new(BillingRateRecords::MatchJson)
+                            .text()
+                            .not_null()
+                            .default("{}"),
+                    )
+                    .col(
+                        ColumnDef::new(BillingRateRecords::Priority)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(BillingRateRecords::Enabled)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(
+                        ColumnDef::new(BillingRateRecords::RawJson)
+                            .text()
+                            .not_null()
+                            .default("{}"),
+                    )
+                    .col(
+                        ColumnDef::new(BillingRateRecords::UpdatedAt)
+                            .text()
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(MonoizeProviders::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(MonoizeProviders::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(MonoizeProviders::Name).text().not_null())
+                    .col(
+                        ColumnDef::new(MonoizeProviders::MaxRetries)
+                            .integer()
+                            .not_null()
+                            .default(3),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeProviders::Transforms)
+                            .text()
+                            .not_null()
+                            .default("[]"),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeProviders::ApiTypeOverrides)
+                            .text()
+                            .not_null()
+                            .default("[]"),
+                    )
+                    .col(ColumnDef::new(MonoizeProviders::ActiveProbeEnabledOverride).integer())
+                    .col(
+                        ColumnDef::new(MonoizeProviders::ActiveProbeIntervalSecondsOverride)
+                            .integer(),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeProviders::ActiveProbeSuccessThresholdOverride)
+                            .integer(),
+                    )
+                    .col(ColumnDef::new(MonoizeProviders::ActiveProbeModelOverride).text())
+                    .col(ColumnDef::new(MonoizeProviders::RequestTimeoutMsOverride).integer())
+                    .col(
+                        ColumnDef::new(MonoizeProviders::Enabled)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeProviders::Priority)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeProviders::CreatedAt)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeProviders::UpdatedAt)
+                            .text()
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(MonoizeChannels::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(MonoizeChannels::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeChannels::ProviderId)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(MonoizeChannels::Name).text().not_null())
+                    .col(
+                        ColumnDef::new(MonoizeChannels::ProviderType)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(MonoizeChannels::BaseUrl).text().not_null())
+                    .col(ColumnDef::new(MonoizeChannels::ApiKey).text().not_null())
+                    .col(
+                        ColumnDef::new(MonoizeChannels::Weight)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeChannels::Enabled)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(ColumnDef::new(MonoizeChannels::PassiveFailureThresholdOverride).integer())
+                    .col(ColumnDef::new(MonoizeChannels::PassiveCooldownSecondsOverride).integer())
+                    .col(ColumnDef::new(MonoizeChannels::PassiveWindowSecondsOverride).integer())
+                    .col(
+                        ColumnDef::new(MonoizeChannels::PassiveRateLimitCooldownSecondsOverride)
+                            .integer(),
+                    )
+                    .col(ColumnDef::new(MonoizeChannels::ActiveProbeEnabledOverride).integer())
+                    .col(
+                        ColumnDef::new(MonoizeChannels::ActiveProbeIntervalSecondsOverride)
+                            .integer(),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeChannels::ActiveProbeSuccessThresholdOverride)
+                            .integer(),
+                    )
+                    .col(ColumnDef::new(MonoizeChannels::ActiveProbeModelOverride).text())
+                    .col(ColumnDef::new(MonoizeChannels::AffinityEnabledOverride).integer())
+                    .col(ColumnDef::new(MonoizeChannels::AffinityIdleTtlSecondsOverride).integer())
+                    .col(ColumnDef::new(MonoizeChannels::AffinityFailbackModeOverride).text())
+                    .col(
+                        ColumnDef::new(MonoizeChannels::AffinityFailbackDelaySecondsOverride)
+                            .integer(),
+                    )
+                    .col(ColumnDef::new(MonoizeChannels::CreatedAt).text().not_null())
+                    .col(ColumnDef::new(MonoizeChannels::UpdatedAt).text().not_null())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk_mc_provider_id")
+                            .from(MonoizeChannels::Table, MonoizeChannels::ProviderId)
+                            .to(MonoizeProviders::Table, MonoizeProviders::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(MonoizeChannelModels::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(MonoizeChannelModels::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeChannelModels::ChannelId)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeChannelModels::ModelName)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(MonoizeChannelModels::Redirect).text())
+                    .col(
+                        ColumnDef::new(MonoizeChannelModels::Multiplier)
+                            .double()
+                            .not_null()
+                            .default(1.0),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeChannelModels::CreatedAt)
+                            .text()
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk_mcm_channel_id")
+                            .from(MonoizeChannelModels::Table, MonoizeChannelModels::ChannelId)
+                            .to(MonoizeChannels::Table, MonoizeChannels::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(StateRecords::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(StateRecords::TenantId).text().not_null())
+                    .col(ColumnDef::new(StateRecords::Kind).text().not_null())
+                    .col(ColumnDef::new(StateRecords::Id).text().not_null())
+                    .col(ColumnDef::new(StateRecords::Value).text().not_null())
+                    .col(ColumnDef::new(StateRecords::ExpiresAt).integer())
+                    .primary_key(
+                        Index::create()
+                            .name("pk_state_records")
+                            .col(StateRecords::TenantId)
+                            .col(StateRecords::Kind)
+                            .col(StateRecords::Id),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(FileBytes::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(FileBytes::TenantId).text().not_null())
+                    .col(ColumnDef::new(FileBytes::FileId).text().not_null())
+                    .col(ColumnDef::new(FileBytes::Bytes).binary().not_null())
+                    .primary_key(
+                        Index::create()
+                            .name("pk_file_bytes")
+                            .col(FileBytes::TenantId)
+                            .col(FileBytes::FileId),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("uq_users_username")
+                    .table(Users::Table)
+                    .col(Users::Username)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_sessions_user_id")
+                    .table(Sessions::Table)
+                    .col(Sessions::UserId)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_sessions_token")
+                    .table(Sessions::Table)
+                    .col(Sessions::Token)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_api_keys_user_id")
+                    .table(ApiKeys::Table)
+                    .col(ApiKeys::UserId)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_api_keys_key")
+                    .table(ApiKeys::Table)
+                    .col(ApiKeys::Key)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_billing_ledger_user_id")
+                    .table(BillingLedger::Table)
+                    .col(BillingLedger::UserId)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_request_logs_user_created_at")
+                    .table(RequestLogs::Table)
+                    .col(RequestLogs::UserId)
+                    .col(RequestLogs::CreatedAtUnixMs)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_request_logs_created_at")
+                    .table(RequestLogs::Table)
+                    .col(RequestLogs::CreatedAtUnixMs)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_request_logs_model")
+                    .table(RequestLogs::Table)
+                    .col(RequestLogs::Model)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("uq_mrr_logical_model_provider_id")
+                    .table(ModelRegistryRecords::Table)
+                    .col(ModelRegistryRecords::LogicalModel)
+                    .col(ModelRegistryRecords::ProviderId)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_mc_provider_id")
+                    .table(MonoizeChannels::Table)
+                    .col(MonoizeChannels::ProviderId)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_mcm_channel_id")
+                    .table(MonoizeChannelModels::Table)
+                    .col(MonoizeChannelModels::ChannelId)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("uq_mcm_channel_id_model_name")
+                    .table(MonoizeChannelModels::Table)
+                    .col(MonoizeChannelModels::ChannelId)
+                    .col(MonoizeChannelModels::ModelName)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(FileBytes::Table).if_exists().to_owned())
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(StateRecords::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(MonoizeChannelModels::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(MonoizeChannels::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(MonoizeProviders::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(BillingRateRecords::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(ModelMetadataRecords::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(ModelRegistryRecords::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(SystemSettings::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(RequestLogs::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(BillingLedger::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(Table::drop().table(ApiKeys::Table).if_exists().to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Sessions::Table).if_exists().to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Users::Table).if_exists().to_owned())
+            .await?;
+
+        Ok(())
+    }
+}
+
+#[derive(Iden)]
+enum Users {
+    Table,
+    Id,
+    Username,
+    PasswordHash,
+    Role,
+    CreatedAt,
+    UpdatedAt,
+    LastLoginAt,
+    Enabled,
+    BalanceNanoUsd,
+    BalanceUnlimited,
+    Email,
+}
+
+#[derive(Iden)]
+enum Sessions {
+    Table,
+    Id,
+    UserId,
+    Token,
+    CreatedAt,
+    ExpiresAt,
+}
+
+#[derive(Iden)]
+enum ApiKeys {
+    Table,
+    Id,
+    UserId,
+    Name,
+    KeyPrefix,
+    Key,
+    CreatedAt,
+    ExpiresAt,
+    LastUsedAt,
+    Enabled,
+    QuotaRemaining,
+    QuotaUnlimited,
+    ModelLimitsEnabled,
+    ModelLimits,
+    IpWhitelist,
+    TokenGroup,
+    MaxMultiplier,
+    Transforms,
+}
+
+#[derive(Iden)]
+enum BillingLedger {
+    Table,
+    Id,
+    UserId,
+    Kind,
+    DeltaNanoUsd,
+    BalanceAfterNanoUsd,
+    MetaJson,
+    CreatedAt,
+}
+
+#[derive(Iden)]
+enum RequestLogs {
+    Table,
+    Id,
+    RequestId,
+    UserId,
+    ApiKeyId,
+    Model,
+    ProviderId,
+    UpstreamModel,
+    ChannelId,
+    IsStream,
+    InputTokens,
+    OutputTokens,
+    CacheReadTokens,
+    CacheCreationTokens,
+    ToolPromptTokens,
+    ReasoningTokens,
+    AcceptedPredictionTokens,
+    RejectedPredictionTokens,
+    ProviderMultiplier,
+    ChargeNanoUsd,
+    Status,
+    UsageBreakdownJson,
+    BillingBreakdownJson,
+    ErrorCode,
+    ErrorMessage,
+    ErrorHttpStatus,
+    DurationMs,
+    TtfbMs,
+    FirstVisibleOutputMs,
+    LastVisibleOutputMs,
+    VisibleGenerationMs,
+    VisibleOutputTokens,
+    TpsMode,
+    RequestIp,
+    ReasoningEffort,
+    TriedProvidersJson,
+    RequestKind,
+    EffectiveProviderType,
+    AffinityHit,
+    AffinityKeyHash,
+    AffinityTarget,
+    CreatedAt,
+    CreatedAtUnixMs,
+}
+
+#[derive(Iden)]
+enum SystemSettings {
+    Table,
+    Key,
+    Value,
+    UpdatedAt,
+}
+
+#[derive(Iden)]
+enum ModelRegistryRecords {
+    Table,
+    Id,
+    LogicalModel,
+    ProviderId,
+    UpstreamModel,
+    CapabilitiesJson,
+    Enabled,
+    Priority,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(Iden)]
+enum ModelMetadataRecords {
+    Table,
+    ModelId,
+    ModelsDevProvider,
+    Mode,
+    InputCostPerTokenNano,
+    OutputCostPerTokenNano,
+    CacheReadInputCostPerTokenNano,
+    CacheCreationInputCostPerTokenNano,
+    OutputCostPerReasoningTokenNano,
+    MaxInputTokens,
+    MaxOutputTokens,
+    MaxTokens,
+    RawJson,
+    Source,
+    UpdatedAt,
+}
+
+#[derive(Iden)]
+enum BillingRateRecords {
+    Table,
+    Id,
+    Source,
+    PricingProfile,
+    ModelPattern,
+    ProviderType,
+    RateKind,
+    UsageClass,
+    Unit,
+    UnitPriceNanoUsd,
+    ContextTier,
+    ServiceTier,
+    Modality,
+    CacheTtl,
+    MatchJson,
+    Priority,
+    Enabled,
+    RawJson,
+    UpdatedAt,
+}
+
+#[derive(Iden)]
+enum MonoizeProviders {
+    Table,
+    Id,
+    Name,
+    MaxRetries,
+    Transforms,
+    ApiTypeOverrides,
+    ActiveProbeEnabledOverride,
+    ActiveProbeIntervalSecondsOverride,
+    ActiveProbeSuccessThresholdOverride,
+    ActiveProbeModelOverride,
+    RequestTimeoutMsOverride,
+    Enabled,
+    Priority,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(Iden)]
+enum MonoizeChannels {
+    Table,
+    Id,
+    ProviderId,
+    Name,
+    ProviderType,
+    BaseUrl,
+    ApiKey,
+    Weight,
+    Enabled,
+    PassiveFailureThresholdOverride,
+    PassiveCooldownSecondsOverride,
+    PassiveWindowSecondsOverride,
+    PassiveRateLimitCooldownSecondsOverride,
+    ActiveProbeEnabledOverride,
+    ActiveProbeIntervalSecondsOverride,
+    ActiveProbeSuccessThresholdOverride,
+    ActiveProbeModelOverride,
+    AffinityEnabledOverride,
+    AffinityIdleTtlSecondsOverride,
+    AffinityFailbackModeOverride,
+    AffinityFailbackDelaySecondsOverride,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(Iden)]
+enum MonoizeChannelModels {
+    Table,
+    Id,
+    ChannelId,
+    ModelName,
+    Redirect,
+    Multiplier,
+    CreatedAt,
+}
+
+#[derive(Iden)]
+enum StateRecords {
+    Table,
+    TenantId,
+    Kind,
+    Id,
+    Value,
+    ExpiresAt,
+}
+
+#[derive(Iden)]
+enum FileBytes {
+    Table,
+    TenantId,
+    FileId,
+    Bytes,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ConnectOptions, ConnectionTrait, Database, DbBackend, Statement};
+
+    #[tokio::test]
+    async fn initial_request_logs_preserve_rows_after_user_deletion() {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1);
+        let db = Database::connect(options).await.expect("SQLite connects");
+        db.execute_unprepared("PRAGMA foreign_keys = ON")
+            .await
+            .expect("foreign keys enable");
+        Migration
+            .up(&SchemaManager::new(&db))
+            .await
+            .expect("initial migration succeeds");
+
+        let foreign_keys = db
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                "PRAGMA foreign_key_list(request_logs)".to_string(),
+            ))
+            .await
+            .expect("request-log foreign keys query");
+        assert!(foreign_keys.is_empty());
+        let schema = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS column_count, MAX(CASE WHEN name = 'provider_multiplier' THEN type END) AS provider_multiplier_type FROM pragma_table_info('request_logs')".to_string(),
+            ))
+            .await
+            .expect("request-log schema queries")
+            .expect("request-log schema exists");
+        assert_eq!(schema.try_get::<i64>("", "column_count").unwrap(), 42);
+        assert_eq!(
+            schema
+                .try_get::<String>("", "provider_multiplier_type")
+                .unwrap(),
+            "TEXT"
+        );
+
+        db.execute_unprepared(
+            "INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES ('user-1', 'history-user', 'hash', 'user', '2026-08-09T00:00:00Z', '2026-08-09T00:00:00Z')",
+        )
+        .await
+        .expect("user inserts");
+        db.execute_unprepared(
+            "INSERT INTO request_logs (id, user_id, model, status, created_at) VALUES ('log-1', 'user-1', 'model-1', 'success', '2026-08-09T00:00:00Z')",
+        )
+        .await
+        .expect("request log inserts");
+        db.execute_unprepared("DELETE FROM users WHERE id = 'user-1'")
+            .await
+            .expect("user deletes");
+
+        let count: i64 = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM request_logs WHERE id = 'log-1'".to_string(),
+            ))
+            .await
+            .expect("request-log count queries")
+            .expect("request-log count exists")
+            .try_get("", "count")
+            .expect("request-log count decodes");
+        assert_eq!(count, 1);
+    }
+}

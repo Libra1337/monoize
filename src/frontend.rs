@@ -1,0 +1,103 @@
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+
+#[cfg(embed_frontend)]
+use include_dir::{Dir, include_dir};
+#[cfg(embed_frontend)]
+use mime_guess::MimeGuess;
+
+#[cfg(embed_frontend)]
+static FRONTEND_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/frontend/dist");
+
+#[cfg(any(embed_frontend, test))]
+fn entry_document_with_nonce(contents: &[u8], nonce: &str) -> Vec<u8> {
+    String::from_utf8_lossy(contents)
+        .replace("__MONOIZE_CSP_NONCE__", nonce)
+        .into_bytes()
+}
+
+#[cfg(embed_frontend)]
+fn asset_response(path: &str, nonce: Option<&str>) -> Response {
+    match FRONTEND_DIR.get_file(path) {
+        Some(file) => {
+            let mime: MimeGuess = mime_guess::from_path(path);
+            let content_type = mime.first_or_octet_stream();
+            let cache_control = if path == "index.html" {
+                "no-store"
+            } else if path.starts_with("assets/") {
+                "public, max-age=31536000, immutable"
+            } else {
+                "no-cache"
+            };
+            let body = if path == "index.html" {
+                entry_document_with_nonce(file.contents(), nonce.unwrap_or_default())
+            } else {
+                file.contents().to_vec()
+            };
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, content_type.as_ref())
+                .header(header::CACHE_CONTROL, cache_control)
+                .body(Body::from(body))
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entry_document_replaces_the_nonce_placeholder() {
+        let rendered = entry_document_with_nonce(
+            br#"<meta name="csp-nonce" content="__MONOIZE_CSP_NONCE__">"#,
+            "request-nonce",
+        );
+        let rendered = String::from_utf8(rendered).unwrap();
+        assert_eq!(
+            rendered,
+            r#"<meta name="csp-nonce" content="request-nonce">"#
+        );
+        assert!(!rendered.contains("__MONOIZE_CSP_NONCE__"));
+    }
+}
+
+pub async fn frontend_fallback(req: Request<Body>) -> Response {
+    if req.method() != Method::GET {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    #[cfg(not(embed_frontend))]
+    {
+        let _ = req;
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("Frontend not embedded. Use Vite dev server."))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    }
+
+    #[cfg(embed_frontend)]
+    {
+        let nonce = req
+            .extensions()
+            .get::<crate::app::CspNonce>()
+            .map(|nonce| nonce.0.as_str());
+        let path = req.uri().path().trim_start_matches('/');
+        if path.is_empty() {
+            return asset_response("index.html", nonce);
+        }
+        if path == "api" || path.starts_with("api/") {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+
+        if FRONTEND_DIR.get_file(path).is_some() {
+            return asset_response(path, nonce);
+        }
+
+        asset_response("index.html", nonce)
+    }
+}

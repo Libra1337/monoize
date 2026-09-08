@@ -1,0 +1,321 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhaseZone {
+    Empty,
+    InReasoning,
+    InContent,
+    InAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PartKind {
+    Reasoning,
+    Content,
+    Action,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeAction {
+    Append,
+    FlushAndNew(Vec<super::Node>),
+}
+
+#[derive(Debug, Clone)]
+pub struct NodeGreedyMerger {
+    zone: PhaseZone,
+    current_role: Option<super::OrdinaryRole>,
+    pending: Vec<super::Node>,
+}
+
+impl NodeGreedyMerger {
+    pub fn new() -> Self {
+        Self {
+            zone: PhaseZone::Empty,
+            current_role: None,
+            pending: Vec::new(),
+        }
+    }
+
+    pub fn feed(&mut self, node: super::Node) -> NodeAction {
+        let role = node.role();
+        if role.is_some()
+            && self.current_role.is_some()
+            && self.current_role != role
+            && !self.pending.is_empty()
+        {
+            let flushed = std::mem::take(&mut self.pending);
+            self.current_role = role;
+            self.zone = Self::zone_for(&node);
+            self.pending.push(node);
+            return NodeAction::FlushAndNew(flushed);
+        }
+        if role.is_some() {
+            self.current_role = role;
+        }
+
+        match Self::kind(&node) {
+            PartKind::Reasoning => {
+                if matches!(self.zone, PhaseZone::InContent | PhaseZone::InAction) {
+                    let flushed = std::mem::take(&mut self.pending);
+                    self.zone = PhaseZone::InReasoning;
+                    self.pending.push(node);
+                    return NodeAction::FlushAndNew(flushed);
+                }
+                self.zone = PhaseZone::InReasoning;
+            }
+            PartKind::Content => {
+                if matches!(self.zone, PhaseZone::InContent | PhaseZone::InAction) {
+                    let flushed = std::mem::take(&mut self.pending);
+                    self.zone = PhaseZone::InContent;
+                    self.pending.push(node);
+                    return NodeAction::FlushAndNew(flushed);
+                }
+                self.zone = PhaseZone::InContent;
+            }
+            PartKind::Action => {
+                self.zone = PhaseZone::InAction;
+            }
+        }
+
+        self.pending.push(node);
+        NodeAction::Append
+    }
+
+    pub fn finish(&mut self) -> Option<Vec<super::Node>> {
+        if self.pending.is_empty() {
+            self.zone = PhaseZone::Empty;
+            self.current_role = None;
+            return None;
+        }
+        let flushed = std::mem::take(&mut self.pending);
+        self.zone = PhaseZone::Empty;
+        self.current_role = None;
+        Some(flushed)
+    }
+
+    fn kind(node: &super::Node) -> PartKind {
+        match node {
+            super::Node::Reasoning { .. } => PartKind::Reasoning,
+            super::Node::Text { .. }
+            | super::Node::Image { .. }
+            | super::Node::Audio { .. }
+            | super::Node::File { .. }
+            | super::Node::Refusal { .. } => PartKind::Content,
+            super::Node::ToolCall { .. }
+            | super::Node::ProviderItem { .. }
+            | super::Node::ToolResult { .. }
+            | super::Node::NextDownstreamEnvelopeExtra { .. } => PartKind::Action,
+        }
+    }
+
+    fn zone_for(node: &super::Node) -> PhaseZone {
+        match Self::kind(node) {
+            PartKind::Reasoning => PhaseZone::InReasoning,
+            PartKind::Content => PhaseZone::InContent,
+            PartKind::Action => PhaseZone::InAction,
+        }
+    }
+}
+
+impl Default for NodeGreedyMerger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NodeAction, NodeGreedyMerger};
+    use crate::urp::{Node, OrdinaryRole, ProviderProtocol};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[test]
+    fn sequential_reasoning_nodes_do_not_flush() {
+        let mut merger = NodeGreedyMerger::new();
+
+        assert_eq!(merger.feed(reasoning("r1")), NodeAction::Append);
+        assert_eq!(merger.feed(reasoning("r2")), NodeAction::Append);
+        assert_eq!(
+            merger.finish(),
+            Some(vec![reasoning("r1"), reasoning("r2")])
+        );
+    }
+
+    #[test]
+    fn reasoning_then_text_does_not_flush() {
+        let mut merger = NodeGreedyMerger::new();
+
+        assert_eq!(merger.feed(reasoning("r")), NodeAction::Append);
+        assert_eq!(
+            merger.feed(text(OrdinaryRole::Assistant, "t")),
+            NodeAction::Append
+        );
+        assert_eq!(
+            merger.finish(),
+            Some(vec![reasoning("r"), text(OrdinaryRole::Assistant, "t")])
+        );
+    }
+
+    #[test]
+    fn text_then_tool_call_does_not_flush() {
+        let mut merger = NodeGreedyMerger::new();
+
+        assert_eq!(
+            merger.feed(text(OrdinaryRole::Assistant, "t")),
+            NodeAction::Append
+        );
+        assert_eq!(merger.feed(tool_call("1")), NodeAction::Append);
+        assert_eq!(
+            merger.finish(),
+            Some(vec![text(OrdinaryRole::Assistant, "t"), tool_call("1")])
+        );
+    }
+
+    #[test]
+    fn tool_call_then_text_flushes() {
+        let mut merger = NodeGreedyMerger::new();
+
+        assert_eq!(merger.feed(tool_call("1")), NodeAction::Append);
+        assert_flushes_to(
+            merger.feed(text(OrdinaryRole::Assistant, "t")),
+            vec![tool_call("1")],
+        );
+        assert_eq!(
+            merger.finish(),
+            Some(vec![text(OrdinaryRole::Assistant, "t")])
+        );
+    }
+
+    #[test]
+    fn tool_call_then_reasoning_flushes() {
+        let mut merger = NodeGreedyMerger::new();
+
+        assert_eq!(merger.feed(tool_call("1")), NodeAction::Append);
+        assert_flushes_to(merger.feed(reasoning("r")), vec![tool_call("1")]);
+        assert_eq!(merger.finish(), Some(vec![reasoning("r")]));
+    }
+
+    #[test]
+    fn content_then_reasoning_flushes() {
+        let mut merger = NodeGreedyMerger::new();
+
+        assert_eq!(
+            merger.feed(text(OrdinaryRole::Assistant, "t")),
+            NodeAction::Append
+        );
+        assert_flushes_to(
+            merger.feed(reasoning("r")),
+            vec![text(OrdinaryRole::Assistant, "t")],
+        );
+        assert_eq!(merger.finish(), Some(vec![reasoning("r")]));
+    }
+
+    #[test]
+    fn role_change_flushes() {
+        let mut merger = NodeGreedyMerger::new();
+
+        assert_eq!(
+            merger.feed(text(OrdinaryRole::User, "t")),
+            NodeAction::Append
+        );
+        assert_flushes_to(
+            merger.feed(text(OrdinaryRole::Assistant, "u")),
+            vec![text(OrdinaryRole::User, "t")],
+        );
+        assert_eq!(
+            merger.finish(),
+            Some(vec![text(OrdinaryRole::Assistant, "u")])
+        );
+    }
+
+    #[test]
+    fn multiple_tool_calls_do_not_flush() {
+        let mut merger = NodeGreedyMerger::new();
+
+        assert_eq!(merger.feed(tool_call("1")), NodeAction::Append);
+        assert_eq!(merger.feed(tool_call("2")), NodeAction::Append);
+        assert_eq!(merger.finish(), Some(vec![tool_call("1"), tool_call("2")]));
+    }
+
+    #[test]
+    fn empty_finish_returns_none() {
+        let mut merger = NodeGreedyMerger::new();
+
+        assert_eq!(merger.finish(), None);
+    }
+
+    #[test]
+    fn finish_with_pending_returns_nodes() {
+        let mut merger = NodeGreedyMerger::new();
+
+        assert_eq!(merger.feed(provider_item()), NodeAction::Append);
+        assert_eq!(merger.finish(), Some(vec![provider_item()]));
+    }
+
+    #[test]
+    fn text_then_text_flushes() {
+        let mut merger = NodeGreedyMerger::new();
+        assert_eq!(
+            merger.feed(text(OrdinaryRole::Assistant, "a")),
+            NodeAction::Append
+        );
+        assert_flushes_to(
+            merger.feed(text(OrdinaryRole::Assistant, "b")),
+            vec![text(OrdinaryRole::Assistant, "a")],
+        );
+        assert_eq!(
+            merger.finish(),
+            Some(vec![text(OrdinaryRole::Assistant, "b")])
+        );
+    }
+
+    fn text(role: OrdinaryRole, content: &str) -> Node {
+        Node::Text {
+            id: None,
+            role,
+            content: content.to_owned(),
+            phase: None,
+            extra_body: HashMap::new(),
+        }
+    }
+
+    fn reasoning(content: &str) -> Node {
+        Node::Reasoning {
+            id: None,
+            content: Some(content.to_owned()),
+            encrypted: None,
+            summary: None,
+            source: None,
+            extra_body: HashMap::new(),
+        }
+    }
+
+    fn tool_call(call_id: &str) -> Node {
+        Node::ToolCall {
+            id: None,
+            tool_type: crate::urp::ToolCallType::Function,
+            call_id: call_id.to_owned(),
+            name: "lookup".to_owned(),
+            arguments: "{}".to_owned(),
+            extra_body: HashMap::new(),
+        }
+    }
+
+    fn provider_item() -> Node {
+        Node::ProviderItem {
+            id: None,
+            origin_protocol: ProviderProtocol::Responses,
+            role: OrdinaryRole::Assistant,
+            item_type: "raw".to_owned(),
+            body: json!({"ok": true}),
+            extra_body: HashMap::new(),
+        }
+    }
+
+    fn assert_flushes_to(action: NodeAction, expected: Vec<Node>) {
+        match action {
+            NodeAction::FlushAndNew(nodes) => assert_eq!(nodes, expected),
+            NodeAction::Append => panic!("expected flush action"),
+        }
+    }
+}
