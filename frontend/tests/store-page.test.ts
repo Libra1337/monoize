@@ -118,8 +118,9 @@ describe("Store user pages", () => {
   test("polls a pending payment every two seconds and revalidates account data", () => {
     expect(storeSource).toContain("storeApi.getOrder(pollingOrderId)");
     expect(storeSource).toContain("2_000");
-    expect(storeSource).toContain("refreshUser()");
-    expect(storeSource).toContain("catalog.mutate()");
+    // The terminal branch of the poll revalidates the order list and the wallet
+    // balance. `catalog.mutate()` belongs to the retry handler, not to polling.
+    expect(storeSource).toContain("await Promise.all([mutate(ORDERS_KEY), refreshUser()])");
     expect(storeSource).toContain("shouldContinueCheckoutPolling({");
     expect(storeSource).toContain("paymentState: order.payment_state");
     expect(ordersSource).toContain("isPaymentPollingTerminal(current.payment_state)");
