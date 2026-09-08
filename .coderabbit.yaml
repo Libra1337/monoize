@@ -9,6 +9,7 @@ reviews:
   review_status: true
   path_filters:
     - "!**/Cargo.lock"
+    - "!**/bun.lock"
     - "!**/package-lock.json"
     - "!**/pnpm-lock.yaml"
     - "!**/dist/**"
