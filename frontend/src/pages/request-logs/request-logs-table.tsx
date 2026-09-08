@@ -1,0 +1,124 @@
+import type { ComponentProps } from 'react'
+import { TableVirtuoso } from 'react-virtuoso'
+import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/ui/empty-state'
+import type { RequestLog } from '@/lib/api'
+import { LogRowCells } from './log-row-cells'
+
+interface RequestLogsTableProps {
+	affinityTargetNames: ReadonlyMap<string, string>
+	isAdmin: boolean
+	isInitialLoading: boolean
+	logs: RequestLog[]
+	onLoadMore: () => void
+	onOpenCapture: (log: RequestLog) => void
+	onTooltipOpenChange: (tooltipId: string, open: boolean) => void
+	showIp: boolean
+	t: (key: string, options?: Record<string, unknown>) => string
+}
+
+const tableComponents = {
+	Table: (props: ComponentProps<'table'>) => (
+		<table
+			{...props}
+			className='w-full table-auto text-xs'
+			style={{ minWidth: '60rem' }}
+		/>
+	),
+	TableHead: (props: ComponentProps<'thead'>) => (
+		<thead {...props} className='[&_tr]:border-b' />
+	),
+	TableBody: (props: ComponentProps<'tbody'>) => (
+		<tbody {...props} className='[&_tr:last-child]:border-0' />
+	),
+	TableRow: (props: ComponentProps<'tr'>) => (
+		<tr
+			{...props}
+			className='h-11 border-b align-middle transition-colors hover:bg-muted/50'
+		/>
+	)
+}
+
+function RequestLogsTableHeader({ isAdmin, t }: Pick<RequestLogsTableProps, 'isAdmin' | 't'>) {
+	return (
+		<tr className='border-b bg-muted/30'>
+			<th className='w-[11rem] whitespace-nowrap py-1.5 pl-2 pr-2 text-left font-medium text-muted-foreground'>
+				{t('requestLogs.time')} / {t('requestLogs.requestId')}
+			</th>
+			<th className='min-w-[13.5rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
+				{t('requestLogs.model')}
+				{isAdmin ? ` / ${t('requestLogs.channel')}` : null}
+			</th>
+			<th className='min-w-24 whitespace-nowrap px-2 py-1.5 text-left font-medium text-muted-foreground'>
+				{isAdmin ? `${t('requestLogs.username')} / ` : null}
+				{t('requestLogs.tokenName')}
+			</th>
+			<th className='w-[10rem] text-left font-medium text-muted-foreground px-1 py-1.5 whitespace-nowrap'>
+				{t('requestLogs.duration')} / {t('requestLogs.ttfb')}
+			</th>
+			<th className='min-w-32 whitespace-nowrap px-2 py-1.5 text-right font-medium text-muted-foreground'>
+				{t('requestLogs.input')}
+			</th>
+			<th className='min-w-24 whitespace-nowrap px-2 py-1.5 text-right font-medium text-muted-foreground'>
+				{t('requestLogs.output')}
+			</th>
+			<th className='min-w-[8.5rem] text-right font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
+				{t('requestLogs.cost')}
+			</th>
+			<th className='text-left font-medium text-muted-foreground pl-2 pr-2 py-1.5 whitespace-nowrap'>
+				{t('requestLogs.requestIp')}
+			</th>
+		</tr>
+	)
+}
+
+export function RequestLogsTable({
+	affinityTargetNames,
+	isAdmin,
+	isInitialLoading,
+	logs,
+	onLoadMore,
+	onOpenCapture,
+	onTooltipOpenChange,
+	showIp,
+	t
+}: RequestLogsTableProps) {
+	if (isInitialLoading) {
+		return (
+			<div className='p-4 space-y-1.5'>
+				{Array.from({ length: 24 }).map((_, i) => (
+					<Skeleton key={i} className='h-9 w-full' />
+				))}
+			</div>
+		)
+	}
+
+	if (logs.length === 0) {
+		return (
+			<EmptyState title={t('requestLogs.noLogs')} className='h-full px-4 py-0' />
+		)
+	}
+
+	return (
+		<TableVirtuoso
+			style={{ height: '100%', overflowX: 'auto' }}
+			data={logs}
+			computeItemKey={(_index, log) => log.id}
+			overscan={480}
+			endReached={onLoadMore}
+			components={tableComponents}
+			fixedHeaderContent={() => <RequestLogsTableHeader isAdmin={isAdmin} t={t} />}
+			itemContent={(_index, log) => (
+				<LogRowCells
+					affinityTargetNames={affinityTargetNames}
+					log={log}
+					isAdmin={isAdmin}
+					showIp={showIp}
+					t={t}
+					onOpenCapture={onOpenCapture}
+					onTooltipOpenChange={onTooltipOpenChange}
+				/>
+			)}
+		/>
+	)
+}
