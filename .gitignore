@@ -1,0 +1,16 @@
+/target
+/rehearsal/target
+/rehearsal/.postgres-data/
+/rehearsal/.postgres.log
+/data/
+.playwright-mcp
+frontend/playwright-report/
+frontend/test-results/
+.env
+.env.*
+deploy.sh
+.Sisyphus/
+.sisyphus/
+tests/e2e/.out/
+__pycache__/
+.worktrees/
