@@ -569,7 +569,10 @@ export function UsersPage() {
                     </DropdownMenu>
                   </div>
                 )}
-                {editUser?.role !== "super_admin" && (
+                {/* `editUser` must be narrowed here, not tested through `?.`. JSX props are
+                    evaluated while this page renders, before the Dialog decides to mount, so
+                    reading a field of a null `editUser` blanks the whole page. */}
+                {editUser !== null && editUser.role !== "super_admin" && (
                   <div className="space-y-2 rounded-xl border bg-muted/20 p-4">
                     <div>
                       <Label>{t("users.accountClass")}</Label>

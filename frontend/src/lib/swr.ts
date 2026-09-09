@@ -412,6 +412,9 @@ export async function createUserOptimistic(
     id: `temp-${Date.now()}`,
     username,
     role: role as User["role"],
+    // The server creates every user as standard, so the placeholder must match or the edit
+    // dialog renders an account class the row does not have.
+    account_class: "standard",
     enabled: true,
     created_at: new Date().toISOString(),
     last_login_at: undefined,

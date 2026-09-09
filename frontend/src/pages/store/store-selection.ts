@@ -150,7 +150,7 @@ export function paymentOptionId(channelId: string, method: EpayMethodKind | null
 }
 
 export function expandPaymentOptions(channels: StorePaymentChannel[]): StorePaymentOption[] {
-  return channels.flatMap((channel) => {
+  return channels.flatMap((channel): StorePaymentOption[] => {
     if (channel.adapter_kind !== "epay") {
       return [{
         id: paymentOptionId(channel.id, null),
