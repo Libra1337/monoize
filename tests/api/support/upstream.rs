@@ -2046,6 +2046,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                     Ok::<_, Infallible>(
                         Event::default().event("error").data(
                             json!({
+                                "type": "error",
                                 "code": "mock_stream_error",
                                 "message": "mock streaming error"
                             })
@@ -2062,6 +2063,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                     Ok::<_, Infallible>(
                         Event::default().event("error").data(
                             json!({
+                                "type": "error",
                                 "code": "mock_stream_error",
                                 "message": "mock streaming error"
                             })
@@ -2184,7 +2186,18 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             events.push(Ok::<_, Infallible>(
                 Event::default()
                     .event("response.output_text.delta")
-                    .data(json!({ "delta": text }).to_string()),
+                    // Every Responses SSE payload carries its own `type`; the decoder reads the
+                    // data object, not the `event:` line, so a payload without it is rejected.
+                    .data(
+                        json!({
+                            "type": "response.output_text.delta",
+                            "item_id": "msg_mock",
+                            "output_index": 0,
+                            "content_index": 0,
+                            "delta": text
+                        })
+                        .to_string(),
+                    ),
             ));
             if emit_usage {
                 events.push(Ok::<_, Infallible>(
@@ -5110,7 +5123,10 @@ async fn create_test_provider_in_new_group(
             confirm_public_exposure: true,
             name: format!("{name}-group"),
             description: String::new(),
-            user_selectable: false,
+            // `user_selectable` is the wire alias of `is_public`. A private Group is routable
+            // only for an Admin or an explicitly granted user, so a test Provider placed in a
+            // private Group would be filtered out of every request's eligible set.
+            user_selectable: true,
             sort_order: 0,
             account_class: Default::default(),
         })
