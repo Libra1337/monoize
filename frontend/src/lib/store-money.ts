@@ -281,3 +281,18 @@ export function formatPerMillionTokenRate(
   }
   return `${formatMinor(minor.toString(), currency)} / 1M tokens`;
 }
+
+/**
+ * Coin minor units a balance order delivered, or null when the order is not a balance order.
+ *
+ * A custom-amount recharge reuses a fixed tier's product row as a carrier, so the snapshot's
+ * `name` and `price_minor` describe that carrier rather than the amount bought. Only the
+ * balance block states what the buyer received (SB-UI-10D).
+ */
+export function balanceOrderReceivedMinor(product: {
+  kind: string;
+  balance: { actual_received_minor: string } | null;
+}): string | null {
+  if (product.kind !== "balance" || !product.balance) return null;
+  return product.balance.actual_received_minor;
+}

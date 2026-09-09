@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   addMinor,
+  balanceOrderReceivedMinor,
   convertMinor,
   formatMinor,
   formatNanoUsd,
@@ -56,5 +57,41 @@ describe("Store money helpers", () => {
     expect(formatPerMillionTokenRate("1500", "USD", "7")).toBe("$1.50 / 1M tokens");
     expect(formatPerMillionTokenRate("1500", "CNY", "7")).toBe("¥10.50 / 1M tokens");
     expect(formatPerMillionTokenRate("0.5", "USD", "7")).toBe("$0.00 / 1M tokens");
+  });
+
+  // SB-UI-10D, reproduced from the production order that displayed "50" for a 1 CNY custom
+  // recharge. The carrier product's name and price describe the tier whose row the custom
+  // amount borrowed, so only the balance block states what the buyer received.
+  test("reads what a balance order delivered rather than its carrier product", () => {
+    const customRecharge = {
+      kind: "balance",
+      name: "50",
+      price_minor: "5000",
+      balance: {
+        recharge_minor: "100",
+        bonus_minor: "0",
+        actual_received_minor: "100",
+      },
+    };
+    expect(balanceOrderReceivedMinor(customRecharge)).toBe("100");
+    expect(formatMinor(balanceOrderReceivedMinor(customRecharge)!, "CNY")).toBe("¥1.00");
+
+    // A fixed tier keeps working, and a bonus counts toward what was received.
+    const fixedTier = {
+      kind: "balance",
+      name: "100",
+      price_minor: "10000",
+      balance: {
+        recharge_minor: "10000",
+        bonus_minor: "2000",
+        actual_received_minor: "12000",
+      },
+    };
+    expect(balanceOrderReceivedMinor(fixedTier)).toBe("12000");
+
+    // A plan order has no balance block and keeps its own name as the title.
+    expect(
+      balanceOrderReceivedMinor({ kind: "plan", name: "Pro monthly", balance: null }),
+    ).toBeNull();
   });
 });

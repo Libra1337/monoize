@@ -18,7 +18,11 @@ import { useAuth } from "@/hooks/use-auth";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { storeApi, type StoreOrder } from "@/lib/store-api";
-import { formatCoinFromMinorForCurrency } from "@/lib/store-money";
+import {
+  balanceOrderReceivedMinor,
+  formatCoinFromMinor,
+  formatCoinFromMinorForCurrency,
+} from "@/lib/store-money";
 import { isPaymentPollingTerminal } from "./store/checkout-state";
 
 const ORDERS_KEY = "/api/dashboard/store/orders";
@@ -49,6 +53,22 @@ export function OrdersPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { currency } = useStoreCurrency();
   const [selectedOrder, setSelectedOrder] = useState<StoreOrder | null>(null);
   const orders = useSWR(ORDERS_KEY, () => storeApi.listOrders(100));
+  // SB-UI-10D: a balance order is titled by what it delivered, not by the carrier product
+  // whose row a custom amount borrowed. The Coin figure does not follow the display-currency
+  // toggle, because the Coin credited is fixed regardless of the currency the buyer views.
+  const orderTitle = (order: StoreOrder) => {
+    const received = balanceOrderReceivedMinor(order.quote.product);
+    if (received === null) return order.quote.product.name;
+    const cnyRate = exchangeRate.data?.cny_per_usd;
+    if (order.quote.product.price_currency !== "CNY" && !cnyRate) {
+      return order.quote.product.name;
+    }
+    return (
+      <CoinAmount
+        value={formatCoinFromMinor(received, order.quote.product.price_currency, cnyRate ?? "1")}
+      />
+    );
+  };
   const formatOrderAmount = (order: StoreOrder) => {
     const cnyRate = exchangeRate.data?.cny_per_usd;
     if (!cnyRate) return "--";
@@ -127,7 +147,7 @@ export function OrdersPage({ embedded = false }: { embedded?: boolean } = {}) {
             <Card key={order.id} className="rounded-2xl">
               <CardContent className="grid gap-4 p-5 sm:grid-cols-[minmax(0,1.5fr)_minmax(8rem,1fr)_auto] sm:items-center">
                 <div className="min-w-0">
-                  <p className="truncate font-semibold">{order.quote.product.name}</p>
+                  <p className="truncate font-semibold">{orderTitle(order)}</p>
                   <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
                     {order.order_number}
                   </p>
@@ -177,7 +197,7 @@ export function OrdersPage({ embedded = false }: { embedded?: boolean } = {}) {
             <dl className="grid gap-3 text-sm">
               <div className="flex justify-between gap-4 border-b pb-3">
                 <dt className="text-muted-foreground">{t("store.orders.product")}</dt>
-                <dd className="text-right font-medium">{selectedOrder.quote.product.name}</dd>
+                <dd className="text-right font-medium">{orderTitle(selectedOrder)}</dd>
               </div>
               <div className="flex justify-between gap-4 border-b pb-3">
                 <dt className="text-muted-foreground">{t("store.orders.amount")}</dt>

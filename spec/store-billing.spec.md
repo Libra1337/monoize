@@ -899,6 +899,17 @@ MUST display a success indicator for 1800 ms and then close. When polling reache
 terminal condition (expiry, failure, or a 404 order), the dialog MUST close immediately
 without a success indicator.
 
+SB-UI-10D. In the order history list and in every order detail surface, an order whose
+`quote.product.kind` is `balance` MUST title the order with the Coin amount derived from
+`quote.product.balance.actual_received_minor`, denominated in `quote.product.price_currency`.
+It MUST NOT title the order with `quote.product.name`. An order of any other kind MUST title
+the order with `quote.product.name`.
+
+A custom-amount recharge reuses a fixed tier's product row as its carrier, so the snapshot's
+`name` and `price_minor` describe the carrier tier rather than the amount bought. Titling a
+1 CNY custom recharge with the carrier's name displays `50` for an order that delivered 1
+Coin. The balance block is the only part of the snapshot that states what the buyer received.
+
 SB-UI-11. Store Management MUST have Products, Payment Channels, Orders, and Redemption Codes child pages with an animated active indicator.
 
 SB-UI-12. Orders MUST show payment and fulfillment state separately. It MUST expose query, verified event reprocess, close, refund, dispute, hold, and case actions according to role and state. Close MUST be hidden when another Attempt for the order has state `created` or `presented`. Each user-triggered order or refund mutation MUST use an SWR optimistic cache value, roll back that value on error, apply the returned record to the cache, and then revalidate order detail and list data. A successful refund query MUST clear the reauthentication password. It MUST NOT show manual Complete.

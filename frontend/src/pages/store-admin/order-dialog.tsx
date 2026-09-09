@@ -20,7 +20,7 @@ import type {
   StorePaymentAttempt,
   StoreRefundRecord,
 } from "@/lib/store-api";
-import { formatMinor } from "@/lib/store-money";
+import { balanceOrderReceivedMinor, formatMinor } from "@/lib/store-money";
 import { canCloseAttempt } from "./order-actions";
 
 interface OrderDialogProps {
@@ -52,6 +52,23 @@ function canCreateRefund(order: StoreOrder): boolean {
 
 function canQueryRefund(refund: StoreRefundRecord): boolean {
   return refund.state === "created" || refund.state === "pending";
+}
+
+/**
+ * Labels an order by what it delivered rather than by the product row it borrowed.
+ *
+ * SB-UI-10D: a custom-amount recharge carries a fixed tier's name, so labelling by name shows
+ * the carrier tier instead of the amount bought. Admin sees the settled currency amount here
+ * rather than Coin, matching the other money fields in this dialog.
+ */
+function productLabel(product: {
+  kind: string;
+  name: string;
+  price_currency: "CNY" | "USD";
+  balance: { actual_received_minor: string } | null;
+}): string {
+  const received = balanceOrderReceivedMinor(product);
+  return received === null ? product.name : formatMinor(received, product.price_currency);
 }
 
 function DetailItem({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
@@ -165,7 +182,7 @@ export function OrderDialog({
                   {t("store.admin.orders.fulfillment")}
                 </h3>
                 <dl className="grid gap-3 sm:grid-cols-2">
-                  <DetailItem label={t("store.admin.orders.product")} value={detail.order.quote.product.name} />
+                  <DetailItem label={t("store.admin.orders.product")} value={productLabel(detail.order.quote.product)} />
                   <DetailItem
                     label={t("store.admin.orders.productKind")}
                     value={t(`store.admin.orders.productKinds.${detail.order.product_kind}`)}
