@@ -110,21 +110,54 @@ const roleVariants = {
   user: "secondary" as const,
 };
 
+/**
+ * Admin list groupings (UM-S1).
+ *
+ * The first three mirror the account classes. Sales agents are ordinary standard-class user
+ * accounts, so without a grouping of their own they sit indistinguishable among the standard
+ * users. This grouping is presentational only: it changes no permission, class, or route.
+ */
+const USER_SCOPES = ["standard", "enterprise", "private", "sales"] as const;
+
+type UserScope = (typeof USER_SCOPES)[number];
+
+/** Assigns a user to exactly one grouping, with agents taking precedence over their class. */
+function scopeOf(user: User): UserScope {
+  if (user.is_sales_agent) return "sales";
+  return user.account_class;
+}
+
 export function UsersPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
   const { data: users = [], isLoading } = useUsers();
+  const [scope, setScope] = useState<UserScope>("standard");
   const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
   const { data: billingPlans = [] } = useBillingPlans();
   const defaultGroupId = useMemo(
     () => groups.find((group) => group.is_default)?.id ?? "",
     [groups]
   );
+  const scopedUsers = useMemo(
+    () => users.filter((user) => scopeOf(user) === scope),
+    [users, scope],
+  );
+  const scopeCounts = useMemo(() => {
+    const counts: Record<UserScope, number> = {
+      standard: 0,
+      enterprise: 0,
+      private: 0,
+      sales: 0,
+    };
+    for (const user of users) counts[scopeOf(user)] += 1;
+    return counts;
+  }, [users]);
+
   const todayTotals = useMemo(() => {
     let calls = 0;
     let cost = 0n;
-    for (const user of users) {
+    for (const user of scopedUsers) {
       calls += user.today_calls ?? 0;
       const raw = user.today_cost_nano_usd ?? "0";
       if (isSignedIntegerString(raw)) {
@@ -132,7 +165,7 @@ export function UsersPage() {
       }
     }
     return { calls, cost };
-  }, [users]);
+  }, [scopedUsers]);
   const [createOpen, setCreateOpen] = useState(false);
   const [editUser, setEditUser] = useState<User | null>(null);
   const [formData, setFormData] = useState({
@@ -732,19 +765,33 @@ export function UsersPage() {
       >
         <DataTableShell
           toolbar={(
-            <div>
-              <h2 className="text-base font-semibold">{t("users.allUsers")}</h2>
+            <div className="flex flex-col gap-3">
+              <Tabs value={scope} onValueChange={(value) => setScope(value as UserScope)}>
+                <TabsList className="grid h-10 w-full grid-cols-4 rounded-lg sm:w-[32rem]">
+                  {USER_SCOPES.map((value) => (
+                    <TabsTrigger key={value} value={value} className="gap-1.5">
+                      {t(`users.scopes.${value}`)}
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {scopeCounts[value]}
+                      </span>
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+              <div>
+              <h2 className="text-base font-semibold">{t(`users.scopes.${scope}`)}</h2>
               <p className="text-sm text-muted-foreground">
-                {t("users.usersTotal", { count: users.length })}
+                {t("users.usersTotal", { count: scopedUsers.length })}
                 {" · "}
                 {t("users.todaySummary", {
                   spend: formatNanoUsd(todayTotals.cost, 2),
                   calls: todayTotals.calls.toLocaleString(),
                 })}
               </p>
+              </div>
             </div>
           )}
-          isEmpty={users.length === 0}
+          isEmpty={scopedUsers.length === 0}
           emptyState={(
             <EmptyState
               icon={<UserIcon className="h-12 w-12" />}
@@ -755,7 +802,7 @@ export function UsersPage() {
         >
             <TableVirtuoso
               style={{ height: "calc(100dvh - 280px)", minHeight: 400, overflowX: "auto" }}
-              data={users}
+              data={scopedUsers}
               components={{
                 Table: (props) => (
                   <table

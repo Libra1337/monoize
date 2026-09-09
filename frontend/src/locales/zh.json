@@ -1012,7 +1012,13 @@
     "accountClassDeleteKeysWarning": "将 {{username}} 切换为{{accountClass}}。此操作会永久删除该用户现有的全部 API Key。",
     "accountClassChanged": "账户类型已切换",
     "accountClass": "账户类型",
-    "accountClassDescription": "切换类型会将用户迁移到相互隔离的模型目录。"
+    "accountClassDescription": "切换类型会将用户迁移到相互隔离的模型目录。",
+    "scopes": {
+      "standard": "普通用户 / 管理员",
+      "enterprise": "企业分组",
+      "private": "私有",
+      "sales": "销售"
+    }
   },
   "apiKeys": {
     "title": "令牌管理",

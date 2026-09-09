@@ -1012,7 +1012,13 @@
     "accountClassDeleteKeysWarning": "Change {{username}} to {{accountClass}}. This action permanently deletes every existing API Key for this user.",
     "accountClassChanged": "Account class changed",
     "accountClass": "Account class",
-    "accountClassDescription": "Changing the class moves this user to an isolated catalog."
+    "accountClassDescription": "Changing the class moves this user to an isolated catalog.",
+    "scopes": {
+      "standard": "Users & Admins",
+      "enterprise": "Enterprise",
+      "private": "Private",
+      "sales": "Sales"
+    }
   },
   "apiKeys": {
     "title": "Token Management",

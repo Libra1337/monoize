@@ -177,6 +177,25 @@ isolate an account's catalogue, not to withhold dashboard features from it.
 DL5b. The expanded, collapsed, and mobile sidebar brand link MUST target `/`. The mobile
 brand link MUST invoke the existing navigation-close callback.
 
+DL-UM1. The Admin user list MUST offer exactly four groupings, in this order: standard users
+and administrators, enterprise, private, and sales. Exactly one grouping MUST be visible at a
+time, and each MUST display the number of users it contains.
+
+DL-UM2. A user MUST belong to exactly one grouping. A user whose `is_sales_agent` is true
+MUST belong to the sales grouping regardless of `account_class`, and MUST NOT appear in any
+other grouping. Every other user MUST belong to the grouping matching their `account_class`.
+
+A sales agent is an ordinary standard-class user account, so without a grouping of its own it
+is indistinguishable from a regular user in the list.
+
+DL-UM3. The grouping MUST be presentational only. Selecting a grouping MUST NOT change any
+user's `account_class`, role, permissions, or routing, and the sales grouping MUST NOT be
+offered as a target of the account-class switch, which continues to offer exactly the three
+account classes.
+
+DL-UM4. The per-day usage summary shown above the list MUST aggregate only the users of the
+visible grouping, so the figure matches the rows displayed beneath it.
+
 DL6. Sidebar admin navigation group (visible only when user role is `admin` or `super_admin`) MUST include exactly:
 
 - `/dashboard/admin`

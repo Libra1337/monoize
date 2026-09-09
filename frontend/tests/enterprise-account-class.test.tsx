@@ -103,6 +103,36 @@ describe("Enterprise navigation", () => {
     expect(condition).toContain("navItems");
   });
 
+  // DL-UM1 and DL-UM2: sales agents are ordinary standard-class accounts, so a grouping that
+  // filtered on account_class alone would leave them mixed in with regular users. The
+  // precedence in scopeOf is what keeps each user in exactly one grouping.
+  test("groups the user list four ways and keeps agents out of the other three", () => {
+    expect(usersSource).toContain('const USER_SCOPES = ["standard", "enterprise", "private", "sales"]');
+
+    const start = usersSource.indexOf("function scopeOf");
+    expect(start).toBeGreaterThan(-1);
+    const body = usersSource.slice(start, usersSource.indexOf("}", start));
+    // The agent check must come first, or an enterprise-class agent lands in enterprise.
+    expect(body.indexOf("is_sales_agent")).toBeLessThan(body.indexOf("account_class"));
+
+    // DL-UM3: the account-class switch keeps offering three classes, not four.
+    expect(usersSource).toContain('["standard", "enterprise", "private"]');
+    const switchStart = usersSource.indexOf("setAccountClassTarget");
+    expect(usersSource.slice(0, switchStart)).not.toContain('next: "sales"');
+
+    // DL-UM4: the summary counts the visible grouping.
+    expect(usersSource).toContain("for (const user of scopedUsers)");
+    expect(usersSource).toContain("data={scopedUsers}");
+  });
+
+  test("labels every user grouping in all locales", () => {
+    for (const locale of locales) {
+      for (const scope of ["standard", "enterprise", "private", "sales"]) {
+        expect(locale.users.scopes[scope]).toBeString();
+      }
+    }
+  });
+
   // GR-E1a: the third class must reach every admin scope selector, or a private Group and
   // its Providers become unmanageable from the dashboard.
   test("offers the private class wherever account class is selected", () => {

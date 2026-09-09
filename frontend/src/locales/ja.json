@@ -1012,7 +1012,13 @@
     "accountClassDeleteKeysWarning": "{{username}} を{{accountClass}}に変更します。この操作は、このユーザーの既存 API Key をすべて完全に削除します。",
     "accountClassChanged": "アカウント種別を変更しました",
     "accountClass": "アカウント種別",
-    "accountClassDescription": "種別を変更すると、ユーザーは分離されたモデルカタログへ移動します。"
+    "accountClassDescription": "種別を変更すると、ユーザーは分離されたモデルカタログへ移動します。",
+    "scopes": {
+      "standard": "一般ユーザー / 管理者",
+      "enterprise": "エンタープライズ",
+      "private": "プライベート",
+      "sales": "販売"
+    }
   },
   "apiKeys": {
     "title": "トークン管理",

@@ -1012,7 +1012,13 @@
     "accountClassDeleteKeysWarning": "將 {{username}} 切換為{{accountClass}}。此操作會永久刪除該使用者現有的全部 API Key。",
     "accountClassChanged": "帳戶類型已切換",
     "accountClass": "帳戶類型",
-    "accountClassDescription": "切換類型會將使用者移到相互隔離的模型目錄。"
+    "accountClassDescription": "切換類型會將使用者移到相互隔離的模型目錄。",
+    "scopes": {
+      "standard": "一般使用者 / 管理員",
+      "enterprise": "企業分組",
+      "private": "私有",
+      "sales": "銷售"
+    }
   },
   "apiKeys": {
     "title": "Token 管理",
