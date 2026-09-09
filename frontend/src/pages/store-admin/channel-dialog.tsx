@@ -71,10 +71,16 @@ const EMPTY_CREDENTIAL: CredentialDraft = {
   wxpayEnabled: false,
 };
 
+/// Either the payload to send, or the translation key naming the field that blocked it. A
+/// single `null` return hid which of several unrelated causes actually applied.
+type CredentialDraftResult =
+  | { payload: PaymentCredentialPayload; error?: undefined }
+  | { payload?: undefined; error: string };
+
 function buildCredential(
   adapterKind: PaymentAdapterKind,
   draft: CredentialDraft,
-): PaymentCredentialPayload | null {
+): CredentialDraftResult {
   if (adapterKind === "stripe") {
     const values = [
       draft.secretKey,
@@ -83,34 +89,47 @@ function buildCredential(
       draft.apiVersion,
       draft.accountId,
     ].map((value) => value.trim());
-    if (values.some((value) => !value)) return null;
+    if (values.some((value) => !value)) {
+      return { error: "store.admin.channels.credential.errorFieldsRequired" };
+    }
     return {
-      secret_key: values[0],
-      publishable_key: values[1],
-      webhook_signing_secret: values[2],
-      api_version: values[3],
-      account_id: values[4],
-      live_mode: draft.liveMode,
+      payload: {
+        secret_key: values[0],
+        publishable_key: values[1],
+        webhook_signing_secret: values[2],
+        api_version: values[3],
+        account_id: values[4],
+        live_mode: draft.liveMode,
+      },
     };
   }
   if (adapterKind === "epay") {
     const values = [draft.gatewayBaseUrl, draft.merchantId, draft.merchantKey]
       .map((value) => value.trim());
-    if (values.some((value) => !value)) return null;
+    if (values.some((value) => !value)) {
+      return { error: "store.admin.channels.credential.errorFieldsRequired" };
+    }
     // The gateway must be an absolute origin with a trailing slash so `mapi.php` and
-    // `api.php` resolve against it.
+    // `api.php` resolve against it. HTTPS is required because the query endpoints send the
+    // merchant secret as a `key` query parameter.
     const gateway = values[0].endsWith("/") ? values[0] : `${values[0]}/`;
-    if (!/^https?:\/\/[^/?#]+\/$/.test(gateway)) return null;
-    if (!draft.alipayEnabled && !draft.wxpayEnabled) return null;
+    if (!/^https:\/\/[^/?#]+\/$/.test(gateway)) {
+      return { error: "store.admin.channels.credential.errorGatewayInvalid" };
+    }
+    if (!draft.alipayEnabled && !draft.wxpayEnabled) {
+      return { error: "store.admin.channels.credential.errorMethodRequired" };
+    }
     return {
-      gateway_base_url: gateway,
-      merchant_id: values[1],
-      merchant_key: values[2],
-      alipay_enabled: draft.alipayEnabled,
-      wxpay_enabled: draft.wxpayEnabled,
+      payload: {
+        gateway_base_url: gateway,
+        merchant_id: values[1],
+        merchant_key: values[2],
+        alipay_enabled: draft.alipayEnabled,
+        wxpay_enabled: draft.wxpayEnabled,
+      },
     };
   }
-  return null;
+  return { error: "store.admin.channels.credential.invalid" };
 }
 
 function ChannelMark({ adapterKind }: { adapterKind: PaymentAdapterKind }) {
@@ -212,11 +231,16 @@ export function ChannelDialog({ open, channel, saving, onOpenChange, onSave, onS
   const submitCredential = async () => {
     if (!channel || adapterKind === "http") return;
     setError(null);
-    const payload = buildCredential(adapterKind, credential);
-    if (!payload || !currentPassword) {
-      setError(t("store.admin.channels.credential.invalid"));
+    const built = buildCredential(adapterKind, credential);
+    if (built.error !== undefined) {
+      setError(t(built.error));
       return;
     }
+    if (!currentPassword) {
+      setError(t("store.admin.channels.credential.errorPasswordRequired"));
+      return;
+    }
+    const payload = built.payload;
     setCredentialSaving(true);
     try {
       await onSaveCredential(channel.id, payload, currentPassword);

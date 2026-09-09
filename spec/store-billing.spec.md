@@ -965,6 +965,14 @@ SB-EP-10. The EPay adapter MUST support merchant validation, order query, full r
 
 SB-EP-11. The gateway URL MUST reject credentials in the URL, loopback, link-local, and private destinations. Outbound requests MUST reject a cross-host redirect and MUST validate resolved addresses before each connection.
 
+SB-C-37. The required merchant capability set depends on the adapter kind. A Channel MUST prove
+`payment_query`, `refund`, `refund_query`, and `settlement_report` as `supported`, except that
+an `epay` Channel MUST prove only `payment_query` and `refund`. The EPay protocol defines no
+refund-status query, and settlement retrieval exists only on gateways that implement
+`act=settle`, so requiring either as `supported` would make every EPay Channel permanently
+unavailable. An Admin MAY still record those two capabilities as `unsupported` or `manual`, and
+such a record MUST NOT block availability.
+
 SB-EP-10A. The EPay refund protocol defines `code = 1` as success and every other value as failure without defining an error-code taxonomy. A refund response with HTTP 200 and `code = 1` MUST map to a succeeded refund. A refund response with HTTP 200 and any other `code` MUST map to an ambiguous refund and MUST remain reconcilable. It MUST NOT map to a terminal refund failure, because an undocumented code can report a transient gateway condition, an unsynchronized order, or an already-refunded order, and a terminal rejection would abandon a refundable amount with no later correction path.
 
 SB-EP-11A. The gateway URL scheme MUST be `https`. An `http` gateway URL MUST fail configuration validation. The EPay query endpoints (`act=query`, `act=order`, `act=orders`, `act=settle`, `act=paytype`) send the merchant secret as the `key` query parameter, so an `http` gateway would expose that secret in plaintext to every intermediate node. The merchant secret MUST NOT be moved to a POST body to permit `http`, because the documented EPay protocol defines those endpoints as GET.

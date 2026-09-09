@@ -632,7 +632,11 @@
 					"merchantKey": "商戶金鑰",
 					"alipayEnabled": "啟用支付寶方式",
 					"wxpayEnabled": "啟用微信支付方式",
-					"epayCnyOnly": "易支付僅接受人民幣訂單。美元結帳請使用 Stripe。"
+					"epayCnyOnly": "易支付僅接受人民幣訂單。美元結帳請使用 Stripe。",
+					"errorFieldsRequired": "請填寫全部憑證欄位。",
+					"errorGatewayInvalid": "閘道根位址必須以 https 開頭且不帶路徑，例如 https://pay.example.com/。",
+					"errorMethodRequired": "至少啟用一種付款方式。",
+					"errorPasswordRequired": "請輸入目前管理員密碼。"
 				},
 				"deleteConfirm": "確定刪除 {{name}}？"
 			},

@@ -30,7 +30,15 @@ describe("EPay Store adapter", () => {
     expect(channelSource).toContain("merchant_key: values[2]");
     expect(channelSource).toContain("alipay_enabled: draft.alipayEnabled");
     expect(channelSource).toContain("wxpay_enabled: draft.wxpayEnabled");
-    expect(channelSource).toContain("if (!draft.alipayEnabled && !draft.wxpayEnabled) return null;");
+    // The gateway must be HTTPS, because the query endpoints carry the merchant secret in the
+    // query string. The form must reject each cause with its own message instead of one
+    // generic "invalid" for a missing field, a bad URL, a missing method, or no password.
+    expect(channelSource).toContain("/^https:");
+    expect(channelSource).not.toContain("/^https?:");
+    expect(channelSource).toContain("credential.errorMethodRequired");
+    expect(channelSource).toContain("credential.errorGatewayInvalid");
+    expect(channelSource).toContain("credential.errorFieldsRequired");
+    expect(channelSource).toContain("credential.errorPasswordRequired");
     // The merchant secret is entered as a password field and never prefilled.
     expect(channelSource).toContain('id="store-epay-key"');
     expect(channelSource).toContain('type="password"');

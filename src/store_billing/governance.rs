@@ -19,12 +19,25 @@ use crate::db::DbPool;
 
 pub const CURRENT_STORE_PAYMENT_TERMS_VERSION: &str = "2026-08-28";
 
+/// Every capability the governance model knows about. A capability outside this list is not
+/// a recognised verification target.
 const REQUIRED_CAPABILITIES: [&str; 4] = [
     "payment_query",
     "refund",
     "refund_query",
     "settlement_report",
 ];
+
+/// SB-C-37: a Channel only has to prove the capabilities its protocol can actually perform.
+/// The EPay protocol has no refund-status query at all, and settlement retrieval exists only
+/// on gateways that implement `act=settle`, so demanding a `supported` verification for those
+/// two would leave every EPay Channel permanently unavailable.
+fn required_capabilities(adapter_kind: &str) -> &'static [&'static str] {
+    match adapter_kind {
+        "epay" => &["payment_query", "refund"],
+        _ => &REQUIRED_CAPABILITIES,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PaymentGovernanceStore {
@@ -893,7 +906,7 @@ fn evaluate_snapshot_channel(
         Some(Some(version)) if version == CURRENT_STORE_PAYMENT_TERMS_VERSION => {}
         Some(_) => reasons.push("compliance_terms_outdated".to_string()),
     }
-    for capability in REQUIRED_CAPABILITIES {
+    for capability in required_capabilities(adapter_kind).iter().copied() {
         let key = (channel_id.to_string(), capability.to_string());
         let Some(row) = snapshot.capabilities.get(&key) else {
             reasons.push(format!("capability_{capability}_missing"));
@@ -1471,4 +1484,35 @@ fn timestamp(value: DateTime<Utc>) -> String {
 
 fn storage(error: impl ToString) -> StoreBillingError {
     StoreBillingError::Storage(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{REQUIRED_CAPABILITIES, required_capabilities};
+
+    /// SB-C-37: a Channel must only prove the capabilities its protocol can perform. The EPay
+    /// protocol has no refund-status query, and settlement retrieval is gateway-optional, so
+    /// requiring a `supported` verification for either would leave every EPay Channel
+    /// permanently unavailable no matter how the Admin configures it.
+    #[test]
+    fn epay_requires_only_the_capabilities_its_protocol_provides() {
+        assert_eq!(required_capabilities("epay"), &["payment_query", "refund"]);
+        for capability in ["refund_query", "settlement_report"] {
+            assert!(
+                !required_capabilities("epay").contains(&capability),
+                "{capability} cannot be required for EPay"
+            );
+            // The capability stays a recognised verification target, so an Admin may still
+            // record it as unsupported or manual.
+            assert!(REQUIRED_CAPABILITIES.contains(&capability));
+        }
+    }
+
+    /// Stripe performs all four, so its gate is unchanged.
+    #[test]
+    fn other_adapters_keep_the_full_capability_gate() {
+        for adapter in ["stripe", "http", "unknown"] {
+            assert_eq!(required_capabilities(adapter), &REQUIRED_CAPABILITIES);
+        }
+    }
 }
