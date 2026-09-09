@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
+import { formatCoinFromNanoUsdForCurrency } from "../src/lib/store-money";
 
 function source(relativePath: string): string {
   const url = new URL(relativePath, import.meta.url);
@@ -98,6 +99,18 @@ describe("Dashboard navigation", () => {
     expect(adminUsageSource).toContain('const isAdmin = user?.role === "super_admin" || user?.role === "admin"');
     expect(adminUsageSource).toContain('useStoreExchangeRate(currency === "CNY" && isAdmin)');
     expect(adminUsageSource).toContain("{isAdmin ? (");
+    // Only the CNY branch consumes the rate, so a USD administrator must render a
+    // real cost rather than waiting on a request that is never made.
+    expect(adminUsageSource).toContain('const needsRate = currency === "CNY"');
+    expect(adminUsageSource).toContain("if (needsRate && !cnyPerUsd) return");
+    expect(adminUsageSource).toContain("isAdmin && needsRate && !cnyPerUsd && exchangeRate.isLoading");
+  });
+
+  test("formats administrator costs in both display currencies", () => {
+    // The USD branch returns before reading the rate, so an absent rate must not
+    // turn a USD administrator's cost into a placeholder.
+    expect(formatCoinFromNanoUsdForCurrency("2500000000", "USD", "0")).toBe("C2.50");
+    expect(formatCoinFromNanoUsdForCurrency("2500000000", "CNY", "7.200000")).toBe("C18.00");
   });
 
   test("supports selected ranges for authenticated rankings and a dedicated wallet page", () => {

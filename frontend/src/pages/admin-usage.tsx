@@ -61,8 +61,11 @@ export function AdminUsagePage() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
-  const exchangeRate = useStoreExchangeRate(true);
   const { currency } = useStoreCurrency();
+  // UR-2: the rate is consumed only by the administrator-only cost columns, and a
+  // non-admin session must not request an administrator endpoint. It is also only
+  // needed to convert into CNY.
+  const exchangeRate = useStoreExchangeRate(currency === "CNY" && isAdmin);
   const [range, setRange] = useState<UsageRankingRange>("24h");
   const { data, error, isLoading, isValidating, mutate } = useAdminUsageRanking(range);
   const [selected, setSelected] = useState<AdminUsageUserRow | null>(null);
@@ -96,9 +99,13 @@ export function AdminUsagePage() {
   if (!data) return null;
 
   const cnyPerUsd = exchangeRate.data?.cny_per_usd;
-  const moneyLoading = isAdmin && !cnyPerUsd && exchangeRate.isLoading;
+  // Only the CNY branch consumes the rate, so a USD administrator must not wait on
+  // it or fall back to a placeholder.
+  const needsRate = currency === "CNY";
+  const moneyLoading = isAdmin && needsRate && !cnyPerUsd && exchangeRate.isLoading;
   const formatCost = (nanoUsd: string | null | undefined) => {
-    return cnyPerUsd ? formatCoinFromNanoUsdForCurrency(nanoUsd ?? "0", currency, cnyPerUsd) : "—";
+    if (needsRate && !cnyPerUsd) return "—";
+    return formatCoinFromNanoUsdForCurrency(nanoUsd ?? "0", currency, cnyPerUsd ?? "0");
   };
   const rankingSummaryLabel = t("adminUsage.currentRank");
   const rankingSummaryValue = data.current_user_rank != null
