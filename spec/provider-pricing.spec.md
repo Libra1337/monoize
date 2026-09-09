@@ -478,3 +478,10 @@ requested Profile name, including every model-level override, is reachable from 
 account class MUST fail with HTTP `409` and code `pricing_profile_account_class_conflict`,
 and MUST NOT change any row. The Provider being updated is excluded from the reachability
 check, so keeping its own Profile is never a conflict.
+
+PP-ENT8. On update, `pricing_profile` and the Channel are optional and an absent field keeps
+its stored value. The PP-ENT7 check MUST therefore run against the effective post-update
+state: the requested Provider Profile when the request supplies one and the stored Profile
+otherwise, and the requested Channel model entries when the request supplies them and the
+stored model entries otherwise. A request that names only `group_id` MUST still be checked,
+because moving a Provider carries its stored Profile into the target account class.

@@ -749,22 +749,21 @@ async fn provider_account_class(
         })
 }
 
-async fn validate_pricing_profiles(
-    state: &AppState,
+/// Collects the Profile names one Provider state reaches: its own Profile plus every
+/// model-level override.
+fn reached_pricing_profiles(
     provider_profile: Option<&str>,
-    channel: Option<&crate::monoize_routing::CreateMonoizeChannelInput>,
-    account_class: crate::users::AccountClass,
-    exclude_provider_id: Option<&str>,
-) -> AppResult<()> {
-    let mut requested = HashSet::new();
+    models: Option<&HashMap<String, crate::monoize_routing::MonoizeModelEntry>>,
+) -> HashSet<String> {
+    let mut reached = HashSet::new();
     if let Some(profile) = provider_profile
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        requested.insert(profile.to_string());
+        reached.insert(profile.to_string());
     }
-    if let Some(channel) = channel {
-        requested.extend(channel.models.values().filter_map(|entry| {
+    if let Some(models) = models {
+        reached.extend(models.values().filter_map(|entry| {
             (entry.pricing_profile_mode == crate::monoize_routing::PricingProfileMode::Override)
                 .then(|| entry.pricing_profile_override.as_deref().map(str::trim))
                 .flatten()
@@ -772,6 +771,15 @@ async fn validate_pricing_profiles(
                 .map(str::to_string)
         }));
     }
+    reached
+}
+
+async fn validate_pricing_profiles(
+    state: &AppState,
+    requested: HashSet<String>,
+    account_class: crate::users::AccountClass,
+    exclude_provider_id: Option<&str>,
+) -> AppResult<()> {
     if requested.is_empty() {
         return Ok(());
     }
@@ -847,8 +855,7 @@ pub async fn create_provider(
     let account_class = provider_account_class(&state, &body.group_id).await?;
     validate_pricing_profiles(
         &state,
-        body.pricing_profile.as_deref(),
-        Some(&body.channel),
+        reached_pricing_profiles(body.pricing_profile.as_deref(), Some(&body.channel.models)),
         account_class,
         None,
     )
@@ -893,12 +900,20 @@ pub async fn update_provider(
         .as_deref()
         .unwrap_or(prev_provider.group_id.as_str());
     let account_class = provider_account_class(&state, target_group_id).await?;
+    // An absent field keeps its stored value, so the check must run against the state the
+    // Provider will have after the write. A request that carries only `group_id` still moves
+    // the stored Profile into the target account class.
+    let effective_profile = match body.pricing_profile.as_ref() {
+        Some(profile) => profile.as_deref(),
+        None => prev_provider.pricing_profile.as_deref(),
+    };
+    let effective_models = match body.channel.as_ref() {
+        Some(channel) => &channel.models,
+        None => &prev_provider.channel.models,
+    };
     validate_pricing_profiles(
         &state,
-        body.pricing_profile
-            .as_ref()
-            .and_then(|profile| profile.as_deref()),
-        body.channel.as_ref(),
+        reached_pricing_profiles(effective_profile, Some(effective_models)),
         account_class,
         Some(&provider_id),
     )
@@ -1828,7 +1843,12 @@ mod tests {
         // A Profile already reachable from the standard class is rejected for an Enterprise
         // Provider, even though the Profile name itself is registered.
         let conflict =
-            validate_pricing_profiles(&state, Some("openai"), None, AccountClass::Enterprise, None)
+            validate_pricing_profiles(
+                &state,
+                reached_pricing_profiles(Some("openai"), None),
+                AccountClass::Enterprise,
+                None,
+            )
                 .await
                 .expect_err("shared Profile must be rejected");
         assert_eq!(conflict.status, StatusCode::CONFLICT);
@@ -1850,8 +1870,7 @@ mod tests {
         .expect("Channel input decodes");
         let override_conflict = validate_pricing_profiles(
             &state,
-            None,
-            Some(&override_channel),
+            reached_pricing_profiles(None, Some(&override_channel.models)),
             AccountClass::Enterprise,
             None,
         )
@@ -1860,7 +1879,12 @@ mod tests {
         assert_eq!(override_conflict.status, StatusCode::CONFLICT);
 
         // A Profile used only inside the same class stays allowed.
-        validate_pricing_profiles(&state, Some("openai"), None, AccountClass::Standard, None)
+        validate_pricing_profiles(
+            &state,
+            reached_pricing_profiles(Some("openai"), None),
+            AccountClass::Standard,
+            None,
+        )
             .await
             .expect("same-class reuse is allowed");
 
@@ -1877,13 +1901,162 @@ mod tests {
             .expect("enterprise Provider creates");
         let reverse = validate_pricing_profiles(
             &state,
-            Some("openai-enterprise"),
-            None,
+            reached_pricing_profiles(Some("openai-enterprise"), None),
             AccountClass::Standard,
             None,
         )
         .await
         .expect_err("the reserved Enterprise Profile must be rejected for standard");
         assert_eq!(reverse.status, StatusCode::CONFLICT);
+    }
+
+    /// PP-ENT7: `pricing_profile` and `channel` are both optional on update, so a request that
+    /// carries only `group_id` still moves the stored Profile into the target account class.
+    /// The check must therefore run against the effective post-update state, not against the
+    /// request body alone.
+    #[tokio::test]
+    async fn group_only_provider_move_still_enforces_profile_disjointness() {
+        use crate::users::{AccountClass, CreateGroupInput};
+
+        let state = load_state_with_runtime(RuntimeConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_path: "/metrics".to_string(),
+            database_dsn: "sqlite::memory:".to_string(),
+            request_log_spool_dir: None,
+            node: crate::node_config::NodeSettings::primary_default(),
+        })
+        .await
+        .expect("state loads");
+
+        let mut groups = HashMap::new();
+        for (name, account_class) in [
+            ("standard-group", AccountClass::Standard),
+            ("enterprise-group", AccountClass::Enterprise),
+        ] {
+            let group = state
+                .user_store
+                .create_group(CreateGroupInput {
+                    confirm_public_exposure: true,
+                    name: name.to_string(),
+                    description: String::new(),
+                    user_selectable: true,
+                    sort_order: 0,
+                    account_class,
+                })
+                .await
+                .expect("Group creates");
+            groups.insert(name, group.id);
+        }
+        let standard_group = groups["standard-group"].clone();
+        let enterprise_group = groups["enterprise-group"].clone();
+
+        for profile in ["openai", "openai-override"] {
+            state
+                .billing_rate_store
+                .upsert_billing_rate(
+                    &format!("{profile}-input"),
+                    crate::billing_rate_store::UpsertBillingRateInput {
+                        source: Some("test".to_string()),
+                        pricing_profile: Some(profile.to_string()),
+                        model_pattern: Some(Some("gpt-shared".to_string())),
+                        provider_type: Some(Some("responses".to_string())),
+                        rate_kind: Some("token".to_string()),
+                        usage_class: Some("input_uncached".to_string()),
+                        unit: Some("token".to_string()),
+                        unit_price_nano_usd: Some("1".to_string()),
+                        context_tier: Some(None),
+                        service_tier: Some(None),
+                        modality: Some(None),
+                        cache_ttl: Some(None),
+                        match_json: Some(json!({})),
+                        priority: Some(0),
+                        enabled: Some(true),
+                        raw_json: Some(json!({ "fixture": true })),
+                    },
+                )
+                .await
+                .expect("rate creates");
+        }
+
+        let create = |name: &str, group_id: &str, profile: Option<&str>, override_profile: Option<&str>| {
+            let model = match override_profile {
+                Some(value) => json!({
+                    "redirect": null,
+                    "pricing_profile_mode": "override",
+                    "pricing_profile_override": value
+                }),
+                None => json!({ "redirect": null }),
+            };
+            serde_json::from_value::<CreateMonoizeProviderInput>(json!({
+                "name": name,
+                "confirm_public_exposure": true,
+                "group_id": group_id,
+                "pricing_profile": profile,
+                "channel": {
+                    "name": format!("{name}-channel"),
+                    "provider_type": "responses",
+                    "base_url": "https://example.com",
+                    "api_key": "secret",
+                    "models": { "gpt-shared": model }
+                }
+            }))
+            .expect("Provider input decodes")
+        };
+
+        // Each Profile is reached by two standard Providers, so moving one still leaves the
+        // Profile reachable from the standard class.
+        let mut movable = Vec::new();
+        for (name, profile, override_profile) in [
+            ("standard-a", Some("openai"), None),
+            ("standard-b", Some("openai"), None),
+            ("override-a", None, Some("openai-override")),
+            ("override-b", None, Some("openai-override")),
+        ] {
+            let provider = state
+                .monoize_store
+                .create_provider(create(name, &standard_group, profile, override_profile))
+                .await
+                .expect("standard Provider creates");
+            if name.ends_with("-a") {
+                movable.push(provider);
+            }
+        }
+
+        // A move that names only the target Group must be rejected for both reachability paths.
+        for provider in &movable {
+            let moved: UpdateMonoizeProviderInput =
+                serde_json::from_value(json!({ "group_id": enterprise_group }))
+                    .expect("update input decodes");
+            assert!(moved.pricing_profile.is_none());
+            assert!(moved.channel.is_none());
+
+            let effective_profile = match moved.pricing_profile.as_ref() {
+                Some(profile) => profile.as_deref(),
+                None => provider.pricing_profile.as_deref(),
+            };
+            let effective_models = match moved.channel.as_ref() {
+                Some(channel) => &channel.models,
+                None => &provider.channel.models,
+            };
+            let conflict = validate_pricing_profiles(
+                &state,
+                reached_pricing_profiles(effective_profile, Some(effective_models)),
+                AccountClass::Enterprise,
+                Some(&provider.id),
+            )
+            .await
+            .expect_err("a Group-only move must not carry a Profile across classes");
+            assert_eq!(conflict.status, StatusCode::CONFLICT);
+
+            // The same request inside the original class stays valid.
+            validate_pricing_profiles(
+                &state,
+                reached_pricing_profiles(effective_profile, Some(effective_models)),
+                AccountClass::Standard,
+                Some(&provider.id),
+            )
+            .await
+            .expect("a move inside the same class is allowed");
+        }
     }
 }
