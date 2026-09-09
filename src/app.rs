@@ -2324,6 +2324,10 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::create_sales_withdrawal),
         )
         .route(
+            "/dashboard/sales/withdrawals/{id}",
+            axum::routing::delete(crate::dashboard_handlers::cancel_sales_withdrawal),
+        )
+        .route(
             "/dashboard/store/admin/sales/agents",
             post(crate::dashboard_handlers::create_sales_agent_admin),
         )

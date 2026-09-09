@@ -29,6 +29,7 @@ import { PublicUsageRankingPage } from "@/pages/public-usage-ranking";
 import { PUBLIC_PATHS } from "@/public-routes";
 import { StorePage } from "@/pages/store";
 import { DashboardGuard, SalesRoute } from "@/pages/sales/sales-route";
+import { SalesAdminPage } from "@/pages/sales-admin";
 import { OrdersPage } from "@/pages/orders";
 import { StoreAdminPage } from "@/pages/store-admin";
 import { UsageAnalysisPage } from "@/pages/usage-analysis";
@@ -110,6 +111,7 @@ function App() {
             <Route path="wallet" element={<WalletPage />} />
             <Route path="orders" element={<OrdersPage />} />
             <Route path="store-admin" element={<StoreAdminRoute />} />
+            <Route path="sales-admin" element={<AdminRoute><SalesAdminPage /></AdminRoute>} />
             <Route path="admin-settings" element={<SettingsPage />} />
           </Route>
           {/* User settings routes */}

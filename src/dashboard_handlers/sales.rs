@@ -72,6 +72,11 @@ fn map_sales_error(error: SalesStoreError) -> AppError {
             "sales_withdrawal_pending",
             "A withdrawal is already pending".to_string(),
         ),
+        SalesStoreError::WithdrawalNotFound => (
+            StatusCode::NOT_FOUND,
+            "sales_withdrawal_not_found",
+            "Withdrawal was not found".to_string(),
+        ),
         SalesStoreError::WithdrawalNotPending => (
             StatusCode::CONFLICT,
             "sales_withdrawal_not_pending",
@@ -249,11 +254,12 @@ pub async fn create_sales_withdrawal(
             "amount is invalid",
         )
     })?;
+    // SC-5.1: any positive balance is withdrawable, down to one minor unit.
     if amount < MIN_WITHDRAWAL_MINOR || amount.to_string() != input.amount_fen {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
-            "sales_withdrawal_below_minimum",
-            "The minimum withdrawal is 100 CNY",
+            "invalid_request",
+            "amount must be a positive integer of Coin minor units",
         ));
     }
     let withdrawal = SalesStore::new(state.db_pool.clone())
@@ -261,6 +267,20 @@ pub async fn create_sales_withdrawal(
         .await
         .map_err(map_sales_error)?;
     Ok((StatusCode::CREATED, Json(withdrawal)))
+}
+
+/// SC-5.1b.
+pub async fn cancel_sales_withdrawal(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(withdrawal_id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let agent = require_agent(&headers, &state).await?;
+    let withdrawal = SalesStore::new(state.db_pool.clone())
+        .cancel_withdrawal(&withdrawal_id, &agent.user_id, Utc::now())
+        .await
+        .map_err(map_sales_error)?;
+    Ok(Json(withdrawal))
 }
 
 #[derive(Debug, Deserialize)]

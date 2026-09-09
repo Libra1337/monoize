@@ -13,6 +13,7 @@ import {
   Store,
   CalendarClock,
   Gauge,
+  HandCoins,
   Boxes,
   ShoppingBag,
   ReceiptText,
@@ -174,6 +175,7 @@ function Sidebar({
     { to: "/dashboard/users", icon: Users, label: t("nav.users") },
     { to: "/dashboard/groups", icon: Boxes, label: t("nav.groups") },
     { to: "/dashboard/store-admin", icon: BadgeDollarSign, label: t("nav.storeManagement") },
+    { to: "/dashboard/sales-admin", icon: HandCoins, label: t("nav.salesManagement") },
     { to: "/dashboard/admin-settings", icon: Settings, label: t("nav.settings") },
   ];
 

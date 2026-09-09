@@ -66,8 +66,9 @@ describe("Store admin page", () => {
         onTabChange: () => undefined,
       }),
     ));
-    // Products, Channels, Orders, Redemptions, and Sales (SC-UI-6).
-    expect(html.match(/role="tab"/g)).toHaveLength(5);
+    // Products, Channels, Orders, Redemptions. Sales is its own page under SC-UI-6, not a
+    // fifth tab here.
+    expect(html.match(/role="tab"/g)).toHaveLength(4);
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain('aria-selected="false"');
   });

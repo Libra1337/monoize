@@ -20,8 +20,8 @@ function coin(minor: string): string {
   return formatCoinFromMinor(minor, "CNY", "1");
 }
 
-/** SC-5.1: the minimum withdrawal is 100 CNY, i.e. 10000 Coin minor units. */
-const MINIMUM_WITHDRAWAL_MINOR = 10_000n;
+/** SC-5.1: any positive balance is withdrawable, down to one minor unit. */
+const MINIMUM_WITHDRAWAL_MINOR = 1n;
 
 export function SalesEntryList({ entries }: { entries: SalesCommissionEntry[] }) {
   const { t } = useTranslation();
@@ -167,6 +167,21 @@ export function SalesWithdrawalPanel({
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const cancel = async (id: string) => {
+    setBusy(true);
+    try {
+      await salesApi.cancelWithdrawal(id);
+      toast.success(t("sales.withdrawal.cancelled"));
+      await onRequested();
+    } catch (error) {
+      toast.error(
+        error instanceof StoreApiError ? error.message : t("sales.withdrawal.failed"),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const minor = decimalToMinor(amount);
   const balance = BigInt(balanceMinor);
   // A negative balance is a debt, so no positive request can satisfy the cap (SC-5.1a).
@@ -202,13 +217,24 @@ export function SalesWithdrawalPanel({
         </div>
 
         {pending ? (
-          <div className="rounded-xl border border-warning-border bg-warning-soft px-4 py-3 text-sm">
-            <p className="font-medium text-warning-foreground">
-              {t("sales.withdrawal.pending")}
-            </p>
-            <p className="mt-1 font-mono tabular-nums text-warning-foreground">
-              <CoinAmount value={coin(pending.amount_minor)} />
-            </p>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-border bg-warning-soft px-4 py-3 text-sm">
+            <div>
+              <p className="font-medium text-warning-foreground">
+                {t("sales.withdrawal.pending")}
+              </p>
+              <p className="mt-1 font-mono tabular-nums text-warning-foreground">
+                <CoinAmount value={coin(pending.amount_minor)} />
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 rounded-xl"
+              disabled={busy}
+              onClick={() => void cancel(pending.id)}
+            >
+              {t("sales.withdrawal.cancel")}
+            </Button>
           </div>
         ) : (
           <div className="flex flex-col gap-3">
@@ -226,7 +252,7 @@ export function SalesWithdrawalPanel({
                 aria-describedby="sales-withdrawal-help"
               />
               <p id="sales-withdrawal-help" className="text-xs text-muted-foreground">
-                {t("sales.withdrawal.minimum")}
+                {t("sales.withdrawal.available", { amount: coin(balanceMinor) })}
               </p>
             </div>
             <Button
@@ -241,21 +267,26 @@ export function SalesWithdrawalPanel({
         )}
 
         {withdrawals.length > 0 && (
-          <ul className="flex flex-col divide-y border-t pt-2">
-            {withdrawals.map((withdrawal) => (
-              <li
-                key={withdrawal.id}
-                className="flex items-center justify-between gap-3 py-2 text-sm"
-              >
-                <span className="font-mono tabular-nums">
-                  <CoinAmount value={coin(withdrawal.amount_minor)} />
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {t(`sales.withdrawal.state.${withdrawal.state}`)}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <div className="flex flex-col gap-2 border-t pt-3">
+            <h3 className="text-sm font-medium">{t("sales.withdrawal.log")}</h3>
+            <ul className="flex flex-col divide-y">
+              {withdrawals.map((withdrawal) => (
+                <li key={withdrawal.id} className="flex flex-col gap-1 py-2 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-mono tabular-nums">
+                      <CoinAmount value={coin(withdrawal.amount_minor)} />
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {t(`sales.withdrawal.state.${withdrawal.state}`)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {withdrawal.decided_at ?? withdrawal.requested_at}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </CardContent>
     </Card>

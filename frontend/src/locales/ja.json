@@ -239,7 +239,8 @@
 		"collapseSidebar": "サイドバーを折りたたむ",
 		"expandSidebar": "サイドバーを展開",
 		"orders": "注文",
-		"storeManagement": "ストア管理"
+		"storeManagement": "ストア管理",
+		"salesManagement": "セールス管理"
 	},
 	"wallet": {
 		"title": "ウォレット",
@@ -391,8 +392,7 @@
 				"products": "商品",
 				"channels": "支払いチャネル",
 				"orders": "注文",
-				"redemptions": "引換コード",
-				"sales": "セールス"
+				"redemptions": "引換コード"
 			},
 			"channelAvailability": {
 				"configuredState": "設定状態",
@@ -2124,7 +2124,6 @@
 			"title": "出金",
 			"description": "出金を申請すると運営が送金し、完了後に支払済みとして記録します。",
 			"amount": "金額",
-			"minimum": "最低 100 CNY。",
 			"submit": "出金を申請",
 			"requested": "出金を申請しました",
 			"failed": "申請に失敗しました",
@@ -2132,8 +2131,22 @@
 			"state": {
 				"requested": "処理待ち",
 				"paid": "支払済み",
-				"rejected": "却下"
-			}
+				"rejected": "却下",
+				"cancelled": "取消済み"
+			},
+			"available": "出金可能：{{amount}}",
+			"log": "出金ログ",
+			"cancel": "申請を取り消す",
+			"cancelled": "出金申請を取り消しました"
+		},
+		"tabs": {
+			"label": "セールス表示",
+			"overview": "概要",
+			"records": "明細"
 		}
+	},
+	"salesAdmin": {
+		"title": "セールス管理",
+		"description": "エージェント、報酬記録、出金。"
 	}
 }

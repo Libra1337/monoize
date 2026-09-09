@@ -239,7 +239,8 @@
 		"collapseSidebar": "收合側邊欄",
 		"expandSidebar": "展開側邊欄",
 		"orders": "訂單",
-		"storeManagement": "商店管理"
+		"storeManagement": "商店管理",
+		"salesManagement": "銷售管理"
 	},
 	"wallet": {
 		"title": "錢包",
@@ -391,8 +392,7 @@
 				"products": "商品",
 				"channels": "付款管道",
 				"orders": "訂單",
-				"redemptions": "兌換碼",
-				"sales": "銷售"
+				"redemptions": "兌換碼"
 			},
 			"channelAvailability": {
 				"configuredState": "設定狀態",
@@ -2125,7 +2125,6 @@
 			"title": "提領",
 			"description": "提交提領申請後由營運轉帳，轉帳完成後會標記為已履約。",
 			"amount": "金額",
-			"minimum": "最低 100 元。",
 			"submit": "申請提領",
 			"requested": "提領申請已提交",
 			"failed": "申請失敗",
@@ -2133,8 +2132,22 @@
 			"state": {
 				"requested": "待處理",
 				"paid": "已履約",
-				"rejected": "已駁回"
-			}
+				"rejected": "已駁回",
+				"cancelled": "已撤銷"
+			},
+			"available": "可提領：{{amount}}",
+			"log": "提領日誌",
+			"cancel": "撤銷申請",
+			"cancelled": "提領申請已撤銷"
+		},
+		"tabs": {
+			"label": "銷售檢視",
+			"overview": "概覽",
+			"records": "明細"
 		}
+	},
+	"salesAdmin": {
+		"title": "銷售管理",
+		"description": "銷售帳號、分成記錄與提領。"
 	}
 }

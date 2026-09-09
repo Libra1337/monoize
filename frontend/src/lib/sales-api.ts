@@ -50,7 +50,7 @@ export interface SalesWithdrawal {
   agent_user_id: string;
   agent_username: string;
   amount_minor: string;
-  state: "requested" | "paid" | "rejected";
+  state: "requested" | "paid" | "rejected" | "cancelled";
   requested_at: string;
   decided_at: string | null;
   decision_note: string | null;
@@ -100,6 +100,10 @@ export const salesApi = {
     salesRequest<SalesCommissionEntry>("/sales/claims", {
       method: "POST",
       body: JSON.stringify({ order_number: orderNumber, user_id: userId }),
+    }),
+  cancelWithdrawal: (id: string) =>
+    salesRequest<SalesWithdrawal>(`/sales/withdrawals/${encodeURIComponent(id)}`, {
+      method: "DELETE",
     }),
   requestWithdrawal: (amountMinor: string) =>
     salesRequest<SalesWithdrawal>("/sales/withdrawals", {

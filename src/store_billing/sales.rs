@@ -12,8 +12,11 @@ pub const MAX_COMMISSION_RATE_BP: i64 = 2000;
 /// Default commission rate in basis points (SC-1.1).
 pub const DEFAULT_COMMISSION_RATE_BP: i64 = 500;
 
-/// Minimum withdrawal in Coin minor units, i.e. 100 CNY (SC-5.1).
-pub const MIN_WITHDRAWAL_MINOR: i128 = 10_000;
+/// Minimum withdrawal in Coin minor units (SC-5.1).
+///
+/// One minor unit: any positive balance is withdrawable. A higher floor would strand a small
+/// balance the agent earned but could never take.
+pub const MIN_WITHDRAWAL_MINOR: i128 = 1;
 
 /// Minimum face value of an order carrying a sales code, i.e. 1 CNY (SC-2.7a).
 ///

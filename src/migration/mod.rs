@@ -71,6 +71,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260909_000066_billing_rate_currency::Migration),
             Box::new(m20260909_000067_model_metadata_price_currency::Migration),
             Box::new(m20260909_000068_sales_commission::Migration),
+            Box::new(m20260909_000069_sales_withdrawal_cancelled::Migration),
         ]
     }
 }
@@ -271,6 +272,7 @@ mod m20260909_000065_readiness_optional_evidence;
 mod m20260909_000066_billing_rate_currency;
 mod m20260909_000067_model_metadata_price_currency;
 mod m20260909_000068_sales_commission;
+mod m20260909_000069_sales_withdrawal_cancelled;
 
 #[cfg(test)]
 mod tests {

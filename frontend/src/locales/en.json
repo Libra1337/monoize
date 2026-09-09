@@ -239,7 +239,8 @@
 		"collapseSidebar": "Collapse sidebar",
 		"expandSidebar": "Expand sidebar",
 		"orders": "Orders",
-		"storeManagement": "Store Management"
+		"storeManagement": "Store Management",
+		"salesManagement": "Sales"
 	},
 	"wallet": {
 		"title": "Wallet",
@@ -391,8 +392,7 @@
 				"products": "Products",
 				"channels": "Payment Channels",
 				"orders": "Orders",
-				"redemptions": "Redemption Codes",
-				"sales": "Sales"
+				"redemptions": "Redemption Codes"
 			},
 			"channelAvailability": {
 				"configuredState": "Configured state",
@@ -2128,7 +2128,6 @@
 			"title": "Withdraw",
 			"description": "Request a withdrawal and the operator transfers the money, then marks it paid.",
 			"amount": "Amount",
-			"minimum": "Minimum 100 CNY.",
 			"submit": "Request withdrawal",
 			"requested": "Withdrawal requested",
 			"failed": "Request failed",
@@ -2136,8 +2135,22 @@
 			"state": {
 				"requested": "Pending",
 				"paid": "Paid",
-				"rejected": "Rejected"
-			}
+				"rejected": "Rejected",
+				"cancelled": "Cancelled"
+			},
+			"available": "Available: {{amount}}",
+			"log": "Withdrawal log",
+			"cancel": "Cancel request",
+			"cancelled": "Withdrawal cancelled"
+		},
+		"tabs": {
+			"label": "Sales views",
+			"overview": "Overview",
+			"records": "Records"
 		}
+	},
+	"salesAdmin": {
+		"title": "Sales management",
+		"description": "Agents, commission records, and withdrawals."
 	}
 }

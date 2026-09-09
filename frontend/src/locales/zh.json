@@ -239,7 +239,8 @@
 		"collapseSidebar": "收起侧边栏",
 		"expandSidebar": "展开侧边栏",
 		"orders": "订单",
-		"storeManagement": "商店管理"
+		"storeManagement": "商店管理",
+		"salesManagement": "销售管理"
 	},
 	"wallet": {
 		"title": "钱包",
@@ -391,8 +392,7 @@
 				"products": "商品",
 				"channels": "支付渠道",
 				"orders": "订单",
-				"redemptions": "兑换码",
-				"sales": "销售"
+				"redemptions": "兑换码"
 			},
 			"channelAvailability": {
 				"configuredState": "配置状态",
@@ -2128,7 +2128,6 @@
 			"title": "提现",
 			"description": "提交提现申请后由运营转账，转账完成后会标记为已履约。",
 			"amount": "金额",
-			"minimum": "最低 100 元。",
 			"submit": "申请提现",
 			"requested": "提现申请已提交",
 			"failed": "申请失败",
@@ -2136,8 +2135,22 @@
 			"state": {
 				"requested": "待处理",
 				"paid": "已履约",
-				"rejected": "已驳回"
-			}
+				"rejected": "已驳回",
+				"cancelled": "已撤销"
+			},
+			"available": "可提现：{{amount}}",
+			"log": "提现日志",
+			"cancel": "撤销申请",
+			"cancelled": "提现申请已撤销"
+		},
+		"tabs": {
+			"label": "销售视图",
+			"overview": "概览",
+			"records": "明细"
 		}
+	},
+	"salesAdmin": {
+		"title": "销售管理",
+		"description": "销售账户、分成记录与提现。"
 	}
 }

@@ -65,7 +65,7 @@ pub use providers::{
 };
 pub use sales::{
     create_sales_agent_admin, create_sales_claim, create_sales_claim_admin,
-    create_sales_withdrawal,
+    cancel_sales_withdrawal, create_sales_withdrawal,
     decide_sales_withdrawal_admin, get_sales_overview, get_sales_settings_admin,
     list_sales_agents_admin, list_sales_entries, list_sales_entries_admin,
     list_sales_withdrawals,

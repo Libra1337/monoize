@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import useSWR from "swr";
 import { AlertCircle, LogOut, RefreshCw } from "lucide-react";
@@ -9,6 +10,8 @@ import { useAuth } from "@/hooks/use-auth";
 import { salesApi } from "@/lib/sales-api";
 import { SalesBalanceCard, SalesCodeCard, SalesWindowCard } from "./sales-cards";
 import { SalesClaimPanel, SalesEntryList, SalesWithdrawalPanel } from "./sales-panels";
+
+type SalesTab = "overview" | "records";
 
 const OVERVIEW_KEY = "sales:overview";
 const ENTRIES_KEY = "sales:entries";
@@ -24,6 +27,9 @@ const WITHDRAWALS_KEY = "sales:withdrawals";
 export function SalesPage() {
   const { t } = useTranslation();
   const { logout } = useAuth();
+  // Two sub-pages rather than one long column: at 100% zoom the single page ran past the
+  // viewport, and an agent checking today's numbers should not have to scroll to see them.
+  const [tab, setTab] = useState<SalesTab>("overview");
   const overview = useSWR(OVERVIEW_KEY, () => salesApi.getOverview());
   const entries = useSWR(ENTRIES_KEY, () => salesApi.listEntries());
   const withdrawals = useSWR(WITHDRAWALS_KEY, () => salesApi.listWithdrawals());
@@ -93,42 +99,69 @@ export function SalesPage() {
         transition={{ delay: 0.06, ...transitions.normal }}
         className="flex flex-col gap-6"
       >
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-          <SalesCodeCard agent={data.agent} />
-          <SalesBalanceCard balanceMinor={data.agent.commission_balance_minor} />
+        <div
+          className="grid w-full grid-cols-2 gap-1 rounded-xl bg-muted p-1"
+          role="tablist"
+          aria-label={t("sales.tabs.label")}
+        >
+          {(["overview", "records"] as SalesTab[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              aria-selected={tab === item}
+              onClick={() => setTab(item)}
+              className={
+                tab === item
+                  ? "flex min-h-11 items-center justify-center rounded-lg bg-background px-4 text-sm font-medium shadow-sm"
+                  : "flex min-h-11 items-center justify-center rounded-lg px-4 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+              }
+            >
+              {t(`sales.tabs.${item}`)}
+            </button>
+          ))}
         </div>
 
-        <section aria-labelledby="sales-windows" className="flex flex-col gap-3">
-          <h2 id="sales-windows" className="text-sm font-semibold">
-            {t("sales.window.title")}
-          </h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <SalesWindowCard title={t("sales.window.today")} window={data.today} />
-            <SalesWindowCard title={t("sales.window.last7d")} window={data.last_7d} />
-            <SalesWindowCard title={t("sales.window.last30d")} window={data.last_30d} />
-          </div>
-        </section>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <SalesClaimPanel onClaimed={refreshAll} />
-          <SalesWithdrawalPanel
-            balanceMinor={data.agent.commission_balance_minor}
-            pending={data.pending_withdrawal}
-            withdrawals={withdrawals.data ?? []}
-            onRequested={refreshAll}
-          />
-        </div>
-
-        <section aria-labelledby="sales-entries" className="flex flex-col gap-3">
-          <h2 id="sales-entries" className="text-sm font-semibold">
-            {t("sales.entries.title")}
-          </h2>
-          {entries.isLoading && !entries.data ? (
-            <Skeleton className="h-48 rounded-2xl" />
-          ) : (
-            <SalesEntryList entries={entries.data ?? []} />
-          )}
-        </section>
+        {tab === "overview" ? (
+          <>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+              <SalesCodeCard agent={data.agent} />
+              <SalesBalanceCard balanceMinor={data.agent.commission_balance_minor} />
+            </div>
+            <section aria-labelledby="sales-windows" className="flex flex-col gap-3">
+              <h2 id="sales-windows" className="text-sm font-semibold">
+                {t("sales.window.title")}
+              </h2>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <SalesWindowCard title={t("sales.window.today")} window={data.today} />
+                <SalesWindowCard title={t("sales.window.last7d")} window={data.last_7d} />
+                <SalesWindowCard title={t("sales.window.last30d")} window={data.last_30d} />
+              </div>
+            </section>
+          </>
+        ) : (
+          <>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <SalesClaimPanel onClaimed={refreshAll} />
+              <SalesWithdrawalPanel
+                balanceMinor={data.agent.commission_balance_minor}
+                pending={data.pending_withdrawal}
+                withdrawals={withdrawals.data ?? []}
+                onRequested={refreshAll}
+              />
+            </div>
+            <section aria-labelledby="sales-entries" className="flex flex-col gap-3">
+              <h2 id="sales-entries" className="text-sm font-semibold">
+                {t("sales.entries.title")}
+              </h2>
+              {entries.isLoading && !entries.data ? (
+                <Skeleton className="h-48 rounded-2xl" />
+              ) : (
+                <SalesEntryList entries={entries.data ?? []} />
+              )}
+            </section>
+          </>
+        )}
       </motion.div>
     </PageWrapper>
   );

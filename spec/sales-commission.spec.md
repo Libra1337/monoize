@@ -131,7 +131,7 @@ SC-D3. Table `sales_withdrawals`:
 | `id` | TEXT | PK |
 | `agent_user_id` | TEXT | NOT NULL, references `sales_agents(user_id)` |
 | `amount_fen` | TEXT | NOT NULL, canonical positive integer |
-| `state` | TEXT | NOT NULL, `CHECK (state IN ('requested', 'paid', 'rejected'))` |
+| `state` | TEXT | NOT NULL, `CHECK (state IN ('requested', 'paid', 'rejected', 'cancelled'))` |
 | `requested_at` | TEXT | NOT NULL, RFC3339 |
 | `decided_at` | TEXT | NULL, RFC3339 |
 | `decided_by` | TEXT | NULL, Admin `users.id` |
@@ -307,10 +307,19 @@ SC-5.1. `POST /api/dashboard/sales/withdrawals` MUST require an agent session an
 exactly `{ "amount_fen": string }`. `amount_fen` MUST be a canonical positive integer at
 most the agent's `commission_balance_fen`, and at least 10000 fen (100 CNY).
 
-SC-5.1a. An agent whose `commission_balance_fen` is negative MUST NOT be able to withdraw
-any amount, because SC-5.1 caps the request at the balance and no positive amount satisfies
-that cap. The Sales surface MUST present such a balance as an amount owed and MUST disable
-the withdrawal action.
+SC-5.1a. An agent whose `commission_balance_fen` is zero or negative MUST NOT be able to
+withdraw, because SC-5.1 requires a positive amount capped at the balance. The Sales surface
+MUST disable the withdrawal action in that state.
+
+SC-5.1b. `DELETE /api/dashboard/sales/withdrawals/{id}` MUST require an agent session, accept
+no body, and cancel that agent's own withdrawal while its state is `requested`. It MUST set
+`state = 'cancelled'` and return `amount_fen` to `commission_balance_fen` in one transaction.
+A withdrawal belonging to another agent MUST return HTTP `404`, and one already decided MUST
+return HTTP `409` with `sales_withdrawal_not_pending`.
+
+Cancellation exists because SC-5.2 holds the amount at request time and SC-5.3 admits only
+one pending withdrawal. Without it, an agent who typed the wrong amount would be blocked
+until an Admin acted on a request neither party wants.
 
 The request MUST NOT carry payout details. Settlement happens out of band: the Admin
 contacts the agent through an existing channel and transfers the money, then records the
@@ -363,8 +372,15 @@ agent's entries in descending `created_at` order with at most 100 records, each 
 MUST NOT return the buyer's username, email, or any other buyer identity beyond the
 `buyer_user_id` the agent already submits when claiming.
 
+SC-UI-2c. The withdrawal panel MUST render the complete SC-6.4 log with each entry's state
+and its decision time when decided, and MUST expose a cancel action while a request is
+pending. It MUST state the withdrawable balance rather than a minimum, because SC-5.1 has no
+minimum beyond one minor unit.
+
 SC-6.4. `GET /api/dashboard/sales/withdrawals` MUST require an agent session and return that
-agent's own withdrawals in descending `requested_at` order with at most 100 records.
+agent's own withdrawals in descending `requested_at` order with at most 100 records. Every
+state MUST appear, including `cancelled` and `rejected`, so the list is a complete withdrawal
+log rather than only the outstanding request.
 
 ## 8. Frontend
 
@@ -378,9 +394,11 @@ An agent exists only to sell. Presenting the API-key, usage, log, and Marketplac
 would imply capabilities the account is not created for, and presenting the Store would let
 an agent buy under their own code, which SC-2.3 forbids.
 
-SC-UI-2. The Sales surface MUST show the agent's code, the three SC-6.2 windows, the SC-6.3
-entry list, the claim form, and the withdrawal panel, and MUST expose sign-out and a
-password change. It MUST use SWR with a skeleton that matches the ready layout, and MUST
+SC-UI-2. The Sales surface MUST present its content as two sub-pages selected by a tab
+control: an overview carrying the agent's code, balance, and the three SC-6.2 windows; and a
+records page carrying the claim form, the withdrawal panel, and the SC-6.3 entry list. One
+continuous page ran past the viewport at 100% zoom, which forced an agent to scroll or zoom
+out to read today's numbers. The surface MUST expose sign-out. It MUST use SWR with a skeleton that matches the ready layout, and MUST
 apply an optimistic value for a withdrawal request and a claim submission, rolling back on
 error.
 
@@ -408,10 +426,16 @@ SC-UI-5. When a code with a nonzero discount is applied, the order summary MUST 
 face value, the discount, and the amount payable as separate lines, so the buyer can see
 that the amount received is the face value rather than the discounted amount.
 
-SC-UI-6. Store Management MUST expose a Sales child surface listing agents and pending
-withdrawals, with a decide action per withdrawal that obtains the SC-5.4 reauthentication
-grant. Creating an agent MUST create the user account and the `sales_agents` row in one
-request and MUST return the generated code once in the creation response.
+SC-UI-6. Sales administration MUST be its own dashboard page at `/dashboard/sales-admin`
+with its own admin navigation entry. It MUST NOT be a child tab of Store Management: agents,
+commission records, and withdrawals are a distinct workflow from products and payment
+channels, and nesting it there pushed the page past the viewport.
+
+The page MUST expose the commission rate with an edit control, the agent list with creation
+and enable/disable, the withdrawal queue with a decide action per pending request, the
+SC-7.7 Admin claim form, and the SC-7.6 commission records across every agent. Creating an
+agent MUST create the user account and the `sales_agents` row in one request and MUST return
+the generated code and password once in the creation response.
 
 SC-UI-7. Every string introduced by this document MUST exist in `en`, `zh`, `zh-TW`, and
 `ja`.

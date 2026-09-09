@@ -50,6 +50,8 @@ pub enum SalesStoreError {
     WithdrawalPending,
     #[error("withdrawal is not pending")]
     WithdrawalNotPending,
+    #[error("withdrawal was not found")]
+    WithdrawalNotFound,
     #[error("insufficient commission balance")]
     InsufficientBalance,
     #[error("sales storage failure: {0}")]
@@ -856,6 +858,66 @@ impl SalesStore {
             requested_at: row_string(&row, "requested_at")?,
             decided_at: Some(decided_at),
             decision_note: Some(decision_note.to_string()),
+        })
+    }
+
+    /// SC-5.1b: the agent cancels their own pending request.
+    ///
+    /// SC-5.2 holds the amount at request time and SC-5.3 admits one pending withdrawal, so
+    /// without this an agent who typed the wrong amount is blocked until an Admin acts on a
+    /// request neither party wants.
+    pub async fn cancel_withdrawal(
+        &self,
+        withdrawal_id: &str,
+        agent_user_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<SalesWithdrawal, SalesStoreError> {
+        let tx = self.db.begin_write().await.map_err(storage)?;
+        let row = tx
+            .query_one(self.db.stmt(
+                "SELECT id, agent_user_id, amount_fen, state, requested_at
+                 FROM sales_withdrawals WHERE id = $1 AND agent_user_id = $2",
+                vec![withdrawal_id.into(), agent_user_id.into()],
+            ))
+            .await
+            .map_err(storage)?
+            // A withdrawal belonging to another agent is indistinguishable from one that does
+            // not exist, so an agent cannot probe for other agents' request identifiers.
+            .ok_or(SalesStoreError::WithdrawalNotFound)?;
+        if row_string(&row, "state")? != "requested" {
+            return Err(SalesStoreError::WithdrawalNotPending);
+        }
+        let amount_minor = parse_minor(&row_string(&row, "amount_fen")?)?;
+        let decided_at = timestamp(now);
+
+        tx.execute(self.db.stmt(
+            "UPDATE sales_withdrawals SET state = 'cancelled', decided_at = $2
+             WHERE id = $1 AND state = 'requested'",
+            vec![withdrawal_id.into(), decided_at.clone().into()],
+        ))
+        .await
+        .map_err(storage)?;
+        let agent = tx
+            .query_one(self.db.stmt(
+                "SELECT commission_balance_fen FROM sales_agents WHERE user_id = $1",
+                vec![agent_user_id.into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or(SalesStoreError::NotAgent)?;
+        let balance = parse_signed_minor(&row_string(&agent, "commission_balance_fen")?)?;
+        set_agent_balance(&self.db, &*tx, agent_user_id, balance + amount_minor, now).await?;
+        tx.commit().await.map_err(storage)?;
+
+        Ok(SalesWithdrawal {
+            id: withdrawal_id.to_string(),
+            agent_user_id: agent_user_id.to_string(),
+            agent_username: String::new(),
+            amount_minor: amount_minor.to_string(),
+            state: "cancelled".to_string(),
+            requested_at: row_string(&row, "requested_at")?,
+            decided_at: Some(decided_at),
+            decision_note: None,
         })
     }
 
