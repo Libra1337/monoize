@@ -109,6 +109,16 @@ MUST include the application instance and routing-configuration revision. `gener
 `data_through`, response bytes, and ETag MUST remain identical during that interval.
 Browser SWR refresh is 30 seconds.
 
+PST-P10a. The status snapshot cache MUST include the viewer account class in its key, and an
+entry MUST only be served to a viewer of the same class. The document lists Group public
+names of one class only, so a cache keyed without the class would serve one class the other
+class's catalogue for the lifetime of the entry, contradicting MM-ENT5.
+
+PST-P10b. The status page MUST send session credentials with its request. The account class
+is resolved server-side from the session (MM-ENT5), so a request that omits credentials is
+indistinguishable from an anonymous one and returns the standard catalogue to every signed-in
+viewer regardless of class.
+
 PST-P11. The endpoint MUST apply the public token-bucket limit and ETag behavior from
 `public-site.spec.md`. A matching `If-None-Match` MUST return HTTP `304` with an empty body.
 

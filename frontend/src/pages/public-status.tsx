@@ -62,7 +62,10 @@ interface PublicStatusResponse {
 }
 
 async function fetchPublicStatus(): Promise<PublicStatusResponse> {
-  const response = await fetch("/api/public/status", { credentials: "omit" });
+  // MM-ENT5: the server picks the catalogue from the session, so the session has to be sent.
+  // With `omit` a signed-in enterprise or private user was shown the standard catalogue, and
+  // the status page disagreed with every other surface they could see.
+  const response = await fetch("/api/public/status", { credentials: "include" });
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.error?.message || data.error?.code || "Request failed");

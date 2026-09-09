@@ -33,12 +33,19 @@ static SNAPSHOT: OnceLock<Mutex<Option<Snapshot>>> = OnceLock::new();
 struct CachedPublicStatusSnapshot {
     source_id: usize,
     revision: u64,
+    account_class: crate::users::AccountClass,
     created_at: Instant,
     bytes: Vec<u8>,
 }
 
-static PUBLIC_STATUS_SNAPSHOT: OnceLock<tokio::sync::Mutex<Option<CachedPublicStatusSnapshot>>> =
-    OnceLock::new();
+/// One cached status document per account class (PST-P10a).
+///
+/// The document lists Group names of one class only, so a single shared slot would serve one
+/// class the other's catalogue for the life of the entry. Keying by class is what keeps the
+/// snapshot from crossing the isolation boundary MM-ENT5 defines.
+static PUBLIC_STATUS_SNAPSHOT: OnceLock<
+    tokio::sync::Mutex<Vec<CachedPublicStatusSnapshot>>,
+> = OnceLock::new();
 
 fn snapshot(revision: u64) -> Snapshot {
     let storage = SNAPSHOT.get_or_init(|| Mutex::new(None));
@@ -898,13 +905,16 @@ pub async fn public_status(
     let revision = state
         .routing_config_revision
         .load(std::sync::atomic::Ordering::Acquire);
-    let cache = PUBLIC_STATUS_SNAPSHOT.get_or_init(|| tokio::sync::Mutex::new(None));
+    // Resolved before the cache lookup because the account class is part of the cache key.
+    let account_class = viewer_account_class(&state, &headers).await;
+    let cache = PUBLIC_STATUS_SNAPSHOT.get_or_init(|| tokio::sync::Mutex::new(Vec::new()));
     let mut cache = cache.lock().await;
-    if let Some(current) = cache.as_ref()
-        && current.source_id == source_id
-        && current.revision == revision
-        && current.created_at.elapsed() < Duration::from_secs(15)
-    {
+    if let Some(current) = cache.iter().find(|entry| {
+        entry.source_id == source_id
+            && entry.revision == revision
+            && entry.account_class == account_class
+            && entry.created_at.elapsed() < Duration::from_secs(15)
+    }) {
         return Ok(crate::public_api::cacheable_json_response(
             &headers,
             current.bytes.clone(),
@@ -923,7 +933,6 @@ pub async fn public_status(
     let latest_bucket_start = data_through_unix_ms.div_euclid(HALF_HOUR_MS) * HALF_HOUR_MS;
     let first_bucket_start = latest_bucket_start.saturating_sub(47 * HALF_HOUR_MS);
 
-    let account_class = viewer_account_class(&state, &headers).await;
     let groups = groups_by_id(&state, account_class)
         .await
         .map_err(status_source_error)?;
@@ -1101,9 +1110,14 @@ pub async fn public_status(
         groups: output,
     };
     let bytes = serde_json::to_vec(&response).map_err(status_source_error)?;
-    *cache = Some(CachedPublicStatusSnapshot {
+    cache.retain(|entry| {
+        entry.account_class != account_class
+            && entry.created_at.elapsed() < Duration::from_secs(15)
+    });
+    cache.push(CachedPublicStatusSnapshot {
         source_id,
         revision,
+        account_class,
         created_at: Instant::now(),
         bytes: bytes.clone(),
     });
@@ -1491,6 +1505,145 @@ mod tests {
             models(stale).await,
             vec!["standard-model".to_string()],
             "an invalid session must resolve the standard class, not error"
+        );
+    }
+
+
+    /// PST-P10a: the 15 second status snapshot must not be shared across account classes.
+    ///
+    /// The document names Groups of one class only. A cache keyed without the class hands
+    /// whichever class asked first its catalogue to the other for the life of the entry, which
+    /// is a disclosure rather than a stale read. Both orderings are exercised because a
+    /// single-slot cache only leaks in the direction of whoever populated it.
+    #[tokio::test]
+    async fn the_status_snapshot_is_never_shared_across_account_classes() {
+        use crate::users::{AccountClass, CreateGroupInput};
+
+        let state = make_state().await;
+        let standard_group_id = state
+            .user_store
+            .default_group_id()
+            .await
+            .expect("default group exists");
+        let enterprise_group = state
+            .user_store
+            .create_group(CreateGroupInput {
+                name: "Enterprise Status Group".to_string(),
+                confirm_public_exposure: true,
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 1,
+                account_class: AccountClass::Enterprise,
+            })
+            .await
+            .expect("enterprise group creates");
+
+        for (group_id, label, model) in [
+            (standard_group_id.clone(), "StatusStandard", "status-standard-model"),
+            (enterprise_group.id.clone(), "StatusEnterprise", "status-enterprise-model"),
+        ] {
+            state
+                .monoize_store
+                .create_provider(
+                    serde_json::from_value(serde_json::json!({
+                        "name": format!("{label} Provider"),
+                        "confirm_public_exposure": true,
+                        "group_id": group_id,
+                        "enabled": true,
+                        "channel": {
+                            "name": format!("{label} Channel"),
+                            "provider_type": "responses",
+                            "base_url": "https://example.invalid",
+                            "api_key": "secret",
+                            "enabled": true,
+                            "models": { model: { "redirect": null } }
+                        }
+                    }))
+                    .expect("provider payload deserializes"),
+                )
+                .await
+                .expect("provider creates");
+        }
+
+        let user = state
+            .user_store
+            .create_user(
+                "status_enterprise_viewer",
+                "correct horse battery staple",
+                crate::users::UserRole::User,
+                None,
+            )
+            .await
+            .expect("user creates");
+        state
+            .user_store
+            .change_user_account_class(&user.id, AccountClass::Enterprise, &user.id)
+            .await
+            .expect("account class changes");
+        let session = state
+            .user_store
+            .create_session(&user.id, 7)
+            .await
+            .expect("session creates");
+
+        let group_names = |headers: HeaderMap| {
+            let state = state.clone();
+            async move {
+                let response = public_status(State(state), headers)
+                    .await
+                    .expect("status succeeds")
+                    .into_response();
+                let body = response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("body reads")
+                    .to_bytes();
+                let json: serde_json::Value =
+                    serde_json::from_slice(&body).expect("body is JSON");
+                json["groups"]
+                    .as_array()
+                    .expect("groups is an array")
+                    .iter()
+                    .map(|group| {
+                        group["public_name"]
+                            .as_str()
+                            .expect("public_name is a string")
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        let mut authenticated = HeaderMap::new();
+        authenticated.insert(
+            axum::http::header::COOKIE,
+            format!("monoize_session={}", session.token)
+                .parse()
+                .expect("cookie header is valid"),
+        );
+
+        // Anonymous first, so the standard document is the one already cached.
+        let anonymous_names = group_names(HeaderMap::new()).await;
+        let enterprise_names = group_names(authenticated.clone()).await;
+        assert!(
+            !anonymous_names.contains(&"Enterprise Status Group".to_string()),
+            "an anonymous viewer must not see an Enterprise Group: {anonymous_names:?}"
+        );
+        assert_eq!(
+            enterprise_names,
+            vec!["Enterprise Status Group".to_string()],
+            "the cached standard document must not be served to an Enterprise viewer"
+        );
+
+        // And immediately again, now that the enterprise document is the most recent entry.
+        assert_eq!(
+            group_names(authenticated).await,
+            vec!["Enterprise Status Group".to_string()]
+        );
+        assert!(
+            !group_names(HeaderMap::new()).await.contains(&"Enterprise Status Group".to_string()),
+            "the cached Enterprise document must not be served to an anonymous viewer"
         );
     }
 
