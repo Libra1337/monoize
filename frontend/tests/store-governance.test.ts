@@ -14,16 +14,16 @@ type PrivacyDraft = {
 
 type PrivacyBuilder = (draft: PrivacyDraft) => unknown | null;
 type ReadinessValidator = (
-  adapterKind: "alipay" | "wechat" | "stripe",
+  adapterKind: "alipay" | "wechat" | "stripe" | "epay",
   input: {
-    privacy_record_id: string;
+    privacy_record_id?: string;
     callback_verification_passed: boolean;
     supported_currencies: Array<"CNY" | "USD">;
     amount_limits: Partial<Record<"CNY" | "USD", { min_minor: string; max_minor: string }>>;
     checkout_action_kinds: Array<"redirect" | "qr" | "form">;
-    license_evidence_digest: string;
-    runtime_evidence_digest: string;
-    availability_evidence_digest: string;
+    license_evidence_digest?: string;
+    runtime_evidence_digest?: string;
+    availability_evidence_digest?: string;
     valid_for_days: number;
   },
 ) => boolean;
@@ -99,6 +99,46 @@ describe("Store governance form validation", () => {
       amount_limits: { ...readinessInput.amount_limits, USD: { min_minor: "21", max_minor: "20" } },
     })).toBe(false);
     expect(validate("alipay", readinessInput)).toBe(false);
+  });
+
+  // SB-C-38: EPay has no issuer for a licence, runtime, availability, or privacy attestation.
+  // The server rejects a partially filled profile, so the exempt form must carry none of them.
+  test("accepts an EPay Readiness profile that carries no attestation fields", () => {
+    const validate = (governanceState as Record<string, unknown>).validateReadinessInput as ReadinessValidator | undefined;
+    expect(typeof validate).toBe("function");
+    if (!validate) return;
+
+    const epayInput = {
+      callback_verification_passed: true,
+      supported_currencies: ["CNY"] as Array<"CNY" | "USD">,
+      amount_limits: { CNY: { min_minor: "1", max_minor: "100000000" } },
+      checkout_action_kinds: ["qr", "redirect"] as Array<"redirect" | "qr" | "form">,
+      valid_for_days: 30,
+    };
+
+    expect(validate("epay", epayInput)).toBe(true);
+
+    // A gated adapter still needs every attestation, so the same payload must fail for Stripe.
+    expect(validate("stripe", epayInput)).toBe(false);
+
+    // An exempt adapter must not smuggle an attestation the gate will never read.
+    expect(validate("epay", { ...epayInput, privacy_record_id: "privacy-1" })).toBe(false);
+    expect(validate("epay", { ...epayInput, license_evidence_digest: "b".repeat(64) })).toBe(false);
+
+    // The adapter's own currency and action constraints still apply.
+    expect(validate("epay", { ...epayInput, supported_currencies: ["USD"], amount_limits: { USD: { min_minor: "1", max_minor: "2" } } })).toBe(false);
+    expect(validate("epay", { ...epayInput, checkout_action_kinds: ["form"] })).toBe(false);
+  });
+
+  test("rejects a Stripe Readiness profile that omits an attestation", () => {
+    const validate = (governanceState as Record<string, unknown>).validateReadinessInput as ReadinessValidator | undefined;
+    expect(typeof validate).toBe("function");
+    if (!validate) return;
+
+    expect(validate("stripe", { ...readinessInput, privacy_record_id: undefined })).toBe(false);
+    expect(validate("stripe", { ...readinessInput, license_evidence_digest: undefined })).toBe(false);
+    expect(validate("stripe", { ...readinessInput, runtime_evidence_digest: undefined })).toBe(false);
+    expect(validate("stripe", { ...readinessInput, availability_evidence_digest: undefined })).toBe(false);
   });
 
   test("accepts only canonical capability verification input", () => {

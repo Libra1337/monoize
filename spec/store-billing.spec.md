@@ -194,7 +194,7 @@ SB-C-27. Migration `054` MUST create `store_channel_readiness_profiles` with one
 
 SB-C-28. `supported_currencies_json` MUST be a nonempty JSON array without duplicates containing only `CNY` and `USD`. `amount_limits_json` MUST be a JSON object with exactly one property for each supported currency and no other properties. Each property value MUST be `{ "min_minor": string, "max_minor": string }`. Both strings MUST be canonical positive base-10 integers and `min_minor <= max_minor`. `checkout_action_kinds_json` MUST be a nonempty JSON array without duplicates containing only `redirect`, `qr`, and `form`. Alipay MUST use currencies `["CNY"]` and actions `["form"]`. WeChat Pay MUST use currencies `["CNY"]` and a nonempty subset of `["qr", "redirect"]`. Stripe MUST use a nonempty subset of currencies `["CNY", "USD"]` and actions `["redirect"]`. A malformed, unknown, duplicate, empty, or adapter-incompatible currency or amount value MUST return `readiness_metadata_invalid`. An invalid or adapter-incompatible action value MUST return `checkout_action_incompatible`. Each reason MUST make the Channel unavailable.
 
-SB-C-29. A readiness profile is current only when its `active_credential_digest` matches the active credential, `verified_at <= evaluation_time < expires_at`, `callback_verification_passed = 1`, and all three evidence digests are valid. Its referenced `store_privacy_records` row MUST exist, have `accepted = 1`, have `approved_at <= evaluation_time < next_review_at`, and contain a valid evidence digest. Missing readiness MUST return `readiness_profile_missing`. A credential mismatch MUST return `readiness_profile_credential_mismatch`. A future verification time or expired profile MUST return `readiness_profile_expired`. A missing, rejected, future, or expired privacy record MUST return `privacy_gate_pending`. Missing callback verification MUST return `callback_verification_pending`. Invalid license, runtime, or availability evidence MUST return `license_gate_pending`, `runtime_gate_pending`, or `availability_evidence_pending`, respectively. Each reason MUST block Catalog inclusion and order creation.
+SB-C-29. A readiness profile is current only when its `active_credential_digest` matches the active credential, `verified_at <= evaluation_time < expires_at`, `callback_verification_passed = 1`, and — for an adapter subject to the attestation gates (SB-C-38) — all three evidence digests are valid and its referenced `store_privacy_records` row exists, has `accepted = 1`, has `approved_at <= evaluation_time < next_review_at`, and contains a valid evidence digest. Missing readiness MUST return `readiness_profile_missing`. A credential mismatch MUST return `readiness_profile_credential_mismatch`. A future verification time or expired profile MUST return `readiness_profile_expired`. A missing, rejected, future, or expired privacy record MUST return `privacy_gate_pending`. Missing callback verification MUST return `callback_verification_pending`. Invalid license, runtime, or availability evidence MUST return `license_gate_pending`, `runtime_gate_pending`, or `availability_evidence_pending`, respectively. For an `epay` Channel the evidence and privacy gates MUST NOT be evaluated, so none of those four reasons can be raised. Each reason MUST block Catalog inclusion and order creation.
 
 SB-C-30. `PaymentChannel` and `StoreChannelAvailability` MUST contain `supported_currencies`, `amount_limits`, and `checkout_action_kinds`. The evaluator MUST return empty values for all three fields when no valid readiness metadata exists. Catalog MUST return only Channels with `effective_available = true`. Order creation MUST first compute the final `payment_currency` and `payment_minor`, then use the same readiness profile to require a listed currency and `min_minor <= payment_minor <= max_minor`. An unsupported currency MUST return reason `payment_currency_unsupported`. An out-of-range amount MUST return reason `payment_amount_out_of_range`. An adapter-incompatible action set MUST return reason `checkout_action_incompatible`. Each order failure MUST map to `payment_channel_unavailable`.
 
@@ -967,11 +967,28 @@ SB-EP-11. The gateway URL MUST reject credentials in the URL, loopback, link-loc
 
 SB-C-37. The required merchant capability set depends on the adapter kind. A Channel MUST prove
 `payment_query`, `refund`, `refund_query`, and `settlement_report` as `supported`, except that
-an `epay` Channel MUST prove only `payment_query` and `refund`. The EPay protocol defines no
-refund-status query, and settlement retrieval exists only on gateways that implement
-`act=settle`, so requiring either as `supported` would make every EPay Channel permanently
-unavailable. An Admin MAY still record those two capabilities as `unsupported` or `manual`, and
+an `epay` Channel MUST prove none of them. The EPay protocol defines no refund-status query,
+and settlement retrieval exists only on gateways that implement `act=settle`, so requiring
+either as `supported` would make every EPay Channel permanently unavailable. EPay availability
+is decided by the readiness profile alone (SB-C-38), so no capability verification is required.
+An Admin MAY still record a capability for a non-EPay Channel as `unsupported` or `manual`, and
 such a record MUST NOT block availability.
+
+SB-C-38. The licence, runtime, availability, and privacy gates all require a SHA-256 digest of a
+document issued by a third party — a card-network attestation, a payment licence, an audited
+availability report, a privacy review. Such documents exist for a regulated acquirer (for
+example Stripe), so an adapter of any kind other than `epay` MUST supply a current readable
+`store_channel_readiness_profiles` row whose `privacy_record_id` references a current record and
+whose `license_evidence_digest`, `runtime_evidence_digest`, and `availability_evidence_digest`
+are all valid. An `epay` adapter MUST NOT be required to supply any of them, because EPay is a
+self-hosted gateway protocol with no issuer for those documents; requiring them would leave
+every EPay Channel permanently unavailable with reasons its operator can never clear. An
+`epay` Channel MUST be gated only on facts the deployment itself establishes: the Channel is
+enabled, an active credential matches the adapter, the terms are confirmed at the current
+version, and a current readiness profile supplies the currency, amount, and checkout-action
+metadata. On write, an adapter subject to the gates MUST supply every attestation and an exempt
+adapter MUST supply none; a partially filled profile MUST be rejected rather than stored, so an
+exempt Channel can never carry a digest that no gate will read.
 
 SB-EP-10A. The EPay refund protocol defines `code = 1` as success and every other value as failure without defining an error-code taxonomy. A refund response with HTTP 200 and `code = 1` MUST map to a succeeded refund. A refund response with HTTP 200 and any other `code` MUST map to an ambiguous refund and MUST remain reconcilable. It MUST NOT map to a terminal refund failure, because an undocumented code can report a transient gateway condition, an unsynchronized order, or an already-refunded order, and a terminal rejection would abandon a refundable amount with no later correction path.
 

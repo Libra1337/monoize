@@ -329,15 +329,20 @@ pub struct StorePrivacyRecordsView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PutStoreChannelReadinessInput {
-    pub privacy_record_id: String,
+    /// Absent only for an adapter exempt from the attestation gates (SB-C-38).
+    #[serde(default)]
+    pub privacy_record_id: Option<String>,
     pub callback_verification_passed: bool,
     pub supported_currencies: Vec<Currency>,
     #[serde(deserialize_with = "deserialize_unique_amount_limits")]
     pub amount_limits: BTreeMap<String, StoreAmountLimit>,
     pub checkout_action_kinds: Vec<CheckoutActionKind>,
-    pub license_evidence_digest: String,
-    pub runtime_evidence_digest: String,
-    pub availability_evidence_digest: String,
+    #[serde(default)]
+    pub license_evidence_digest: Option<String>,
+    #[serde(default)]
+    pub runtime_evidence_digest: Option<String>,
+    #[serde(default)]
+    pub availability_evidence_digest: Option<String>,
     pub valid_for_days: i64,
 }
 
@@ -379,14 +384,14 @@ where
 pub struct StoreChannelReadinessProfile {
     pub channel_id: String,
     pub active_credential_digest: String,
-    pub privacy_record_id: String,
+    pub privacy_record_id: Option<String>,
     pub callback_verification_passed: bool,
     pub supported_currencies: Vec<Currency>,
     pub amount_limits: BTreeMap<String, StoreAmountLimit>,
     pub checkout_action_kinds: Vec<CheckoutActionKind>,
-    pub license_evidence_digest: String,
-    pub runtime_evidence_digest: String,
-    pub availability_evidence_digest: String,
+    pub license_evidence_digest: Option<String>,
+    pub runtime_evidence_digest: Option<String>,
+    pub availability_evidence_digest: Option<String>,
     pub verifier_admin_id: String,
     pub verified_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,

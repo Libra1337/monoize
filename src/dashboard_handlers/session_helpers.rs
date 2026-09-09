@@ -38,6 +38,20 @@ fn extract_session_from_cookie(headers: &HeaderMap) -> Option<String> {
         })
 }
 
+/// Resolves the session user when one is present and usable, and yields `None` otherwise.
+///
+/// Endpoints that serve both anonymous visitors and signed-in users need the caller's
+/// identity without turning a missing or stale cookie into an error. Every failure mode of
+/// [`get_current_user`] — absent token, expired session, deleted or disabled user, storage
+/// error — collapses to `None` so the caller falls back to its anonymous behaviour.
+pub(crate) async fn optional_current_user(headers: &HeaderMap, state: &AppState) -> Option<User> {
+    let token = extract_session_token(headers)?;
+    let user_store = &state.user_store;
+    let session = user_store.get_session_by_token(&token).await.ok()??;
+    let user = user_store.get_user_by_id(&session.user_id).await.ok()??;
+    user.enabled.then_some(user)
+}
+
 pub(crate) async fn get_current_user(headers: &HeaderMap, state: &AppState) -> AppResult<User> {
     let token = extract_session_token(headers).ok_or_else(|| {
         AppError::new(

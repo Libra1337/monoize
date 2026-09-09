@@ -59,7 +59,10 @@ export class MarketplaceApiError extends Error {
 }
 
 export async function marketplaceRequest<T>(url: string): Promise<T> {
-  const response = await fetch(url, { credentials: "omit" });
+  // The session cookie is sent so a signed-in user gets the catalogue for their own account
+  // class. Anonymous visitors carry no usable session, and `optional_current_user` treats a
+  // missing or stale cookie as `None`, so the public page still resolves the standard class.
+  const response = await fetch(url, { credentials: "include" });
   const data = await response.json();
   if (!response.ok) {
     throw new MarketplaceApiError(

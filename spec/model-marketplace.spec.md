@@ -327,6 +327,8 @@ MM-ENT3. Enterprise model prices MUST be independently stored rates. The service
 
 MM-ENT4. An unavailable Enterprise model and an unavailable standard model MUST use the same response shape. The response MUST NOT reveal the existence of an offer in the other class.
 
+MM-ENT5. The public Marketplace and public status endpoints are reachable without a session. A request that carries a valid session cookie MUST resolve the account class of the authenticated user and return that class' catalog. A request without a valid session cookie (missing, expired, disabled user, or not authenticated) MUST resolve the standard class.
+
 ## 8. Qualification
 
 MM-Q1. The supported catalog envelope is 128 Groups, 5,000 Providers and embedded

@@ -327,16 +327,23 @@ function ReadinessForm({
   const submit = async () => {
     const days = Number(validDays);
     const amountLimits = Object.fromEntries(currencies.map((currency) => [currency, limits[currency]]));
+    // SB-C-38: an exempt adapter omits the attestation fields entirely; the server rejects a
+    // profile that carries any of them, so they are not sent as empty strings either.
+    const requiresAttestations = channel.adapter_kind !== "epay";
     const input: PutStoreChannelReadinessInput = {
-      privacy_record_id: privacyId,
       callback_verification_passed: callbackPassed,
       supported_currencies: currencies,
       amount_limits: amountLimits,
       checkout_action_kinds: actions,
-      license_evidence_digest: licenseDigest,
-      runtime_evidence_digest: runtimeDigest,
-      availability_evidence_digest: availabilityDigest,
       valid_for_days: days,
+      ...(requiresAttestations
+        ? {
+            privacy_record_id: privacyId,
+            license_evidence_digest: licenseDigest,
+            runtime_evidence_digest: runtimeDigest,
+            availability_evidence_digest: availabilityDigest,
+          }
+        : {}),
     };
     if (!validateReadinessInput(channel.adapter_kind, input)) {
       toast.error(t("store.admin.governance.invalid"));
@@ -347,8 +354,12 @@ function ReadinessForm({
 
   const currencyOptions: StoreCurrency[] = channel.adapter_kind === "stripe" ? ["CNY", "USD"] : ["CNY"];
   const actionOptions: StoreCheckoutActionKind[] = channel.adapter_kind === "epay" ? ["qr", "redirect"] : defaults.actions;
+  // SB-C-38: EPay carries no evidence or privacy attestation, so those gates are not part of
+  // its readiness form. Requiring a privacy record here would block the only adapter whose
+  // operator has no way to obtain one.
+  const requiresAttestations = channel.adapter_kind !== "epay";
 
-  if (privacyRecords.length === 0) {
+  if (requiresAttestations && privacyRecords.length === 0) {
     return (
       <div className="flex min-h-36 flex-col items-center justify-center gap-4 rounded-xl border border-dashed p-5 text-center">
         <div className="grid gap-1">
@@ -372,12 +383,12 @@ function ReadinessForm({
         </div>
       )}
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className="grid gap-2 sm:col-span-2"><Label>{t("store.admin.governance.fields.privacyRecord")}</Label><Select value={privacyId} onValueChange={setPrivacyId}><SelectTrigger className="min-h-11 rounded-xl"><SelectValue placeholder={t("store.admin.governance.readiness.selectPrivacy")} /></SelectTrigger><SelectContent>{privacyRecords.map((record) => <SelectItem key={record.id} value={record.id}>{record.policy_version} · {record.jurisdiction}</SelectItem>)}</SelectContent></Select></div>
+        {requiresAttestations && <div className="grid gap-2 sm:col-span-2"><Label>{t("store.admin.governance.fields.privacyRecord")}</Label><Select value={privacyId} onValueChange={setPrivacyId}><SelectTrigger className="min-h-11 rounded-xl"><SelectValue placeholder={t("store.admin.governance.readiness.selectPrivacy")} /></SelectTrigger><SelectContent>{privacyRecords.map((record) => <SelectItem key={record.id} value={record.id}>{record.policy_version} · {record.jurisdiction}</SelectItem>)}</SelectContent></Select></div>}
         <div className="flex min-h-11 items-center justify-between gap-3 rounded-xl border p-3 sm:col-span-2"><div><Label htmlFor="readiness-callback">{t("store.admin.governance.fields.callbackVerification")}</Label><p className="text-xs text-muted-foreground">{t("store.admin.governance.readiness.callbackHelp")}</p></div><Switch id="readiness-callback" checked={callbackPassed} onCheckedChange={setCallbackPassed} /></div>
         <fieldset className="grid gap-3 rounded-xl border p-3"><legend className="px-1 text-sm font-medium">{t("store.admin.governance.fields.currencies")}</legend>{currencyOptions.map((currency) => <label key={currency} className="flex min-h-9 items-center gap-3 text-sm"><Checkbox checked={currencies.includes(currency)} disabled={channel.adapter_kind !== "stripe"} onCheckedChange={(checked) => toggleCurrency(currency, checked === true)} />{currency}</label>)}</fieldset>
         <fieldset className="grid gap-3 rounded-xl border p-3"><legend className="px-1 text-sm font-medium">{t("store.admin.governance.fields.actions")}</legend>{actionOptions.map((action) => <label key={action} className="flex min-h-9 items-center gap-3 text-sm"><Checkbox checked={actions.includes(action)} disabled={channel.adapter_kind !== "epay"} onCheckedChange={(checked) => toggleAction(action, checked === true)} />{t(`store.admin.governance.actions.${action}`)}</label>)}</fieldset>
         {currencies.map((currency) => <div key={currency} className="grid gap-3 rounded-xl border p-3 sm:col-span-2"><p className="text-sm font-medium">{t("store.admin.governance.readiness.amountRange", { currency })}</p><div className="grid gap-3 sm:grid-cols-2"><div className="grid gap-2"><Label htmlFor={`readiness-${currency}-min`}>{t("store.admin.governance.fields.minimumMinor")}</Label><Input id={`readiness-${currency}-min`} className="min-h-11 rounded-xl" inputMode="numeric" value={limits[currency]?.min_minor ?? ""} onChange={(event) => updateLimit(currency, "min_minor", event.target.value)} /></div><div className="grid gap-2"><Label htmlFor={`readiness-${currency}-max`}>{t("store.admin.governance.fields.maximumMinor")}</Label><Input id={`readiness-${currency}-max`} className="min-h-11 rounded-xl" inputMode="numeric" value={limits[currency]?.max_minor ?? ""} onChange={(event) => updateLimit(currency, "max_minor", event.target.value)} /></div></div></div>)}
-        {(["license", "runtime", "availability"] as const).map((kind) => <div key={kind} className="grid gap-2 sm:col-span-2"><Label htmlFor={`readiness-${kind}`}>{t(`store.admin.governance.fields.${kind}Evidence`)}</Label><Input id={`readiness-${kind}`} className="min-h-11 rounded-xl font-mono text-xs" value={kind === "license" ? licenseDigest : kind === "runtime" ? runtimeDigest : availabilityDigest} onChange={(event) => { if (kind === "license") setLicenseDigest(event.target.value); else if (kind === "runtime") setRuntimeDigest(event.target.value); else setAvailabilityDigest(event.target.value); }} /></div>)}
+        {requiresAttestations && (["license", "runtime", "availability"] as const).map((kind) => <div key={kind} className="grid gap-2 sm:col-span-2"><Label htmlFor={`readiness-${kind}`}>{t(`store.admin.governance.fields.${kind}Evidence`)}</Label><Input id={`readiness-${kind}`} className="min-h-11 rounded-xl font-mono text-xs" value={kind === "license" ? licenseDigest : kind === "runtime" ? runtimeDigest : availabilityDigest} onChange={(event) => { if (kind === "license") setLicenseDigest(event.target.value); else if (kind === "runtime") setRuntimeDigest(event.target.value); else setAvailabilityDigest(event.target.value); }} /></div>)}
         <div className="grid gap-2"><Label htmlFor="readiness-valid-days">{t("store.admin.governance.fields.validDays")}</Label><Input id="readiness-valid-days" className="min-h-11 rounded-xl" type="number" min={1} max={90} value={validDays} onChange={(event) => setValidDays(event.target.value)} /></div>
       </div>
       <Button type="button" className="min-h-11 w-fit rounded-xl" disabled={saving} onClick={() => void submit()}><ShieldCheck className="size-4" />{saving ? t("common.loading") : t("common.save")}</Button>

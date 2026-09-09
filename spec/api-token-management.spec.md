@@ -89,6 +89,13 @@ that `(group_id, model)`. If a conflict exists and the key has no valid matching
 the request MUST fail with HTTP `409` and code `channel_selection_required`; it MUST NOT
 select a Channel by priority, affinity, or random choice.
 
+TM-CH-6. Conflict enumeration and validation MUST be scoped to the account class of the
+authenticated user. A Group whose account class differs from the caller's class MUST NOT
+contribute a conflict, because a key owned by that user can never route into it; surfacing
+such a conflict would demand a Channel choice for a Group the caller cannot reach and would
+block creation of every key. The Channel options in a returned conflict belong to Groups of
+the caller's class only.
+
 TM-IP-1. Every non-empty `ip_whitelist` entry on create or update MUST parse as either an exact IPv4/IPv6 address or an IPv4/IPv6 CIDR network. Any invalid entry MUST reject the mutation with HTTP `400` and code `invalid_request`.
 
 TM-IP-2. The server MUST persist exact addresses and CIDR networks in their canonical string representation. It MUST trim entries, deduplicate canonical duplicates, and preserve exact-address entries as addresses rather than converting them to host-prefix CIDRs.

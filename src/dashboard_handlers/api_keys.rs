@@ -4,14 +4,14 @@ use crate::error::{AppError, AppResult};
 use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
 use crate::users::{
-    AnalyticsBucketing, ApiKeyChannelBinding, CreateApiKeyInput, CreateApiKeyWithLimitError,
-    ModelRedirectRule, RequestCaptureMode, UpdateApiKeyInput, canonicalize_channel_bindings,
-    format_nano_to_usd, parse_nano_usd,
+    canonicalize_channel_bindings, format_nano_to_usd, parse_nano_usd, AnalyticsBucketing,
+    ApiKeyChannelBinding, CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule,
+    RequestCaptureMode, UpdateApiKeyInput,
 };
-use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -188,14 +188,21 @@ pub struct ApiKeyChannelConflictResponse {
     pub options: Vec<ApiKeyChannelOptionResponse>,
 }
 
+/// Groups and models for which the key owner would face more than one eligible Channel.
+///
+/// Only Groups in `account_class` are considered. A key can never route into the other
+/// class, so a conflict there is not one the owner can resolve — surfacing it would demand a
+/// Channel choice for a Group the owner cannot reach and block key creation outright.
 async fn current_channel_conflicts(
     state: &AppState,
+    account_class: crate::users::AccountClass,
 ) -> Result<Vec<ApiKeyChannelConflictResponse>, String> {
     let group_names = state
         .user_store
         .list_groups()
         .await?
         .into_iter()
+        .filter(|group| group.account_class == account_class)
         .map(|group| (group.id, group.name))
         .collect::<std::collections::BTreeMap<_, _>>();
     let providers = state.monoize_store.list_providers().await?;
@@ -203,6 +210,9 @@ async fn current_channel_conflicts(
         std::collections::BTreeMap::<(String, String), Vec<ApiKeyChannelOptionResponse>>::new();
     for provider in providers {
         if !provider.enabled || !provider.channel.enabled {
+            continue;
+        }
+        if !group_names.contains_key(&provider.group_id) {
             continue;
         }
         let unpriced_models = super::providers::provider_pricing_warnings(state, &provider)
@@ -244,13 +254,14 @@ async fn current_channel_conflicts(
 
 async fn validate_channel_bindings_for_scope(
     state: &AppState,
+    account_class: crate::users::AccountClass,
     group_ids: &[String],
     model_limits_enabled: bool,
     model_limits: &[String],
     bindings: &[ApiKeyChannelBinding],
 ) -> Result<(), String> {
     let bindings = canonicalize_channel_bindings(bindings)?;
-    let conflicts = current_channel_conflicts(state).await?;
+    let conflicts = current_channel_conflicts(state, account_class).await?;
     let in_scope = |conflict: &&ApiKeyChannelConflictResponse| {
         (group_ids.is_empty() || group_ids.iter().any(|id| id == &conflict.group_id))
             && (!model_limits_enabled
@@ -288,10 +299,12 @@ pub async fn list_api_key_channel_conflicts(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
-    get_current_user(&headers, &state).await?;
-    let conflicts = current_channel_conflicts(&state).await.map_err(|error| {
-        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
-    })?;
+    let user = get_current_user(&headers, &state).await?;
+    let conflicts = current_channel_conflicts(&state, user.account_class)
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
     Ok(Json(conflicts))
 }
 
@@ -364,6 +377,7 @@ pub async fn create_api_key(
 
     validate_channel_bindings_for_scope(
         &state,
+        user.account_class,
         &body.group_ids,
         body.model_limits_enabled,
         &body.model_limits,
@@ -872,6 +886,7 @@ pub async fn update_api_key(
 
     validate_channel_bindings_for_scope(
         &state,
+        user.account_class,
         body.group_ids.as_deref().unwrap_or(&api_key.group_ids),
         body.model_limits_enabled
             .unwrap_or(api_key.model_limits_enabled),
@@ -1055,11 +1070,11 @@ pub async fn transfer_to_sub_account(
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalyticsBucketPlan, AnalyticsBucketUnit, add_months, align_down_to_day,
-        align_down_to_hour, align_down_to_month, analytics_bucket_plan, current_channel_conflicts,
-        months_between,
+        add_months, align_down_to_day, align_down_to_hour, align_down_to_month,
+        analytics_bucket_plan, current_channel_conflicts, months_between, AnalyticsBucketPlan,
+        AnalyticsBucketUnit,
     };
-    use crate::app::{RuntimeConfig, load_state_with_runtime};
+    use crate::app::{load_state_with_runtime, RuntimeConfig};
     use crate::billing_rate_store::UpsertBillingRateInput;
     use crate::monoize_routing::CreateMonoizeProviderInput;
     use crate::users::CreateGroupInput;
@@ -1142,10 +1157,122 @@ mod tests {
                 .expect("rate creates");
         }
 
-        let conflicts = current_channel_conflicts(&state)
+        let conflicts = current_channel_conflicts(&state, crate::users::AccountClass::Standard)
             .await
             .expect("conflicts load");
         assert!(conflicts.is_empty());
+    }
+
+    /// TM-CH-6: conflicts are scoped to the caller's account class. A standard Group with two
+    /// Channels on the same model is a real conflict for a standard caller but not for an
+    /// enterprise caller, whose key can never route into that Group. Surfacing it would demand
+    /// an impossible Channel choice and block every enterprise key.
+    #[tokio::test]
+    async fn channel_conflicts_are_scoped_to_the_callers_account_class() {
+        let state = load_state_with_runtime(RuntimeConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_path: "/metrics".to_string(),
+            database_dsn: "sqlite::memory:".to_string(),
+            request_log_spool_dir: None,
+            node: crate::node_config::NodeSettings::primary_default(),
+        })
+        .await
+        .expect("state loads");
+
+        for (name, account_class) in [
+            ("standard-group", crate::users::AccountClass::Standard),
+            ("enterprise-group", crate::users::AccountClass::Enterprise),
+        ] {
+            let group = state
+                .user_store
+                .create_group(CreateGroupInput {
+                    confirm_public_exposure: true,
+                    name: name.to_string(),
+                    description: String::new(),
+                    user_selectable: true,
+                    sort_order: 1,
+                    account_class,
+                })
+                .await
+                .expect("Group creates");
+
+            for (provider_name, profile) in [
+                (format!("{name}-a"), format!("{name}-priced-a")),
+                (format!("{name}-b"), format!("{name}-priced-b")),
+            ] {
+                let input: CreateMonoizeProviderInput = serde_json::from_value(json!({
+                    "name": provider_name,
+                    "confirm_public_exposure": true,
+                    "group_id": group.id,
+                    "enabled": true,
+                    "pricing_profile": profile,
+                    "channel": {
+                        "name": format!("{provider_name}-channel"),
+                        "provider_type": "responses",
+                        "base_url": "https://example.com",
+                        "api_key": "secret",
+                        "enabled": true,
+                        "models": { "gpt-scoped": { "redirect": null } }
+                    }
+                }))
+                .expect("Provider input decodes");
+                state
+                    .monoize_store
+                    .create_provider(input)
+                    .await
+                    .expect("Provider creates");
+            }
+
+            for usage_class in ["input_uncached", "output"] {
+                for profile in [format!("{name}-priced-a"), format!("{name}-priced-b")] {
+                    state
+                        .billing_rate_store
+                        .upsert_billing_rate(
+                            &format!("{profile}-{usage_class}"),
+                            UpsertBillingRateInput {
+                                source: Some("test".to_string()),
+                                pricing_profile: Some(profile.clone()),
+                                model_pattern: Some(Some("gpt-scoped".to_string())),
+                                provider_type: Some(Some("responses".to_string())),
+                                rate_kind: Some("token".to_string()),
+                                usage_class: Some(usage_class.to_string()),
+                                unit: Some("token".to_string()),
+                                unit_price_nano_usd: Some("1".to_string()),
+                                context_tier: Some(None),
+                                service_tier: Some(None),
+                                modality: Some(None),
+                                cache_ttl: Some(None),
+                                match_json: Some(json!({})),
+                                priority: Some(0),
+                                enabled: Some(true),
+                                raw_json: Some(json!({ "fixture": true })),
+                            },
+                        )
+                        .await
+                        .expect("rate creates");
+                }
+            }
+        }
+
+        let standard = current_channel_conflicts(&state, crate::users::AccountClass::Standard)
+            .await
+            .expect("standard conflicts load");
+        assert_eq!(
+            standard.len(),
+            1,
+            "the standard group has a two-Channel conflict on gpt-scoped"
+        );
+        assert_eq!(standard[0].group_name, "standard-group");
+
+        let enterprise = current_channel_conflicts(&state, crate::users::AccountClass::Enterprise)
+            .await
+            .expect("enterprise conflicts load");
+        assert_eq!(
+            enterprise.len(),
+            1,
+            "the enterprise group has its own conflict"
+        );
+        assert_eq!(enterprise[0].group_name, "enterprise-group");
     }
 
     #[test]
