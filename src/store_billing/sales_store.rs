@@ -36,6 +36,8 @@ pub enum SalesStoreError {
     SelfReferral,
     #[error("discount exceeds the commission rate")]
     DiscountAboveRate,
+    #[error("order amount is below the sales-code minimum")]
+    AmountTooSmall,
     #[error("the caller is not a sales agent")]
     NotAgent,
     #[error("the order and user do not correspond")]
@@ -58,6 +60,7 @@ impl From<SalesError> for SalesStoreError {
     fn from(error: SalesError) -> Self {
         match error {
             SalesError::DiscountAboveRate => Self::DiscountAboveRate,
+            SalesError::AmountTooSmall => Self::AmountTooSmall,
             SalesError::RateOutOfRange | SalesError::InvalidAmount => Self::InvalidInput,
         }
     }
@@ -75,9 +78,23 @@ fn row_i64(row: &QueryResult, column: &str) -> Result<i64, SalesStoreError> {
     row.try_get("", column).map_err(storage)
 }
 
+/// Parses a canonical nonnegative integer amount.
 fn parse_minor(value: &str) -> Result<i128, SalesStoreError> {
+    let parsed = parse_signed_minor(value)?;
+    if parsed < 0 {
+        return Err(SalesStoreError::InvalidInput);
+    }
+    Ok(parsed)
+}
+
+/// Parses a canonical integer amount that may be negative (SC-3.4c).
+///
+/// A commission balance goes negative when a refund reverses an accrual the agent already
+/// withdrew. That debt is carried until later commission repays it, so the balance column is
+/// signed while every individual amount remains nonnegative.
+fn parse_signed_minor(value: &str) -> Result<i128, SalesStoreError> {
     let parsed: i128 = value.parse().map_err(|_| SalesStoreError::InvalidInput)?;
-    if parsed < 0 || parsed.to_string() != value {
+    if parsed.to_string() != value {
         return Err(SalesStoreError::InvalidInput);
     }
     Ok(parsed)
@@ -650,7 +667,8 @@ impl SalesStore {
             .await
             .map_err(storage)?
             .ok_or(SalesStoreError::NotAgent)?;
-        let balance = parse_minor(&row_string(&agent, "commission_balance_fen")?)?;
+        // SC-5.1a: a negative balance is a debt, so no positive amount satisfies the cap.
+        let balance = parse_signed_minor(&row_string(&agent, "commission_balance_fen")?)?;
         if amount_minor > balance {
             return Err(SalesStoreError::InsufficientBalance);
         }
@@ -737,7 +755,7 @@ impl SalesStore {
                 .await
                 .map_err(storage)?
                 .ok_or(SalesStoreError::NotAgent)?;
-            let balance = parse_minor(&row_string(&agent, "commission_balance_fen")?)?;
+            let balance = parse_signed_minor(&row_string(&agent, "commission_balance_fen")?)?;
             set_agent_balance(&self.db, &*tx, &agent_user_id, balance + amount_minor, now)
                 .await?;
         }
@@ -795,6 +813,49 @@ impl SalesStore {
     }
 }
 
+/// Reverses the commission entry of a refunded order, inside the refund transaction (SC-3.4).
+///
+/// Returns the reversed amount when an entry existed. An order without an entry is not an
+/// error: most orders carry no sales code.
+pub async fn reverse_commission_for_order<C: ConnectionTrait>(
+    db: &DbPool,
+    conn: &C,
+    order_id: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<i128>, SalesStoreError> {
+    let row = conn
+        .query_one(db.stmt(
+            "SELECT id, agent_user_id, commission_fen FROM sales_commission_entries
+             WHERE order_id = $1 AND reversed_at IS NULL",
+            vec![order_id.into()],
+        ))
+        .await
+        .map_err(storage)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let entry_id = row_string(&row, "id")?;
+    let agent_user_id = row_string(&row, "agent_user_id")?;
+    let commission_minor = parse_minor(&row_string(&row, "commission_fen")?)?;
+
+    // The entry keeps its original `commission_fen` and only gains `reversed_at`, so the
+    // debt's origin stays auditable after later commission repays it (SC-3.4c).
+    let changed = conn
+        .execute(db.stmt(
+            "UPDATE sales_commission_entries SET reversed_at = $2
+             WHERE id = $1 AND reversed_at IS NULL",
+            vec![entry_id.into(), timestamp(now).into()],
+        ))
+        .await
+        .map_err(storage)?;
+    if changed.rows_affected() != 1 {
+        // Another transaction reversed it first; the balance was adjusted there.
+        return Ok(None);
+    }
+    credit_agent(db, conn, &agent_user_id, -commission_minor, now).await?;
+    Ok(Some(commission_minor))
+}
+
 /// Adds to an agent's balance inside a caller-owned transaction.
 async fn credit_agent<C: ConnectionTrait>(
     db: &DbPool,
@@ -811,7 +872,9 @@ async fn credit_agent<C: ConnectionTrait>(
         .await
         .map_err(storage)?
         .ok_or(SalesStoreError::NotAgent)?;
-    let balance = parse_minor(&row_string(&row, "commission_balance_fen")?)?;
+    // SC-3.4b: an accrual adds to the balance whatever its sign, so a debt is repaid before
+    // the agent can withdraw again.
+    let balance = parse_signed_minor(&row_string(&row, "commission_balance_fen")?)?;
     set_agent_balance(db, conn, agent_user_id, balance + delta_minor, now).await
 }
 
@@ -822,14 +885,14 @@ async fn set_agent_balance<C: ConnectionTrait>(
     balance_minor: i128,
     now: DateTime<Utc>,
 ) -> Result<(), SalesStoreError> {
-    // SC-3.4 clamps at zero: a reversal after the agent already withdrew must not drive the
-    // balance negative, and the reversed entry keeps the record of the shortfall.
-    let clamped = balance_minor.max(0);
+    // SC-3.4a: the balance is not clamped. A reversal after the agent already withdrew leaves
+    // a negative balance, which is a debt repaid by later commission (SC-3.4b). Clamping would
+    // forgive it and pay the agent again from zero on the next sale.
     conn.execute(db.stmt(
         "UPDATE sales_agents SET commission_balance_fen = $2, updated_at = $3 WHERE user_id = $1",
         vec![
             agent_user_id.into(),
-            clamped.to_string().into(),
+            balance_minor.to_string().into(),
             timestamp(now).into(),
         ],
     ))
@@ -894,5 +957,34 @@ mod tests {
         assert_eq!(parse_minor("010"), Err(SalesStoreError::InvalidInput));
         assert_eq!(parse_minor("1.5"), Err(SalesStoreError::InvalidInput));
         assert_eq!(parse_minor(""), Err(SalesStoreError::InvalidInput));
+    }
+
+    /// SC-3.4c: only the balance is signed. An individual amount stays nonnegative.
+    #[test]
+    fn only_the_balance_may_be_negative() {
+        assert_eq!(parse_signed_minor("-500"), Ok(-500));
+        assert_eq!(parse_signed_minor("0"), Ok(0));
+        assert_eq!(parse_signed_minor("500"), Ok(500));
+        assert_eq!(parse_signed_minor("-0"), Err(SalesStoreError::InvalidInput));
+        assert_eq!(parse_signed_minor("--5"), Err(SalesStoreError::InvalidInput));
+        assert_eq!(parse_signed_minor("+5"), Err(SalesStoreError::InvalidInput));
+    }
+
+    /// SC-1.7 and SC-2.7a: 1 CNY is both the smallest purchasable amount and the smallest
+    /// face value a code may price, and its commission is exactly 0.05 CNY.
+    #[test]
+    fn the_minimum_recharge_earns_a_commission_in_whole_fen() {
+        use crate::store_billing::sales::{MIN_CODED_ORDER_MINOR, SalesError, compute_amounts};
+
+        assert_eq!(MIN_CODED_ORDER_MINOR, 100);
+        let minimum = compute_amounts(MIN_CODED_ORDER_MINOR, 500, 0).expect("1 CNY");
+        assert_eq!(minimum.commission_minor, 5);
+
+        // A smaller face value is refused rather than accruing zero, so an agent never makes
+        // a sale that credits nothing.
+        assert_eq!(
+            compute_amounts(99, 500, 0),
+            Err(SalesError::AmountTooSmall)
+        );
     }
 }

@@ -15,6 +15,13 @@ pub const DEFAULT_COMMISSION_RATE_BP: i64 = 500;
 /// Minimum withdrawal in Coin minor units, i.e. 100 CNY (SC-5.1).
 pub const MIN_WITHDRAWAL_MINOR: i128 = 10_000;
 
+/// Minimum face value of an order carrying a sales code, i.e. 1 CNY (SC-2.7a).
+///
+/// At the 500 bp default this is the smallest face value whose commission is still nonzero
+/// and still representable in two decimal places: 1 CNY yields exactly 5 minor units. One
+/// minor unit would yield `floor(1 * 500 / 10000) = 0`, crediting nothing for a real sale.
+pub const MIN_CODED_ORDER_MINOR: i128 = 100;
+
 /// Basis-point denominator.
 const BP_DENOMINATOR: i128 = 10_000;
 
@@ -38,6 +45,8 @@ pub enum SalesError {
     DiscountAboveRate,
     /// An amount is not a canonical nonnegative integer, or overflowed.
     InvalidAmount,
+    /// The face value is below `MIN_CODED_ORDER_MINOR` (SC-2.7a).
+    AmountTooSmall,
 }
 
 /// The four amounts an order carries once a code is applied (SC-1.3).
@@ -73,6 +82,10 @@ pub fn compute_amounts(
     }
     if base_minor <= 0 {
         return Err(SalesError::InvalidAmount);
+    }
+    // SC-2.7a: below 1 CNY the commission floors to zero, so the sale would credit nothing.
+    if base_minor < MIN_CODED_ORDER_MINOR {
+        return Err(SalesError::AmountTooSmall);
     }
 
     let discount_minor = base_minor
@@ -190,11 +203,6 @@ mod tests {
     /// Floor division must never round a share up, or the platform pays the rounding.
     #[test]
     fn rounding_never_favours_the_agent() {
-        // 1 fen at 5% is 0.05 fen, which floors to zero commission.
-        let tiny = compute_amounts(1, 500, 0).expect("one fen");
-        assert_eq!(tiny.commission_minor, 0);
-        assert_eq!(tiny.payment_minor, 1);
-
         // 199 fen at 5% is 9.95 fen.
         let odd = compute_amounts(199, 500, 0).expect("199 fen");
         assert_eq!(odd.commission_minor, 9);
@@ -205,16 +213,27 @@ mod tests {
         assert_eq!(sub_fen_discount.payment_minor, 100);
     }
 
+    /// SC-2.7a: 1 CNY is the smallest face value whose commission is nonzero and expressible
+    /// in two decimal places. Anything smaller would credit the agent nothing for a real sale.
+    #[test]
+    fn one_yuan_is_the_smallest_face_value_that_earns_anything() {
+        let one_yuan = compute_amounts(MIN_CODED_ORDER_MINOR, 500, 0).expect("1 CNY");
+        assert_eq!(one_yuan.commission_minor, 5); // 0.05 CNY
+        assert_eq!(one_yuan.payment_minor, 100);
+
+        for below in [1, 50, MIN_CODED_ORDER_MINOR - 1] {
+            assert_eq!(
+                compute_amounts(below, 500, 0),
+                Err(SalesError::AmountTooSmall),
+                "{below} minor units must be refused"
+            );
+        }
+    }
+
     #[test]
     fn a_zero_or_negative_face_value_is_rejected() {
-        assert_eq!(
-            compute_amounts(0, 500, 0),
-            Err(SalesError::InvalidAmount)
-        );
-        assert_eq!(
-            compute_amounts(-100, 500, 0),
-            Err(SalesError::InvalidAmount)
-        );
+        assert_eq!(compute_amounts(0, 500, 0), Err(SalesError::InvalidAmount));
+        assert_eq!(compute_amounts(-100, 500, 0), Err(SalesError::InvalidAmount));
     }
 
     #[test]

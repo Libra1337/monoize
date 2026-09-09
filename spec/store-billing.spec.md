@@ -76,6 +76,11 @@ SB-P-3. A balance product MUST store recharge and bonus amounts in its price cur
 
 SB-P-4. A custom recharge MUST use the Admin minimum and maximum for its selected payment currency. Its bonus MUST be zero.
 
+SB-P-4b. The default custom-recharge minimum MUST be 100 minor units for both CNY and USD,
+which is 1 CNY. `sales-commission.spec.md` SC-1.7 requires it: at a 500 bp commission rate a
+face value below 20 fen floors its commission to zero, so a smaller minimum would admit an
+order that earns a sales agent nothing.
+
 SB-P-4a. The face value that SB-P-3 and SB-P-4 produce is the input to a sales-code
 discount, never its output. The equality between a fixed balance product's price and the
 order amount MUST be evaluated against that face value, so a discounted order does not read

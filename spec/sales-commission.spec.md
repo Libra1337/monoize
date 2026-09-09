@@ -69,6 +69,14 @@ by the agent's own commission; the platform MUST NOT subsidize it.
 SC-1.5. An entry MUST record the `commission_rate_bp` that applied, so the arithmetic of a
 past order remains reproducible after the rate changes.
 
+SC-1.6. Both shares use floor division, so neither the discount nor the commission is ever
+rounded up at the platform's expense. At `r = 500` the commission is `floor(base_fen / 20)`.
+
+SC-1.7. The minimum custom recharge for CNY MUST be 100 fen (1 CNY), which is the default of
+`store-billing.spec.md` SB-P-4b. At `r = 500` this yields a minimum commission of 5 fen
+(0.05 CNY), so every order a buyer can place through the custom-amount field earns a
+commission expressible in two decimal places.
+
 ## 2. Data model
 
 SC-D1. Table `sales_agents`:
@@ -78,7 +86,7 @@ SC-D1. Table `sales_agents`:
 | `user_id` | TEXT | PK, references `users(id)` |
 | `code` | TEXT | NOT NULL, UNIQUE |
 | `discount_bp` | INTEGER | NOT NULL, `CHECK (discount_bp BETWEEN 0 AND 500)` |
-| `commission_balance_fen` | TEXT | NOT NULL, canonical nonnegative integer |
+| `commission_balance_fen` | TEXT | NOT NULL, canonical integer, MAY be negative per SC-3.4c |
 | `enabled` | INTEGER | NOT NULL, `CHECK (enabled IN (0, 1))` |
 | `created_at` | TEXT | NOT NULL, RFC3339 |
 | `updated_at` | TEXT | NOT NULL, RFC3339 |
@@ -181,6 +189,28 @@ any other out-of-range amount does.
 SC-2.7. A code MUST apply only to a `balance` product order. A `plan` product order with a
 `sales_code` MUST return HTTP `400` with code `sales_code_not_applicable`.
 
+SC-2.7a. An order whose face value is below 100 minor units (1 CNY) MUST reject an applied
+code with HTTP `400` and code `sales_code_amount_too_small`, and MUST create no order. It
+MUST NOT create the order with a zero commission instead.
+
+At `r = 500` a face value below 20 fen floors its commission to zero under SC-1.6, so the
+agent would make a real sale and be credited nothing. Refusing the order tells the buyer to
+remove the code or raise the amount, whereas accruing zero would look to the agent like the
+sale was never attributed. The 100-minor-unit bound is stricter than the 20 needed for a
+nonzero result, because SC-1.7 already sets 1 CNY as the smallest purchasable amount and a
+commission should be expressible in two decimal places.
+
+SC-2.7a. An order carrying a code MUST have a face value of at least 100 Coin minor units,
+that is 1 CNY. A smaller face value MUST return HTTP `400` with code
+`sales_code_amount_too_small` and MUST create no order.
+
+The bound exists so commission is always representable in two decimal places and never
+floors to zero. At the 500 bp default, 1 CNY yields exactly 5 minor units (0.05 CNY), the
+smallest nonzero commission the currency can express. A 1 minor unit order would yield
+`floor(1 * 500 / 10000) = 0`, crediting the agent nothing for a sale that consumed one of
+their referrals. The bound is on the face value, not the discounted payable amount, because
+the face value is the commission base under SC-1.3.
+
 SC-2.8. `creation_request_digest` MUST include the normalized `sales_code`, so that a retry
 of the same idempotency key with a different code is a conflict rather than a silent reuse
 of the first quote.
@@ -203,10 +233,20 @@ because the rate is defined on a CNY face value.
 
 SC-3.4. A refund of an order with a commission entry MUST reverse it in the refund
 transaction: set `reversed_at`, and decrease `commission_balance_fen` by `commission_fen`.
-The balance MUST NOT go negative; when the agent has already withdrawn the amount, the
-balance MUST clamp at zero and the shortfall MUST remain recorded by the reversed entry, so
-the operator can settle it out of band. Without reversal the agent keeps commission on money
-the buyer got back.
+Without reversal the agent keeps commission on money the buyer got back.
+
+SC-3.4a. The balance MUST be allowed to go negative, and MUST NOT be clamped at zero. A
+negative balance is a debt the agent owes, carried until later commission repays it. When
+the agent had already withdrawn the reversed amount, clamping at zero would silently forgive
+that debt and the next sale would pay the agent again from a zero base.
+
+SC-3.4b. A subsequent accrual MUST add to the balance whatever its sign, so a debt is repaid
+before the agent can withdraw again. The balance therefore rises from negative toward zero
+and only becomes withdrawable once it is at least the SC-5.1 minimum.
+
+SC-3.4c. `commission_balance_fen` MUST be a canonical integer that MAY carry a leading `-`.
+The reversed entry MUST remain in place with its original `commission_fen`, so the debt's
+origin stays auditable after the balance recovers.
 
 ## 5. Retroactive claim
 
@@ -248,6 +288,11 @@ belongs to.
 SC-5.1. `POST /api/dashboard/sales/withdrawals` MUST require an agent session and accept
 exactly `{ "amount_fen": string }`. `amount_fen` MUST be a canonical positive integer at
 most the agent's `commission_balance_fen`, and at least 10000 fen (100 CNY).
+
+SC-5.1a. An agent whose `commission_balance_fen` is negative MUST NOT be able to withdraw
+any amount, because SC-5.1 caps the request at the balance and no positive amount satisfies
+that cap. The Sales surface MUST present such a balance as an amount owed and MUST disable
+the withdrawal action.
 
 The request MUST NOT carry payout details. Settlement happens out of band: the Admin
 contacts the agent through an existing channel and transfers the money, then records the
@@ -325,6 +370,11 @@ SC-UI-2a. Every monetary value on the Sales surface MUST render as Coin through 
 Coin mark of `coin-wallet-navigation.spec.md` CN-16. The surface MUST NOT show a nano value
 and MUST NOT apply an exchange rate, because SC-0.3 stores commission in Coin minor units
 already.
+
+SC-UI-2b. A negative balance MUST render with `destructive` styling, labelled as an amount
+owed rather than as available, and MUST state that later commission repays it before a
+withdrawal is possible. A reversed entry MUST be visibly marked as reversed in the SC-6.3
+list and MUST NOT be silently omitted, because it is the origin of the debt.
 
 SC-UI-3. The Store purchase panel MUST render a sales-code input beside the custom-amount
 input, each occupying half of the row at `sm` and above and stacking below it. The field MUST

@@ -428,9 +428,12 @@ pub struct StoreSettings {
 impl Default for StoreSettings {
     fn default() -> Self {
         Self {
-            custom_recharge_cny_min_minor: "1000".to_string(),
+            // SC-1.7: 100 fen is 1 CNY, the smallest recharge whose 5% commission is a whole
+            // number of fen. A lower minimum would let a buyer place an order that floors its
+            // commission to zero.
+            custom_recharge_cny_min_minor: "100".to_string(),
             custom_recharge_cny_max_minor: "100000000".to_string(),
-            custom_recharge_usd_min_minor: "1000".to_string(),
+            custom_recharge_usd_min_minor: "100".to_string(),
             custom_recharge_usd_max_minor: "100000000".to_string(),
         }
     }
