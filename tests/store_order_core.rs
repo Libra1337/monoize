@@ -128,6 +128,7 @@ fn order_input(key: &str) -> CreatePaymentOrderInput {
         payment_channel_id: "store-channel-stripe".to_string(),
         payment_currency: Currency::CNY,
         custom_recharge_minor: None,
+        sales: None,
     }
 }
 
@@ -444,6 +445,7 @@ async fn pending_sqlite_gate_rejects_plan_orders_but_not_balance_orders() {
         payment_channel_id: "store-channel-stripe".to_string(),
         payment_currency: Currency::CNY,
         custom_recharge_minor: None,
+        sales: None,
     };
 
     assert_eq!(

@@ -8,6 +8,7 @@ mod captcha;
 mod groups;
 mod model_registry;
 mod providers;
+mod sales;
 mod request_captures;
 pub(crate) mod session_helpers;
 mod settings;
@@ -61,6 +62,12 @@ pub use providers::{
     FetchChannelModelsRequest, TestChannelRequest, create_provider, delete_provider,
     fetch_channel_models, fetch_provider_models, get_provider, get_provider_presets,
     get_transform_registry, list_providers, reorder_providers, test_channel, update_provider,
+};
+pub use sales::{
+    create_sales_agent_admin, create_sales_claim, create_sales_withdrawal,
+    decide_sales_withdrawal_admin, get_sales_overview, get_sales_settings_admin,
+    list_sales_agents_admin, list_sales_entries, list_sales_withdrawals,
+    list_sales_withdrawals_admin, update_sales_agent_admin, update_sales_settings_admin,
 };
 pub use settings::{
     UpdateSettingsRequest, get_config_overview, get_dashboard_stats, get_public_settings,

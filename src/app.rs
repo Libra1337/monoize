@@ -2316,6 +2316,30 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::redeem_store_code),
         )
         .route(
+            "/dashboard/sales/claims",
+            post(crate::dashboard_handlers::create_sales_claim),
+        )
+        .route(
+            "/dashboard/sales/withdrawals",
+            post(crate::dashboard_handlers::create_sales_withdrawal),
+        )
+        .route(
+            "/dashboard/store/admin/sales/agents",
+            post(crate::dashboard_handlers::create_sales_agent_admin),
+        )
+        .route(
+            "/dashboard/store/admin/sales/agents/{user_id}",
+            put(crate::dashboard_handlers::update_sales_agent_admin),
+        )
+        .route(
+            "/dashboard/store/admin/sales/withdrawals/{id}/decide",
+            post(crate::dashboard_handlers::decide_sales_withdrawal_admin),
+        )
+        .route(
+            "/dashboard/store/admin/sales/settings",
+            put(crate::dashboard_handlers::update_sales_settings_admin),
+        )
+        .route(
             "/dashboard/store/admin/products",
             post(crate::dashboard_handlers::create_store_product_admin),
         )
@@ -2449,6 +2473,30 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/store/catalog",
             get(crate::dashboard_handlers::get_store_catalog),
+        )
+        .route(
+            "/dashboard/sales/overview",
+            get(crate::dashboard_handlers::get_sales_overview),
+        )
+        .route(
+            "/dashboard/sales/entries",
+            get(crate::dashboard_handlers::list_sales_entries),
+        )
+        .route(
+            "/dashboard/sales/withdrawals",
+            get(crate::dashboard_handlers::list_sales_withdrawals),
+        )
+        .route(
+            "/dashboard/store/admin/sales/agents",
+            get(crate::dashboard_handlers::list_sales_agents_admin),
+        )
+        .route(
+            "/dashboard/store/admin/sales/withdrawals",
+            get(crate::dashboard_handlers::list_sales_withdrawals_admin),
+        )
+        .route(
+            "/dashboard/store/admin/sales/settings",
+            get(crate::dashboard_handlers::get_sales_settings_admin),
         )
         .route(
             "/dashboard/store/exchange-rate",

@@ -320,6 +320,7 @@ async fn expired_presented_order(suffix: &str) -> PresentedFixture {
                 payment_channel_id: "store-channel-stripe".to_string(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
+                sales: None,
             },
             &ExchangeRateSnapshot {
                 base: "USD".to_string(),
@@ -499,6 +500,7 @@ async fn paid_pending_order() -> (DbPool, String) {
                 payment_channel_id: "store-channel-stripe".to_string(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
+                sales: None,
             },
             &ExchangeRateSnapshot {
                 base: "USD".to_string(),

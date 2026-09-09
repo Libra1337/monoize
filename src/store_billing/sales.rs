@@ -127,6 +127,19 @@ pub fn generate_code() -> String {
         .collect()
 }
 
+/// Generates the one-time password returned at agent creation (SC-7.2).
+///
+/// 20 characters over the 32-character code alphabet is 100 bits of entropy. It reuses that
+/// alphabet so the operator can read the password aloud under the same rules as the code.
+pub fn generate_password() -> String {
+    let mut random = [0_u8; 20];
+    OsRng.fill_bytes(&mut random);
+    random
+        .iter()
+        .map(|byte| char::from(CODE_ALPHABET[usize::from(byte & 31)]))
+        .collect()
+}
+
 /// Normalizes a submitted code for comparison (SC-D1b).
 ///
 /// Comparison uppercases and drops ASCII hyphens and spaces so that a code read aloud and

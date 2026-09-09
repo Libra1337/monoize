@@ -656,6 +656,7 @@ async fn store_settings_bound_custom_recharge_on_the_new_order_path() {
         payment_channel_id: "store-channel-stripe".to_string(),
         payment_currency: Currency::USD,
         custom_recharge_minor: Some(amount.to_string()),
+        sales: None,
     };
     assert!(
         orders
@@ -725,6 +726,7 @@ async fn admin_lists_include_disabled_records_and_order_references_block_deletes
                 payment_channel_id: "store-channel-stripe".to_string(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
+                sales: None,
             },
             &rate(),
         )

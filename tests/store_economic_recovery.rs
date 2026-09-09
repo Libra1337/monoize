@@ -170,6 +170,7 @@ async fn setup_paid_balance_order(current_balance: i128) -> PaidOrderFixture {
                 payment_channel_id: "store-channel-stripe".to_string(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
+                sales: None,
             },
             &rate(),
         )
@@ -613,6 +614,7 @@ async fn payment_hold_blocks_new_orders_and_redemption_without_consuming_the_cod
                     payment_channel_id: "store-channel-stripe".to_string(),
                     payment_currency: Currency::CNY,
                     custom_recharge_minor: None,
+                    sales: None,
                 },
                 &rate(),
             )
@@ -646,6 +648,7 @@ async fn provider_claim_identity_cannot_be_rebound_to_another_order() {
                 payment_channel_id: "store-channel-stripe".to_string(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
+                sales: None,
             },
             &rate(),
         )

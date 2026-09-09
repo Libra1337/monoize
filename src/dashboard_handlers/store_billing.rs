@@ -73,6 +73,9 @@ pub struct CreatePaymentOrderRequest {
     pub payment_channel_id: String,
     pub payment_currency: Currency,
     pub custom_recharge_minor: Option<String>,
+    /// SC-2.1: optional. Absent, null, or blank means no code was applied.
+    #[serde(default)]
+    pub sales_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -904,6 +907,30 @@ pub async fn list_store_orders(
     Ok(Json(orders))
 }
 
+/// Maps a code-resolution failure onto the SC-2.2 surface.
+fn map_sales_code_error(
+    error: crate::store_billing::sales_store::SalesStoreError,
+) -> AppError {
+    use crate::store_billing::sales_store::SalesStoreError;
+    match error {
+        SalesStoreError::CodeInvalid => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "sales_code_invalid",
+            "Sales code is invalid; check it and enter it again",
+        ),
+        SalesStoreError::DiscountAboveRate => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "sales_discount_above_rate",
+            "This sales code is misconfigured; contact the operator",
+        ),
+        other => AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            other.to_string(),
+        ),
+    }
+}
+
 pub async fn create_store_order(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -913,13 +940,50 @@ pub async fn create_store_order(
     let input = parse_store_json(body)?;
     let idempotency_key = required_idempotency_key(&headers)?;
     let store = PaymentOrderStore::new(state.db_pool.clone());
+    // SC-2.2 and SC-2.3: an unresolvable code, or an agent's own code, refuses the order
+    // rather than dropping the code and charging full price.
+    let sales = match input
+        .sales_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+    {
+        Some(code) => {
+            let resolved = crate::store_billing::sales_store::SalesStore::new(
+                state.db_pool.clone(),
+            )
+            .resolve_code(code)
+            .await
+            .map_err(map_sales_code_error)?;
+            if resolved.agent_user_id == user.id {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "sales_code_self_referral",
+                    "An agent may not credit their own order",
+                ));
+            }
+            if input.payment_currency != Currency::CNY {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "sales_code_currency_unsupported",
+                    "A sales code applies only to a CNY order",
+                ));
+            }
+            Some(crate::store_billing::order::AppliedSalesCode {
+                code: resolved.code,
+                discount_bp: resolved.discount_bp,
+                commission_rate_bp: resolved.commission_rate_bp,
+            })
+        }
+        None => None,
+    };
     let input = CreatePaymentOrderInput {
         idempotency_key,
         product_id: input.product_id,
         payment_channel_id: input.payment_channel_id,
         payment_currency: input.payment_currency,
         custom_recharge_minor: input.custom_recharge_minor,
-        sales: None,
+        sales,
     };
     if let Some(order) = store
         .replay_order(&user.id, &input)

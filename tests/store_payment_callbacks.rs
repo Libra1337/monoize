@@ -153,6 +153,7 @@ async fn setup() -> (DbPool, String, String, String) {
                 payment_channel_id: "store-channel-stripe".to_string(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
+                sales: None,
             },
             &ExchangeRateSnapshot {
                 base: "USD".to_string(),
@@ -726,6 +727,7 @@ async fn pending_sqlite_gate_blocks_plan_fulfillment() {
                 payment_channel_id: "store-channel-stripe".to_string(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
+                sales: None,
             },
             &ExchangeRateSnapshot {
                 base: "USD".to_string(),

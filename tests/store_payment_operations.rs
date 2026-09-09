@@ -336,6 +336,7 @@ async fn operations_fixture(adapter_kind: &str) -> OperationsFixture {
                 payment_channel_id: channel_id.clone(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
+                sales: None,
             },
             &ExchangeRateSnapshot {
                 base: "USD".to_string(),

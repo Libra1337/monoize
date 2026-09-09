@@ -728,6 +728,7 @@ async fn paused_checkout_rejects_new_orders_before_insert() {
                 payment_channel_id: "store-channel-stripe".to_string(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
+                sales: None,
             },
             &rate,
         )
@@ -1319,6 +1320,7 @@ async fn paused_checkout_replays_existing_order_and_terminal_attempt() {
         payment_channel_id: "store-channel-stripe".to_string(),
         payment_currency: Currency::CNY,
         custom_recharge_minor: None,
+        sales: None,
     };
 
     let order = store
@@ -1385,6 +1387,7 @@ async fn paused_checkout_replays_existing_order_and_terminal_attempt() {
                 payment_channel_id: "store-channel-stripe".to_string(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
+                sales: None,
             },
             &rate,
         )
