@@ -957,7 +957,20 @@ SB-EP-1. One EPay Channel MUST store one gateway base URL, merchant ID, encrypte
 
 SB-EP-2. Checkout MUST submit `POST {gateway}/mapi.php` as `application/x-www-form-urlencoded`. It MUST include the documented `pid`, `type`, `out_trade_no`, `notify_url`, `return_url`, `name`, `money`, `clientip`, `device`, `param`, `sign`, and `sign_type` fields when applicable.
 
-SB-EP-3. `money` MUST contain exactly two decimal places produced from integer CNY fen. EPay checkout MUST reject every non-CNY order.
+SB-EP-3. An outbound `money` field MUST contain exactly two decimal places produced from integer CNY fen. EPay checkout MUST reject every non-CNY order.
+
+SB-EP-3A. An inbound `money` value, in a callback or a query response, MUST be parsed as CNY
+yuan with an optional fractional part of zero, one, or two digits, and MUST convert to
+integer fen exactly. `"1000"` MUST parse as `100000` fen, `"1000.5"` as `100050`, and
+`"1000.50"` as `100050`. A value with three or more fractional digits, an empty integer part,
+an empty fractional part after a decimal point, a sign, exponent, whitespace, separator, or
+any non-digit MUST be rejected. Parsing MUST NOT use `f32` or `f64` per SB-0.9.
+
+The inbound grammar MUST NOT reuse the outbound two-decimal requirement of SB-EP-3. A
+gateway reports a whole-yuan amount without a fractional part, so requiring two decimals on
+input rejects the callback for every whole-yuan order while accepting one whose amount
+happens to carry fen. That admits the smallest test payment and rejects every ordinary
+recharge, which is indistinguishable from the gateway never calling back.
 
 SB-EP-4. EPay signing and verification MUST remove `sign`, `sign_type`, and empty values; sort remaining field names by ascending ASCII bytes; join unencoded `key=value` pairs with `&`; append the merchant secret without another separator; and compute lowercase MD5.
 

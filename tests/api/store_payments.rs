@@ -1146,9 +1146,13 @@ async fn epay_callback_returns_success_after_verified_idempotent_fulfillment() {
         .await
         .unwrap();
 
+    // SB-EP-3A: the gateway reports a whole-yuan order as `10`, not `10.00`. The amount check
+    // must accept that form, or the callback is rejected for every whole-yuan recharge while
+    // an amount that happens to carry fen still settles.
     let query = signed_epay_callback(&[
         ("out_trade_no", order_number),
         ("trade_no", "2026082722001002"),
+        ("money", "10"),
     ]);
     for _ in 0..2 {
         let (status, response) = epay_callback_request(&ctx, &query).await;

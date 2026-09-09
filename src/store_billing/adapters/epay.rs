@@ -305,26 +305,42 @@ pub fn verify_epay_signature(
         .into()
 }
 
-/// EPay money is CNY yuan with exactly two decimal places derived from integer fen.
+/// An outbound EPay `money` field is CNY yuan with exactly two decimal places (SB-EP-3).
 pub fn format_fen_as_yuan(fen: u64) -> String {
     format!("{}.{:02}", fen / 100, fen % 100)
 }
 
+/// Parses an inbound EPay `money` value into integer fen (SB-EP-3A).
+///
+/// The fractional part is optional and may carry one or two digits, because a gateway reports
+/// a whole-yuan amount as `"1000"` rather than `"1000.00"`. Requiring the outbound two-decimal
+/// form here rejects the callback for every whole-yuan order while accepting one whose amount
+/// happens to carry fen, so only the smallest test payment would ever settle.
 pub fn parse_yuan_as_fen(value: &str) -> Option<u64> {
-    let (whole, fraction) = value.split_once('.')?;
+    let (whole, fraction) = match value.split_once('.') {
+        Some((whole, fraction)) => (whole, fraction),
+        None => (value, ""),
+    };
     if whole.is_empty()
         || whole.len() > 16
         || !whole.bytes().all(|byte| byte.is_ascii_digit())
-        || fraction.len() != 2
+        || fraction.len() > 2
+        || (value.contains('.') && fraction.is_empty())
         || !fraction.bytes().all(|byte| byte.is_ascii_digit())
     {
         return None;
     }
+    // One fractional digit is tenths of a yuan, so it scales to ten fen.
+    let fen_fraction = match fraction.len() {
+        0 => 0,
+        1 => fraction.parse::<u64>().ok()? * 10,
+        _ => fraction.parse::<u64>().ok()?,
+    };
     whole
         .parse::<u64>()
         .ok()?
         .checked_mul(100)?
-        .checked_add(fraction.parse::<u64>().ok()?)
+        .checked_add(fen_fraction)
         .filter(|fen| *fen > 0)
 }
 
@@ -1112,16 +1128,52 @@ mod tests {
         assert!(!verify_epay_signature(&parameters, "124", &signature));
     }
 
+    /// SB-EP-3: an outbound amount always carries two decimals.
     #[test]
-    fn fen_formatting_is_exact_and_reversible() {
+    fn fen_formatting_is_exact() {
         assert_eq!(format_fen_as_yuan(1), "0.01");
         assert_eq!(format_fen_as_yuan(100), "1.00");
         assert_eq!(format_fen_as_yuan(123_456), "1234.56");
+        assert_eq!(format_fen_as_yuan(100_000), "1000.00");
+    }
+
+    /// SB-EP-3A: an inbound amount may omit the fractional part or carry one digit, because a
+    /// gateway reports a whole-yuan amount as `1000`. Requiring the outbound two-decimal form
+    /// on input rejected the callback for every whole-yuan order and accepted only an amount
+    /// that happened to carry fen, so a one-fen test payment settled and real recharges did
+    /// not. This test previously asserted that rejection, which is what kept the defect alive.
+    #[test]
+    fn inbound_yuan_parses_whole_and_short_fractions() {
+        assert_eq!(parse_yuan_as_fen("1000"), Some(100_000));
+        assert_eq!(parse_yuan_as_fen("1000.5"), Some(100_050));
+        assert_eq!(parse_yuan_as_fen("1000.50"), Some(100_050));
         assert_eq!(parse_yuan_as_fen("1234.56"), Some(123_456));
-        assert_eq!(parse_yuan_as_fen("1.0"), None);
-        assert_eq!(parse_yuan_as_fen("1"), None);
+        assert_eq!(parse_yuan_as_fen("0.01"), Some(1));
+        assert_eq!(parse_yuan_as_fen("1"), Some(100));
+        assert_eq!(parse_yuan_as_fen("1.0"), Some(100));
+
+        // Anything beyond fen precision, or not a bare decimal, stays rejected.
+        assert_eq!(parse_yuan_as_fen("1000.005"), None);
+        assert_eq!(parse_yuan_as_fen("1000."), None);
+        assert_eq!(parse_yuan_as_fen(".01"), None);
+        assert_eq!(parse_yuan_as_fen(""), None);
+        assert_eq!(parse_yuan_as_fen("0"), None);
         assert_eq!(parse_yuan_as_fen("0.00"), None);
         assert_eq!(parse_yuan_as_fen("-1.00"), None);
+        assert_eq!(parse_yuan_as_fen("+1.00"), None);
+        assert_eq!(parse_yuan_as_fen("1e3"), None);
+        assert_eq!(parse_yuan_as_fen(" 1.00"), None);
+        assert_eq!(parse_yuan_as_fen("1,000.00"), None);
+        assert_eq!(parse_yuan_as_fen("1.00.00"), None);
+    }
+
+    /// The exact production failure: the gateway reported a 1000 CNY order as `money=1000`
+    /// against an order of 100000 fen, and the amount check rejected it.
+    #[test]
+    fn whole_yuan_callback_amount_matches_the_stored_order() {
+        assert_eq!(parse_yuan_as_fen("1000"), Some(100_000));
+        assert_eq!(format_fen_as_yuan(100_000), "1000.00");
+        assert_eq!(parse_yuan_as_fen(&format_fen_as_yuan(100_000)), Some(100_000));
     }
 
     #[test]
