@@ -1,6 +1,17 @@
 use monoize::error::AppError;
+use std::future::IntoFuture;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+/// Upper bound on the HTTP drain of RL1g1, measured from the shutdown signal.
+///
+/// A streaming response keeps its connection open for as long as the upstream produces
+/// tokens, so an unbounded drain never completes. The supervisor then sends SIGKILL on its
+/// own deadline (`docker stop -t 30`) and the steps after the drain — the batcher flush and
+/// the pending-row transition — never run, which loses buffered request logs. This bound
+/// keeps a remaining budget for those steps.
+const HTTP_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[tokio::main]
 async fn main() {
@@ -67,19 +78,42 @@ async fn run() -> Result<(), AppError> {
     })?;
     tracing::info!("listening on {}", addr);
 
-    axum::serve(
+    let serve = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal(state.background_shutdown.clone()))
-    .await
-    .map_err(|err| {
+    .into_future();
+    tokio::pin!(serve);
+
+    // RL1g1: the drain is bounded from the signal, not from process start, so the timer must
+    // only begin once the shutdown flag is set. Polling the same flag the signal future sets
+    // keeps this independent of which shutdown source fired.
+    let drained = loop {
+        tokio::select! {
+            result = &mut serve => break result.map(|()| true),
+            () = monoize::store_billing::availability::wait_for_background_shutdown(
+                state.background_shutdown.clone(),
+            ) => {
+                break match tokio::time::timeout(HTTP_DRAIN_TIMEOUT, &mut serve).await {
+                    Ok(result) => result.map(|()| true),
+                    Err(_) => Ok(false),
+                };
+            }
+        }
+    };
+    if !drained.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "serve_failed",
             err.to_string(),
         )
-    })?;
+    })? {
+        tracing::warn!(
+            timeout_secs = HTTP_DRAIN_TIMEOUT.as_secs(),
+            "HTTP drain timed out; abandoning open connections so shutdown cleanup can run"
+        );
+    }
 
     let terminal_tasks = state.request_log_tasks.active_count();
     if terminal_tasks > 0 {

@@ -136,6 +136,21 @@ RL1f. On server startup, all request-log rows with `status = "pending"` MUST be 
 
 RL1g. On receipt of SIGINT or SIGTERM, the server MUST initiate graceful shutdown: set the process-local background-shutdown flag, stop accepting new connections, allow in-flight requests to drain, wait for all tracked request-log and active-probe work to finish, flush all write batchers (including the request-log batcher), then transition any remaining `"pending"` rows (legacy) to `"error"` with the same fields as RL1f before process exit.
 
+RL1g1. The HTTP drain of RL1g MUST be bounded by a fixed timeout of 15 seconds measured
+from the moment the background-shutdown flag is set. When the timeout expires, the server
+MUST abandon the connections still open, log one warning that names the timeout, and
+proceed to the remaining RL1g steps.
+
+The bound is required for the RL1g steps after the drain to run at all. A streaming
+response holds its connection open for as long as the upstream keeps producing tokens, so an
+unbounded drain does not complete; the supervisor then sends SIGKILL on its own deadline and
+the batcher flush and pending-row transition never execute, losing buffered request logs and
+leaving `"pending"` rows for RL1f to repair on the next start. Abandoning a connection loses
+only bytes that were already undeliverable, because RL1h keeps the forwarding task and its
+billing independent of the downstream connection. The timeout MUST remain strictly below the
+deployment stop timeout of `deployment-watchdog.spec.md`, which is 30 seconds, so that the
+post-drain steps have a remaining budget.
+
 RL1h. A downstream client disconnect MUST NOT cancel in-flight upstream work. After admission, Monoize MUST keep the forwarding task alive independently of the downstream HTTP connection: it MUST continue dispatching or consuming the upstream request until one of the L2/L2.1 terminal conditions in `user-billing-and-model-metadata.spec.md` holds. Encoded bytes that can no longer be delivered MAY be discarded. If that upstream attempt completes as a billable success, billing MUST execute normally on the accumulated or terminal upstream usage and the request log MUST finalize as `status = "client_gone"` with `error_code = "client_gone"`, `error_message = "client disconnected"`, and `error_http_status = 499`. If the upstream attempt fails as an API error, the request log MUST finalize as `status = "error"` with that upstream error (not as a local 500). `"client_gone"` is a billable terminal status and MUST NOT be treated as a server fault.
 
 RL1i. When a provider attempt is selected (upstream call succeeds or streaming begins), the provider metadata (`provider_id`, `channel_id`, `upstream_model`, `provider_multiplier`) MUST be captured in memory and included in the terminal INSERT. No intermediate database write is performed.
