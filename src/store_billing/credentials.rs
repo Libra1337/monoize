@@ -7,9 +7,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::adapters::alipay::AlipayCredential;
+use super::adapters::epay::EpayCredential;
 use super::adapters::stripe::StripeCredential;
-use super::adapters::wechat::WechatCredential;
 use super::crypto::EncryptedSecret;
 use super::crypto::PaymentKeyRing;
 use super::governance::lock_channel;
@@ -174,10 +173,7 @@ fn validate_credential_identity(
         "stripe" => StripeCredential::from_json(plaintext)
             .map(|credential| digest(credential.account_id()))
             .map_err(|_| CredentialStoreError::InvalidCredential),
-        "alipay" => AlipayCredential::from_json(plaintext)
-            .map(|credential| digest(credential.seller_id()))
-            .map_err(|_| CredentialStoreError::InvalidCredential),
-        "wechat" => WechatCredential::from_json(plaintext)
+        "epay" => EpayCredential::from_json(plaintext)
             .map(|credential| credential.account_identity_digest())
             .map_err(|_| CredentialStoreError::InvalidCredential),
         _ => Err(CredentialStoreError::InvalidCredential),

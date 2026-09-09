@@ -64,6 +64,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260829_000059_store_released_schema_repair::Migration),
             Box::new(m20260829_000060_api_key_channel_bindings::Migration),
             Box::new(m20260830_000061_usage_ranking_privacy::Migration),
+            Box::new(m20260904_000062_group_visibility::Migration),
+            Box::new(m20260908_000063_enterprise_account_class::Migration),
+            Box::new(m20260908_000064_epay_adapter::Migration),
         ]
     }
 }
@@ -257,6 +260,9 @@ mod m20260828_000058_store_retention_runtime;
 mod m20260829_000059_store_released_schema_repair;
 mod m20260829_000060_api_key_channel_bindings;
 mod m20260830_000061_usage_ranking_privacy;
+mod m20260904_000062_group_visibility;
+mod m20260908_000063_enterprise_account_class;
+mod m20260908_000064_epay_adapter;
 
 #[cfg(test)]
 mod tests {
@@ -297,10 +303,13 @@ mod tests {
         )
         .expect("strictly newer history is accepted");
 
-        assert_eq!(decision, StartupMigrationDecision::AcceptNewerApplied {
-            newest_embedded: "m002_current".to_string(),
-            newer_applied: versions(&["m003_future", "m004_future"]),
-        });
+        assert_eq!(
+            decision,
+            StartupMigrationDecision::AcceptNewerApplied {
+                newest_embedded: "m002_current".to_string(),
+                newer_applied: versions(&["m003_future", "m004_future"]),
+            }
+        );
     }
 
     #[test]

@@ -648,7 +648,62 @@ impl StoreBillingStore {
         channel.supported_currencies = availability.supported_currencies;
         channel.amount_limits = availability.amount_limits;
         channel.checkout_action_kinds = availability.checkout_action_kinds;
+        if channel.adapter_kind == PaymentAdapterKind::Epay {
+            channel.epay_methods = load_epay_methods(&self.db, enabled_only)
+                .await?
+                .remove(id)
+                .unwrap_or_default();
+        }
         Ok(Some(channel))
+    }
+
+    /// Replaces the presentation and enabled state of one EPay method. Enabling a method does
+    /// not by itself make the Channel available; the readiness and credential checks still
+    /// apply through the normal availability evaluation.
+    pub async fn update_epay_method(
+        &self,
+        channel_id: &str,
+        method: EpayMethodKind,
+        input: UpdateEpayMethodInput,
+    ) -> Result<PaymentChannel, StoreBillingError> {
+        self.require_write()?;
+        validate_payment_channel(&input.label, input.icon_kind, input.icon_value.as_deref())?;
+        let channel = self
+            .payment_channel_by_id(channel_id, false)
+            .await?
+            .ok_or(StoreBillingError::NotFound)?;
+        if channel.adapter_kind != PaymentAdapterKind::Epay {
+            return Err(StoreBillingError::InvalidPaymentChannel);
+        }
+        let now = timestamp(Utc::now());
+        let changed = self
+            .db
+            .write()
+            .await
+            .execute(self.db.stmt(
+                "UPDATE store_epay_methods
+                 SET label = $3, icon_kind = $4, icon_value = $5, sort_order = $6,
+                     enabled = $7, updated_at = $8
+                 WHERE channel_id = $1 AND method = $2",
+                vec![
+                    channel_id.into(),
+                    method.as_str().into(),
+                    input.label.trim().into(),
+                    input.icon_kind.as_str().into(),
+                    input.icon_value.clone().into(),
+                    input.sort_order.into(),
+                    i32::from(input.enabled).into(),
+                    now.into(),
+                ],
+            ))
+            .await
+            .map_err(storage)?;
+        if changed.rows_affected() == 0 {
+            return Err(StoreBillingError::NotFound);
+        }
+        self.payment_channel_by_id(channel_id, false)
+            .await?
+            .ok_or(StoreBillingError::NotFound)
     }
 
     pub async fn catalog(&self) -> Result<StoreCatalog, StoreBillingError> {
@@ -695,6 +750,7 @@ impl StoreBillingStore {
         let availability = evaluate_channels(&self.db, self.db.read(), Utc::now())
             .await
             .map_err(storage)?;
+        let mut epay_methods = load_epay_methods(&self.db, true).await?;
         let mut payment_channels = Vec::new();
         for row in channel_rows {
             let mut channel = payment_channel_from_row(row)?;
@@ -707,6 +763,13 @@ impl StoreBillingStore {
                 channel.supported_currencies = availability.supported_currencies.clone();
                 channel.amount_limits = availability.amount_limits.clone();
                 channel.checkout_action_kinds = availability.checkout_action_kinds.clone();
+                if channel.adapter_kind == PaymentAdapterKind::Epay {
+                    channel.epay_methods = epay_methods.remove(&channel.id).unwrap_or_default();
+                    // An EPay Channel with no enabled method is not selectable.
+                    if channel.epay_methods.is_empty() {
+                        continue;
+                    }
+                }
                 payment_channels.push(channel);
             }
         }
@@ -755,6 +818,7 @@ impl StoreBillingStore {
         let availability = evaluate_channels(&self.db, self.db.read(), Utc::now())
             .await
             .map_err(storage)?;
+        let mut epay_methods = load_epay_methods(&self.db, false).await?;
         let mut channels = Vec::with_capacity(rows.len());
         for row in rows {
             let mut channel = payment_channel_from_row(row)?;
@@ -766,6 +830,9 @@ impl StoreBillingStore {
             channel.supported_currencies = availability.supported_currencies.clone();
             channel.amount_limits = availability.amount_limits.clone();
             channel.checkout_action_kinds = availability.checkout_action_kinds.clone();
+            if channel.adapter_kind == PaymentAdapterKind::Epay {
+                channel.epay_methods = epay_methods.remove(&channel.id).unwrap_or_default();
+            }
             channels.push(channel);
         }
         Ok(channels)
@@ -1550,9 +1617,57 @@ fn payment_channel_from_row(row: QueryResult) -> Result<PaymentChannel, StoreBil
         supported_currencies: Vec::new(),
         amount_limits: Default::default(),
         checkout_action_kinds: Vec::new(),
+        epay_methods: Vec::new(),
         created_at: parse_timestamp(&row_string(&row, "created_at")?)?,
         updated_at: parse_timestamp(&row_string(&row, "updated_at")?)?,
     })
+}
+
+fn epay_method_from_row(row: &QueryResult) -> Result<EpayMethodConfig, StoreBillingError> {
+    Ok(EpayMethodConfig {
+        method: EpayMethodKind::from_str(&row_string(row, "method")?)
+            .ok_or_else(|| storage("stored EPay method is invalid"))?,
+        label: row_string(row, "label")?,
+        icon_kind: IconKind::from_str(&row_string(row, "icon_kind")?)
+            .ok_or_else(|| storage("stored EPay method icon kind is invalid"))?,
+        icon_value: row_optional_string(row, "icon_value")?,
+        sort_order: row.try_get("", "sort_order").map_err(storage)?,
+        enabled: row_i32(row, "enabled")? != 0,
+    })
+}
+
+/// Loads the EPay method configuration for every EPay Channel in one query. `enabled_only`
+/// restricts the result to the methods a user may select.
+async fn load_epay_methods(
+    db: &DbPool,
+    enabled_only: bool,
+) -> Result<std::collections::HashMap<String, Vec<EpayMethodConfig>>, StoreBillingError> {
+    let filter = if enabled_only {
+        " WHERE enabled = 1"
+    } else {
+        ""
+    };
+    let rows = db
+        .read()
+        .query_all(db.stmt(
+            &format!(
+                "SELECT channel_id, method, label, icon_kind, icon_value, sort_order, enabled
+                 FROM store_epay_methods{filter}
+                 ORDER BY sort_order ASC, method ASC"
+            ),
+            vec![],
+        ))
+        .await
+        .map_err(storage)?;
+    let mut methods: std::collections::HashMap<String, Vec<EpayMethodConfig>> =
+        std::collections::HashMap::new();
+    for row in &rows {
+        methods
+            .entry(row_string(row, "channel_id")?)
+            .or_default()
+            .push(epay_method_from_row(row)?);
+    }
+    Ok(methods)
 }
 
 fn validate_rate_snapshot(rate: &ExchangeRateSnapshot) -> Result<(), StoreBillingError> {

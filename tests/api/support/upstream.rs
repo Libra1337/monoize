@@ -5112,6 +5112,7 @@ async fn create_test_provider_in_new_group(
             description: String::new(),
             user_selectable: false,
             sort_order: 0,
+            account_class: Default::default(),
         })
         .await
         .expect("test Group creates");

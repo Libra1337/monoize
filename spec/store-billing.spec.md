@@ -4,7 +4,7 @@
 
 SB-0.1. The Store MUST sell one-time balance products and one-time plan products.
 
-SB-0.2. The Store MUST support Alipay, WeChat Pay v3, and Stripe Checkout in Milestone 1.
+SB-0.2. The Store MUST support one EPay Channel with Alipay and WeChat methods, and Stripe Checkout in Milestone 1.
 
 SB-0.3. The configurable HTTP payment adapter belongs to Milestone 2. A draft HTTP Channel MUST NOT accept production checkout or callbacks in Milestone 1.
 
@@ -58,7 +58,7 @@ SB-FX-16. Admin approval of a quarantined rate and Admin resume after suspected 
 
 SB-FX-17. Each order MUST store the exact rate rational, source timestamp, refresh timestamp, settlement amount, and settlement currency used at quote time. Later rate updates MUST NOT change an order.
 
-SB-FX-18. Alipay and WeChat Pay MUST settle in CNY. Stripe MAY settle in CNY or USD only when the configured Stripe account capability allows the currency.
+SB-FX-18. EPay MUST settle in CNY. Stripe MAY settle in CNY or USD only when the configured Stripe account capability allows the currency. EPay MUST reject a USD order and MUST NOT convert it to CNY.
 
 SB-FX-19. The Store MUST persist refresh attempt URL, parser version, HTTP status, response-body SHA-256 digest when present, result category, consecutive failure count, and attempt time. It MUST NOT log the response body.
 
@@ -124,9 +124,9 @@ SB-P-20A. Repeating one source with the same immutable snapshot MUST return the 
 
 ## 3. Payment Channels, Credentials, And Capability
 
-SB-C-1. A Channel adapter kind MUST be `alipay`, `wechat`, `stripe`, or `http`.
+SB-C-1. A Channel adapter kind MUST be `epay`, `stripe`, or `http`. EPay method values MUST be `alipay` or `wxpay`.
 
-SB-C-2. The migration MUST create disabled, unconfigured Alipay, WeChat Pay, and Stripe Channels when an equivalent Channel is absent.
+SB-C-2. The migration MUST create one disabled, unconfigured EPay Channel and one disabled, unconfigured Stripe Channel when an equivalent Channel is absent. Legacy Alipay and WeChat Channel kinds MUST NOT remain active.
 
 SB-C-3. A saved Channel credential MUST create a new immutable encrypted credential version. It MUST NOT overwrite a prior version.
 
@@ -941,3 +941,30 @@ SB-M-13. Migration `058` down MUST remove `idx_store_legal_holds_expiry` and `id
 SB-M-14. SQLite migration `051` MUST succeed with `PRAGMA foreign_keys = ON` when one or more legacy `store_orders` rows reference legacy `store_payment_channels` rows. It MUST preserve every order and its Channel reference, replace both legacy table shapes, disable every migrated Channel, and leave `PRAGMA foreign_key_check` empty.
 
 SB-M-15. Migration `059` MUST repair a database in which the released legacy migration `049` is recorded as applied, `store_plan_entitlements` exists, and `store_plan_entitlement_generations`, `store_plan_entitlement_current`, and `store_plan_entitlement_lifecycle` do not exist. It MUST migrate each legacy entitlement to generation `1`, preserve its user, product, name, time range, Group JSON, quota JSON, source kind, and source ID, convert `cny_per_usd` to positive canonical integer rate numerator and denominator values, and reduce the values by their greatest common divisor. It MUST create one unsuspended lifecycle row and one current row, and remove `store_plan_entitlements`. It MUST reject a partial or mixed legacy/current entitlement schema. On SQLite and PostgreSQL, it MUST normalize every migration-`051` order expiry whose date and time are separated by one space to the same UTC instant in RFC3339 form. It MUST leave `PRAGMA foreign_key_check` empty on SQLite. A database that already has the complete current entitlement schema and no legacy table MUST retain its entitlement rows.
+### 3.1 EPay Protocol
+
+SB-EP-1. One EPay Channel MUST store one gateway base URL, merchant ID, encrypted merchant secret, callback configuration, and independent enabled switches for `alipay` and `wxpay`.
+
+SB-EP-2. Checkout MUST submit `POST {gateway}/mapi.php` as `application/x-www-form-urlencoded`. It MUST include the documented `pid`, `type`, `out_trade_no`, `notify_url`, `return_url`, `name`, `money`, `clientip`, `device`, `param`, `sign`, and `sign_type` fields when applicable.
+
+SB-EP-3. `money` MUST contain exactly two decimal places produced from integer CNY fen. EPay checkout MUST reject every non-CNY order.
+
+SB-EP-4. EPay signing and verification MUST remove `sign`, `sign_type`, and empty values; sort remaining field names by ascending ASCII bytes; join unencoded `key=value` pairs with `&`; append the merchant secret without another separator; and compute lowercase MD5.
+
+SB-EP-5. A successful create response MUST contain `code = 1` and exactly one usable action from `qrcode`, `payurl`, or `urlscheme`. An absent action MUST fail creation and MUST NOT fulfill the order.
+
+SB-EP-6. The EPay callback MUST accept GET parameters and MUST process success only when `trade_status = TRADE_SUCCESS`. It MUST verify signature, merchant ID, local order number, provider trade number, exact amount, and expected method before applying payment.
+
+SB-EP-7. A callback MUST return plain text `success` only after verified evidence and the idempotent payment transition commit. Invalid or transiently uncommitted callbacks MUST NOT return `success`.
+
+SB-EP-8. Callback, order query, and reconciliation MUST use the same state-transition and fulfillment services. Repeated or concurrent evidence MUST fulfill one order at most once.
+
+SB-EP-9. After a timeout, disconnect, or HTTP `5xx`, the service MUST query the original provider order before retrying payment creation or refund.
+
+SB-EP-10. The EPay adapter MUST support merchant validation, order query, full refund, available-method discovery, and reconciliation. It MUST support refund query and settlement retrieval when the configured gateway reports those capabilities.
+
+SB-EP-11. The gateway URL MUST reject credentials in the URL, loopback, link-local, and private destinations. Outbound requests MUST reject a cross-host redirect and MUST validate resolved addresses before each connection.
+
+SB-EP-10A. The EPay refund protocol defines `code = 1` as success and every other value as failure without defining an error-code taxonomy. A refund response with HTTP 200 and `code = 1` MUST map to a succeeded refund. A refund response with HTTP 200 and any other `code` MUST map to an ambiguous refund and MUST remain reconcilable. It MUST NOT map to a terminal refund failure, because an undocumented code can report a transient gateway condition, an unsynchronized order, or an already-refunded order, and a terminal rejection would abandon a refundable amount with no later correction path.
+
+SB-EP-11A. The gateway URL scheme MUST be `https`. An `http` gateway URL MUST fail configuration validation. The EPay query endpoints (`act=query`, `act=order`, `act=orders`, `act=settle`, `act=paytype`) send the merchant secret as the `key` query parameter, so an `http` gateway would expose that secret in plaintext to every intermediate node. The merchant secret MUST NOT be moved to a POST body to permit `http`, because the documented EPay protocol defines those endpoints as GET.

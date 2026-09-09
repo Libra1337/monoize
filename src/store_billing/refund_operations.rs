@@ -5,9 +5,8 @@ use chrono::{DateTime, Duration, Utc};
 use sea_orm::{ConnectionTrait, QueryResult};
 use sha2::{Digest, Sha256};
 
-use super::adapters::alipay::{self, AlipayCredential};
+use super::adapters::epay::{self, EpayCredential};
 use super::adapters::stripe::{self, StripeCredential};
-use super::adapters::wechat::{self, WechatCredential, WechatPlatformVerifier};
 use super::crypto::{EncryptedSecret, PaymentKeyRing};
 use super::money::Currency;
 use super::payment::{AdapterError, ProviderRefundState, RefundRequest};
@@ -17,11 +16,7 @@ use crate::db::DbPool;
 #[derive(Clone)]
 pub enum RefundCredential {
     Stripe(StripeCredential),
-    Alipay(AlipayCredential),
-    Wechat {
-        credential: WechatCredential,
-        verifiers: Vec<WechatPlatformVerifier>,
-    },
+    Epay(EpayCredential),
 }
 
 #[derive(Clone)]
@@ -95,8 +90,8 @@ impl RefundProvider for ReqwestRefundProvider {
                         not_found_is_definitive: result.not_found_is_definitive,
                     })
             }
-            RefundCredential::Alipay(credential) => {
-                alipay::create_refund(&self.client, credential, &contract.request)
+            RefundCredential::Epay(credential) => {
+                epay::create_refund(&self.client, credential, &contract.request)
                     .await
                     .map(|result| RefundProviderOutcome {
                         state: result.state,
@@ -104,16 +99,6 @@ impl RefundProvider for ReqwestRefundProvider {
                         not_found_is_definitive: result.not_found_is_definitive,
                     })
             }
-            RefundCredential::Wechat {
-                credential,
-                verifiers,
-            } => wechat::create_refund(&self.client, credential, verifiers, &contract.request)
-                .await
-                .map(|result| RefundProviderOutcome {
-                    state: result.state,
-                    provider_refund_id: result.provider_refund_id,
-                    not_found_is_definitive: result.not_found_is_definitive,
-                }),
         }
     }
 
@@ -134,8 +119,8 @@ impl RefundProvider for ReqwestRefundProvider {
                 provider_refund_id: result.provider_refund_id,
                 not_found_is_definitive: result.not_found_is_definitive,
             }),
-            RefundCredential::Alipay(credential) => {
-                alipay::query_refund(&self.client, credential, &contract.request)
+            RefundCredential::Epay(credential) => {
+                epay::query_refund(&self.client, credential, &contract.request)
                     .await
                     .map(|result| RefundProviderOutcome {
                         state: result.state,
@@ -143,16 +128,6 @@ impl RefundProvider for ReqwestRefundProvider {
                         not_found_is_definitive: result.not_found_is_definitive,
                     })
             }
-            RefundCredential::Wechat {
-                credential,
-                verifiers,
-            } => wechat::query_refund(&self.client, credential, verifiers, &contract.request)
-                .await
-                .map(|result| RefundProviderOutcome {
-                    state: result.state,
-                    provider_refund_id: result.provider_refund_id,
-                    not_found_is_definitive: result.not_found_is_definitive,
-                }),
         }
     }
 }
@@ -356,29 +331,13 @@ async fn load_contract(
             validate_sha256_identity(credential.account_id(), &loaded.merchant_account_identity)?;
             RefundCredential::Stripe((*credential).clone())
         }
-        "alipay" => {
-            let credential = AlipayCredential::from_json(&plaintext)
-                .map_err(|_| RefundOperationsError::ConfigurationUnavailable)?;
-            validate_sha256_identity(credential.seller_id(), &loaded.merchant_account_identity)?;
-            RefundCredential::Alipay((*credential).clone())
-        }
-        "wechat" => {
-            let credential = WechatCredential::from_json(&plaintext)
+        "epay" => {
+            let credential = EpayCredential::from_json(&plaintext)
                 .map_err(|_| RefundOperationsError::ConfigurationUnavailable)?;
             if credential.account_identity_digest() != loaded.merchant_account_identity {
                 return Err(RefundOperationsError::ConfigurationUnavailable);
             }
-            let verifiers = load_wechat_platform_verifiers(
-                db,
-                key_ring,
-                &loaded.channel_id,
-                &loaded.merchant_account_identity,
-            )
-            .await?;
-            RefundCredential::Wechat {
-                credential: (*credential).clone(),
-                verifiers,
-            }
+            RefundCredential::Epay((*credential).clone())
         }
         _ => return Err(RefundOperationsError::ConfigurationUnavailable),
     };
@@ -465,75 +424,6 @@ async fn load_refund_contract(
             },
         },
     })
-}
-
-async fn load_wechat_platform_verifiers(
-    db: &DbPool,
-    key_ring: &PaymentKeyRing,
-    channel_id: &str,
-    account_identity_digest: &str,
-) -> Result<Vec<WechatPlatformVerifier>, RefundOperationsError> {
-    let rows = db
-        .read()
-        .query_all(db.stmt(
-            "SELECT id, format_version, key_id, nonce_base64, ciphertext_base64
-             FROM store_channel_credentials
-             WHERE channel_id = $1 AND adapter_kind = 'wechat'
-               AND account_identity_digest = $2
-             ORDER BY created_at DESC, id DESC",
-            vec![channel_id.into(), account_identity_digest.into()],
-        ))
-        .await
-        .map_err(storage)?;
-    let mut verifiers = Vec::new();
-    for row in rows {
-        let Ok(version) = row.try_get::<i32>("", "format_version") else {
-            continue;
-        };
-        let Ok(version) = u8::try_from(version) else {
-            continue;
-        };
-        let Ok(credential_id) = row.try_get::<String>("", "id") else {
-            continue;
-        };
-        let Ok(key_id) = row.try_get::<String>("", "key_id") else {
-            continue;
-        };
-        let Ok(nonce_base64) = row.try_get::<String>("", "nonce_base64") else {
-            continue;
-        };
-        let Ok(ciphertext_base64) = row.try_get::<String>("", "ciphertext_base64") else {
-            continue;
-        };
-        let encrypted = EncryptedSecret {
-            version,
-            key_id,
-            nonce_base64,
-            ciphertext_base64,
-        };
-        let aad = format!("store_channel_credentials:{credential_id}:secret");
-        let Ok(plaintext) = key_ring.decrypt(&aad, &encrypted) else {
-            continue;
-        };
-        let Ok(credential) = WechatCredential::from_json(&plaintext) else {
-            continue;
-        };
-        if credential.account_identity_digest() != account_identity_digest {
-            continue;
-        }
-        let Ok(verifier) = credential.platform_verifier() else {
-            continue;
-        };
-        if !verifiers.iter().any(|stored: &WechatPlatformVerifier| {
-            stored.certificate_serial() == verifier.certificate_serial()
-        }) {
-            verifiers.push(verifier);
-        }
-    }
-    if verifiers.is_empty() {
-        return Err(RefundOperationsError::ConfigurationUnavailable);
-    }
-    Ok(verifiers)
 }
 
 async fn project_provider_result(

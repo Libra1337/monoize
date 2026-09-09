@@ -6,9 +6,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::adapters::alipay::{self, AlipayCredential};
+use super::adapters::epay::{self, EpayCredential};
 use super::adapters::stripe::{self, StripeCredential};
-use super::adapters::wechat::{self, WechatCredential, WechatPlatformVerifier};
 use super::callbacks::{
     ApplyProviderEventInput, CallbackApplyResult, CallbackStoreError, PaymentCallbackStore,
 };
@@ -68,16 +67,9 @@ pub trait PaymentQueryProvider: Send + Sync {
         query: &PaymentQuery,
     ) -> Result<ProviderPaymentState, AdapterError>;
 
-    async fn query_alipay_payment(
+    async fn query_epay_payment(
         &self,
-        credential: &AlipayCredential,
-        query: &PaymentQuery,
-    ) -> Result<ProviderPaymentState, AdapterError>;
-
-    async fn query_wechat_payment(
-        &self,
-        credential: &WechatCredential,
-        verifiers: &[WechatPlatformVerifier],
+        credential: &EpayCredential,
         query: &PaymentQuery,
     ) -> Result<ProviderPaymentState, AdapterError>;
 }
@@ -103,21 +95,12 @@ impl PaymentQueryProvider for ReqwestPaymentQueryProvider {
         stripe::query_payment(&self.client, credential, query).await
     }
 
-    async fn query_alipay_payment(
+    async fn query_epay_payment(
         &self,
-        credential: &AlipayCredential,
+        credential: &EpayCredential,
         query: &PaymentQuery,
     ) -> Result<ProviderPaymentState, AdapterError> {
-        alipay::query_payment(&self.client, credential, query).await
-    }
-
-    async fn query_wechat_payment(
-        &self,
-        credential: &WechatCredential,
-        verifiers: &[WechatPlatformVerifier],
-        query: &PaymentQuery,
-    ) -> Result<ProviderPaymentState, AdapterError> {
-        wechat::query_payment_with_verifiers(&self.client, credential, verifiers, query).await
+        epay::query_payment(&self.client, credential, query).await
     }
 }
 
@@ -185,27 +168,12 @@ impl PaymentQueryOperations {
                     .query_stripe_payment(&credential, &query)
                     .await?
             }
-            "alipay" => {
-                let credential = AlipayCredential::from_json(&plaintext)
-                    .map_err(|_| PaymentOperationsError::CredentialInvalid)?;
-                validate_account_identity(credential.seller_id(), &loaded)?;
-                self.provider
-                    .query_alipay_payment(&credential, &query)
-                    .await?
-            }
-            "wechat" => {
-                let credential = WechatCredential::from_json(&plaintext)
+            "epay" => {
+                let credential = EpayCredential::from_json(&plaintext)
                     .map_err(|_| PaymentOperationsError::CredentialInvalid)?;
                 validate_account_identity_digest(&credential.account_identity_digest(), &loaded)?;
-                let verifiers = load_wechat_platform_verifiers(
-                    &self.db,
-                    &self.key_ring,
-                    &loaded.channel_id,
-                    &loaded.merchant_account_identity,
-                )
-                .await?;
                 self.provider
-                    .query_wechat_payment(&credential, &verifiers, &query)
+                    .query_epay_payment(&credential, &query)
                     .await?
             }
             _ => return Err(PaymentOperationsError::UnsupportedAdapter),
@@ -319,7 +287,10 @@ impl AdminOrderOperations {
         }
     }
 
-    pub async fn detail(&self, order_id: &str) -> Result<AdminOrderDetail, AdminOrderOperationError> {
+    pub async fn detail(
+        &self,
+        order_id: &str,
+    ) -> Result<AdminOrderDetail, AdminOrderOperationError> {
         Self::detail_from_db(&self.db, order_id).await
     }
 
@@ -579,9 +550,7 @@ fn map_query_error(error: PaymentOperationsError) -> AdminOrderOperationError {
         }
         PaymentOperationsError::Provider(
             AdapterError::InvalidConfiguration | AdapterError::InvalidRequest,
-        ) => {
-            AdminOrderOperationError::ConfigurationUnavailable
-        }
+        ) => AdminOrderOperationError::ConfigurationUnavailable,
         PaymentOperationsError::Provider(_) => AdminOrderOperationError::ProviderQueryFailed,
         PaymentOperationsError::Storage(detail) => AdminOrderOperationError::Storage(detail),
     }
@@ -613,66 +582,6 @@ fn map_callback_error(error: CallbackStoreError) -> AdminOrderOperationError {
             AdminOrderOperationError::Storage(detail)
         }
     }
-}
-
-async fn load_wechat_platform_verifiers(
-    db: &DbPool,
-    key_ring: &PaymentKeyRing,
-    channel_id: &str,
-    account_identity_digest: &str,
-) -> Result<Vec<WechatPlatformVerifier>, PaymentOperationsError> {
-    let rows = db
-        .read()
-        .query_all(db.stmt(
-            "SELECT id, format_version, key_id, nonce_base64, ciphertext_base64
-             FROM store_channel_credentials
-             WHERE channel_id = $1 AND adapter_kind = 'wechat'
-               AND account_identity_digest = $2
-             ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END,
-                      created_at DESC, id DESC",
-            vec![channel_id.into(), account_identity_digest.into()],
-        ))
-        .await
-        .map_err(storage)?;
-    let mut verifiers = Vec::new();
-    for row in rows {
-        let credential_id = row_string(&row, "id")?;
-        let version = row
-            .try_get::<i32>("", "format_version")
-            .map_err(storage)
-            .and_then(|value| {
-                u8::try_from(value).map_err(|_| PaymentOperationsError::CredentialInvalid)
-            })?;
-        let encrypted_secret = EncryptedSecret {
-            version,
-            key_id: row_string(&row, "key_id")?,
-            nonce_base64: row_string(&row, "nonce_base64")?,
-            ciphertext_base64: row_string(&row, "ciphertext_base64")?,
-        };
-        let aad = format!("store_channel_credentials:{credential_id}:secret");
-        let Ok(plaintext) = key_ring.decrypt(&aad, &encrypted_secret) else {
-            continue;
-        };
-        let Ok(credential) = WechatCredential::from_json(&plaintext) else {
-            continue;
-        };
-        let digest = credential.account_identity_digest();
-        if digest != account_identity_digest {
-            continue;
-        }
-        let Ok(verifier) = credential.platform_verifier() else {
-            continue;
-        };
-        if !verifiers.iter().any(|stored: &WechatPlatformVerifier| {
-            stored.certificate_serial() == verifier.certificate_serial()
-        }) {
-            verifiers.push(verifier);
-        }
-    }
-    if verifiers.is_empty() {
-        return Err(PaymentOperationsError::CredentialDecryptionFailed);
-    }
-    Ok(verifiers)
 }
 
 struct LoadedPaymentQuery {
@@ -757,7 +666,7 @@ async fn load_attempt(
     let order_number = row_string(&row, "order_number")?;
     let provider_object_id = match row_optional_string(&row, "provider_object_id")? {
         Some(value) => value,
-        None if matches!(adapter_kind.as_str(), "alipay" | "wechat") => order_number.clone(),
+        None if adapter_kind == "epay" => order_number.clone(),
         None => return Err(PaymentOperationsError::PaymentContractInvalid),
     };
 

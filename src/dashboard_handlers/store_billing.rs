@@ -957,7 +957,14 @@ pub async fn create_store_payment_attempt(
         state.payment_public_origin.clone(),
         state.checkout_provider.clone(),
     )
-    .with_client_ip(crate::client_ip::canonical_client_ip_from_headers(&headers));
+    .with_client_ip(crate::client_ip::canonical_client_ip_from_headers(&headers))
+    .with_device(
+        crate::store_billing::adapters::epay::EpayDevice::from_user_agent(
+            headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+        ),
+    );
     let result = checkout
         .create_attempt(&user.id, &id, input)
         .await
@@ -1215,7 +1222,9 @@ pub async fn list_wallet_ledger(
         .user_store
         .list_billing_ledger(&user.id, query.limit.unwrap_or(50))
         .await
-        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?;
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
     Ok(Json(entries))
 }
 
@@ -1538,6 +1547,29 @@ pub async fn update_store_payment_channel_admin(
     let channel = state
         .store_billing
         .update_payment_channel(&id, input)
+        .await
+        .map_err(map_store_error)?;
+    Ok(Json(channel))
+}
+
+pub async fn put_store_epay_method_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, method)): Path<(String, String)>,
+    body: Result<Json<crate::store_billing::UpdateEpayMethodInput>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let input = parse_store_json(body)?;
+    let method = crate::store_billing::EpayMethodKind::from_str(&method).ok_or_else(|| {
+        AppError::new(
+            StatusCode::NOT_FOUND,
+            "store_not_found",
+            "Store record was not found",
+        )
+    })?;
+    let channel = state
+        .store_billing
+        .update_epay_method(&id, method, input)
         .await
         .map_err(map_store_error)?;
     Ok(Json(channel))

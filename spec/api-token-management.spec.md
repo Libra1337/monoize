@@ -279,3 +279,40 @@ TM-Q2. Sub-account billing behavior is defined in `api-key-sub-account-billing.s
 TM-UI1. The create and edit dialogs MUST render `sub_account_balance_nano_usd` only when the authenticated user's role is `admin` or `super_admin`. The create control MUST accept only a non-negative integer; the edit control MUST accept a signed integer. The frontend MUST validate and submit its value as a decimal string using `BigInt`-equivalent integer arithmetic; it MUST NOT pass the value through JavaScript `Number`, `parseInt`, `parseFloat`, or `toFixed`. When an edit disables sub-account billing, the mutation MUST omit `sub_account_balance_nano_usd` so the server can consolidate the locked current balance.
 
 TM-UI2. A non-admin create or update mutation MUST omit `sub_account_balance_nano_usd` from its JSON request body.
+## API Key Analytics
+
+TM-AN1. `GET /api/dashboard/tokens/{key_id}/analytics` MUST accept `range` equal to `24h`, `7d`, `30d`, or `all`. An absent range MUST equal `24h`. Any other value MUST return HTTP `400`.
+
+TM-AN2. A non-Admin caller MUST own `key_id`. An Admin MAY inspect a Key owned by another user. An unauthorized or unknown Key MUST return the existing not-found response.
+
+TM-AN3. The response MUST contain total, input, cache-read, and output Tokens, request count, consumed Coin in nano units, current independent Key balance, trend buckets, and model rows.
+
+TM-AN4. Consumed Coin MUST equal the sum of persisted canonical `charge_nano_usd` values for matching request logs. The service MUST NOT calculate a historical charge from a current model rate.
+
+TM-AN5. `24h` MUST use hourly buckets. `7d` and `30d` MUST use daily buckets. `all` MUST use daily buckets when retained history spans at most 90 days and calendar-month buckets otherwise.
+
+TM-AN5a. Each bucket boundary MUST align to the start of its own bucket unit in UTC. An hourly bucket MUST start at minute zero and second zero. A daily bucket MUST start at midnight. A calendar-month bucket MUST start on day one at midnight. A label MUST NOT round a boundary that the bucket does not start at; for example, a bucket covering `10:37` to `11:37` MUST NOT be labelled `10:00`.
+
+TM-AN5b. Both range ends MUST align to the bucket unit. The exclusive range end MUST be the start of the unit that follows the unit containing the request instant, and the range start MUST be that end minus the bucket count in whole units. Aligning only the start leaves a range whose length is not a whole number of units, which yields buckets wider than the unit their label names. For the `all` range the start MUST additionally not precede the aligned unit that contains the first retained request.
+
+TM-AN5c. Calendar months have unequal lengths, so month buckets MUST be derived from the calendar rather than by dividing the range into equal durations. Bucket `k` MUST cover the calendar month `k` months after the range start month. Aggregation MUST assign a request to the bucket of the calendar month that contains it.
+
+TM-AN6. Each model row MUST contain model, total Tokens, request count, and consumed Coin. Rows MUST sort by total Tokens descending and model ascending.
+
+TM-AN7. A Key with `sub_account_enabled = false` MUST return `balance_mode = wallet` and no independent balance. A Key with `sub_account_enabled = true` MUST return `balance_mode = independent` and its signed stored balance.
+
+TM-AN8. Disabled and expired Keys MUST retain analytics access. A deleted Key MUST retain only a non-secret name snapshot and non-reversible identifier in historical data.
+
+TM-AN9. The Key list MUST remain a compact overview. Selecting one Key MUST open an analytics dialog without navigation. Initial loading MUST use a shape-matched Skeleton. Range changes MUST retain the prior result until the replacement result arrives.
+
+## Account-Class Transition
+
+TM-ENT1. `PUT /api/dashboard/users/{user_id}/account-class` MUST require Admin authorization and exact JSON fields `account_class` and `confirm_delete_api_keys`.
+
+TM-ENT2. `account_class` MUST equal `standard` or `enterprise`. `confirm_delete_api_keys` MUST equal `true`. Invalid input MUST change no row.
+
+TM-ENT3. One transaction MUST lock the user, settle every signed independent Key balance under SA-DEL2 through SA-DEL4, delete every API Key owned by the user, update the user account class, and append an audit row.
+
+TM-ENT4. The transaction MUST preserve wallet balance after required Key settlement, plan entitlement, orders, redemption history, request logs, and historical usage. A failed step MUST roll back every mutation.
+
+TM-ENT5. After commit, the process MUST invalidate API Key authentication, Group access, Marketplace, routing, and pricing caches affected by the user. A deleted Key MUST fail its next authentication attempt.

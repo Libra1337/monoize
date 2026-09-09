@@ -317,6 +317,16 @@ Provider, Channel, API type, capability, and human-price values.
 MM-UA9. The page MUST use SWR, show shape-matched initial Skeletons, retain the prior result
 during filter changes, and expose inline retry for a failed request.
 
+## 7.1 Authenticated Account-Class Catalog
+
+MM-ENT1. An authenticated Marketplace request MUST derive its account class from the authenticated user. The client MUST NOT choose or override this class.
+
+MM-ENT2. The authenticated Marketplace MUST return only Groups, Providers, Channels, models, offers, and prices whose Group account class equals the authenticated user account class.
+
+MM-ENT3. Enterprise model prices MUST be independently stored rates. The service MUST NOT derive them from standard prices during reads or billing.
+
+MM-ENT4. An unavailable Enterprise model and an unavailable standard model MUST use the same response shape. The response MUST NOT reveal the existence of an offer in the other class.
+
 ## 8. Qualification
 
 MM-Q1. The supported catalog envelope is 128 Groups, 5,000 Providers and embedded

@@ -229,13 +229,11 @@ async fn payment_migration_replaces_legacy_store_shape() {
             )
         })
         .collect::<Vec<_>>();
+    // Migration 064 replaces the legacy Alipay and WeChat Channels with one disabled EPay
+    // Channel and keeps the disabled Stripe Channel.
     assert_eq!(
         channels,
-        vec![
-            ("alipay".to_string(), 0),
-            ("stripe".to_string(), 0),
-            ("wechat".to_string(), 0),
-        ]
+        vec![("epay".to_string(), 0), ("stripe".to_string(), 0)]
     );
 }
 
@@ -501,7 +499,7 @@ async fn migration_059_repairs_released_entitlements_and_order_expiry() {
 #[tokio::test]
 async fn migration_059_preserves_complete_current_entitlement_schema() {
     let db = migrated_database().await;
-    Migrator::down(&db, Some(2)).await.unwrap();
+    Migrator::down(&db, Some(6)).await.unwrap();
 
     let group = db
         .query_one(Statement::from_string(
@@ -568,8 +566,8 @@ async fn migration_059_preserves_complete_current_entitlement_schema() {
 #[tokio::test]
 async fn migration_059_rejects_partial_or_mixed_entitlement_schema() {
     let db = migrated_database().await;
-    // Migration 060 follows 059, so both must be rolled back before 059 can be re-executed.
-    Migrator::down(&db, Some(2)).await.unwrap();
+    // Later migrations follow 059, so each must be rolled back before 059 can be re-executed.
+    Migrator::down(&db, Some(6)).await.unwrap();
     db.execute_unprepared("DROP TABLE store_plan_entitlement_current")
         .await
         .unwrap();
@@ -620,7 +618,7 @@ async fn payment_migration_installs_transition_and_recovery_guards() {
           state_revision, expires_at, created_at, updated_at)
          VALUES
          ('order-guard', 'LS-GUARD', 'user-1', 'product-1', 'balance', 'unpaid',
-          'pending', 'none', 0, 'store-channel-alipay', 'CNY', '1000', '6.7',
+          'pending', 'none', 0, 'store-channel-epay', 'CNY', '1000', '6.7',
           '67', '10', '2026-08-27T00:00:00Z', '{}', 2, 0,
           '2026-08-27T00:30:00Z', '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z')",
     )
@@ -807,5 +805,39 @@ async fn admission_migration_installs_token_receipt_and_key_shape_guards() {
         .await
         .is_err(),
         "published key shape must reject activation and encrypted seed"
+    );
+}
+
+#[tokio::test]
+async fn migration_064_keeps_the_payment_channel_catalog_index_after_rebuilding_the_table() {
+    let db = migrated_database().await;
+    let indexes = sqlite_names(&db, "index").await;
+
+    // Migration 064 rebuilds store_payment_channels to change its adapter-kind
+    // constraint. `RENAME TO` carries the migration-049 index onto the old table,
+    // so dropping that table would take the index with it and degrade the catalog
+    // query to a full table scan.
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_store_payment_channels_catalog"),
+        "the catalog index must survive the adapter-kind rebuild, found: {indexes:?}"
+    );
+
+    let adapter_kinds: Vec<String> = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT DISTINCT adapter_kind FROM store_payment_channels".to_string(),
+        ))
+        .await
+        .expect("read adapter kinds")
+        .iter()
+        .map(|row| String::try_get(row, "", "adapter_kind").expect("adapter_kind"))
+        .collect();
+    assert!(
+        adapter_kinds
+            .iter()
+            .all(|kind| matches!(kind.as_str(), "epay" | "stripe" | "http")),
+        "only epay, stripe, and http remain: {adapter_kinds:?}"
     );
 }

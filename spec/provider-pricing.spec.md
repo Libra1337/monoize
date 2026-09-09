@@ -446,3 +446,42 @@ cache and meter rates, missing rates, maximum integers, and exact PP-G5 equality
 
 PP-V5. UI tests MUST verify singular Group and Channel controls, public-exposure
 confirmation, optimistic rollback, revalidation, warnings, and Skeletons.
+
+## Account-Class Price Isolation
+
+PP-ENT1. Every price resolution MUST include the account class inherited from the selected Provider Group.
+
+PP-ENT2. A price candidate whose account class differs from the authenticated user account class MUST be ineligible.
+
+PP-ENT3. A missing in-class price MUST fail price resolution. Resolution MUST NOT fall back to a candidate from the other account class.
+
+PP-ENT4. Enterprise and standard rates MAY contain different values for the same normalized model, API type, usage class, context tier, service tier, modality, and cache TTL.
+
+PP-ENT5. PP-ENT1 through PP-ENT4 are enforced through the effective Profile, not through an
+account-class column on billing-rate records. Rate lookup is keyed by `effective_profile`,
+and `effective_profile` derives from the selected Provider or Channel (PP-M8), whose account
+class is already restricted to the authenticated user account class. An Enterprise request
+therefore reaches only Enterprise Providers and resolves only their Profiles.
+
+PP-ENT6. Required invariant that PP-ENT5 depends on: one Profile name MUST NOT be reachable
+from Providers of both account classes. A shared Profile name would make one set of
+billing-rate records resolve for both classes and would defeat PP-ENT2 and PP-ENT3, even
+though every routing query filters by account class. Enterprise and standard Providers
+therefore MUST use disjoint Profile names.
+
+PP-ENT7. Provider create and Provider update MUST enforce PP-ENT6 before the write commits.
+The account class is the class of the Group the write targets, which is the requested Group
+when the write moves the Provider and the current Group otherwise. A Profile name is
+reachable from an account class when a Provider of that class names it as its Provider
+Profile or a model entry of that Provider overrides its Profile to that name. A write whose
+requested Profile name, including every model-level override, is reachable from the other
+account class MUST fail with HTTP `409` and code `pricing_profile_account_class_conflict`,
+and MUST NOT change any row. The Provider being updated is excluded from the reachability
+check, so keeping its own Profile is never a conflict.
+
+PP-ENT8. On update, `pricing_profile` and the Channel are optional and an absent field keeps
+its stored value. The PP-ENT7 check MUST therefore run against the effective post-update
+state: the requested Provider Profile when the request supplies one and the stored Profile
+otherwise, and the requested Channel model entries when the request supplies them and the
+stored model entries otherwise. A request that names only `group_id` MUST still be checked,
+because moving a Provider carries its stored Profile into the target account class.

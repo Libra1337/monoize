@@ -648,6 +648,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 0,
+                account_class: Default::default(),
             })
             .await
             .expect("group creates")

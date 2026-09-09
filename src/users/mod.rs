@@ -6,6 +6,7 @@ mod utils;
 
 pub use groups::{CreateGroupInput, Group, GroupStoreError, ReorderGroupsInput, UpdateGroupInput};
 pub use plans::{BillingPlan, BillingPlanInput};
+pub use request_logs::AnalyticsBucketing;
 
 use crate::db::DbPool;
 use crate::exact_decimal::Multiplier;
@@ -13,6 +14,31 @@ use crate::transforms::TransformRuleConfig;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountClass {
+    #[default]
+    Standard,
+    Enterprise,
+}
+
+impl AccountClass {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "standard" => Some(Self::Standard),
+            "enterprise" => Some(Self::Enterprise),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Enterprise => "enterprise",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +91,8 @@ pub struct User {
     #[serde(skip_serializing)]
     pub password_hash: String,
     pub role: UserRole,
+    #[serde(default)]
+    pub account_class: AccountClass,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -431,6 +459,33 @@ pub fn resolve_effective_groups(
         _ => base,
     };
     canonicalize_group_ids(&filtered)
+}
+
+/// AKG5b: restricting a key/plan result to the Groups visible to the owner can
+/// legitimately yield nothing, and that is an empty authorization rather than an
+/// absent one. Returning a bare `Vec` would collapse it into `[]`, which
+/// `is_provider_group_eligible` reads as "no restriction" under R-GRP-1a, so the
+/// two states are kept apart in the type.
+///
+/// `None` means the key selects only Groups the owner cannot access; the caller
+/// MUST fail authentication closed instead of attaching `[]`.
+pub fn restrict_effective_groups(
+    effective_groups: &[String],
+    accessible_groups: &[String],
+) -> Option<Vec<String>> {
+    if effective_groups.is_empty() {
+        let accessible = canonicalize_group_ids(accessible_groups);
+        // AKG5d: an owner who can access no Group has no routable Group for any
+        // key, so an empty selection fails closed just like an empty
+        // intersection.
+        return (!accessible.is_empty()).then_some(accessible);
+    }
+    let restricted: Vec<String> = effective_groups
+        .iter()
+        .filter(|id| accessible_groups.iter().any(|allowed| allowed == *id))
+        .cloned()
+        .collect();
+    (!restricted.is_empty()).then_some(restricted)
 }
 
 /// R-GRP-1 eligibility: `None` means internal system traffic (all Providers
@@ -848,7 +903,7 @@ mod tests {
     use super::{
         MAX_MODEL_REDIRECT_PATTERN_BYTES, ModelRedirectRule, canonicalize_group_ids,
         is_provider_group_eligible, provider_group_rank, resolve_effective_groups,
-        validate_model_redirects,
+        restrict_effective_groups, validate_model_redirects,
     };
 
     fn ids(values: &[&str]) -> Vec<String> {
@@ -868,10 +923,7 @@ mod tests {
     #[test]
     fn resolve_effective_groups_follows_akg5() {
         // Empty key groups mean every Group.
-        assert_eq!(
-            resolve_effective_groups(&[], None),
-            Vec::<String>::new()
-        );
+        assert_eq!(resolve_effective_groups(&[], None), Vec::<String>::new());
         // Explicit ordered selection preserves order.
         assert_eq!(
             resolve_effective_groups(&ids(&["g-2", "g-1"]), None),
@@ -879,10 +931,7 @@ mod tests {
         );
         // Non-empty plan layer filters by membership in base order.
         assert_eq!(
-            resolve_effective_groups(
-                &ids(&["g-2", "g-1", "g-3"]),
-                Some(&ids(&["g-3", "g-2"]))
-            ),
+            resolve_effective_groups(&ids(&["g-2", "g-1", "g-3"]), Some(&ids(&["g-3", "g-2"]))),
             ids(&["g-2", "g-3"])
         );
         // Empty plan layer is unrestricted.
@@ -898,16 +947,47 @@ mod tests {
     }
 
     #[test]
+    fn private_groups_are_removed_without_erasing_saved_key_scope() {
+        assert_eq!(
+            restrict_effective_groups(&[], &ids(&["public", "granted"])),
+            Some(ids(&["public", "granted"]))
+        );
+        assert_eq!(
+            restrict_effective_groups(&ids(&["private", "public"]), &ids(&["public"])),
+            Some(ids(&["public"]))
+        );
+    }
+
+    #[test]
+    fn empty_restriction_never_degrades_into_unrestricted_routing() {
+        // AKG5b: a selection that survives no visibility check is an empty
+        // authorization. Returning `[]` would make R-GRP-1a treat every Provider
+        // as eligible, so the owner would reach Groups they cannot access.
+        assert_eq!(
+            restrict_effective_groups(&ids(&["private-a", "private-b"]), &ids(&["public"])),
+            None
+        );
+
+        // AKG5d: an owner with no accessible Group fails closed for both an
+        // explicit selection and an empty one.
+        assert_eq!(restrict_effective_groups(&ids(&["g-1"]), &[]), None);
+        assert_eq!(restrict_effective_groups(&[], &[]), None);
+
+        // The bypass this guards against: `[]` is "every Provider is eligible".
+        assert!(is_provider_group_eligible(
+            "g-not-accessible",
+            &Some(Vec::new())
+        ));
+    }
+
+    #[test]
     fn provider_group_eligibility_and_rank_follow_r_grp_rules() {
         // None = internal traffic: everything eligible at rank 0.
         assert!(is_provider_group_eligible("g-1", &None));
         assert_eq!(provider_group_rank("g-1", &None), 0);
 
         // Empty effective groups mean every Group for API-key traffic.
-        assert!(is_provider_group_eligible(
-            "g-1",
-            &Some(Vec::new())
-        ));
+        assert!(is_provider_group_eligible("g-1", &Some(Vec::new())));
         assert_eq!(provider_group_rank("g-1", &Some(Vec::new())), 0);
 
         let effective = Some(ids(&["g-2", "g-1"]));

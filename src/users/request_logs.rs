@@ -285,16 +285,49 @@ fn decode_charge_aggregate(
     Ok(total.to_string())
 }
 
-fn analytics_bucket_expr(is_sqlite: bool) -> &'static str {
-    if is_sqlite {
-        "CAST(((rl.created_at_unix_ms - $1) * $2) / $3 AS BIGINT)"
-    } else {
-        "FLOOR(((rl.created_at_unix_ms - $1)::NUMERIC * $2) / $3)::BIGINT"
+/// How `get_dashboard_analytics_bucketed` divides the requested window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalyticsBucketing {
+    /// `bucket_count` buckets of equal duration over `[time_from, time_to)`.
+    /// Bind `$1` = window start in milliseconds, `$2` = bucket count, `$3` = window length.
+    EqualIntervals,
+    /// One bucket per calendar month, starting at the month containing `time_from`.
+    /// Calendar months have unequal lengths, so an equal-duration split would label a bucket
+    /// with a month it does not cover. Bind `$1` = first month index, `$2` = bucket count,
+    /// `$3` = last month index, where a month index is `year * 12 + month - 1`.
+    CalendarMonths,
+}
+
+fn analytics_bucket_expr(is_sqlite: bool, bucketing: AnalyticsBucketing) -> &'static str {
+    match (bucketing, is_sqlite) {
+        (AnalyticsBucketing::EqualIntervals, true) => {
+            "CAST(((rl.created_at_unix_ms - $1) * $2) / $3 AS BIGINT)"
+        }
+        (AnalyticsBucketing::EqualIntervals, false) => {
+            "FLOOR(((rl.created_at_unix_ms - $1)::NUMERIC * $2) / $3)::BIGINT"
+        }
+        (AnalyticsBucketing::CalendarMonths, true) => {
+            "CAST(MIN(MAX((CAST(strftime('%Y', rl.created_at_unix_ms / 1000, 'unixepoch') AS INTEGER) * 12               + CAST(strftime('%m', rl.created_at_unix_ms / 1000, 'unixepoch') AS INTEGER) - 1) - $1, 0),               MIN($2 - 1, $3 - $1)) AS BIGINT)"
+        }
+        (AnalyticsBucketing::CalendarMonths, false) => {
+            "LEAST(GREATEST((EXTRACT(YEAR FROM to_timestamp(rl.created_at_unix_ms / 1000.0))::BIGINT * 12               + EXTRACT(MONTH FROM to_timestamp(rl.created_at_unix_ms / 1000.0))::BIGINT - 1) - $1, 0),               LEAST($2 - 1, $3 - $1))::BIGINT"
+        }
     }
 }
 
-fn analytics_model_bucket_sql(is_sqlite: bool, user_scoped: bool) -> String {
-    let bucket_expr = analytics_bucket_expr(is_sqlite);
+/// The calendar month index used by `AnalyticsBucketing::CalendarMonths`.
+pub fn analytics_month_index(value: chrono::DateTime<chrono::Utc>) -> i64 {
+    use chrono::Datelike;
+    i64::from(value.year()) * 12 + i64::from(value.month()) - 1
+}
+
+fn analytics_model_bucket_sql(
+    is_sqlite: bool,
+    user_scoped: bool,
+    api_key_scoped: bool,
+    bucketing: AnalyticsBucketing,
+) -> String {
+    let bucket_expr = analytics_bucket_expr(is_sqlite, bucketing);
     let model_expr =
         "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')";
     let charge_columns = charge_aggregate_columns(!is_sqlite);
@@ -302,6 +335,11 @@ fn analytics_model_bucket_sql(is_sqlite: bool, user_scoped: bool) -> String {
         " AND rl.user_id = $6"
     } else {
         ""
+    };
+    let api_key_filter = match (user_scoped, api_key_scoped) {
+        (true, true) => " AND rl.api_key_id = $7",
+        (false, true) => " AND rl.api_key_id = $6",
+        (_, false) => "",
     };
     let token_columns = if is_sqlite {
         "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
@@ -321,7 +359,7 @@ fn analytics_model_bucket_sql(is_sqlite: bool, user_scoped: bool) -> String {
     format!(
         "SELECT {bucket_expr} AS bucket_idx, {model_expr} AS model, {charge_columns}, {token_columns}, COUNT(*) AS call_count \
          FROM request_logs rl \
-         WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter} \
+         WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter}{api_key_filter} \
          GROUP BY bucket_idx, {model_expr} \
          ORDER BY bucket_idx, model"
     )
@@ -343,12 +381,12 @@ fn decode_token_aggregate(row: &sea_orm::QueryResult, column: &str) -> Result<i1
 #[cfg(test)]
 mod tests {
     use super::{
-        analytics_bucket_expr, analytics_model_bucket_sql, append_request_log_filters,
-        ascii_folded_like_pattern, charge_aggregate_select, decode_charge_aggregate,
-        decode_token_aggregate,
-        enrich_tried_providers_names, escape_like_literal,
-        request_log_model_filter_max_terms_from_raw, tried_providers_need_name_enrichment,
-        validate_request_log_model_filter_with_limit,
+        AnalyticsBucketing, analytics_bucket_expr, analytics_model_bucket_sql,
+        analytics_month_index,
+        append_request_log_filters, ascii_folded_like_pattern, charge_aggregate_select,
+        decode_charge_aggregate, decode_token_aggregate, enrich_tried_providers_names,
+        escape_like_literal, request_log_model_filter_max_terms_from_raw,
+        tried_providers_need_name_enrichment, validate_request_log_model_filter_with_limit,
     };
     use crate::db::DbPool;
     use sea_orm::{ConnectionTrait, TransactionTrait, Value as SeaValue};
@@ -486,20 +524,22 @@ mod tests {
             .map(|term| format!("model-{term}"))
             .collect::<Vec<_>>()
             .join(",");
-        assert!(append_request_log_filters(
-            &mut sql,
-            &mut values,
-            &mut idx,
-            false,
-            Some(&over_limit),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .is_err());
+        assert!(
+            append_request_log_filters(
+                &mut sql,
+                &mut values,
+                &mut idx,
+                false,
+                Some(&over_limit),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .is_err()
+        );
         assert_eq!(sql, "SELECT 1 FROM request_logs rl WHERE 1 = 1");
         assert!(values.is_empty());
         assert_eq!(idx, 1);
@@ -578,6 +618,96 @@ mod tests {
         );
     }
 
+    /// TM-AN5c: the calendar-month expression must place each request in the bucket of the
+    /// calendar month that contains it, including across a year boundary, and must clamp
+    /// instants outside the window into the first and last bucket.
+    #[tokio::test]
+    async fn dashboard_analytics_sqlite_calendar_month_buckets_follow_the_calendar() {
+        let db = DbPool::connect("sqlite::memory:").await.unwrap();
+        db.write()
+            .await
+            .execute_unprepared(
+                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER)",
+            )
+            .await
+            .unwrap();
+
+        let at = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .expect("fixed instant")
+                .timestamp_millis()
+        };
+        // The window covers 2025-11 through 2026-02, so bucket 0 is 2025-11 and bucket 3 is
+        // 2026-02. December has 31 days and February has 28, so an equal-duration split would
+        // misplace at least one of these rows.
+        for (model, instant) in [
+            ("november", "2025-11-30T23:59:59Z"),
+            ("december-first", "2025-12-01T00:00:00Z"),
+            ("december-last", "2025-12-31T23:59:59Z"),
+            ("january", "2026-01-15T12:00:00Z"),
+            ("february", "2026-02-28T23:59:59Z"),
+            ("before-window", "2025-10-15T00:00:00Z"),
+            ("after-window", "2026-03-05T00:00:00Z"),
+        ] {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO request_logs (created_at_unix_ms, model, upstream_model, charge_nano_usd, user_id, input_tokens, cache_read_tokens, output_tokens) VALUES ($1, $2, '', '1', 'u1', 1, 0, 0)",
+                    vec![at(instant).into(), model.into()],
+                ))
+                .await
+                .unwrap();
+        }
+
+        let first_month = analytics_month_index(
+            chrono::DateTime::parse_from_rfc3339("2025-11-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        let last_month = analytics_month_index(
+            chrono::DateTime::parse_from_rfc3339("2026-02-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        assert_eq!(last_month - first_month, 3);
+
+        let sql =
+            analytics_model_bucket_sql(true, true, false, AnalyticsBucketing::CalendarMonths);
+        let rows = db
+            .read()
+            .query_all(db.stmt(
+                &sql,
+                vec![
+                    first_month.into(),
+                    4_i64.into(),
+                    last_month.into(),
+                    // The time window itself still filters rows, so it is widened here to keep
+                    // the out-of-window rows and prove the expression clamps them.
+                    at("2025-01-01T00:00:00Z").into(),
+                    at("2027-01-01T00:00:00Z").into(),
+                    "u1".into(),
+                ],
+            ))
+            .await
+            .unwrap();
+
+        let mut buckets = std::collections::BTreeMap::new();
+        for row in rows {
+            let model: String = row.try_get("", "model").unwrap();
+            let bucket_idx: i64 = row.try_get("", "bucket_idx").unwrap();
+            buckets.insert(model, bucket_idx);
+        }
+        assert_eq!(buckets.get("november"), Some(&0));
+        assert_eq!(buckets.get("december-first"), Some(&1));
+        assert_eq!(buckets.get("december-last"), Some(&1));
+        assert_eq!(buckets.get("january"), Some(&2));
+        assert_eq!(buckets.get("february"), Some(&3));
+        // Instants outside the window clamp into the first and last bucket rather than
+        // producing a negative or out-of-range index.
+        assert_eq!(buckets.get("before-window"), Some(&0));
+        assert_eq!(buckets.get("after-window"), Some(&3));
+    }
+
     #[tokio::test]
     async fn dashboard_analytics_sqlite_model_buckets_group_exact_cost_and_tokens() {
         let db = DbPool::connect("sqlite::memory:").await.unwrap();
@@ -631,7 +761,16 @@ mod tests {
                 15_i64,
             ),
             (700_i64, "overflow", "", "1", "u1", 16_i64, 17_i64, 18_i64),
-            (800_i64, "  ", "fallback-model", "2", "u1", 1_i64, 2_i64, 3_i64),
+            (
+                800_i64,
+                "  ",
+                "fallback-model",
+                "2",
+                "u1",
+                1_i64,
+                2_i64,
+                3_i64,
+            ),
             (900_i64, "", "  ", "3", "u1", 4_i64, 5_i64, 6_i64),
             (
                 100_i64,
@@ -663,8 +802,10 @@ mod tests {
                 .unwrap();
         }
 
-        let sql = analytics_model_bucket_sql(true, true);
-        assert!(sql.contains("COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')"));
+        let sql = analytics_model_bucket_sql(true, true, false, AnalyticsBucketing::EqualIntervals);
+        assert!(sql.contains(
+            "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')"
+        ));
         assert!(!sql.contains("SELECT rl.created_at_unix_ms"));
         let rows = db
             .read()
@@ -865,7 +1006,7 @@ mod tests {
             .query_one(db.stmt(
                 &format!(
                     "SELECT {} AS bucket_idx FROM request_logs rl WHERE model = $4",
-                    analytics_bucket_expr(true)
+                    analytics_bucket_expr(true, AnalyticsBucketing::EqualIntervals)
                 ),
                 vec![
                     1_704_067_199_400_i64.into(),
@@ -882,20 +1023,22 @@ mod tests {
         let mut malformed_sql = "SELECT 1 FROM request_logs rl WHERE 1 = 1".to_string();
         let mut malformed_values = Vec::new();
         let mut malformed_idx = 1;
-        assert!(append_request_log_filters(
-            &mut malformed_sql,
-            &mut malformed_values,
-            &mut malformed_idx,
-            false,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("bad"),
-            None,
-        )
-        .is_err());
+        assert!(
+            append_request_log_filters(
+                &mut malformed_sql,
+                &mut malformed_values,
+                &mut malformed_idx,
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("bad"),
+                None,
+            )
+            .is_err()
+        );
         assert_eq!(malformed_idx, 1);
         assert!(malformed_values.is_empty());
     }
@@ -1025,7 +1168,7 @@ mod tests {
 
         let bucket_sql = format!(
             "SELECT {} AS bucket_idx FROM request_logs rl WHERE model = $4",
-            analytics_bucket_expr(false)
+            analytics_bucket_expr(false, AnalyticsBucketing::EqualIntervals)
         );
         let bucket = txn
             .query_one(db.stmt(
@@ -1069,7 +1212,7 @@ mod tests {
         }
         let analytics_rows = txn
             .query_all(db.stmt(
-                &analytics_model_bucket_sql(false, true),
+                &analytics_model_bucket_sql(false, true, false, AnalyticsBucketing::EqualIntervals),
                 vec![
                     1_704_067_199_000_i64.into(),
                     2_i64.into(),
@@ -1778,13 +1921,55 @@ impl UserStore {
         Ok((logs, total, total_charge_nano_usd))
     }
 
+    pub async fn get_api_key_analytics_start(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+    ) -> Result<Option<i64>, String> {
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                "SELECT MIN(created_at_unix_ms) AS first_ms FROM request_logs WHERE user_id = $1 AND api_key_id = $2 AND created_at_unix_ms IS NOT NULL",
+                vec![user_id.into(), api_key_id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "API key analytics start query returned no row".to_string())?;
+        row.try_get::<Option<i64>>("", "first_ms")
+            .map_err(|error| error.to_string())
+    }
+
     pub async fn get_dashboard_analytics(
         &self,
         user_id: Option<&str>,
+        api_key_id: Option<&str>,
         time_from: &str,
         time_to: &str,
         today_start: &str,
         bucket_count: i64,
+    ) -> Result<DashboardAnalyticsRaw, String> {
+        self.get_dashboard_analytics_bucketed(
+            user_id,
+            api_key_id,
+            time_from,
+            time_to,
+            today_start,
+            bucket_count,
+            AnalyticsBucketing::EqualIntervals,
+        )
+        .await
+    }
+
+    pub async fn get_dashboard_analytics_bucketed(
+        &self,
+        user_id: Option<&str>,
+        api_key_id: Option<&str>,
+        time_from: &str,
+        time_to: &str,
+        today_start: &str,
+        bucket_count: i64,
+        bucketing: AnalyticsBucketing,
     ) -> Result<DashboardAnalyticsRaw, String> {
         let is_sqlite = self.db.is_sqlite();
         let time_from_unix_ms = chrono::DateTime::parse_from_rfc3339(time_from)
@@ -1800,16 +1985,39 @@ impl UserStore {
             return Err("analytics time range and bucket count must be positive".to_string());
         }
 
-        let model_sql = analytics_model_bucket_sql(is_sqlite, user_id.is_some());
+        let model_sql = analytics_model_bucket_sql(
+            is_sqlite,
+            user_id.is_some(),
+            api_key_id.is_some(),
+            bucketing,
+        );
+        // The three bucket parameters carry a different meaning per mode; see
+        // `AnalyticsBucketing`. Every mode must reference all three, because a supplied but
+        // unreferenced parameter is a bind error on PostgreSQL.
+        let (bucket_anchor, bucket_bound) = match bucketing {
+            AnalyticsBucketing::EqualIntervals => (time_from_unix_ms, range_ms),
+            AnalyticsBucketing::CalendarMonths => {
+                let from = chrono::DateTime::from_timestamp_millis(time_from_unix_ms)
+                    .ok_or_else(|| "analytics month range is out of bounds".to_string())?;
+                // `time_to` is the exclusive end of the last bucket, so the last covered
+                // month is the one before it.
+                let last = chrono::DateTime::from_timestamp_millis(time_to_unix_ms - 1)
+                    .ok_or_else(|| "analytics month range is out of bounds".to_string())?;
+                (analytics_month_index(from), analytics_month_index(last))
+            }
+        };
         let mut model_values: Vec<SeaValue> = vec![
-            time_from_unix_ms.into(),
+            bucket_anchor.into(),
             bucket_count.into(),
-            range_ms.into(),
+            bucket_bound.into(),
             time_from_unix_ms.into(),
             time_to_unix_ms.into(),
         ];
         if let Some(uid) = user_id {
             model_values.push(uid.into());
+        }
+        if let Some(key_id) = api_key_id {
+            model_values.push(key_id.into());
         }
 
         let model_rows = self
@@ -1843,7 +2051,7 @@ impl UserStore {
             })
             .collect::<Result<Vec<_>, String>>()?;
 
-        let bucket_expr = analytics_bucket_expr(is_sqlite);
+        let bucket_expr = analytics_bucket_expr(is_sqlite, bucketing);
 
         // 2. Provider bucketed aggregation (calls only)
         let mut prov_sql = format!(
@@ -1858,9 +2066,9 @@ impl UserStore {
         );
         prov_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
         let mut prov_values: Vec<SeaValue> = vec![
-            time_from_unix_ms.into(),
+            bucket_anchor.into(),
             bucket_count.into(),
-            range_ms.into(),
+            bucket_bound.into(),
             time_from_unix_ms.into(),
             time_to_unix_ms.into(),
         ];
@@ -1871,7 +2079,10 @@ impl UserStore {
             prov_values.push(uid.into());
             prov_idx += 1;
         }
-        let _ = prov_idx;
+        if let Some(key_id) = api_key_id {
+            prov_sql.push_str(&format!(" AND rl.api_key_id = ${prov_idx}"));
+            prov_values.push(key_id.into());
+        }
         prov_sql.push_str(" GROUP BY bucket_idx, provider_label");
 
         let prov_rows = self
@@ -1913,9 +2124,11 @@ impl UserStore {
                     input
                         .checked_add(row.input_tokens)
                         .ok_or_else(|| "analytics input token aggregate overflow".to_string())?,
-                    cache_read.checked_add(row.cache_read_tokens).ok_or_else(|| {
-                        "analytics cache-read token aggregate overflow".to_string()
-                    })?,
+                    cache_read
+                        .checked_add(row.cache_read_tokens)
+                        .ok_or_else(|| {
+                            "analytics cache-read token aggregate overflow".to_string()
+                        })?,
                     output
                         .checked_add(row.output_tokens)
                         .ok_or_else(|| "analytics output token aggregate overflow".to_string())?,
@@ -1937,9 +2150,15 @@ impl UserStore {
             .timestamp_millis();
         let mut today_values: Vec<SeaValue> = vec![today_start_unix_ms.into()];
 
+        let mut today_idx = 2usize;
         if let Some(uid) = user_id {
-            today_sql.push_str(" AND rl.user_id = $2");
+            today_sql.push_str(&format!(" AND rl.user_id = ${today_idx}"));
             today_values.push(uid.into());
+            today_idx += 1;
+        }
+        if let Some(key_id) = api_key_id {
+            today_sql.push_str(&format!(" AND rl.api_key_id = ${today_idx}"));
+            today_values.push(key_id.into());
         }
         let today_row = self
             .db
@@ -2182,12 +2401,8 @@ impl UserStore {
             .collect::<Result<Vec<_>, String>>()?;
         decoded.sort_by(|left, right| {
             let order = if rank_by_tokens {
-                let left_tokens = left
-                    .input_tokens
-                    .saturating_add(left.output_tokens);
-                let right_tokens = right
-                    .input_tokens
-                    .saturating_add(right.output_tokens);
+                let left_tokens = left.input_tokens.saturating_add(left.output_tokens);
+                let right_tokens = right.input_tokens.saturating_add(right.output_tokens);
                 right_tokens.cmp(&left_tokens)
             } else {
                 right.cost_nano_usd.cmp(&left.cost_nano_usd)
@@ -2274,12 +2489,8 @@ impl UserStore {
             })
             .collect::<Result<Vec<_>, String>>()?;
         decoded.sort_by(|left, right| {
-            let left_tokens = left
-                .input_tokens
-                .saturating_add(left.output_tokens);
-            let right_tokens = right
-                .input_tokens
-                .saturating_add(right.output_tokens);
+            let left_tokens = left.input_tokens.saturating_add(left.output_tokens);
+            let right_tokens = right.input_tokens.saturating_add(right.output_tokens);
             right_tokens
                 .cmp(&left_tokens)
                 .then_with(|| right.call_count.cmp(&left.call_count))

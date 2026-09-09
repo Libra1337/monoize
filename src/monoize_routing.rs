@@ -1318,6 +1318,94 @@ impl MonoizeRoutingStore {
             .collect()
     }
 
+    /// PP-ENT6: reports every account class that already reaches each named pricing Profile,
+    /// through a Provider-level Profile or a model-level override. `exclude_provider_id` skips
+    /// the Provider being updated, so keeping its own Profile is never a conflict.
+    pub async fn pricing_profile_account_classes(
+        &self,
+        profiles: &[String],
+        exclude_provider_id: Option<&str>,
+    ) -> Result<Vec<(String, crate::users::AccountClass)>, String> {
+        if profiles.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut values: Vec<sea_orm::Value> = Vec::with_capacity(profiles.len() * 2 + 2);
+        let provider_placeholders = (0..profiles.len())
+            .map(|index| format!("${}", index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        values.extend(profiles.iter().cloned().map(Into::into));
+        let model_placeholders = (0..profiles.len())
+            .map(|index| format!("${}", profiles.len() + index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        values.extend(profiles.iter().cloned().map(Into::into));
+
+        let exclude_index = profiles.len() * 2 + 1;
+        let (provider_filter, model_filter) = match exclude_provider_id {
+            Some(id) => {
+                values.push(id.into());
+                values.push(id.into());
+                (
+                    format!(" AND p.id <> ${exclude_index}"),
+                    format!(" AND p.id <> ${}", exclude_index + 1),
+                )
+            }
+            None => (String::new(), String::new()),
+        };
+
+        let sql = format!(
+            "SELECT p.pricing_profile AS profile, g.account_class AS account_class              FROM monoize_providers p JOIN monoize_groups g ON g.id = p.group_id              WHERE p.pricing_profile IN ({provider_placeholders}){provider_filter}              UNION              SELECT pm.pricing_profile_override AS profile, g.account_class AS account_class              FROM monoize_provider_models pm              JOIN monoize_providers p ON p.id = pm.provider_id              JOIN monoize_groups g ON g.id = p.group_id              WHERE pm.pricing_profile_mode = 'override'                AND pm.pricing_profile_override IN ({model_placeholders}){model_filter}"
+        );
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(&sql, values))
+            .await
+            .map_err(|error| error.to_string())?;
+        rows.into_iter()
+            .map(|row| {
+                let profile: String = row.try_get("", "profile").map_err(|e| e.to_string())?;
+                let raw: String = row
+                    .try_get("", "account_class")
+                    .map_err(|e| e.to_string())?;
+                let account_class = crate::users::AccountClass::from_str(&raw)
+                    .ok_or_else(|| format!("invalid persisted account_class: {raw:?}"))?;
+                Ok((profile, account_class))
+            })
+            .collect()
+    }
+
+    pub async fn list_providers_by_account_class(
+        &self,
+        account_class: crate::users::AccountClass,
+    ) -> Result<Vec<MonoizeProvider>, String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                &format!(
+                    "{} FROM monoize_providers p JOIN monoize_groups g ON g.id = p.group_id \
+                     WHERE g.account_class = $1 ORDER BY p.priority ASC, p.created_at ASC",
+                    provider_projection("p.")
+                ),
+                vec![account_class.as_str().into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+
+        let mut channels_by_provider = self.load_channels_bulk(None).await?;
+        rows.iter()
+            .map(|row| {
+                let id: String = row.try_get("", "id").map_err(|error| error.to_string())?;
+                let channel = channels_by_provider
+                    .remove(&id)
+                    .ok_or_else(|| format!("provider {id} missing embedded channel"))?;
+                decode_provider_row(row, channel)
+            })
+            .collect()
+    }
+
     pub async fn available_model_names(
         &self,
         candidates: &[String],
@@ -1360,6 +1448,53 @@ impl MonoizeRoutingStore {
         Ok(available)
     }
 
+    pub async fn available_model_names_for_account_class(
+        &self,
+        candidates: &[String],
+        account_class: crate::users::AccountClass,
+    ) -> Result<HashSet<String>, String> {
+        if candidates.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let candidates = candidates
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut available = HashSet::new();
+        const LOOKUP_CHUNK_SIZE: usize = 399;
+        for chunk in candidates.chunks(LOOKUP_CHUNK_SIZE) {
+            let placeholders = (0..chunk.len())
+                .map(|index| format!("${}", index + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT DISTINCT pm.model_name FROM monoize_provider_models pm
+                 JOIN monoize_providers p ON p.id = pm.provider_id
+                 JOIN monoize_groups g ON g.id = p.group_id
+                 WHERE p.enabled = 1 AND p.channel_enabled = 1
+                   AND g.account_class = $1
+                   AND pm.model_name IN ({placeholders})"
+            );
+            let mut values: Vec<sea_orm::Value> = vec![account_class.as_str().into()];
+            values.extend(chunk.iter().cloned().map(Into::into));
+            let rows = self
+                .db
+                .read()
+                .query_all(self.db.stmt(&sql, values))
+                .await
+                .map_err(|error| error.to_string())?;
+            for row in rows {
+                available.insert(
+                    row.try_get("", "model_name")
+                        .map_err(|error| error.to_string())?,
+                );
+            }
+        }
+        Ok(available)
+    }
+
     pub async fn list_available_model_names(&self) -> Result<Vec<String>, String> {
         let sql = "SELECT DISTINCT pm.model_name FROM monoize_provider_models pm
                    JOIN monoize_providers p ON p.id = pm.provider_id
@@ -1391,6 +1526,37 @@ impl MonoizeRoutingStore {
             .collect())
     }
 
+    pub async fn list_providers_for_model_and_account_class(
+        &self,
+        model: &str,
+        account_class: crate::users::AccountClass,
+    ) -> Result<Vec<MonoizeProvider>, String> {
+        let providers = self.list_providers_for_model(model).await?;
+        if providers.is_empty() {
+            return Ok(providers);
+        }
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT p.id FROM monoize_providers p JOIN monoize_groups g ON g.id = p.group_id WHERE g.account_class = $1",
+                vec![account_class.as_str().into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        let allowed = rows
+            .into_iter()
+            .map(|row| {
+                row.try_get::<String>("", "id")
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<Result<HashSet<_>, _>>()?;
+        Ok(providers
+            .into_iter()
+            .filter(|provider| allowed.contains(&provider.id))
+            .collect())
+    }
+
     pub async fn list_active_probe_candidates(&self) -> Result<Vec<MonoizeProvider>, String> {
         let providers = self.list_providers().await?;
         Ok(providers
@@ -1404,7 +1570,10 @@ impl MonoizeRoutingStore {
             .collect())
     }
 
-    async fn resolve_provider_group_id(&self, group_id: &str) -> Result<String, String> {
+    /// Resolves the Group a Provider write targets. An empty id selects the default Group,
+    /// so callers that must agree with the write on the target Group use this instead of
+    /// reading the request field directly.
+    pub async fn resolve_provider_group_id(&self, group_id: &str) -> Result<String, String> {
         let group_id = group_id.trim();
         if group_id.is_empty() {
             let row = self
@@ -2912,10 +3081,7 @@ mod tests {
         .to_string();
         let default_group_id: String = db
             .read()
-            .query_one(db.stmt(
-                "SELECT id FROM monoize_groups WHERE is_default = 1",
-                vec![],
-            ))
+            .query_one(db.stmt("SELECT id FROM monoize_groups WHERE is_default = 1", vec![]))
             .await
             .expect("default Group query succeeds")
             .expect("default Group exists")

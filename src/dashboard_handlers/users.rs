@@ -4,7 +4,9 @@ use crate::dashboard_handlers::session_helpers::{
     is_reserved_internal_username, is_valid_username, require_admin,
 };
 use crate::error::{AppError, AppResult};
-use crate::users::{AdminUpdateUserInput, UserRole, UserTodayUsage, parse_usd_to_nano};
+use crate::users::{
+    AccountClass, AdminUpdateUserInput, UserRole, UserTodayUsage, parse_usd_to_nano,
+};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -38,6 +40,55 @@ pub struct UpdateUserRequest {
     /// Absent = no change; null = unassign; string = assign plan (BP-S1..S4).
     #[serde(default)]
     pub billing_plan_id: Option<Option<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateAccountClassRequest {
+    pub account_class: AccountClass,
+    pub confirm_delete_api_keys: bool,
+}
+
+pub async fn update_user_account_class(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+    Json(body): Json<UpdateAccountClassRequest>,
+) -> AppResult<impl IntoResponse> {
+    let actor = require_admin(&headers, &state).await?;
+    if !body.confirm_delete_api_keys {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "api_key_deletion_confirmation_required",
+            "confirm_delete_api_keys must be true",
+        ));
+    }
+    state
+        .user_store
+        .change_user_account_class(&user_id, body.account_class, &actor.id)
+        .await
+        .map_err(|error| {
+            if error == "user not found" {
+                AppError::new(StatusCode::NOT_FOUND, "not_found", error)
+            } else if error == "target account class has no Group" {
+                AppError::new(StatusCode::CONFLICT, "account_class_has_no_group", error)
+            } else {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+            }
+        })?;
+    let user = state
+        .user_store
+        .get_user_by_id(&user_id)
+        .await
+        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "user not found"))?;
+    Ok(Json(
+        user_response_from_store(&state.user_store, user)
+            .await
+            .map_err(|error| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+            })?,
+    ))
 }
 
 pub async fn list_users(
@@ -176,7 +227,12 @@ pub async fn create_user(
     }
 
     let user = user_store
-        .create_user(&body.username, &body.password, role, body.group_id.as_deref())
+        .create_user(
+            &body.username,
+            &body.password,
+            role,
+            body.group_id.as_deref(),
+        )
         .await
         .map_err(|e| {
             if e.starts_with("unknown group id") {

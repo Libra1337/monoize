@@ -4,16 +4,68 @@ use crate::error::{AppError, AppResult};
 use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
 use crate::users::{
-    ApiKeyChannelBinding, CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule,
-    RequestCaptureMode, UpdateApiKeyInput, canonicalize_channel_bindings, format_nano_to_usd,
-    parse_nano_usd,
+    AnalyticsBucketing, ApiKeyChannelBinding, CreateApiKeyInput, CreateApiKeyWithLimitError,
+    ModelRedirectRule, RequestCaptureMode, UpdateApiKeyInput, canonicalize_channel_bindings,
+    format_nano_to_usd, parse_nano_usd,
 };
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Deserialize)]
+pub struct ApiKeyAnalyticsQuery {
+    #[serde(default = "default_api_key_analytics_range")]
+    pub range: String,
+}
+
+fn default_api_key_analytics_range() -> String {
+    "24h".to_string()
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiKeyAnalyticsTrendPoint {
+    pub label: String,
+    pub input_tokens: String,
+    pub cache_read_tokens: String,
+    pub output_tokens: String,
+    pub total_tokens: String,
+    pub request_count: i64,
+    pub consumed_coin_nano: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiKeyAnalyticsModelRow {
+    pub model: String,
+    pub input_tokens: String,
+    pub cache_read_tokens: String,
+    pub output_tokens: String,
+    pub total_tokens: String,
+    pub request_count: i64,
+    pub consumed_coin_nano: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiKeyAnalyticsResponse {
+    pub key_id: String,
+    pub key_name: String,
+    pub range: String,
+    pub time_from: String,
+    pub time_to: String,
+    pub total_tokens: String,
+    pub total_input_tokens: String,
+    pub total_cache_read_tokens: String,
+    pub total_output_tokens: String,
+    pub request_count: i64,
+    pub consumed_coin_nano: String,
+    pub balance_mode: &'static str,
+    pub independent_balance_nano: Option<String>,
+    pub trend: Vec<ApiKeyAnalyticsTrendPoint>,
+    pub models: Vec<ApiKeyAnalyticsModelRow>,
+}
 
 pub(super) fn nano_balance_fields(nano_str: &str) -> Result<(String, String), String> {
     let nano = parse_nano_usd(nano_str)?;
@@ -147,10 +199,8 @@ async fn current_channel_conflicts(
         .map(|group| (group.id, group.name))
         .collect::<std::collections::BTreeMap<_, _>>();
     let providers = state.monoize_store.list_providers().await?;
-    let mut by_scope = std::collections::BTreeMap::<
-        (String, String),
-        Vec<ApiKeyChannelOptionResponse>,
-    >::new();
+    let mut by_scope =
+        std::collections::BTreeMap::<(String, String), Vec<ApiKeyChannelOptionResponse>>::new();
     for provider in providers {
         if !provider.enabled || !provider.channel.enabled {
             continue;
@@ -178,15 +228,17 @@ async fn current_channel_conflicts(
     Ok(by_scope
         .into_iter()
         .filter(|(_, options)| options.len() > 1)
-        .map(|((group_id, model), options)| ApiKeyChannelConflictResponse {
-            group_name: group_names
-                .get(&group_id)
-                .cloned()
-                .unwrap_or_else(|| group_id.clone()),
-            group_id,
-            model,
-            options,
-        })
+        .map(
+            |((group_id, model), options)| ApiKeyChannelConflictResponse {
+                group_name: group_names
+                    .get(&group_id)
+                    .cloned()
+                    .unwrap_or_else(|| group_id.clone()),
+                group_id,
+                model,
+                options,
+            },
+        )
         .collect())
 }
 
@@ -237,9 +289,9 @@ pub async fn list_api_key_channel_conflicts(
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     get_current_user(&headers, &state).await?;
-    let conflicts = current_channel_conflicts(&state)
-        .await
-        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?;
+    let conflicts = current_channel_conflicts(&state).await.map_err(|error| {
+        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+    })?;
     Ok(Json(conflicts))
 }
 
@@ -395,11 +447,8 @@ pub async fn delete_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    api_key.ok_or_else(|| AppError::new(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "API key not found",
-        ))?;
+    api_key
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "API key not found"))?;
 
     user_store
         .delete_api_key(&key_id)
@@ -455,6 +504,354 @@ pub async fn get_api_key(
     }))
 }
 
+/// TM-AN5a bucket alignment. Each helper truncates a UTC instant down to the start
+/// of its bucket unit so a bucket label names the interval the bucket covers.
+fn align_down_to_hour(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    use chrono::Timelike;
+    value
+        .with_minute(0)
+        .and_then(|value| value.with_second(0))
+        .and_then(|value| value.with_nanosecond(0))
+        .unwrap_or(value)
+}
+
+fn align_down_to_day(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    value
+        .date_naive()
+        .and_time(chrono::NaiveTime::MIN)
+        .and_utc()
+}
+
+fn align_down_to_month(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    use chrono::Datelike;
+    let date = value.date_naive();
+    date.with_day(1)
+        .unwrap_or(date)
+        .and_time(chrono::NaiveTime::MIN)
+        .and_utc()
+}
+
+/// The bucket unit of one API Key analytics range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnalyticsBucketUnit {
+    Hour,
+    Day,
+    Month,
+}
+
+impl AnalyticsBucketUnit {
+    fn bucketing(self) -> AnalyticsBucketing {
+        match self {
+            // Hours and days have a constant length, so the window is an exact multiple of
+            // the unit and equal-duration buckets land on unit boundaries.
+            Self::Hour | Self::Day => AnalyticsBucketing::EqualIntervals,
+            Self::Month => AnalyticsBucketing::CalendarMonths,
+        }
+    }
+
+    fn advance(
+        self,
+        start: chrono::DateTime<chrono::Utc>,
+        steps: i64,
+    ) -> chrono::DateTime<chrono::Utc> {
+        match self {
+            Self::Hour => start + chrono::Duration::hours(steps),
+            Self::Day => start + chrono::Duration::days(steps),
+            Self::Month => add_months(start, steps),
+        }
+    }
+}
+
+/// One resolved analytics range. `time_to` is the exclusive end of the last bucket, aligned up
+/// to the unit so every bucket covers exactly the interval its label names.
+struct AnalyticsBucketPlan {
+    time_from: chrono::DateTime<chrono::Utc>,
+    time_to: chrono::DateTime<chrono::Utc>,
+    bucket_count: i64,
+    unit: AnalyticsBucketUnit,
+    label_format: &'static str,
+}
+
+#[cfg(test)]
+impl AnalyticsBucketPlan {
+    fn uses_calendar_months(&self) -> bool {
+        self.unit.bucketing() == AnalyticsBucketing::CalendarMonths
+    }
+}
+
+fn add_months(value: chrono::DateTime<chrono::Utc>, months: i64) -> chrono::DateTime<chrono::Utc> {
+    use chrono::Datelike;
+    let index = i64::from(value.year()) * 12 + i64::from(value.month()) - 1 + months;
+    let year = index.div_euclid(12);
+    let month = index.rem_euclid(12) + 1;
+    i32::try_from(year)
+        .ok()
+        .and_then(|year| chrono::NaiveDate::from_ymd_opt(year, month as u32, 1))
+        .map(|date| date.and_time(chrono::NaiveTime::MIN).and_utc())
+        .unwrap_or(value)
+}
+
+fn months_between(from: chrono::DateTime<chrono::Utc>, to: chrono::DateTime<chrono::Utc>) -> i64 {
+    use chrono::Datelike;
+    (i64::from(to.year()) * 12 + i64::from(to.month()))
+        - (i64::from(from.year()) * 12 + i64::from(from.month()))
+}
+
+/// Resolves one range name into an exact bucket plan. `first_event` is read only for the
+/// `all` range, so the other ranges cost no extra query.
+async fn analytics_bucket_plan<F, Fut>(
+    range: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    first_event: F,
+) -> AppResult<AnalyticsBucketPlan>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<chrono::DateTime<chrono::Utc>, String>>,
+{
+    let next_hour = align_down_to_hour(now) + chrono::Duration::hours(1);
+    let next_day = align_down_to_day(now) + chrono::Duration::days(1);
+    match range {
+        "24h" => Ok(AnalyticsBucketPlan {
+            time_from: next_hour - chrono::Duration::hours(24),
+            time_to: next_hour,
+            bucket_count: 24,
+            unit: AnalyticsBucketUnit::Hour,
+            label_format: "%m-%d %H:00",
+        }),
+        "7d" | "30d" => {
+            let days = if range == "7d" { 7 } else { 30 };
+            Ok(AnalyticsBucketPlan {
+                time_from: next_day - chrono::Duration::days(days),
+                time_to: next_day,
+                bucket_count: days,
+                unit: AnalyticsBucketUnit::Day,
+                label_format: "%m-%d",
+            })
+        }
+        "all" => {
+            let first = first_event().await.map_err(|error| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+            })?;
+            let first = first.min(now);
+            let retained_days = (now - align_down_to_day(first)).num_days().max(0);
+            if retained_days > 90 {
+                let time_from = align_down_to_month(first);
+                let time_to = add_months(align_down_to_month(now), 1);
+                let bucket_count = months_between(time_from, time_to).clamp(1, 120);
+                Ok(AnalyticsBucketPlan {
+                    time_from,
+                    // A clamp shortens the window, so the end follows the kept bucket count.
+                    time_to: add_months(time_from, bucket_count).min(time_to),
+                    bucket_count,
+                    unit: AnalyticsBucketUnit::Month,
+                    label_format: "%Y-%m",
+                })
+            } else {
+                let bucket_count = (retained_days + 1).clamp(1, 90);
+                Ok(AnalyticsBucketPlan {
+                    time_from: next_day - chrono::Duration::days(bucket_count),
+                    time_to: next_day,
+                    bucket_count,
+                    unit: AnalyticsBucketUnit::Day,
+                    label_format: "%m-%d",
+                })
+            }
+        }
+        _ => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "range must equal 24h, 7d, 30d, or all",
+        )
+        .with_param("range")),
+    }
+}
+
+pub async fn get_api_key_analytics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+    Query(query): Query<ApiKeyAnalyticsQuery>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let api_key = state
+        .user_store
+        .get_api_key_by_id(&key_id)
+        .await
+        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
+        .filter(|key| key.user_id == user.id || user.role.can_manage_users())
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "API key not found"))?;
+
+    let now = chrono::Utc::now();
+    let plan = analytics_bucket_plan(&query.range, now, || async {
+        let first_ms = state
+            .user_store
+            .get_api_key_analytics_start(&api_key.user_id, &api_key.id)
+            .await?;
+        Ok(first_ms
+            .and_then(chrono::DateTime::from_timestamp_millis)
+            .unwrap_or(api_key.created_at))
+    })
+    .await?;
+    let AnalyticsBucketPlan {
+        time_from,
+        time_to,
+        bucket_count,
+        unit,
+        label_format,
+    } = plan;
+    let today_start = now.date_naive().and_time(chrono::NaiveTime::MIN).and_utc();
+    let raw = state
+        .user_store
+        .get_dashboard_analytics_bucketed(
+            Some(&api_key.user_id),
+            Some(&api_key.id),
+            &time_from.to_rfc3339(),
+            &time_to.to_rfc3339(),
+            &today_start.to_rfc3339(),
+            bucket_count,
+            unit.bucketing(),
+        )
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
+
+    let mut trend = (0..bucket_count)
+        .map(|index| {
+            // TM-AN5a: the label names the exact interval the bucket aggregates, so it is
+            // derived by advancing whole units rather than by dividing the window.
+            let label = unit
+                .advance(time_from, index)
+                .format(label_format)
+                .to_string();
+            ApiKeyAnalyticsTrendPoint {
+                label,
+                input_tokens: "0".to_string(),
+                cache_read_tokens: "0".to_string(),
+                output_tokens: "0".to_string(),
+                total_tokens: "0".to_string(),
+                request_count: 0,
+                consumed_coin_nano: "0".to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut models = BTreeMap::<String, (i128, i128, i128, i64, i128)>::new();
+    for row in &raw.model_buckets {
+        let index = row.bucket_idx.clamp(0, bucket_count - 1) as usize;
+        let point = &mut trend[index];
+        let input = point.input_tokens.parse::<i128>().unwrap_or(0) + row.input_tokens;
+        let cache = point.cache_read_tokens.parse::<i128>().unwrap_or(0) + row.cache_read_tokens;
+        let output = point.output_tokens.parse::<i128>().unwrap_or(0) + row.output_tokens;
+        let cost = point.consumed_coin_nano.parse::<i128>().unwrap_or(0) + row.cost_nano;
+        point.input_tokens = input.to_string();
+        point.cache_read_tokens = cache.to_string();
+        point.output_tokens = output.to_string();
+        point.total_tokens = input
+            .checked_add(output)
+            .ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "API key analytics token aggregate overflow",
+                )
+            })?
+            .to_string();
+        point.request_count = point
+            .request_count
+            .checked_add(row.call_count)
+            .ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "API key analytics request aggregate overflow",
+                )
+            })?;
+        point.consumed_coin_nano = cost.to_string();
+
+        let entry = models.entry(row.model.clone()).or_insert((0, 0, 0, 0, 0));
+        entry.0 = entry.0.checked_add(row.input_tokens).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics input aggregate overflow",
+            )
+        })?;
+        entry.1 = entry.1.checked_add(row.cache_read_tokens).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics cache aggregate overflow",
+            )
+        })?;
+        entry.2 = entry.2.checked_add(row.output_tokens).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics output aggregate overflow",
+            )
+        })?;
+        entry.3 = entry.3.checked_add(row.call_count).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics call aggregate overflow",
+            )
+        })?;
+        entry.4 = entry.4.checked_add(row.cost_nano).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "API key analytics cost aggregate overflow",
+            )
+        })?;
+    }
+    let mut model_rows = models
+        .into_iter()
+        .map(
+            |(model, (input, cache, output, calls, cost))| ApiKeyAnalyticsModelRow {
+                model,
+                input_tokens: input.to_string(),
+                cache_read_tokens: cache.to_string(),
+                output_tokens: output.to_string(),
+                total_tokens: input.checked_add(output).unwrap_or(i128::MAX).to_string(),
+                request_count: calls,
+                consumed_coin_nano: cost.to_string(),
+            },
+        )
+        .collect::<Vec<_>>();
+    model_rows.sort_by(|left, right| {
+        let left_total = left.total_tokens.parse::<i128>().unwrap_or(0);
+        let right_total = right.total_tokens.parse::<i128>().unwrap_or(0);
+        right_total
+            .cmp(&left_total)
+            .then_with(|| left.model.cmp(&right.model))
+    });
+
+    Ok(Json(ApiKeyAnalyticsResponse {
+        key_id: api_key.id,
+        key_name: api_key.name,
+        range: query.range,
+        time_from: time_from.to_rfc3339(),
+        time_to: time_to.to_rfc3339(),
+        total_tokens: raw.total_tokens.to_string(),
+        total_input_tokens: raw.total_input_tokens.to_string(),
+        total_cache_read_tokens: raw.total_cache_read_tokens.to_string(),
+        total_output_tokens: raw.total_output_tokens.to_string(),
+        request_count: raw.total_calls,
+        consumed_coin_nano: raw.total_cost_nano_usd.to_string(),
+        balance_mode: if api_key.sub_account_enabled {
+            "independent"
+        } else {
+            "wallet"
+        },
+        independent_balance_nano: api_key
+            .sub_account_enabled
+            .then_some(api_key.sub_account_balance_nano),
+        trend,
+        models: model_rows,
+    }))
+}
+
 pub async fn update_api_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -470,18 +867,17 @@ pub async fn update_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    let api_key = api_key.ok_or_else(|| AppError::new(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "API key not found",
-        ))?;
+    let api_key = api_key
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "API key not found"))?;
 
     validate_channel_bindings_for_scope(
         &state,
         body.group_ids.as_deref().unwrap_or(&api_key.group_ids),
         body.model_limits_enabled
             .unwrap_or(api_key.model_limits_enabled),
-        body.model_limits.as_deref().unwrap_or(&api_key.model_limits),
+        body.model_limits
+            .as_deref()
+            .unwrap_or(&api_key.model_limits),
         body.channel_bindings
             .as_deref()
             .unwrap_or(&api_key.channel_bindings),
@@ -658,7 +1054,11 @@ pub async fn transfer_to_sub_account(
 
 #[cfg(test)]
 mod tests {
-    use super::current_channel_conflicts;
+    use super::{
+        AnalyticsBucketPlan, AnalyticsBucketUnit, add_months, align_down_to_day,
+        align_down_to_hour, align_down_to_month, analytics_bucket_plan, current_channel_conflicts,
+        months_between,
+    };
     use crate::app::{RuntimeConfig, load_state_with_runtime};
     use crate::billing_rate_store::UpsertBillingRateInput;
     use crate::monoize_routing::CreateMonoizeProviderInput;
@@ -684,6 +1084,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: true,
                 sort_order: 1,
+                account_class: Default::default(),
             })
             .await
             .expect("Group creates");
@@ -745,5 +1146,182 @@ mod tests {
             .await
             .expect("conflicts load");
         assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn analytics_bucket_starts_align_to_their_labelled_unit() {
+        // TM-AN5a: a mid-period instant must truncate down, otherwise a bucket
+        // covering 10:37-11:37 would carry the label `10:00`.
+        let mid = chrono::DateTime::parse_from_rfc3339("2026-09-08T10:37:41.523Z")
+            .expect("fixed instant")
+            .with_timezone(&chrono::Utc);
+
+        assert_eq!(
+            align_down_to_hour(mid).to_rfc3339(),
+            "2026-09-08T10:00:00+00:00"
+        );
+        assert_eq!(
+            align_down_to_day(mid).to_rfc3339(),
+            "2026-09-08T00:00:00+00:00"
+        );
+        assert_eq!(
+            align_down_to_month(mid).to_rfc3339(),
+            "2026-09-01T00:00:00+00:00"
+        );
+
+        // An already-aligned instant is unchanged, so alignment is idempotent.
+        let aligned = align_down_to_hour(mid);
+        assert_eq!(align_down_to_hour(aligned), aligned);
+        let day = align_down_to_day(mid);
+        assert_eq!(align_down_to_day(day), day);
+        let month = align_down_to_month(mid);
+        assert_eq!(align_down_to_month(month), month);
+    }
+
+    fn fixed_instant(value: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .expect("fixed instant")
+            .with_timezone(&chrono::Utc)
+    }
+
+    async fn plan_for(range: &str, now: chrono::DateTime<chrono::Utc>) -> AnalyticsBucketPlan {
+        analytics_bucket_plan(range, now, || async { Ok(now) })
+            .await
+            .expect("range resolves")
+    }
+
+    /// TM-AN5a: every bucket must cover exactly the interval its label names. A window ending
+    /// at an unaligned `now` would divide into buckets about 61 minutes wide while labelling
+    /// them on whole hours.
+    #[tokio::test]
+    async fn analytics_buckets_cover_exactly_the_interval_their_label_names() {
+        let now = fixed_instant("2026-09-08T10:37:41.523Z");
+
+        let last_day = plan_for("24h", now).await;
+        assert_eq!(last_day.bucket_count, 24);
+        assert_eq!(last_day.unit, AnalyticsBucketUnit::Hour);
+        assert_eq!(last_day.time_to.to_rfc3339(), "2026-09-08T11:00:00+00:00");
+        assert_eq!(last_day.time_from.to_rfc3339(), "2026-09-07T11:00:00+00:00");
+        // The window is an exact multiple of the unit, so the equal-duration SQL buckets land
+        // on the same boundaries the labels name.
+        let range_ms = last_day.time_to.timestamp_millis() - last_day.time_from.timestamp_millis();
+        assert_eq!(range_ms % last_day.bucket_count, 0);
+        assert_eq!(range_ms / last_day.bucket_count, 3_600_000);
+        for index in 0..last_day.bucket_count {
+            let start = last_day.unit.advance(last_day.time_from, index);
+            assert_eq!(
+                start.timestamp_millis(),
+                last_day.time_from.timestamp_millis() + index * 3_600_000
+            );
+            assert_eq!(start.timestamp_subsec_millis(), 0);
+        }
+        assert_eq!(
+            last_day
+                .unit
+                .advance(last_day.time_from, 1)
+                .format(last_day.label_format)
+                .to_string(),
+            "09-07 12:00"
+        );
+
+        let week = plan_for("7d", now).await;
+        assert_eq!(week.bucket_count, 7);
+        assert_eq!(week.unit, AnalyticsBucketUnit::Day);
+        assert_eq!(week.time_to.to_rfc3339(), "2026-09-09T00:00:00+00:00");
+        assert_eq!(week.time_from.to_rfc3339(), "2026-09-02T00:00:00+00:00");
+        let week_ms = week.time_to.timestamp_millis() - week.time_from.timestamp_millis();
+        assert_eq!(week_ms % week.bucket_count, 0);
+        assert_eq!(week_ms / week.bucket_count, 86_400_000);
+
+        let month = plan_for("30d", now).await;
+        assert_eq!(month.bucket_count, 30);
+        assert_eq!(month.time_to.to_rfc3339(), "2026-09-09T00:00:00+00:00");
+        let month_ms = month.time_to.timestamp_millis() - month.time_from.timestamp_millis();
+        assert_eq!(month_ms % month.bucket_count, 0);
+        assert_eq!(month_ms / month.bucket_count, 86_400_000);
+    }
+
+    /// Calendar months have unequal lengths, so the month range must use calendar bucketing
+    /// instead of an equal-duration split.
+    #[tokio::test]
+    async fn analytics_month_buckets_follow_the_calendar() {
+        let now = fixed_instant("2026-09-08T10:37:41.523Z");
+        let first = fixed_instant("2026-01-17T04:05:06Z");
+        let plan = analytics_bucket_plan("all", now, || async { Ok(first) })
+            .await
+            .expect("range resolves");
+
+        assert_eq!(plan.unit, AnalyticsBucketUnit::Month);
+        assert!(plan.uses_calendar_months());
+        assert_eq!(plan.time_from.to_rfc3339(), "2026-01-01T00:00:00+00:00");
+        assert_eq!(plan.time_to.to_rfc3339(), "2026-10-01T00:00:00+00:00");
+        assert_eq!(plan.bucket_count, 9);
+
+        let labels = (0..plan.bucket_count)
+            .map(|index| {
+                plan.unit
+                    .advance(plan.time_from, index)
+                    .format(plan.label_format)
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec![
+                "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07",
+                "2026-08", "2026-09",
+            ]
+        );
+        // February is shorter than January, so an equal-duration split would drift.
+        assert_eq!(
+            plan.unit.advance(plan.time_from, 1).to_rfc3339(),
+            "2026-02-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            plan.unit.advance(plan.time_from, 2).to_rfc3339(),
+            "2026-03-01T00:00:00+00:00"
+        );
+    }
+
+    /// A retained span at or below 90 days keeps daily buckets.
+    #[tokio::test]
+    async fn analytics_short_history_keeps_daily_buckets() {
+        let now = fixed_instant("2026-09-08T10:37:41.523Z");
+        let first = fixed_instant("2026-09-01T23:59:59Z");
+        let plan = analytics_bucket_plan("all", now, || async { Ok(first) })
+            .await
+            .expect("range resolves");
+
+        assert_eq!(plan.unit, AnalyticsBucketUnit::Day);
+        assert!(!plan.uses_calendar_months());
+        assert_eq!(plan.bucket_count, 8);
+        assert_eq!(plan.time_to.to_rfc3339(), "2026-09-09T00:00:00+00:00");
+        assert_eq!(plan.time_from.to_rfc3339(), "2026-09-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn month_arithmetic_crosses_year_boundaries_in_both_directions() {
+        let december = fixed_instant("2026-12-14T09:00:00Z");
+        assert_eq!(
+            add_months(december, 1).to_rfc3339(),
+            "2027-01-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            add_months(december, -12).to_rfc3339(),
+            "2025-12-01T00:00:00+00:00"
+        );
+        // A 31st never overflows into the next month, because every bucket starts on day 1.
+        let january31 = fixed_instant("2026-01-31T23:00:00Z");
+        assert_eq!(
+            add_months(january31, 1).to_rfc3339(),
+            "2026-02-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            months_between(
+                fixed_instant("2026-01-01T00:00:00Z"),
+                fixed_instant("2026-10-01T00:00:00Z")
+            ),
+            9
+        );
     }
 }

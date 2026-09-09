@@ -370,7 +370,7 @@ impl StoreReconciler {
                     (a.state = 'presented' AND a.provider_object_id IS NOT NULL
                      AND a.provider_expires_at IS NOT NULL AND a.provider_expires_at <= $1)
                     OR
-                    (a.adapter_kind IN ('alipay', 'wechat') AND a.updated_at <= $2
+                    (a.adapter_kind = 'epay' AND a.updated_at <= $2
                      AND (a.state = 'created'
                           OR (a.state = 'failed' AND a.failure_kind = 'provider_rejected')))
                  )

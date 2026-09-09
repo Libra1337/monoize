@@ -67,6 +67,7 @@ ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 rsa = { version = "0.9.10", features = ["sha2", "pem"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 clap = { version = "=4.5.60", features = ["derive"] }
+md-5 = "0.10.6"
 
 [dev-dependencies]
 http-body-util = "0.1.3"

@@ -706,8 +706,24 @@ impl PaymentOrderStore {
             Some(attempt) => attempt.expected_payment_method.as_deref(),
             None => input.expected_payment_method.as_deref(),
         };
-        let required_action = required_checkout_action(&adapter_kind, expected_payment_method)
-            .ok_or(PaymentOrderError::ChannelUnavailable)?;
+        let admissible_actions =
+            admissible_checkout_actions(&adapter_kind, expected_payment_method)
+                .ok_or(PaymentOrderError::ChannelUnavailable)?;
+        if adapter_kind == "epay" {
+            // The requested method must be an Admin-enabled method of this Channel.
+            let method = expected_payment_method.ok_or(PaymentOrderError::ChannelUnavailable)?;
+            let enabled = tx
+                .query_one(self.db.stmt(
+                    "SELECT 1 AS present FROM store_epay_methods
+                     WHERE channel_id = $1 AND method = $2 AND enabled = 1",
+                    vec![order.payment_channel_id.clone().into(), method.into()],
+                ))
+                .await
+                .map_err(storage)?;
+            if enabled.is_none() {
+                return Err(PaymentOrderError::ChannelUnavailable);
+            }
+        }
         let availability = evaluate_channel_for_payment(
             &self.db,
             &*tx,
@@ -718,10 +734,15 @@ impl PaymentOrderStore {
         )
         .await
         .map_err(storage)?;
+        // Every action the adapter may return must be declared, so `all` rather than
+        // `any`. EPay answers a creation with either a QR payload or a payment URL,
+        // and `present_attempt` validates only the action's shape, so `any` would let
+        // a Channel declaring just one of them return the undeclared kind. Stripe
+        // declares only `Redirect`, so this does not tighten the Stripe path.
         if !availability.effective_available
-            || !availability
-                .checkout_action_kinds
-                .contains(&required_action)
+            || !admissible_actions
+                .iter()
+                .all(|action| availability.checkout_action_kinds.contains(action))
         {
             return Err(PaymentOrderError::ChannelUnavailable);
         }
@@ -1102,11 +1123,10 @@ async fn query_attempt_by_id<C: ConnectionTrait>(
     id: &str,
 ) -> Result<Option<PaymentAttempt>, PaymentOrderError> {
     connection
-        .query_one(
-            db.stmt(&format!("{} WHERE id = $1", attempt_select()), vec![
-                id.into(),
-            ]),
-        )
+        .query_one(db.stmt(
+            &format!("{} WHERE id = $1", attempt_select()),
+            vec![id.into()],
+        ))
         .await
         .map_err(storage)?
         .map(payment_attempt_from_row)
@@ -1308,17 +1328,17 @@ fn currency_string(value: Currency) -> &'static str {
     }
 }
 
-fn required_checkout_action(
+/// EPay returns either a QR payload or a payment URL for the same requested method, so one
+/// method admits both action kinds and the Channel only needs to support one of them.
+fn admissible_checkout_actions(
     adapter_kind: &str,
     expected_payment_method: Option<&str>,
-) -> Option<CheckoutActionKind> {
+) -> Option<Vec<CheckoutActionKind>> {
     match (adapter_kind, expected_payment_method) {
-        ("stripe", None | Some("card")) => Some(CheckoutActionKind::Redirect),
-        ("alipay", None | Some("computer_web") | Some("mobile_web")) => {
-            Some(CheckoutActionKind::Form)
+        ("stripe", None | Some("card")) => Some(vec![CheckoutActionKind::Redirect]),
+        ("epay", Some("alipay") | Some("wxpay")) => {
+            Some(vec![CheckoutActionKind::Qr, CheckoutActionKind::Redirect])
         }
-        ("wechat", None | Some("native")) => Some(CheckoutActionKind::Qr),
-        ("wechat", Some("h5")) => Some(CheckoutActionKind::Redirect),
         _ => None,
     }
 }

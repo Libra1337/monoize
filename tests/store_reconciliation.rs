@@ -4,9 +4,8 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use monoize::db::DbPool;
 use monoize::migration::Migrator;
-use monoize::store_billing::adapters::alipay::AlipayCredential;
+use monoize::store_billing::adapters::epay::EpayCredential;
 use monoize::store_billing::adapters::stripe::StripeCredential;
-use monoize::store_billing::adapters::wechat::{WechatCredential, WechatPlatformVerifier};
 use monoize::store_billing::callbacks::PaymentCallbackStore;
 use monoize::store_billing::crypto::{PaymentKey, PaymentKeyRing};
 use monoize::store_billing::exchange_rate::ExchangeRateSnapshot;
@@ -53,18 +52,9 @@ impl PaymentQueryProvider for FixedPaymentQueryProvider {
         self.result.clone()
     }
 
-    async fn query_alipay_payment(
+    async fn query_epay_payment(
         &self,
-        _credential: &AlipayCredential,
-        _query: &PaymentQuery,
-    ) -> Result<ProviderPaymentState, AdapterError> {
-        Err(AdapterError::Unsupported)
-    }
-
-    async fn query_wechat_payment(
-        &self,
-        _credential: &WechatCredential,
-        _verifiers: &[WechatPlatformVerifier],
+        _credential: &EpayCredential,
         query: &PaymentQuery,
     ) -> Result<ProviderPaymentState, AdapterError> {
         self.calls.lock().unwrap().push(query.clone());
@@ -372,18 +362,16 @@ async fn expired_presented_order(suffix: &str) -> PresentedFixture {
     }
 }
 
-async fn make_attempt_recoverable_wechat(fixture: &PresentedFixture, suffix: &str, state: &str) {
+async fn make_attempt_recoverable_epay(fixture: &PresentedFixture, suffix: &str, state: &str) {
     let credential_id = format!("query-credential-{suffix}");
     let credential_json = br#"{
-        "merchant_id":"1900000109",
-        "app_id":"wx1234567890",
-        "api_v3_key":"0123456789abcdef0123456789abcdef",
-        "merchant_certificate_serial":"MERCHANT-CERTIFICATE-RECOVERY",
-        "merchant_private_key_pem":"private",
-        "platform_certificate_serial":"PLATFORM-CERTIFICATE-RECOVERY",
-        "platform_public_key_pem":"public"
+        "gateway_base_url":"https://pay.example.com/",
+        "merchant_id":"1001",
+        "merchant_key":"89unJUB8HZ54Hj7x4nUj56HN4nUzUJ8i",
+        "alipay_enabled":true,
+        "wxpay_enabled":true
     }"#;
-    let account_digest = WechatCredential::from_json(credential_json)
+    let account_digest = EpayCredential::from_json(credential_json)
         .unwrap()
         .account_identity_digest();
     let encrypted = fixture
@@ -397,7 +385,7 @@ async fn make_attempt_recoverable_wechat(fixture: &PresentedFixture, suffix: &st
     let write = fixture.db.write().await;
     write
         .execute_unprepared(
-            "UPDATE store_payment_channels SET adapter_kind = 'wechat'
+            "UPDATE store_payment_channels SET adapter_kind = 'epay'
              WHERE id = 'store-channel-stripe'",
         )
         .await
@@ -405,7 +393,7 @@ async fn make_attempt_recoverable_wechat(fixture: &PresentedFixture, suffix: &st
     write
         .execute(fixture.db.stmt(
             "UPDATE store_channel_credentials
-             SET adapter_kind = 'wechat', format_version = $2, key_id = $3,
+             SET adapter_kind = 'epay', format_version = $2, key_id = $3,
                  nonce_base64 = $4, ciphertext_base64 = $5,
                  account_identity_digest = $6
              WHERE id = $1",
@@ -423,7 +411,7 @@ async fn make_attempt_recoverable_wechat(fixture: &PresentedFixture, suffix: &st
     write
         .execute(fixture.db.stmt(
             "UPDATE store_payment_attempts
-             SET adapter_kind = 'wechat', merchant_account_identity = $2,
+             SET adapter_kind = 'epay', merchant_account_identity = $2,
                  state = $3, failure_kind = $4, provider_object_id = NULL,
                  action_kind = NULL, action_json = NULL, provider_expires_at = NULL,
                  presented_at = NULL, updated_at = '2026-08-27T00:00:00Z'
@@ -1423,9 +1411,9 @@ async fn reconciler_records_a_held_payment_without_fulfillment() {
 }
 
 #[tokio::test]
-async fn reconciler_releases_a_rejected_wechat_attempt_after_verified_not_found() {
-    let fixture = expired_presented_order("wechat-rejected").await;
-    make_attempt_recoverable_wechat(&fixture, "wechat-rejected", "failed").await;
+async fn reconciler_releases_a_rejected_epay_attempt_after_verified_not_found() {
+    let fixture = expired_presented_order("epay-rejected").await;
+    make_attempt_recoverable_epay(&fixture, "epay-rejected", "failed").await;
     let provider = FixedPaymentQueryProvider::returning(ProviderPaymentState::NotFound);
     let operations = PaymentQueryOperations::new(
         fixture.db.clone(),
@@ -1436,7 +1424,7 @@ async fn reconciler_releases_a_rejected_wechat_attempt_after_verified_not_found(
 
     let outcome = reconciler
         .run_once(
-            "query-owner-wechat-rejected",
+            "query-owner-epay-rejected",
             Utc.with_ymd_and_hms(2026, 8, 27, 0, 1, 0).unwrap(),
         )
         .await
@@ -1472,11 +1460,11 @@ async fn reconciler_releases_a_rejected_wechat_attempt_after_verified_not_found(
 }
 
 #[tokio::test]
-async fn reconciler_projects_a_created_wechat_attempt_when_query_confirms_payment() {
-    let fixture = expired_presented_order("wechat-created-paid").await;
-    make_attempt_recoverable_wechat(&fixture, "wechat-created-paid", "created").await;
+async fn reconciler_projects_a_created_epay_attempt_when_query_confirms_payment() {
+    let fixture = expired_presented_order("epay-created-paid").await;
+    make_attempt_recoverable_epay(&fixture, "epay-created-paid", "created").await;
     let provider = FixedPaymentQueryProvider::returning(ProviderPaymentState::Paid {
-        provider_transaction_id: "wechat-created-transaction".to_string(),
+        provider_transaction_id: "epay-created-transaction".to_string(),
     });
     let operations = PaymentQueryOperations::new(
         fixture.db.clone(),
@@ -1487,7 +1475,7 @@ async fn reconciler_projects_a_created_wechat_attempt_when_query_confirms_paymen
 
     let outcome = reconciler
         .run_once(
-            "query-owner-wechat-created",
+            "query-owner-epay-created",
             Utc.with_ymd_and_hms(2026, 8, 27, 0, 1, 0).unwrap(),
         )
         .await
