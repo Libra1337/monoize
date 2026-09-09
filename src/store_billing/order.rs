@@ -412,17 +412,24 @@ impl PaymentOrderStore {
         let id = Uuid::new_v4().to_string();
         let order_number = format!("LS-{}", Uuid::new_v4().simple()).to_uppercase();
         let expires_at = now + Duration::minutes(ORDER_LIFETIME_MINUTES);
+        let (sales_code, sales_discount_bp) = match input.sales.as_ref() {
+            Some(sales) => (Some(sales.code.clone()), Some(sales.discount_bp)),
+            None => (None, None),
+        };
         tx.execute(self.db.stmt(
+            // SC-2.4: the submitted code and the discount that applied are part of the
+            // frozen snapshot. Omitting them here left every order with a null code, so
+            // accrual found nothing to credit even though the discount had been applied.
             "INSERT INTO store_orders
                 (id, order_number, user_id, product_id, product_kind, payment_state,
                  fulfillment_state, dispute_state, payment_hold, payment_channel_id,
                  payment_currency, payment_minor, cny_per_usd, rate_numerator,
                  rate_denominator, rate_source_updated_at, quote_json, contract_version,
                  state_revision, creation_idempotency_key, creation_request_digest,
-                 expires_at, created_at, updated_at)
+                 expires_at, created_at, updated_at, sales_code, sales_discount_bp)
              VALUES
                 ($1, $2, $3, $4, $5, 'unpaid', 'pending', 'none', 0, $6,
-                 $7, $8, $9, $10, $11, $12, $13, 2, 0, $14, $15, $16, $17, $17)",
+                 $7, $8, $9, $10, $11, $12, $13, 2, 0, $14, $15, $16, $17, $17, $18, $19)",
             vec![
                 id.clone().into(),
                 order_number.into(),
@@ -441,6 +448,8 @@ impl PaymentOrderStore {
                 request_digest.into(),
                 timestamp(expires_at).into(),
                 now_text.into(),
+                sales_code.into(),
+                sales_discount_bp.into(),
             ],
         ))
         .await

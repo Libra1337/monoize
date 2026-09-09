@@ -386,6 +386,82 @@ async fn concurrent_order_creation_enforces_open_order_limit() {
     );
 }
 
+/// SC-2.4: an applied code must reach the stored order, and the discount must lower only the
+/// payable amount while the buyer still receives the face value.
+///
+/// This is the regression that shipped: the discount was computed and the buyer paid less,
+/// but the INSERT omitted both columns, so every order stored a null code and accrual had
+/// nothing to credit. Asserting the discount alone would not have caught it.
+#[tokio::test]
+async fn an_applied_sales_code_is_frozen_onto_the_order() {
+    let (db, store) = setup().await;
+    let mut input = order_input("sales-coded");
+    input.sales = Some(monoize::store_billing::order::AppliedSalesCode {
+        code: "ABCD2345".to_string(),
+        discount_bp: 100,
+        commission_rate_bp: 500,
+    });
+    let order = store.create_order("user-1", input, &rate()).await.unwrap();
+
+    let row = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT sales_code, sales_discount_bp, payment_minor, quote_json
+             FROM store_orders WHERE id = $1",
+            vec![order.id.clone().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.try_get::<Option<String>>("", "sales_code").unwrap(),
+        Some("ABCD2345".to_string()),
+        "the code must be persisted or nothing can be credited"
+    );
+    assert_eq!(
+        row.try_get::<Option<i64>>("", "sales_discount_bp").unwrap(),
+        Some(100)
+    );
+
+    // The face value stays in the quote; only the payable amount moves. This product also
+    // carries a bonus, which proves the discount is taken from the amount owed rather than
+    // from the larger amount the buyer receives.
+    let quote: serde_json::Value =
+        serde_json::from_str(&row.try_get::<String>("", "quote_json").unwrap()).unwrap();
+    let balance = &quote["product"]["balance"];
+    assert_eq!(balance["recharge_minor"], "1000", "the commission base");
+    assert_eq!(balance["bonus_minor"], "200");
+    assert_eq!(
+        balance["actual_received_minor"], "1200",
+        "the buyer still receives face value plus bonus"
+    );
+    assert_eq!(
+        row.try_get::<String>("", "payment_minor").unwrap(),
+        "990",
+        "a 1% discount applies to the 1000 owed, not to the 1200 received"
+    );
+}
+
+/// An order without a code must store null, so accrual skips it.
+#[tokio::test]
+async fn an_order_without_a_code_stores_no_code() {
+    let (db, store) = setup().await;
+    let order = store
+        .create_order("user-1", order_input("sales-absent"), &rate())
+        .await
+        .unwrap();
+    let row = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT sales_code FROM store_orders WHERE id = $1",
+            vec![order.id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.try_get::<Option<String>>("", "sales_code").unwrap(), None);
+}
+
 #[tokio::test]
 async fn order_creation_is_user_scoped_and_idempotent() {
     let (_db, store) = setup().await;
