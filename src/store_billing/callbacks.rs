@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::crypto::{EncryptedSecret, PaymentKeyRing};
+use super::sales_store::SalesStoreError;
 use super::money::{
     Currency, ExchangeRateRational, cny_fen_to_nano_usd, parse_minor, quoted_received_to_nano_usd,
 };
@@ -1153,8 +1154,122 @@ impl PaymentCallbackStore {
         ))
         .await
         .map_err(storage)?;
+        // SC-3.1: commission accrues in this transaction, alongside the balance credit and
+        // the fulfilled transition, never at payment projection. Projection and fulfillment
+        // are separate transactions under SB-RC-1, so accruing there would credit an agent
+        // for an order whose fulfillment later fails.
+        accrue_sales_commission(&self.db, &*tx, order_id).await?;
         tx.commit().await.map_err(storage)
     }
+}
+
+/// Credits the sales agent named by the order's frozen code (SC-3.2).
+///
+/// A duplicate accrual is not an error: the unique index on `order_id` makes a repeated
+/// callback idempotent, and failing here would roll back a fulfillment that already
+/// succeeded.
+async fn accrue_sales_commission<C: ConnectionTrait>(
+    db: &DbPool,
+    conn: &C,
+    order_id: &str,
+) -> Result<(), CallbackStoreError> {
+    let row = conn
+        .query_one(db.stmt(
+            "SELECT sales_code, sales_discount_bp, order_number, user_id, payment_currency,
+                    quote_json
+             FROM store_orders WHERE id = $1",
+            vec![order_id.into()],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| CallbackStoreError::Storage("order vanished during accrual".to_string()))?;
+
+    let Ok(code) = row.try_get::<String>("", "sales_code") else {
+        return Ok(());
+    };
+    // SC-3.3a: the rate is defined on a CNY face value.
+    if row_string(&row, "payment_currency")? != "CNY" {
+        return Ok(());
+    }
+    let discount_bp: i64 = row.try_get("", "sales_discount_bp").unwrap_or(0);
+    let base_minor = crate::store_billing::sales_store::face_value_minor(&row_string(
+        &row,
+        "quote_json",
+    )?)
+    .map_err(|error| CallbackStoreError::Storage(error.to_string()))?;
+
+    let agent = conn
+        .query_one(db.stmt(
+            "SELECT user_id, commission_balance_fen FROM sales_agents WHERE code = $1",
+            vec![code.clone().into()],
+        ))
+        .await
+        .map_err(storage)?;
+    // A code disabled or deleted after the order was placed still owes the agent this sale,
+    // but a code that no longer exists has nobody to credit.
+    let Some(agent) = agent else {
+        return Ok(());
+    };
+    let agent_user_id = row_string(&agent, "user_id")?;
+    let rate_bp =
+        crate::store_billing::sales_store::commission_rate_for_entry::<_, SalesStoreError>(
+            db, conn,
+        )
+        .await
+        .map_err(|error| CallbackStoreError::Storage(error.to_string()))?;
+    let amounts = crate::store_billing::sales::compute_amounts(base_minor, rate_bp, discount_bp)
+        .map_err(|error| CallbackStoreError::Storage(format!("{error:?}")))?;
+
+    let existing = conn
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM sales_commission_entries WHERE order_id = $1",
+            vec![order_id.into()],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| CallbackStoreError::Storage("count returned no row".to_string()))?;
+    if row_i64(&existing, "value")? > 0 {
+        return Ok(());
+    }
+
+    let now = timestamp(Utc::now());
+    conn.execute(db.stmt(
+        "INSERT INTO sales_commission_entries
+            (id, agent_user_id, order_id, order_number, buyer_user_id, base_fen,
+             commission_fen, discount_bp, commission_rate_bp, origin, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'code', $10)",
+        vec![
+            Uuid::new_v4().to_string().into(),
+            agent_user_id.clone().into(),
+            order_id.into(),
+            row_string(&row, "order_number")?.into(),
+            row_string(&row, "user_id")?.into(),
+            base_minor.to_string().into(),
+            amounts.commission_minor.to_string().into(),
+            discount_bp.into(),
+            rate_bp.into(),
+            now.clone().into(),
+        ],
+    ))
+    .await
+    .map_err(storage)?;
+
+    // SC-3.4b: the accrual adds whatever the sign of the balance, so an outstanding debt is
+    // repaid before the agent can withdraw again.
+    let balance: i128 = row_string(&agent, "commission_balance_fen")?
+        .parse()
+        .map_err(|_| CallbackStoreError::Storage("agent balance is malformed".to_string()))?;
+    conn.execute(db.stmt(
+        "UPDATE sales_agents SET commission_balance_fen = $2, updated_at = $3 WHERE user_id = $1",
+        vec![
+            agent_user_id.into(),
+            (balance + amounts.commission_minor).to_string().into(),
+            now.into(),
+        ],
+    ))
+    .await
+    .map_err(storage)?;
+    Ok(())
 }
 
 async fn has_open_reprocess_identity_conflict<C: ConnectionTrait>(

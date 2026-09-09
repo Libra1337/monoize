@@ -227,9 +227,19 @@ increase `sales_agents.commission_balance_fen` by `commission_fen`. Both writes 
 that transaction. A unique-violation on `order_id` MUST be treated as already accrued and
 MUST NOT fail fulfillment, which makes a repeated callback idempotent.
 
-SC-3.3. `base_fen` for accrual MUST be the order's face value in CNY fen, read from the
-frozen quote. An order whose `payment_currency` is not CNY MUST NOT accrue commission,
-because the rate is defined on a CNY face value.
+SC-3.3. `base_fen` for accrual MUST be the balance quote's `recharge_minor`: the amount the
+buyer owed before any discount, read from the frozen quote.
+
+It MUST NOT be `payment_minor`, which a discount lowers, because SC-1.4 defines the
+commission against the undiscounted amount. It MUST NOT be `actual_received_minor`, which a
+bonus raises above what the platform was paid: a product selling 100 CNY of balance with a
+20 CNY bonus collects 100 CNY, and accruing on 120 would pay the agent 6 CNY out of that 100
+and cut platform revenue to 94.
+
+SC-3.3a. An order whose `payment_currency` is not CNY MUST NOT accrue commission, and SC-2.2
+MUST reject a code submitted on such an order with `sales_code_currency_unsupported`. The
+rate and the discount are both defined on a CNY face value; accepting a code on a USD order
+would apply the discount while crediting nothing, making the platform fund it alone.
 
 SC-3.4. A refund of an order with a commission entry MUST reverse it in the refund
 transaction: set `reversed_at`, and decrease `commission_balance_fen` by `commission_fen`.

@@ -813,6 +813,39 @@ impl SalesStore {
     }
 }
 
+/// Reads the commission rate inside a caller-owned transaction (SC-1.1).
+///
+/// Accrual needs the rate in the same transaction as the entry it freezes onto, so it cannot
+/// use the pooled read connection.
+pub async fn commission_rate_for_entry<C: ConnectionTrait, E>(
+    db: &DbPool,
+    conn: &C,
+) -> Result<i64, E>
+where
+    E: From<SalesStoreError>,
+{
+    let row = conn
+        .query_one(db.stmt(
+            "SELECT value FROM system_settings WHERE key = $1",
+            vec![COMMISSION_RATE_KEY.into()],
+        ))
+        .await
+        .map_err(|error| E::from(storage(error)))?;
+    let Some(row) = row else {
+        return Ok(DEFAULT_COMMISSION_RATE_BP);
+    };
+    let value = row
+        .try_get::<String>("", "value")
+        .map_err(|error| E::from(storage(error)))?;
+    let parsed: i64 = value
+        .parse()
+        .map_err(|_| E::from(SalesStoreError::InvalidInput))?;
+    if !(0..=MAX_COMMISSION_RATE_BP).contains(&parsed) {
+        return Err(E::from(SalesStoreError::InvalidInput));
+    }
+    Ok(parsed)
+}
+
 /// Reverses the commission entry of a refunded order, inside the refund transaction (SC-3.4).
 ///
 /// Returns the reversed amount when an entry existed. An order without an entry is not an
@@ -903,39 +936,76 @@ async fn set_agent_balance<C: ConnectionTrait>(
 
 /// Reads the order face value in Coin minor units from a frozen quote (SC-3.3).
 ///
-/// The face value is the balance quote's `actual_received_minor`, not `payment_minor`, so a
-/// discounted order still accrues on what the buyer received.
+/// The face value is the balance quote's `recharge_minor`: the amount the buyer owes before
+/// any discount. It is deliberately neither of the two neighbouring amounts.
+///
+/// It is not `payment_minor`, because a discount lowers that and the commission is defined
+/// against the undiscounted amount, which is what keeps platform revenue independent of the
+/// discount (SC-1.4).
+///
+/// It is not `actual_received_minor`, because a bonus raises that above what the platform was
+/// paid. A product selling 100 CNY of balance with a 20 CNY bonus takes 100 CNY; accruing on
+/// 120 would pay the agent 6 CNY out of 100 received and cut platform revenue to 94.
 pub fn face_value_minor(quote_json: &str) -> Result<i128, SalesStoreError> {
     let quote: serde_json::Value =
         serde_json::from_str(quote_json).map_err(|_| SalesStoreError::InvalidInput)?;
-    let received = quote
+    let recharge = quote
         .get("product")
         .and_then(|product| product.get("balance"))
-        .and_then(|balance| balance.get("actual_received_minor"))
+        .and_then(|balance| balance.get("recharge_minor"))
         .and_then(serde_json::Value::as_str)
         .ok_or(SalesStoreError::InvalidInput)?;
-    parse_minor(received)
+    parse_minor(recharge)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn face_value_reads_the_received_amount_not_the_paid_amount() {
-        let quote = serde_json::json!({
+    fn balance_quote(recharge: &str, bonus: &str, received: &str) -> String {
+        serde_json::json!({
             "version": 2,
             "product": {
                 "kind": "balance",
                 "balance": {
-                    "recharge_minor": "9900",
-                    "bonus_minor": "0",
-                    "actual_received_minor": "10000"
+                    "recharge_minor": recharge,
+                    "bonus_minor": bonus,
+                    "actual_received_minor": received,
                 }
             }
         })
-        .to_string();
-        assert_eq!(face_value_minor(&quote), Ok(10_000));
+        .to_string()
+    }
+
+    /// SC-3.3: the face value is the undiscounted amount owed, so a discount does not shrink
+    /// the commission base. That is what holds platform revenue at 95% under SC-1.4.
+    #[test]
+    fn face_value_ignores_the_discount() {
+        // 100 CNY face value, 1% discount: the buyer pays 99 and receives 100.
+        assert_eq!(
+            face_value_minor(&balance_quote("10000", "0", "10000")),
+            Ok(10_000)
+        );
+    }
+
+    /// A bonus raises what the buyer receives above what the platform was paid. Accruing on
+    /// the received amount would pay the agent out of money the platform never collected.
+    #[test]
+    fn face_value_excludes_a_bonus() {
+        use crate::store_billing::sales::compute_amounts;
+
+        // Sells 100 CNY of balance and grants 20 CNY: the platform is paid 100.
+        let quote = balance_quote("10000", "2000", "12000");
+        let base = face_value_minor(&quote).expect("face value");
+        assert_eq!(base, 10_000, "the bonus must not enter the commission base");
+
+        let amounts = compute_amounts(base, 500, 0).expect("amounts");
+        assert_eq!(amounts.commission_minor, 500);
+        assert_eq!(amounts.payment_minor - amounts.commission_minor, 9_500);
+
+        // Had the bonus been included the agent would take 600 and leave the platform 9400.
+        let inflated = compute_amounts(12_000, 500, 0).expect("amounts");
+        assert_eq!(inflated.commission_minor, 600);
     }
 
     #[test]

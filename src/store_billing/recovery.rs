@@ -565,6 +565,16 @@ impl RecoveryStore {
         if changed.rows_affected() != 1 {
             return Err(RecoveryError::Conflict);
         }
+        // SC-3.4: the buyer got their money back, so the agent must not keep the commission.
+        // This runs in the refund transaction, so the reversal cannot survive a rollback.
+        crate::store_billing::sales_store::reverse_commission_for_order(
+            &self.db,
+            connection,
+            &row_string(&row, "order_id")?,
+            Utc::now(),
+        )
+        .await
+        .map_err(|error| RecoveryError::Storage(error.to_string()))?;
         Ok(())
     }
 

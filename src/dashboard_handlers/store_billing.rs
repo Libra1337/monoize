@@ -559,6 +559,23 @@ fn map_payment_order_error(error: PaymentOrderError) -> AppError {
             "store_retention_paused",
             "Store checkout is paused by retention failure",
         ),
+        // SC-2.2, SC-2.7 and SC-2.7a: a bad code refuses the order rather than dropping the
+        // code and charging full price, so the buyer learns the code did not apply.
+        PaymentOrderError::SalesCodeInvalid => (
+            StatusCode::BAD_REQUEST,
+            "sales_code_invalid",
+            "Sales code is invalid; check it and enter it again",
+        ),
+        PaymentOrderError::SalesCodeAmountTooSmall => (
+            StatusCode::BAD_REQUEST,
+            "sales_code_amount_too_small",
+            "A sales code requires an order of at least 1 CNY",
+        ),
+        PaymentOrderError::SalesCodeNotApplicable => (
+            StatusCode::BAD_REQUEST,
+            "sales_code_not_applicable",
+            "Sales code does not apply to this product",
+        ),
         PaymentOrderError::ActiveAttemptExists => (
             StatusCode::CONFLICT,
             "active_payment_attempt",
@@ -902,6 +919,7 @@ pub async fn create_store_order(
         payment_channel_id: input.payment_channel_id,
         payment_currency: input.payment_currency,
         custom_recharge_minor: input.custom_recharge_minor,
+        sales: None,
     };
     if let Some(order) = store
         .replay_order(&user.id, &input)

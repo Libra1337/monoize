@@ -9,6 +9,7 @@ use super::governance::{evaluate_channel_for_payment, lock_channel};
 use super::models::{CheckoutActionKind, StoreSettings};
 use super::money::{Currency, ExchangeRateRational, convert_minor_rational, parse_minor};
 use super::payment::CheckoutAction;
+use super::sales::{SalesError, compute_amounts as compute_sales_amounts};
 use super::quota_gate::QuotaGateStore;
 use super::retention::retention_checkout_paused;
 use super::state_machine::{FulfillmentState, PaymentState};
@@ -27,6 +28,16 @@ pub struct CreatePaymentOrderInput {
     pub payment_channel_id: String,
     pub payment_currency: Currency,
     pub custom_recharge_minor: Option<String>,
+    /// Normalized sales code, already resolved by the caller (SC-2.1).
+    pub sales: Option<AppliedSalesCode>,
+}
+
+/// A resolved sales code as order creation applies it (SC-2.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppliedSalesCode {
+    pub code: String,
+    pub discount_bp: i64,
+    pub commission_rate_bp: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +139,12 @@ pub struct CreatePaymentAttemptOutcome {
 pub enum PaymentOrderError {
     #[error("invalid order input")]
     InvalidInput,
+    #[error("sales code is invalid")]
+    SalesCodeInvalid,
+    #[error("order amount is too small for a sales code")]
+    SalesCodeAmountTooSmall,
+    #[error("sales code does not apply to this product")]
+    SalesCodeNotApplicable,
     #[error("invalid payment amount")]
     InvalidAmount,
     #[error("exchange rate is unavailable")]
@@ -941,6 +958,29 @@ impl PaymentOrderStore {
     }
 }
 
+/// Applies a sales discount to a face value, returning the payable amount (SC-2.4).
+///
+/// Only the payable amount moves. The quote keeps the face value in `recharge_minor` and the
+/// buyer still receives `actual_received_minor`, so the discount is funded by the agent's
+/// commission rather than by the platform (SC-1.4).
+fn apply_sales_discount(
+    base_minor: i128,
+    sales: Option<&AppliedSalesCode>,
+) -> Result<i128, PaymentOrderError> {
+    let Some(sales) = sales else {
+        return Ok(base_minor);
+    };
+    let amounts = compute_sales_amounts(base_minor, sales.commission_rate_bp, sales.discount_bp)
+        .map_err(|error| match error {
+            SalesError::AmountTooSmall => PaymentOrderError::SalesCodeAmountTooSmall,
+            SalesError::DiscountAboveRate | SalesError::RateOutOfRange => {
+                PaymentOrderError::SalesCodeInvalid
+            }
+            SalesError::InvalidAmount => PaymentOrderError::InvalidAmount,
+        })?;
+    Ok(amounts.payment_minor)
+}
+
 fn quote_balance(
     product: &QueryResult,
     input: &CreatePaymentOrderInput,
@@ -964,8 +1004,9 @@ fn quote_balance(
         if amount < minimum || amount > maximum {
             return Err(PaymentOrderError::InvalidAmount);
         }
+        let payable = apply_sales_discount(amount, input.sales.as_ref())?;
         return Ok((
-            custom.to_string(),
+            payable.to_string(),
             Some(serde_json::json!({
                 "recharge_minor": custom,
                 "bonus_minor": "0",
@@ -1007,8 +1048,11 @@ fn quote_balance(
     let actual = recharge
         .checked_add(bonus)
         .ok_or(PaymentOrderError::AmountOverflow)?;
+    // SB-P-4a: the equality above compared face values, so a discount cannot read as a price
+    // mismatch. Only the payable amount changes here.
+    let payable = apply_sales_discount(recharge, input.sales.as_ref())?;
     Ok((
-        recharge.to_string(),
+        payable.to_string(),
         Some(serde_json::json!({
             "recharge_minor": recharge.to_string(),
             "bonus_minor": bonus.to_string(),
@@ -1270,12 +1314,20 @@ fn validate_idempotency_key(value: &str) -> Result<(), PaymentOrderError> {
 }
 
 fn order_request_digest(input: &CreatePaymentOrderInput) -> String {
+    // SC-2.8: the sales code is part of the request identity. A retry of the same idempotency
+    // key with a different code must conflict rather than silently reuse the first quote,
+    // which would price the order for one agent and credit another.
     let payload = format!(
-        "v1\0{}\0{}\0{}\0{}",
+        "v2\0{}\0{}\0{}\0{}\0{}",
         input.product_id,
         input.payment_channel_id,
         currency_string(input.payment_currency),
-        input.custom_recharge_minor.as_deref().unwrap_or("")
+        input.custom_recharge_minor.as_deref().unwrap_or(""),
+        input
+            .sales
+            .as_ref()
+            .map(|sales| sales.code.as_str())
+            .unwrap_or("")
     );
     lower_hex(&Sha256::digest(payload.as_bytes()))
 }
