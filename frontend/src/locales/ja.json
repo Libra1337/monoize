@@ -632,7 +632,11 @@
 					"merchantKey": "加盟店キー",
 					"alipayEnabled": "Alipay を有効にする",
 					"wxpayEnabled": "WeChat Pay を有効にする",
-					"epayCnyOnly": "EPay は人民元の注文のみを受け付けます。米ドルの決済には Stripe を使用してください。"
+					"epayCnyOnly": "EPay は人民元の注文のみを受け付けます。米ドルの決済には Stripe を使用してください。",
+					"errorFieldsRequired": "すべての認証情報を入力してください。",
+					"errorGatewayInvalid": "ゲートウェイのベース URL は https で始まり、パスを含まない必要があります。例: https://pay.example.com/",
+					"errorMethodRequired": "決済方式を 1 つ以上有効にしてください。",
+					"errorPasswordRequired": "現在の管理者パスワードを入力してください。"
 				},
 				"deleteConfirm": "{{name}}を削除しますか？"
 			},

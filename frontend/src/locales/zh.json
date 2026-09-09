@@ -632,7 +632,11 @@
 					"merchantKey": "商户密钥",
 					"alipayEnabled": "启用支付宝方式",
 					"wxpayEnabled": "启用微信支付方式",
-					"epayCnyOnly": "易支付仅接受人民币订单。美元结账请使用 Stripe。"
+					"epayCnyOnly": "易支付仅接受人民币订单。美元结账请使用 Stripe。",
+					"errorFieldsRequired": "请填写全部凭据字段。",
+					"errorGatewayInvalid": "网关根地址必须是 https 开头且不带路径，例如 https://pay.example.com/。",
+					"errorMethodRequired": "至少启用一种支付方式。",
+					"errorPasswordRequired": "请输入当前管理员密码。"
 				},
 				"deleteConfirm": "确认删除 {{name}}？"
 			},

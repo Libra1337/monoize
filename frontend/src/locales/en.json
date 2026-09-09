@@ -632,7 +632,11 @@
 					"merchantKey": "Merchant key",
 					"alipayEnabled": "Enable Alipay method",
 					"wxpayEnabled": "Enable WeChat Pay method",
-					"epayCnyOnly": "EPay accepts CNY orders only. Use Stripe for USD checkout."
+					"epayCnyOnly": "EPay accepts CNY orders only. Use Stripe for USD checkout.",
+					"errorFieldsRequired": "Fill every credential field.",
+					"errorGatewayInvalid": "The gateway base URL must be an https origin with no path, for example https://pay.example.com/.",
+					"errorMethodRequired": "Enable at least one payment method.",
+					"errorPasswordRequired": "Enter your current Admin password."
 				},
 				"deleteConfirm": "Delete {{name}}?"
 			},
