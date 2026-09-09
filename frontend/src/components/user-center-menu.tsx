@@ -1,11 +1,10 @@
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Activity, Cog, LogOut, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
+import { Activity, Cog, LogOut, RefreshCw } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
-import { useTheme } from "@/hooks/use-theme";
 import { useLiveUsage } from "@/lib/swr";
 import { formatCacheHitRate, planRemainingFraction } from "@/lib/live-usage";
 import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
@@ -24,52 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CoinAmount } from "@/components/coin-amount";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { springs } from "@/components/ui/motion";
-
-function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
-  const { t } = useTranslation();
-
-  const themes = [
-    { value: "light", icon: Sun, label: t("theme.light") },
-    { value: "dark", icon: Moon, label: t("theme.dark") },
-    { value: "system", icon: Monitor, label: t("theme.system") },
-  ] as const;
-
-  return (
-    <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-      <span className="text-sm text-muted-foreground">{t("theme.toggle")}</span>
-      <div className="relative flex h-8 items-center rounded-full bg-muted p-1">
-        {themes.map((item) => {
-          const Icon = item.icon;
-          const isActive = theme === item.value;
-          return (
-            <button
-              key={item.value}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setTheme(item.value);
-              }}
-              className={`relative z-10 flex h-6 w-8 items-center justify-center rounded-full transition-colors ${
-                isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
-              title={item.label}
-            >
-              {isActive && (
-                <motion.div
-                  layoutId="theme-toggle-indicator"
-                  className="absolute inset-0 rounded-full bg-background shadow-sm"
-                  transition={springs.snappy}
-                />
-              )}
-              <Icon className="relative z-10 h-3.5 w-3.5" />
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+import { ThemeToggle } from "@/components/theme-toggle";
 
 function CurrencyToggle() {
   const { currency, setCurrency } = useStoreCurrency();
