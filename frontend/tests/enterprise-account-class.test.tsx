@@ -87,6 +87,34 @@ describe("Enterprise administration", () => {
 });
 
 describe("Enterprise navigation", () => {
+  // DL5d: the private class is isolated like enterprise but is a full-featured account, so
+  // the reduced sidebar must be gated on enterprise alone. Testing the condition rather than
+  // the rendered output is what catches a future `!== "standard"` refactor, which would
+  // silently strip the private class of the overview, ranking, status, and playground pages.
+  test("gives the private class the full sidebar, not the reduced Enterprise one", () => {
+    expect(layoutSource).toContain('user?.account_class === "enterprise"');
+    expect(layoutSource).not.toContain('user?.account_class !== "standard"');
+
+    const start = layoutSource.indexOf("const visibleNavItems");
+    expect(start).toBeGreaterThan(-1);
+    const condition = layoutSource.slice(start, layoutSource.indexOf(";", start));
+    expect(condition).not.toContain("private");
+    expect(condition).toContain("enterpriseNavItems");
+    expect(condition).toContain("navItems");
+  });
+
+  // GR-E1a: the third class must reach every admin scope selector, or a private Group and
+  // its Providers become unmanageable from the dashboard.
+  test("offers the private class wherever account class is selected", () => {
+    for (const locale of locales) {
+      expect(locale.accountClass.private).toBeString();
+    }
+    for (const source of [groupsSource, providersSource]) {
+      expect(source).toContain("private");
+    }
+    expect(usersSource).toContain('["standard", "enterprise", "private"]');
+  });
+
   // DL5c: assert against the Enterprise array itself. A whole-file `toContain` cannot tell
   // the two navigation sets apart, because every Enterprise route also appears in the
   // standard one, so it would pass even if Store were missing from Enterprise.
@@ -119,6 +147,7 @@ describe("Enterprise navigation", () => {
     for (const locale of locales) {
       expect(locale.accountClass.standard).toBeString();
       expect(locale.accountClass.enterprise).toBeString();
+      expect(locale.accountClass.private).toBeString();
       expect(locale.users.accountClassDeleteKeysWarning).toBeString();
       expect(locale.groups.accountClassDescription).toBeString();
       expect(locale.providers.accountClassDescription).toBeString();

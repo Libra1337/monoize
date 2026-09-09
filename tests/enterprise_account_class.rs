@@ -477,3 +477,105 @@ async fn create_user_rejects_a_group_from_the_other_account_class() {
         .expect("the default Standard Group is accepted");
     assert_eq!(accepted.account_class, AccountClass::Standard);
 }
+
+/// GR-E1a: migration 071 widens all four account-class checks to admit `private`.
+///
+/// SQLite cannot alter a `CHECK`, so each table is rebuilt. That rebuild is the risk this
+/// test exists for: it must preserve every existing row, every column default, and every
+/// index, and it must still reject a value outside the three permitted ones.
+#[tokio::test]
+async fn migration_071_admits_private_without_losing_rows_or_indexes() {
+    let db = Database::connect("sqlite::memory:")
+        .await
+        .expect("connect SQLite");
+    Migrator::up(&db, None).await.expect("run migrations");
+
+    // Rows written before the rebuild must survive it.
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "INSERT INTO users (id, username, password_hash, role, created_at, updated_at, account_class)
+         VALUES ('survivor', 'survivor', 'hash', 'user', '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z', 'enterprise')"
+            .to_string(),
+    ))
+    .await
+    .expect("seed a pre-existing user");
+
+    for (table, column) in [
+        ("users", "account_class"),
+        ("monoize_groups", "account_class"),
+    ] {
+        let columns = sqlite_columns(&db, table).await;
+        assert!(
+            columns.iter().any(|(name, kind, not_null, default)| {
+                name == column
+                    && kind.eq_ignore_ascii_case("TEXT")
+                    && *not_null
+                    && default.as_deref() == Some("'standard'")
+            }),
+            "{table}.{column} must keep its type, NOT NULL, and default: {columns:?}"
+        );
+    }
+
+    let survivor = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT account_class FROM users WHERE id = 'survivor'".to_string(),
+        ))
+        .await
+        .expect("read the seeded user")
+        .expect("the seeded user must survive the rebuild");
+    assert_eq!(
+        survivor.try_get::<String>("", "account_class").unwrap(),
+        "enterprise"
+    );
+
+    let audit_indexes = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "PRAGMA index_list(user_account_class_audits)".to_string(),
+        ))
+        .await
+        .expect("read audit indexes");
+    assert!(
+        audit_indexes.iter().any(|row| {
+            row.try_get::<String>("", "name").as_deref()
+                == Ok("idx_user_account_class_audits_user_created")
+        }),
+        "the rebuild must recreate the audit index: {audit_indexes:?}"
+    );
+
+    // The new value is accepted everywhere the old two were.
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "INSERT INTO users (id, username, password_hash, role, created_at, updated_at, account_class)
+         VALUES ('private-user', 'private-user', 'hash', 'user', '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z', 'private')"
+            .to_string(),
+    ))
+    .await
+    .expect("private must be accepted for a user");
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "UPDATE monoize_groups SET account_class = 'private'".to_string(),
+    ))
+    .await
+    .expect("private must be accepted for a Group");
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "INSERT INTO user_account_class_audits
+            (id, user_id, actor_user_id, from_account_class, to_account_class,
+             deleted_api_key_count, deleted_api_keys_json, created_at)
+         VALUES ('audit-1', 'private-user', 'private-user', 'standard', 'private', 0, '[]',
+                 '2026-09-09T00:00:00Z')"
+            .to_string(),
+    ))
+    .await
+    .expect("private must be accepted in the audit trail");
+
+    // A fourth value is still refused, so the constraint was widened rather than dropped.
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "UPDATE users SET account_class = 'partner' WHERE id = 'private-user'".to_string(),
+    ))
+    .await
+    .expect_err("an unknown account class must still be rejected");
+}

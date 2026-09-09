@@ -314,7 +314,13 @@ non-empty billing-plan Group ceiling still restricts an API key whose own list i
 
 ## 6. Account-Class Isolation
 
-GR-E1. Every `users` row and every `monoize_groups` row MUST contain `account_class` equal to `standard` or `enterprise`.
+GR-E1. Every `users` row and every `monoize_groups` row MUST contain `account_class` equal to
+`standard`, `enterprise`, or `private`.
+
+GR-E1a. The `private` class MUST be isolated from the other two by exactly the rules that
+isolate `enterprise`: GR-E3 through GR-E6, R-ENT-1 through R-ENT-5, PP-ENT1 through PP-ENT8,
+and MM-ENT1 through MM-ENT5 apply to it unchanged. It differs from `enterprise` only in the
+dashboard surface it receives (DL5d).
 
 GR-E2. Migration `m20260908_000063_enterprise_account_class` MUST set `account_class = standard` for every existing user and Group.
 

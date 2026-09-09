@@ -1,6 +1,6 @@
 const API_BASE = "/api/dashboard";
 
-export type AccountClass = "standard" | "enterprise";
+export type AccountClass = "standard" | "enterprise" | "private";
 
 type UnauthorizedHandler = () => void;
 

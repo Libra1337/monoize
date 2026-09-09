@@ -21,6 +21,8 @@ pub enum AccountClass {
     #[default]
     Standard,
     Enterprise,
+    /// Isolated like Enterprise, but with the full standard feature surface (GR-E1a).
+    Private,
 }
 
 impl AccountClass {
@@ -28,6 +30,7 @@ impl AccountClass {
         match value {
             "standard" => Some(Self::Standard),
             "enterprise" => Some(Self::Enterprise),
+            "private" => Some(Self::Private),
             _ => None,
         }
     }
@@ -36,6 +39,7 @@ impl AccountClass {
         match self {
             Self::Standard => "standard",
             Self::Enterprise => "enterprise",
+            Self::Private => "private",
         }
     }
 }

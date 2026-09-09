@@ -170,6 +170,10 @@ class, no clause of `store-billing.spec.md` excludes an enterprise caller, and
 and redemption history. Omitting them leaves an enterprise user with no self-service way to
 add balance.
 
+DL5d. A viewer whose `account_class` is `private` MUST receive the same sidebar as a
+`standard` viewer, not the reduced `enterprise` sidebar of DL5c. The private class exists to
+isolate an account's catalogue, not to withhold dashboard features from it.
+
 DL5b. The expanded, collapsed, and mobile sidebar brand link MUST target `/`. The mobile
 brand link MUST invoke the existing navigation-close callback.
 

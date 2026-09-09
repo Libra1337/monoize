@@ -2082,7 +2082,8 @@
   },
   "accountClass": {
     "standard": "標準ユーザー",
-    "enterprise": "企業ユーザー"
+    "enterprise": "企業ユーザー",
+    "private": "プライベート"
   },
   "sales": {
     "title": "セールス",

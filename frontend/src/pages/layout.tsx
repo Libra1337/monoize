@@ -162,6 +162,9 @@ function Sidebar({
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
   ];
+  // DL5c and DL5d: only the enterprise class gets the reduced sidebar. The private class is
+  // isolated the same way enterprise is, but is a full-featured account, so it uses the
+  // standard set.
   const visibleNavItems = user?.account_class === "enterprise"
     ? enterpriseNavItems
     : navItems;

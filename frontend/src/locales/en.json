@@ -2086,7 +2086,8 @@
   },
   "accountClass": {
     "standard": "Standard",
-    "enterprise": "Enterprise"
+    "enterprise": "Enterprise",
+    "private": "Private"
   },
   "sales": {
     "title": "Sales",

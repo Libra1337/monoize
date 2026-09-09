@@ -83,6 +83,8 @@ function useFinePointer() {
   return isFinePointer;
 }
 
+const ACCOUNT_CLASSES = ["standard", "enterprise", "private"] as const;
+
 export function GroupsPage() {
   const { t } = useTranslation();
   const { data, isLoading } = useDashboardGroups();
@@ -324,9 +326,10 @@ export function GroupsPage() {
             <p className="text-xs text-muted-foreground">{t("groups.accountClassDescription")}</p>
           </div>
           <Tabs value={accountClass} onValueChange={(value) => setAccountClass(value as AccountClass)}>
-            <TabsList className="grid w-full grid-cols-2 rounded-lg sm:w-64">
-              <TabsTrigger value="standard">{t("accountClass.standard")}</TabsTrigger>
-              <TabsTrigger value="enterprise">{t("accountClass.enterprise")}</TabsTrigger>
+            <TabsList className="grid w-full grid-cols-3 rounded-lg sm:w-96">
+              {ACCOUNT_CLASSES.map((value) => (
+                <TabsTrigger key={value} value={value}>{t(`accountClass.${value}`)}</TabsTrigger>
+              ))}
             </TabsList>
           </Tabs>
         </div>

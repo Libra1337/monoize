@@ -2086,7 +2086,8 @@
   },
   "accountClass": {
     "standard": "普通用户",
-    "enterprise": "企业用户"
+    "enterprise": "企业用户",
+    "private": "私有"
   },
   "sales": {
     "title": "销售",

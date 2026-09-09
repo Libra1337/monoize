@@ -2083,7 +2083,8 @@
   },
   "accountClass": {
     "standard": "一般使用者",
-    "enterprise": "企業使用者"
+    "enterprise": "企業使用者",
+    "private": "私有"
   },
   "sales": {
     "title": "銷售",

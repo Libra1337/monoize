@@ -73,6 +73,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260909_000068_sales_commission::Migration),
             Box::new(m20260909_000069_sales_withdrawal_cancelled::Migration),
             Box::new(m20260909_000070_attempt_buyer_query_at::Migration),
+            Box::new(m20260909_000071_private_account_class::Migration),
         ]
     }
 }
@@ -275,6 +276,7 @@ mod m20260909_000067_model_metadata_price_currency;
 mod m20260909_000068_sales_commission;
 mod m20260909_000069_sales_withdrawal_cancelled;
 mod m20260909_000070_attempt_buyer_query_at;
+mod m20260909_000071_private_account_class;
 
 #[cfg(test)]
 mod tests {

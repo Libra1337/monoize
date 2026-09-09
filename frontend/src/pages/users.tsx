@@ -581,8 +581,8 @@ export function UsersPage() {
                       </p>
                     </div>
                     <Tabs value={editUser.account_class}>
-                      <TabsList className="grid h-10 w-full grid-cols-2 rounded-lg">
-                        {(["standard", "enterprise"] as const).map((accountClass) => (
+                      <TabsList className="grid h-10 w-full grid-cols-3 rounded-lg">
+                        {(["standard", "enterprise", "private"] as const).map((accountClass) => (
                           <TabsTrigger
                             key={accountClass}
                             value={accountClass}

@@ -33,6 +33,8 @@ import { ProviderCard } from './providers/ProviderCard'
 import { ProviderDialog } from './providers/ProviderDialog'
 import { DEFAULT_REASONING_SUFFIX_MAP } from './providers/shared'
 
+const ACCOUNT_CLASSES = ['standard', 'enterprise', 'private'] as const
+
 export function ProvidersPage() {
 	const { t } = useTranslation()
 	const { data: providersData, error: providersError, isLoading, mutate: reloadProviders } = useProviders()
@@ -178,9 +180,8 @@ export function ProvidersPage() {
 			<div className='flex flex-col gap-2 rounded-xl border bg-card p-3 sm:flex-row sm:items-center sm:justify-between'>
 				<div><p className='text-sm font-medium'>{t('providers.accountClass')}</p><p className='text-xs text-muted-foreground'>{t('providers.accountClassDescription')}</p></div>
 				<Tabs value={accountClass} onValueChange={value => setAccountClass(value as AccountClass)}>
-					<TabsList className='grid w-full grid-cols-2 rounded-lg sm:w-64'>
-						<TabsTrigger value='standard'>{t('accountClass.standard')}</TabsTrigger>
-						<TabsTrigger value='enterprise'>{t('accountClass.enterprise')}</TabsTrigger>
+					<TabsList className='grid w-full grid-cols-3 rounded-lg sm:w-96'>
+						{ACCOUNT_CLASSES.map(value => <TabsTrigger key={value} value={value}>{t(`accountClass.${value}`)}</TabsTrigger>)}
 					</TabsList>
 				</Tabs>
 			</div>
