@@ -147,10 +147,18 @@ SC-D4. Table `sales_claim_attempts`, used only for rate limiting:
 | `attempted_at` | TEXT | NOT NULL, RFC3339 |
 
 SC-D5. `store_orders` MUST gain two nullable columns: `sales_code` TEXT and
-`sales_discount_bp` INTEGER. Both are part of the immutable order snapshot of
-`store-billing.spec.md` SB-P-13 and MUST be covered by the quote-immutability trigger. A
-null `sales_code` means no code was applied at creation; a later claim MUST NOT write them,
-because they record what the buyer submitted, not who was credited.
+`sales_discount_bp` INTEGER. A null `sales_code` means no code was applied at creation; a
+later claim MUST NOT write them, because they record what the buyer submitted, not who was
+credited.
+
+SC-D5a. Both columns are part of the immutable order snapshot of `store-billing.spec.md`
+SB-P-13, so migration 068 MUST rebuild the `trg_store_orders_quote_immutable` guard of
+migration 051 to include them, on both SQLite and PostgreSQL. Its `down` MUST rebuild the
+guard without them before dropping the columns.
+
+The code decides which agent an order pays. Left outside the guard, an update could reassign
+the commission of an order that is already paid and fulfilled, which the frozen amounts
+beside it are already protected against.
 
 SC-D6. Migration `m20260909_000068_sales_commission` MUST create SC-D1 through SC-D4, add
 the SC-D5 columns, and create an index on `sales_commission_entries(agent_user_id,

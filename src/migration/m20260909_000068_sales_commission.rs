@@ -12,6 +12,105 @@ const fn integer_type(backend: DbBackend) -> &'static str {
     }
 }
 
+/// Columns of `store_orders` frozen by the quote-immutability guard of migration 051.
+const FROZEN_COLUMNS: &[&str] = &[
+    "product_id",
+    "product_kind",
+    "payment_channel_id",
+    "payment_currency",
+    "payment_minor",
+    "cny_per_usd",
+    "rate_numerator",
+    "rate_denominator",
+    "rate_source_updated_at",
+    "quote_json",
+    "contract_version",
+];
+
+/// Rebuilds the quote-immutability guard, with or without the sales columns (SC-D5).
+///
+/// The sales code decides which agent an order pays. Leaving it outside the guard would let
+/// an update reassign the commission of an order that is already paid, so it has to join the
+/// frozen set rather than sit beside it.
+async fn replace_quote_immutable_guard<C: ConnectionTrait>(
+    conn: &C,
+    backend: DbBackend,
+    include_sales: bool,
+) -> Result<(), DbErr> {
+    let mut columns: Vec<&str> = FROZEN_COLUMNS.to_vec();
+    if include_sales {
+        columns.push("sales_code");
+        columns.push("sales_discount_bp");
+    }
+
+    match backend {
+        DbBackend::Sqlite => {
+            conn.execute(Statement::from_string(
+                backend,
+                "DROP TRIGGER IF EXISTS trg_store_orders_quote_immutable".to_string(),
+            ))
+            .await?;
+            let predicate = columns
+                .iter()
+                .map(|column| format!("OLD.{column} IS NOT NEW.{column}"))
+                .collect::<Vec<_>>()
+                .join("\n           OR ");
+            conn.execute(Statement::from_string(
+                backend,
+                format!(
+                    "CREATE TRIGGER trg_store_orders_quote_immutable
+                     BEFORE UPDATE ON store_orders
+                     WHEN {predicate}
+                     BEGIN SELECT RAISE(ABORT, 'immutable store order quote'); END"
+                ),
+            ))
+            .await?;
+        }
+        DbBackend::Postgres => {
+            // Postgres requires the table in `DROP TRIGGER`, and the function is replaced in
+            // place so the trigger can be recreated against the same name.
+            conn.execute(Statement::from_string(
+                backend,
+                "DROP TRIGGER IF EXISTS trg_store_orders_quote_immutable ON store_orders"
+                    .to_string(),
+            ))
+            .await?;
+            let old = columns
+                .iter()
+                .map(|column| format!("OLD.{column}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let new = columns
+                .iter()
+                .map(|column| format!("NEW.{column}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            conn.execute(Statement::from_string(
+                backend,
+                format!(
+                    "CREATE OR REPLACE FUNCTION store_guard_quote_immutable() RETURNS trigger
+                     LANGUAGE plpgsql AS $$
+                     BEGIN
+                       IF ROW({old}) IS DISTINCT FROM ROW({new})
+                       THEN RAISE EXCEPTION 'immutable store order quote'; END IF;
+                       RETURN NEW;
+                     END $$"
+                ),
+            ))
+            .await?;
+            conn.execute(Statement::from_string(
+                backend,
+                "CREATE TRIGGER trg_store_orders_quote_immutable BEFORE UPDATE ON store_orders
+                 FOR EACH ROW EXECUTE FUNCTION store_guard_quote_immutable()"
+                    .to_string(),
+            ))
+            .await?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -157,6 +256,7 @@ impl MigrationTrait for Migration {
             ))
             .await?;
         }
+        replace_quote_immutable_guard(&tx, backend, true).await?;
 
         tx.commit().await
     }
@@ -168,6 +268,7 @@ impl MigrationTrait for Migration {
         }
         let tx = manager.get_connection().begin().await?;
 
+        replace_quote_immutable_guard(&tx, backend, false).await?;
         for statement in [
             "ALTER TABLE store_orders DROP COLUMN sales_discount_bp",
             "ALTER TABLE store_orders DROP COLUMN sales_code",
@@ -317,6 +418,57 @@ mod tests {
             columns.iter().any(|name| name == "sales_discount_bp"),
             "{columns:?}"
         );
+    }
+
+    /// SC-D5: the sales columns join the frozen set. The code decides which agent an order
+    /// pays, so an update must not be able to reassign the commission of a paid order.
+    #[tokio::test]
+    async fn the_sales_columns_are_frozen_with_the_rest_of_the_quote() {
+        let db = database_before_068().await;
+        Migration
+            .up(&SchemaManager::new(&db))
+            .await
+            .expect("apply 068");
+        // The guard under test is a trigger, not a foreign key, so the order can reference
+        // rows this test has no reason to create.
+        db.execute_unprepared("PRAGMA foreign_keys = OFF")
+            .await
+            .expect("relax foreign keys");
+        db.execute_unprepared(
+            "INSERT INTO store_orders
+                (id, order_number, user_id, product_id, product_kind, payment_state,
+                 fulfillment_state, dispute_state, payment_hold, payment_channel_id,
+                 payment_currency, payment_minor, cny_per_usd, rate_numerator,
+                 rate_denominator, rate_source_updated_at, quote_json, contract_version,
+                 state_revision, creation_idempotency_key, creation_request_digest,
+                 expires_at, created_at, updated_at, sales_code, sales_discount_bp)
+             VALUES ('order-1', 'LS-1', 'buyer-1', 'product-1', 'balance', 'paid',
+                     'fulfilled', 'none', 0, 'channel-1', 'CNY', '9900', '7.0', '7', '1',
+                     '2026-09-09T00:00:00Z', '{}', 2, 0, 'key-1', 'digest-1',
+                     '2026-09-09T01:00:00Z', '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z',
+                     'ABCD2345', 100)",
+        )
+        .await
+        .expect("seed order");
+
+        db.execute_unprepared(
+            "UPDATE store_orders SET sales_code = 'ZZZZ9999' WHERE id = 'order-1'",
+        )
+        .await
+        .expect_err("reassigning the agent of a paid order must abort");
+        db.execute_unprepared(
+            "UPDATE store_orders SET sales_discount_bp = 500 WHERE id = 'order-1'",
+        )
+        .await
+        .expect_err("changing the frozen discount must abort");
+
+        // A column outside the frozen set still updates, so the guard is not simply blocking
+        // every write to the table.
+        db.execute_unprepared(
+            "UPDATE store_orders SET updated_at = '2026-09-09T02:00:00Z' WHERE id = 'order-1'",
+        )
+        .await
+        .expect("a non-frozen column must still update");
     }
 
     /// Reverting must leave the store schema exactly as it was, so the release can be rolled
