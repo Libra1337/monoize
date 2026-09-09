@@ -412,6 +412,67 @@ pub async fn decide_sales_withdrawal_admin(
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AdminSalesEntriesQuery {
+    #[serde(default)]
+    pub agent_user_id: Option<String>,
+}
+
+/// SC-7.6.
+pub async fn list_sales_entries_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<AdminSalesEntriesQuery>,
+) -> AppResult<impl IntoResponse> {
+    require_admin_user(&headers, &state).await?;
+    let entries = SalesStore::new(state.db_pool.clone())
+        .list_entries_admin(query.agent_user_id.as_deref())
+        .await
+        .map_err(map_sales_error)?;
+    Ok(Json(entries))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminSalesClaimRequest {
+    pub agent_user_id: String,
+    pub order_number: String,
+    pub user_id: String,
+}
+
+/// SC-7.7: an Admin credits a past order to a named agent.
+pub async fn create_sales_claim_admin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<AdminSalesClaimRequest>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let admin = require_admin_user(&headers, &state).await?;
+    let input = parse_body(body)?;
+    let agent_user_id = input.agent_user_id.trim();
+    let order_number = input.order_number.trim();
+    let buyer_user_id = input.user_id.trim();
+    if agent_user_id.is_empty() || order_number.is_empty() || buyer_user_id.is_empty() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "agent, order number, and user ID are required",
+        ));
+    }
+    let entry = SalesStore::new(state.db_pool.clone())
+        .claim_order_for_agent(agent_user_id, order_number, buyer_user_id, Utc::now())
+        .await
+        .map_err(map_sales_error)?;
+    // SC-7.7c: the entry looks like any other claim, so who filed it is recorded separately.
+    tracing::info!(
+        admin_user_id = %admin.id,
+        agent_user_id = %agent_user_id,
+        order_number = %order_number,
+        "admin credited a sales commission claim"
+    );
+    Ok((StatusCode::CREATED, Json(entry)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateSalesSettingsRequest {
     pub commission_rate_bp: i64,
 }

@@ -138,6 +138,23 @@ pub struct SalesWindow {
     pub order_count: i64,
 }
 
+/// One accrual as the Admin sees it (SC-7.6), carrying the identities SC-6.3 withholds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminSalesEntry {
+    pub id: String,
+    pub agent_user_id: String,
+    pub agent_username: String,
+    pub order_number: String,
+    pub buyer_user_id: String,
+    pub base_minor: String,
+    pub commission_minor: String,
+    pub discount_bp: i64,
+    pub commission_rate_bp: i64,
+    pub origin: String,
+    pub reversed_at: Option<String>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SalesWithdrawal {
     pub id: String,
@@ -474,6 +491,53 @@ impl SalesStore {
             .collect()
     }
 
+    /// SC-7.6: entries across every agent, optionally filtered to one.
+    pub async fn list_entries_admin(
+        &self,
+        agent_user_id: Option<&str>,
+    ) -> Result<Vec<AdminSalesEntry>, SalesStoreError> {
+        let (filter, values) = match agent_user_id {
+            Some(id) => ("WHERE e.agent_user_id = $1", vec![id.into()]),
+            None => ("", vec![]),
+        };
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                &format!(
+                    "SELECT e.id, e.agent_user_id, u.username AS agent_username,
+                            e.order_number, e.buyer_user_id, e.base_fen, e.commission_fen,
+                            e.discount_bp, e.commission_rate_bp, e.origin, e.reversed_at,
+                            e.created_at
+                     FROM sales_commission_entries e
+                     JOIN users u ON u.id = e.agent_user_id
+                     {filter}
+                     ORDER BY e.created_at DESC, e.id ASC LIMIT 100"
+                ),
+                values,
+            ))
+            .await
+            .map_err(storage)?;
+        rows.iter()
+            .map(|row| {
+                Ok(AdminSalesEntry {
+                    id: row_string(row, "id")?,
+                    agent_user_id: row_string(row, "agent_user_id")?,
+                    agent_username: row_string(row, "agent_username")?,
+                    order_number: row_string(row, "order_number")?,
+                    buyer_user_id: row_string(row, "buyer_user_id")?,
+                    base_minor: row_string(row, "base_fen")?,
+                    commission_minor: row_string(row, "commission_fen")?,
+                    discount_bp: row_i64(row, "discount_bp")?,
+                    commission_rate_bp: row_i64(row, "commission_rate_bp")?,
+                    origin: row_string(row, "origin")?,
+                    reversed_at: row.try_get("", "reversed_at").ok(),
+                    created_at: row_string(row, "created_at")?,
+                })
+            })
+            .collect()
+    }
+
     /// SC-4: a retroactive claim.
     ///
     /// The single success per order is enforced by the unique index on `order_id`, not by
@@ -495,6 +559,28 @@ impl SalesStore {
         self.record_claim_attempt(agent_user_id, outcome.is_ok(), now)
             .await?;
         outcome
+    }
+
+    /// Credits an agent for a past order on an Admin's behalf (SC-7.7).
+    ///
+    /// The eligibility rules are identical to an agent's own claim and are evaluated against
+    /// the named agent. The SC-4.7 rate limit and the attempt record are deliberately absent:
+    /// that limit stops an agent from enumerating buyer identities through the error channel,
+    /// and an Admin can already read any order directly.
+    pub async fn claim_order_for_agent(
+        &self,
+        agent_user_id: &str,
+        order_number: &str,
+        buyer_user_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<SalesCommissionEntry, SalesStoreError> {
+        // A code that no longer exists has nobody to credit, so the agent must be real.
+        self.agent_for_user(agent_user_id)
+            .await?
+            .ok_or(SalesStoreError::NotAgent)?;
+        let rate_bp = self.commission_rate_bp().await?;
+        self.claim_order_inner(agent_user_id, order_number, buyer_user_id, rate_bp, now)
+            .await
     }
 
     async fn claim_order_inner(

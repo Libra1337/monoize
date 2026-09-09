@@ -2336,6 +2336,10 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::decide_sales_withdrawal_admin),
         )
         .route(
+            "/dashboard/store/admin/sales/claims",
+            post(crate::dashboard_handlers::create_sales_claim_admin),
+        )
+        .route(
             "/dashboard/store/admin/sales/settings",
             put(crate::dashboard_handlers::update_sales_settings_admin),
         )
@@ -2493,6 +2497,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/store/admin/sales/withdrawals",
             get(crate::dashboard_handlers::list_sales_withdrawals_admin),
+        )
+        .route(
+            "/dashboard/store/admin/sales/entries",
+            get(crate::dashboard_handlers::list_sales_entries_admin),
         )
         .route(
             "/dashboard/store/admin/sales/settings",

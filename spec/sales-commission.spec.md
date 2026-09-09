@@ -433,5 +433,32 @@ SC-7.5. `PUT /api/dashboard/store/admin/sales/settings` MUST require an Admin se
 SB-S-2 Origin check, and accept exactly `{ "commission_rate_bp": integer }` within the SC-1.1
 bounds. It MUST reject a value below any enabled agent's `discount_bp` under SC-1.2.
 
+SC-7.6. `GET /api/dashboard/store/admin/sales/entries` MUST require an Admin session and
+return commission entries across every agent in descending `created_at` order with at most
+100 records. It MUST accept an optional `agent_user_id` filter. Unlike the agent view of
+SC-6.3, it MUST include `agent_user_id`, the agent username, and `buyer_user_id`, because the
+Admin is reconciling who owes whom and already has access to both identities.
+
+SC-7.7. `POST /api/dashboard/store/admin/sales/claims` MUST require an Admin session and the
+SB-S-2 Origin check, and accept exactly
+`{ "agent_user_id": string, "order_number": string, "user_id": string }`. It credits the named
+agent for a past order on that agent's behalf.
+
+SC-7.7a. It MUST apply the same eligibility rules as SC-4.2, evaluated against the named
+agent rather than the caller: the order exists, its `user_id` matches, it is paid and
+fulfilled, its currency is CNY, it has no existing entry, and the buyer is not the named
+agent. It MUST produce the same errors as SC-4.4 and SC-4.5.
+
+SC-7.7b. It MUST NOT be subject to the SC-4.7 rate limit and MUST NOT record a
+`sales_claim_attempts` row. That limit exists to stop an agent from enumerating buyer
+identities through the error channel; an Admin can already read any order directly, so the
+limit would restrict a caller who has nothing to learn while making bulk correction
+impractical.
+
+SC-7.7c. A successful Admin claim MUST be indistinguishable from an agent claim in
+`sales_commission_entries`: `origin` is `claim` and the entry credits the named agent. The
+Admin's identity MUST be recorded in `store_access_audits` rather than on the entry, so the
+agent's own totals are not polluted by who filed the claim.
+
 SC-7.4. Disabling an agent MUST make their code unresolvable for new orders under SC-2.2 and
 MUST leave existing entries, balance, and withdrawals intact.
