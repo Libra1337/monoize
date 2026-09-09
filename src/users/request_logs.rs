@@ -382,6 +382,7 @@ fn decode_token_aggregate(row: &sea_orm::QueryResult, column: &str) -> Result<i1
 mod tests {
     use super::{
         AnalyticsBucketing, analytics_bucket_expr, analytics_model_bucket_sql,
+        analytics_month_index,
         append_request_log_filters, ascii_folded_like_pattern, charge_aggregate_select,
         decode_charge_aggregate, decode_token_aggregate, enrich_tried_providers_names,
         escape_like_literal, request_log_model_filter_max_terms_from_raw,
@@ -615,6 +616,96 @@ mod tests {
             decode_charge_aggregate(&row, false).unwrap_err(),
             "request log charge is outside the signed i128 domain"
         );
+    }
+
+    /// TM-AN5c: the calendar-month expression must place each request in the bucket of the
+    /// calendar month that contains it, including across a year boundary, and must clamp
+    /// instants outside the window into the first and last bucket.
+    #[tokio::test]
+    async fn dashboard_analytics_sqlite_calendar_month_buckets_follow_the_calendar() {
+        let db = DbPool::connect("sqlite::memory:").await.unwrap();
+        db.write()
+            .await
+            .execute_unprepared(
+                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER)",
+            )
+            .await
+            .unwrap();
+
+        let at = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .expect("fixed instant")
+                .timestamp_millis()
+        };
+        // The window covers 2025-11 through 2026-02, so bucket 0 is 2025-11 and bucket 3 is
+        // 2026-02. December has 31 days and February has 28, so an equal-duration split would
+        // misplace at least one of these rows.
+        for (model, instant) in [
+            ("november", "2025-11-30T23:59:59Z"),
+            ("december-first", "2025-12-01T00:00:00Z"),
+            ("december-last", "2025-12-31T23:59:59Z"),
+            ("january", "2026-01-15T12:00:00Z"),
+            ("february", "2026-02-28T23:59:59Z"),
+            ("before-window", "2025-10-15T00:00:00Z"),
+            ("after-window", "2026-03-05T00:00:00Z"),
+        ] {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO request_logs (created_at_unix_ms, model, upstream_model, charge_nano_usd, user_id, input_tokens, cache_read_tokens, output_tokens) VALUES ($1, $2, '', '1', 'u1', 1, 0, 0)",
+                    vec![at(instant).into(), model.into()],
+                ))
+                .await
+                .unwrap();
+        }
+
+        let first_month = analytics_month_index(
+            chrono::DateTime::parse_from_rfc3339("2025-11-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        let last_month = analytics_month_index(
+            chrono::DateTime::parse_from_rfc3339("2026-02-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        assert_eq!(last_month - first_month, 3);
+
+        let sql =
+            analytics_model_bucket_sql(true, true, false, AnalyticsBucketing::CalendarMonths);
+        let rows = db
+            .read()
+            .query_all(db.stmt(
+                &sql,
+                vec![
+                    first_month.into(),
+                    4_i64.into(),
+                    last_month.into(),
+                    // The time window itself still filters rows, so it is widened here to keep
+                    // the out-of-window rows and prove the expression clamps them.
+                    at("2025-01-01T00:00:00Z").into(),
+                    at("2027-01-01T00:00:00Z").into(),
+                    "u1".into(),
+                ],
+            ))
+            .await
+            .unwrap();
+
+        let mut buckets = std::collections::BTreeMap::new();
+        for row in rows {
+            let model: String = row.try_get("", "model").unwrap();
+            let bucket_idx: i64 = row.try_get("", "bucket_idx").unwrap();
+            buckets.insert(model, bucket_idx);
+        }
+        assert_eq!(buckets.get("november"), Some(&0));
+        assert_eq!(buckets.get("december-first"), Some(&1));
+        assert_eq!(buckets.get("december-last"), Some(&1));
+        assert_eq!(buckets.get("january"), Some(&2));
+        assert_eq!(buckets.get("february"), Some(&3));
+        // Instants outside the window clamp into the first and last bucket rather than
+        // producing a negative or out-of-range index.
+        assert_eq!(buckets.get("before-window"), Some(&0));
+        assert_eq!(buckets.get("after-window"), Some(&3));
     }
 
     #[tokio::test]

@@ -729,14 +729,20 @@ fn validate_channel_proxy_url(
     Ok(())
 }
 
-/// The account class a Provider inherits from its Group (GR-E4).
+/// The account class a Provider inherits from its Group (GR-E4). The id is resolved through
+/// the same path the write uses, so an empty id selects the default Group instead of failing.
 async fn provider_account_class(
     state: &AppState,
     group_id: &str,
 ) -> AppResult<crate::users::AccountClass> {
+    let group_id = state
+        .monoize_store
+        .resolve_provider_group_id(group_id)
+        .await
+        .map_err(|error| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", error))?;
     state
         .user_store
-        .get_group_by_id(group_id.trim())
+        .get_group_by_id(&group_id)
         .await
         .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
         .map(|group| group.account_class)
@@ -1908,6 +1914,40 @@ mod tests {
         .await
         .expect_err("the reserved Enterprise Profile must be rejected for standard");
         assert_eq!(reverse.status, StatusCode::CONFLICT);
+    }
+
+    /// An omitted `group_id` selects the default Group on create, so the account class must be
+    /// resolved through the same path the write uses instead of rejecting the empty id.
+    #[tokio::test]
+    async fn omitted_group_id_resolves_the_default_group_account_class() {
+        use crate::users::AccountClass;
+
+        let state = load_state_with_runtime(RuntimeConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_path: "/metrics".to_string(),
+            database_dsn: "sqlite::memory:".to_string(),
+            request_log_spool_dir: None,
+            node: crate::node_config::NodeSettings::primary_default(),
+        })
+        .await
+        .expect("state loads");
+
+        assert_eq!(
+            provider_account_class(&state, "")
+                .await
+                .expect("an empty id resolves the default Group"),
+            AccountClass::Standard
+        );
+        assert_eq!(
+            provider_account_class(&state, "   ")
+                .await
+                .expect("a blank id resolves the default Group"),
+            AccountClass::Standard
+        );
+        let unknown = provider_account_class(&state, "missing-group")
+            .await
+            .expect_err("an unknown id is rejected");
+        assert_eq!(unknown.status, StatusCode::BAD_REQUEST);
     }
 
     /// PP-ENT7: `pricing_profile` and `channel` are both optional on update, so a request that

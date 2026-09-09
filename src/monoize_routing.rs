@@ -1570,7 +1570,10 @@ impl MonoizeRoutingStore {
             .collect())
     }
 
-    async fn resolve_provider_group_id(&self, group_id: &str) -> Result<String, String> {
+    /// Resolves the Group a Provider write targets. An empty id selects the default Group,
+    /// so callers that must agree with the write on the target Group use this instead of
+    /// reading the request field directly.
+    pub async fn resolve_provider_group_id(&self, group_id: &str) -> Result<String, String> {
         let group_id = group_id.trim();
         if group_id.is_empty() {
             let row = self
