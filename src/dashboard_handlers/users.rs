@@ -117,6 +117,23 @@ pub async fn list_users(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
+    // Fetched once as a set rather than per user: the admin list is the only place that needs
+    // to tell agents apart, and a per-row lookup would be one query per user.
+    let sales_agent_ids: std::collections::HashSet<String> =
+        crate::store_billing::sales_store::SalesStore::new(state.db_pool.clone())
+            .list_agents()
+            .await
+            .map_err(|e| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    e.to_string(),
+                )
+            })?
+            .into_iter()
+            .map(|agent| agent.user_id)
+            .collect();
+
     let plan_by_id: HashMap<_, _> = plans
         .into_iter()
         .map(|plan| (plan.id.clone(), plan))
@@ -139,7 +156,8 @@ pub async fn list_users(
                 .as_ref()
                 .and_then(|id| plan_by_id.get(id).cloned());
             let today = usage_by_id.get(&user.id).unwrap_or(&zero_usage);
-            UserResponse::from_user(user, plan, Some(today))
+            let is_sales_agent = sales_agent_ids.contains(&user.id);
+            UserResponse::from_user_with_sales(user, plan, Some(today), is_sales_agent)
         })
         .collect();
     Ok(Json(responses))
