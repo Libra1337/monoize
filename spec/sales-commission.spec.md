@@ -277,6 +277,14 @@ its `fulfillment_state` is `fulfilled`; its `payment_currency` is CNY; no
 `sales_commission_entries` row exists for that `order_id`; and the submitted `user_id` is not
 the claiming agent.
 
+SC-4.2a. The submitted `user_id` MUST resolve against both `users.id` and
+`users.username`, and the claim MUST evaluate SC-4.2 against the resolved ID. An identifier
+matching neither MUST be treated as a mismatch under SC-4.4 rather than as a distinct error,
+so a claim cannot be used to test whether a username exists.
+
+An operator or agent handling a request has the username, not the UUID. Requiring the UUID
+made the form unusable for the situation it exists to serve.
+
 SC-4.3. A successful claim MUST insert one entry with `origin = 'claim'`,
 `discount_bp = 0`, `commission_fen = floor(base_fen * 500 / 10000)`, and MUST increase the
 agent's balance by that amount in the same transaction. It MUST record one

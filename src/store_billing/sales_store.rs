@@ -597,6 +597,10 @@ impl SalesStore {
             return Err(SalesStoreError::SelfReferral);
         }
         let tx = self.db.begin_write().await.map_err(storage)?;
+        // SC-4.2a: the submitted identifier may be a user ID or a username. An operator
+        // reading a support ticket has the username, not the UUID, and requiring the UUID
+        // made the form unusable for the case it exists to serve.
+        let buyer_user_id = &resolve_buyer_identifier(&self.db, &*tx, buyer_user_id).await?;
         let order = tx
             .query_one(self.db.stmt(
                 "SELECT id, user_id, payment_state, fulfillment_state, payment_currency,
@@ -610,7 +614,7 @@ impl SalesStore {
 
         // A mismatched buyer and a missing order return the same error, so a claim cannot be
         // used to learn whether an order number exists.
-        if row_string(&order, "user_id")? != buyer_user_id
+        if &row_string(&order, "user_id")? != buyer_user_id
             || row_string(&order, "payment_state")? != "paid"
             || row_string(&order, "fulfillment_state")? != "fulfilled"
             || row_string(&order, "payment_currency")? != "CNY"
@@ -1080,6 +1084,29 @@ async fn set_agent_balance<C: ConnectionTrait>(
     .await
     .map_err(storage)?;
     Ok(())
+}
+
+/// Resolves a submitted buyer identifier to a user ID (SC-4.2a).
+///
+/// Accepts either the ID itself or a username. An unknown identifier is returned unchanged so
+/// the caller's own mismatch error surfaces, keeping "no such user" and "wrong user for this
+/// order" indistinguishable.
+async fn resolve_buyer_identifier<C: ConnectionTrait>(
+    db: &DbPool,
+    conn: &C,
+    submitted: &str,
+) -> Result<String, SalesStoreError> {
+    let row = conn
+        .query_one(db.stmt(
+            "SELECT id FROM users WHERE id = $1 OR username = $1",
+            vec![submitted.into()],
+        ))
+        .await
+        .map_err(storage)?;
+    Ok(match row {
+        Some(row) => row_string(&row, "id")?,
+        None => submitted.to_string(),
+    })
 }
 
 /// Reads the order face value in Coin minor units from a frozen quote (SC-3.3).
