@@ -13,12 +13,19 @@ agent MUST authenticate through the existing dashboard session of
 variant and MUST NOT be a column on `users`, because `UserRole` is a global permission axis
 and `users.account_class` already partitions standard from enterprise billing.
 
-SC-0.3. All commission amounts are integer CNY fen. Commission MUST NOT be stored in
-nano USD and MUST NOT pass through `f32` or `f64`.
+SC-0.3. All commission amounts are integer Coin minor units. Coin is pegged to CNY at
+`1 C = 1 CNY` by `coin-wallet-navigation.spec.md` CN-3, so one Coin minor unit is one CNY
+fen and the two are the same integer. Commission MUST NOT be stored in nano USD and MUST NOT
+pass through `f32` or `f64`.
 
-Commission is denominated in CNY because every recharge price is quoted in CNY and an agent
+Commission is denominated in Coin because every recharge price is quoted in CNY and an agent
 is paid in CNY. Converting to nano USD would make an agent's earned amount move with the
 exchange rate after the sale, so the same order would owe a different amount tomorrow.
+
+SC-0.5. An agent's commission balance is a platform-side accrual, not cash and not spendable
+balance. It MUST NOT appear in `users.balance_nano_usd`, MUST NOT be usable to pay for API
+usage, and MUST NOT enter `billing_ledger`. It becomes money only when an Admin settles a
+withdrawal out of band under section 6.
 
 SC-0.4. A **discount** is expressed in basis points of the order face value. One basis point
 is 1/10000. A discount reduces what the buyer pays and reduces the agent's commission by the
@@ -27,28 +34,40 @@ revenue.
 
 ## 1. Rates and bounds
 
-SC-1.1. The commission rate MUST be exactly 500 basis points (5%) of the order face value,
-for every agent and every order.
+SC-1.1. The commission rate is one Admin-configurable global setting `commission_rate_bp`,
+an integer in `[0, 2000]`, defaulting to 500 basis points (5%). It MUST apply to every agent.
+A change MUST NOT alter any existing `sales_commission_entries` row, because each entry froze
+the rate that applied to its order.
 
-SC-1.2. `discount_bp` MUST be an integer in `[0, 500]`. A value above 500 MUST be rejected,
-because the discount is funded from the commission and 500 is the whole commission.
+SC-1.2. `discount_bp` MUST be an integer in `[0, commission_rate_bp]`. A value above the
+current rate MUST be rejected with `sales_discount_above_rate`. The discount is funded from
+the commission, so a discount larger than the rate would make the agent's commission
+negative. Lowering `commission_rate_bp` below an existing agent's `discount_bp` MUST be
+rejected with the same code rather than silently clamping, so no agent is left owing money
+on a sale.
 
-SC-1.3. For an order with face value `base_fen` and an applied code with `discount_bp = d`:
+SC-1.3. For an order with face value `base_fen`, applied rate `r = commission_rate_bp`, and
+an applied code with `discount_bp = d`:
 
 ```
 discount_fen   = floor(base_fen * d / 10000)
 payment_fen    = base_fen - discount_fen
-commission_fen = floor(base_fen * (500 - d) / 10000)
+commission_fen = floor(base_fen * (r - d) / 10000)
 received_fen   = base_fen
 ```
 
-All four MUST use integer arithmetic. Worked example, `base_fen = 10000` and `d = 100`:
-`discount_fen = 100`, `payment_fen = 9900`, `commission_fen = 400`, `received_fen = 10000`.
+All four MUST use integer arithmetic. Worked example with `r = 500`, `base_fen = 10000`, and
+`d = 100`: `discount_fen = 100`, `payment_fen = 9900`, `commission_fen = 400`,
+`received_fen = 10000`.
 
 SC-1.4. Platform revenue for that order is `payment_fen - commission_fen`, which equals
-`base_fen - floor(base_fen * d / 10000) - floor(base_fen * (500 - d) / 10000)` and is
-independent of `d` up to one fen of floor rounding. The discount is therefore funded by the
-agent, not by the platform.
+`base_fen - floor(base_fen * d / 10000) - floor(base_fen * (r - d) / 10000)` and is
+independent of `d` up to one fen of floor rounding. At `r = 500` a 100 CNY face value yields
+95 CNY of platform revenue whether the discount is 0% or 5%. The discount is therefore funded
+by the agent's own commission; the platform MUST NOT subsidize it.
+
+SC-1.5. An entry MUST record the `commission_rate_bp` that applied, so the arithmetic of a
+past order remains reproducible after the rate changes.
 
 ## 2. Data model
 
@@ -87,6 +106,7 @@ SC-D2. Table `sales_commission_entries`:
 | `base_fen` | TEXT | NOT NULL, canonical positive integer |
 | `commission_fen` | TEXT | NOT NULL, canonical positive integer |
 | `discount_bp` | INTEGER | NOT NULL |
+| `commission_rate_bp` | INTEGER | NOT NULL, the SC-1.5 frozen rate |
 | `origin` | TEXT | NOT NULL, `CHECK (origin IN ('code', 'claim'))` |
 | `reversed_at` | TEXT | NULL, RFC3339 |
 | `created_at` | TEXT | NOT NULL, RFC3339 |
@@ -104,7 +124,6 @@ SC-D3. Table `sales_withdrawals`:
 | `agent_user_id` | TEXT | NOT NULL, references `sales_agents(user_id)` |
 | `amount_fen` | TEXT | NOT NULL, canonical positive integer |
 | `state` | TEXT | NOT NULL, `CHECK (state IN ('requested', 'paid', 'rejected'))` |
-| `payout_note` | TEXT | NOT NULL, agent-supplied payout destination |
 | `requested_at` | TEXT | NOT NULL, RFC3339 |
 | `decided_at` | TEXT | NULL, RFC3339 |
 | `decided_by` | TEXT | NULL, Admin `users.id` |
@@ -227,9 +246,13 @@ belongs to.
 ## 6. Withdrawal
 
 SC-5.1. `POST /api/dashboard/sales/withdrawals` MUST require an agent session and accept
-exactly `{ "amount_fen": string, "payout_note": string }`. `amount_fen` MUST be a canonical
-positive integer at most the agent's `commission_balance_fen`, and at least 10000 fen
-(100 CNY). `payout_note` MUST be nonempty after trimming and at most 512 characters.
+exactly `{ "amount_fen": string }`. `amount_fen` MUST be a canonical positive integer at
+most the agent's `commission_balance_fen`, and at least 10000 fen (100 CNY).
+
+The request MUST NOT carry payout details. Settlement happens out of band: the Admin
+contacts the agent through an existing channel and transfers the money, then records the
+outcome under SC-5.4. Storing a payout destination would put bank or wallet identifiers into
+the database with no code path that reads them.
 
 SC-5.2. Creating a withdrawal MUST decrease `commission_balance_fen` by `amount_fen` in the
 same transaction that inserts the `requested` row. Holding the amount at request time
@@ -241,10 +264,13 @@ request MUST return HTTP `409` with code `sales_withdrawal_pending`.
 SC-5.4. `POST /api/dashboard/store/admin/sales/withdrawals/{id}/decide` MUST require an
 Admin session, the SB-S-2 Origin check, and a five-minute reauthentication grant with scope
 `sales_withdrawal`. Its exact body MUST be
-`{ "decision": "paid" | "rejected", "decision_note": string }`.
+`{ "decision": "paid" | "rejected", "decision_note": string }`, where `decision_note` MAY be
+empty.
 
-SC-5.5. A `paid` decision MUST set `state = 'paid'`, `decided_at`, and `decided_by`, and
-MUST NOT change `commission_balance_fen`, because SC-5.2 already removed the amount.
+SC-5.5. A `paid` decision records that the Admin has already transferred the money out of
+band. It MUST set `state = 'paid'`, `decided_at`, and `decided_by`, and MUST NOT change
+`commission_balance_fen`, because SC-5.2 already removed the amount. It MUST NOT move money
+itself: no `billing_ledger` row and no change to `users.balance_nano_usd`.
 
 SC-5.6. A `rejected` decision MUST set `state = 'rejected'` and MUST return `amount_fen` to
 `commission_balance_fen` in the same transaction.
@@ -279,14 +305,26 @@ agent's own withdrawals in descending `requested_at` order with at most 100 reco
 
 ## 8. Frontend
 
-SC-UI-1. The sidebar MUST show a Sales entry at `/dashboard/sales` when and only when the
-authenticated user is an agent, for both `standard` and `enterprise` account classes. This
-extends the navigation sets of `dashboard-ui-layout.spec.md` DL5 and DL5c.
+SC-UI-1. An agent MUST land on a dedicated Sales surface at `/sales`, outside the dashboard
+shell. It MUST NOT reuse the standard-user navigation of `dashboard-ui-layout.spec.md` DL5
+or the Enterprise navigation of DL5c, and it MUST NOT render the dashboard sidebar. An agent
+session that requests `/dashboard` or any `/dashboard/*` route MUST be redirected to
+`/sales`; a non-agent session that requests `/sales` MUST be redirected to `/dashboard`.
 
-SC-UI-2. The Sales page MUST show the agent's code, the three SC-6.2 windows, the SC-6.3
-entry list, the claim form, and the withdrawal panel. It MUST use SWR with a skeleton that
-matches the ready layout, and MUST apply an optimistic value for a withdrawal request and a
-claim submission, rolling back on error.
+An agent exists only to sell. Presenting the API-key, usage, log, and Marketplace surfaces
+would imply capabilities the account is not created for, and presenting the Store would let
+an agent buy under their own code, which SC-2.3 forbids.
+
+SC-UI-2. The Sales surface MUST show the agent's code, the three SC-6.2 windows, the SC-6.3
+entry list, the claim form, and the withdrawal panel, and MUST expose sign-out and a
+password change. It MUST use SWR with a skeleton that matches the ready layout, and MUST
+apply an optimistic value for a withdrawal request and a claim submission, rolling back on
+error.
+
+SC-UI-2a. Every monetary value on the Sales surface MUST render as Coin through the shared
+Coin mark of `coin-wallet-navigation.spec.md` CN-16. The surface MUST NOT show a nano value
+and MUST NOT apply an exchange rate, because SC-0.3 stores commission in Coin minor units
+already.
 
 SC-UI-3. The Store purchase panel MUST render a sales-code input beside the custom-amount
 input, each occupying half of the row at `sm` and above and stacking below it. The field MUST
@@ -310,18 +348,30 @@ SC-UI-7. Every string introduced by this document MUST exist in `en`, `zh`, `zh-
 
 ## 9. Admin agent creation
 
-SC-7.1. `POST /api/dashboard/store/admin/sales/agents` MUST require an Admin session, the
-SB-S-2 Origin check, and a `sales_withdrawal`-scoped grant is NOT required. Its exact body
-MUST be `{ "username": string, "password": string, "discount_bp": integer }`.
+SC-7.1. `POST /api/dashboard/store/admin/sales/agents` MUST require an Admin session and the
+SB-S-2 Origin check. Its exact body MUST be `{ "discount_bp": integer }`. The Admin supplies
+neither a username nor a password.
 
-SC-7.2. It MUST create one `users` row with role `user` and one `sales_agents` row with a
-generated SC-D1b code and `commission_balance_fen = "0"`, in one transaction. A duplicate
-username MUST create neither row.
+SC-7.2. It MUST generate one SC-D1b code, then create one `users` row and one `sales_agents`
+row in a single transaction, with `username` equal to the generated code, a password of at
+least 16 characters from a cryptographically secure source, role `user`, and
+`commission_balance_fen = "0"`. A code collision on either the `users.username` unique index
+or the `sales_agents.code` unique index MUST retry with a new code and MUST create neither
+row on failure.
+
+SC-7.2a. The generated password MUST be returned exactly once, in the creation response, and
+MUST NOT be retrievable afterwards, because only its hash is stored. The agent MAY change
+both username and password afterwards through the existing account endpoints; the sales code
+MUST NOT change with the username, because orders already reference the code.
 
 SC-7.3. `PUT /api/dashboard/store/admin/sales/agents/{user_id}` MUST accept
 `{ "discount_bp": integer, "enabled": boolean }`. A changed `discount_bp` MUST NOT alter any
 existing `sales_commission_entries` row, because each entry froze the basis points that
 applied to its order.
+
+SC-7.5. `PUT /api/dashboard/store/admin/sales/settings` MUST require an Admin session and the
+SB-S-2 Origin check, and accept exactly `{ "commission_rate_bp": integer }` within the SC-1.1
+bounds. It MUST reject a value below any enabled agent's `discount_bp` under SC-1.2.
 
 SC-7.4. Disabling an agent MUST make their code unresolvable for new orders under SC-2.2 and
 MUST leave existing entries, balance, and withdrawals intact.

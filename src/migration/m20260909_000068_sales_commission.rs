@@ -32,7 +32,7 @@ impl MigrationTrait for Migration {
                 "CREATE TABLE sales_agents (
                      user_id TEXT NOT NULL PRIMARY KEY,
                      code TEXT NOT NULL,
-                     discount_bp {integer} NOT NULL CHECK (discount_bp BETWEEN 0 AND 500),
+                     discount_bp {integer} NOT NULL CHECK (discount_bp BETWEEN 0 AND 2000),
                      commission_balance_fen TEXT NOT NULL,
                      enabled {integer} NOT NULL CHECK (enabled IN (0, 1)),
                      created_at TEXT NOT NULL,
@@ -61,6 +61,7 @@ impl MigrationTrait for Migration {
                      base_fen TEXT NOT NULL,
                      commission_fen TEXT NOT NULL,
                      discount_bp {integer} NOT NULL,
+                     commission_rate_bp {integer} NOT NULL,
                      origin TEXT NOT NULL CHECK (origin IN ('code', 'claim')),
                      reversed_at TEXT,
                      created_at TEXT NOT NULL
@@ -99,7 +100,6 @@ impl MigrationTrait for Migration {
                  agent_user_id TEXT NOT NULL,
                  amount_fen TEXT NOT NULL,
                  state TEXT NOT NULL CHECK (state IN ('requested', 'paid', 'rejected')),
-                 payout_note TEXT NOT NULL,
                  requested_at TEXT NOT NULL,
                  decided_at TEXT,
                  decided_by TEXT,
@@ -225,9 +225,9 @@ mod tests {
         db.execute_unprepared(&format!(
             "INSERT INTO sales_commission_entries
                 (id, agent_user_id, order_id, order_number, buyer_user_id, base_fen,
-                 commission_fen, discount_bp, origin, created_at)
+                 commission_fen, discount_bp, commission_rate_bp, origin, created_at)
              VALUES ('{id}', 'agent-a', '{order_id}', 'LS-{order_id}', 'buyer-1', '10000',
-                     '400', 100, 'code', '2026-09-09T00:00:00Z')"
+                     '400', 100, 500, 'code', '2026-09-09T00:00:00Z')"
         ))
         .await
         .map(|_| ())
@@ -255,9 +255,12 @@ mod tests {
             .expect("a different order accrues independently");
     }
 
-    /// SC-1.2: the discount is funded from the 500 bp commission, so it cannot exceed it.
+    /// SC-1.2: the column bound is the maximum configurable rate. The exact
+    /// `discount_bp <= commission_rate_bp` rule depends on a mutable setting, so it is
+    /// enforced in the write path rather than by a CHECK that would need a migration to
+    /// change every time the rate moves.
     #[tokio::test]
-    async fn discount_basis_points_are_bounded_by_the_commission_rate() {
+    async fn discount_basis_points_are_bounded_by_the_maximum_rate() {
         let db = database_before_068().await;
         Migration
             .up(&SchemaManager::new(&db))
@@ -270,11 +273,11 @@ mod tests {
             "INSERT INTO sales_agents
                 (user_id, code, discount_bp, commission_balance_fen, enabled,
                  created_at, updated_at)
-             VALUES ('agent-over', 'CCCC2345', 501, '0', 1,
+             VALUES ('agent-over', 'CCCC2345', 2001, '0', 1,
                      '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z')",
         )
         .await
-        .expect_err("a discount above the commission rate must fail the CHECK");
+        .expect_err("a discount above the maximum rate must fail the CHECK");
     }
 
     #[tokio::test]
