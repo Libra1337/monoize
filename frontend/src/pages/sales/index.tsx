@@ -8,10 +8,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { useAuth } from "@/hooks/use-auth";
 import { salesApi } from "@/lib/sales-api";
+import { SalesDiscountCard, SalesPasswordCard } from "./sales-account";
 import { SalesBalanceCard, SalesCodeCard, SalesWindowCard } from "./sales-cards";
 import { SalesClaimPanel, SalesEntryList, SalesWithdrawalPanel } from "./sales-panels";
 
-type SalesTab = "overview" | "records";
+type SalesTab = "overview" | "records" | "account";
 
 const OVERVIEW_KEY = "sales:overview";
 const ENTRIES_KEY = "sales:entries";
@@ -100,11 +101,11 @@ export function SalesPage() {
         className="flex flex-col gap-6"
       >
         <div
-          className="grid w-full grid-cols-2 gap-1 rounded-xl bg-muted p-1"
+          className="grid w-full grid-cols-3 gap-1 rounded-xl bg-muted p-1"
           role="tablist"
           aria-label={t("sales.tabs.label")}
         >
-          {(["overview", "records"] as SalesTab[]).map((item) => (
+          {(["overview", "records", "account"] as SalesTab[]).map((item) => (
             <button
               key={item}
               type="button"
@@ -139,6 +140,15 @@ export function SalesPage() {
               </div>
             </section>
           </>
+        ) : tab === "account" ? (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <SalesDiscountCard
+              agent={data.agent}
+              maxDiscountBp={data.commission_rate_bp}
+              onUpdated={refreshAll}
+            />
+            <SalesPasswordCard />
+          </div>
         ) : (
           <>
             <div className="grid gap-4 lg:grid-cols-2">
