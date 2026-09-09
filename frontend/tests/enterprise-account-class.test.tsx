@@ -51,6 +51,18 @@ describe("Enterprise account-class API", () => {
 
 describe("Enterprise administration", () => {
   test("switches user class only through a separate destructive confirmation", () => {
+    // JSX props evaluate while the page renders, before the Dialog mounts, so the account
+    // class block must narrow `editUser` instead of reading it through `?.`. Reading
+    // `editUser.account_class` under an `editUser?.` guard blanks the whole Users page.
+    // JSX props evaluate while the page renders, before the Dialog mounts, so every
+    // non-optional `editUser` read must sit after a guard that narrows it. Reading
+    // `editUser.account_class` under an `editUser?.` guard blanks the whole Users page.
+    const narrowingGuard = usersSource.indexOf(
+      'editUser !== null && editUser.role !== "super_admin"',
+    );
+    expect(narrowingGuard).toBeGreaterThan(-1);
+    const firstUnguardedRead = usersSource.indexOf("editUser.account_class");
+    expect(firstUnguardedRead).toBeGreaterThan(narrowingGuard);
     expect(usersSource).toContain("accountClassTarget");
     expect(usersSource).toContain("updateUserAccountClassOptimistic");
     expect(usersSource).toContain('"users.accountClassDeleteKeysWarning"');

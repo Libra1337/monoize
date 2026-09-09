@@ -92,6 +92,9 @@ function optimisticChannel(input: PaymentChannelInput, id: string): StorePayment
     effective_available: false,
     unavailable_reasons: [],
     supported_currencies: [],
+    // A new Channel has no configured method yet. The list must exist because the Store and
+    // the method dialog map over it.
+    epay_methods: [],
     amount_limits: {},
     checkout_action_kinds: [],
     created_at: now,
