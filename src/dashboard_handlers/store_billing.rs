@@ -1021,6 +1021,43 @@ pub async fn get_store_order(
     Ok(Json(order))
 }
 
+/// Buyer-triggered provider payment query (SB-P-Q1).
+///
+/// The buyer's poll loop calls this instead of waiting for the provider callback. Throttling
+/// lives in the operation rather than here, so the limit holds per Attempt across every
+/// caller rather than per session.
+pub async fn query_store_order_payment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    if !state.store_order_poll_limiter.allow(&user.id) {
+        return Err(AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "order_poll_rate_limited",
+            "too many order status requests",
+        ));
+    }
+    let order = PaymentOrderStore::new(state.db_pool.clone())
+        .get_order_for_user(&user.id, &id)
+        .await
+        .map_err(map_payment_order_error)?
+        .ok_or_else(|| map_payment_order_error(PaymentOrderError::OrderNotFound))?;
+    let Some(key_ring) = state.payment_keys.clone() else {
+        return Ok(Json(order));
+    };
+    let result = AdminOrderOperations::new(
+        state.db_pool.clone(),
+        key_ring,
+        state.payment_query_provider.clone(),
+    )
+    .query_for_buyer(order, chrono::Utc::now())
+    .await
+    .map_err(map_admin_order_operation_error)?;
+    Ok(Json(result.order))
+}
+
 pub async fn create_store_payment_attempt(
     State(state): State<AppState>,
     headers: HeaderMap,

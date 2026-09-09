@@ -86,6 +86,7 @@ pub use store_billing::{
     export_store_redemption_codes_admin, generate_store_redemption_codes_admin, get_store_catalog,
     get_store_channel_readiness_admin, get_store_entitlement, get_store_exchange_rate,
     get_store_order, get_store_order_admin, get_store_payment_availability_admin,
+    query_store_order_payment,
     get_store_payment_compliance_admin, get_store_payment_icon, get_store_primary_status_admin,
     get_store_refund_admin, get_store_retention_admin, get_store_settings_admin,
     list_all_store_orders_admin, list_store_orders, list_store_payment_capabilities_admin,

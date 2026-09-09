@@ -621,6 +621,14 @@ export const storeApi = {
   getEntitlement: () => storeRequest<StorePlanEntitlement | null>("/entitlement"),
   listOrders: (limit = 100) => storeRequest<StoreOrder[]>(listPath("/orders", limit)),
   getOrder: (id: string) => storeRequest<StoreOrder>(`/orders/${encodeURIComponent(id)}`),
+  /**
+   * Asks the payment provider directly instead of waiting for its callback (SB-P-Q1).
+   *
+   * The server throttles provider contact per Attempt, so this is safe to call on every
+   * poll tick; a throttled call simply returns the current order.
+   */
+  queryOrderPayment: (id: string) =>
+    storeRequest<StoreOrder>(`/orders/${encodeURIComponent(id)}/query`, { method: "POST" }),
   createOrder: (input: CreateStoreOrderInput, idempotencyKey: string) =>
     storeRequest<StoreOrder>("/orders", {
       method: "POST",

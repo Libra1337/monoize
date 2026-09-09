@@ -413,7 +413,11 @@ export function StorePage() {
     const poll = async () => {
       try {
         setWatch((current) => ({ ...current, attempts: current.attempts + 1 }));
-        const order = await storeApi.getOrder(pollingOrderId);
+        // SB-P-Q1: ask the provider rather than waiting for its callback. One production
+        // order waited 2m14s for the callback while another took 12s, and the provider knew
+        // the answer the whole time. The server throttles its own provider contact, so
+        // calling this every tick costs no more than a local read.
+        const order = await storeApi.queryOrderPayment(pollingOrderId);
         await mutate<StoreOrder[]>(
           ORDERS_KEY,
           (current = []) => [order, ...current.filter((item) => item.id !== order.id)],

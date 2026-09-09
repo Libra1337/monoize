@@ -743,3 +743,124 @@ fn row_optional_string(
 fn storage(error: sea_orm::DbErr) -> PaymentOperationsError {
     PaymentOperationsError::Storage(error.to_string())
 }
+
+/// Minimum interval between provider contacts for one Attempt on the buyer path (SB-P-Q3).
+pub const BUYER_QUERY_MIN_INTERVAL_MS: i64 = 8_000;
+
+/// Outcome of a buyer-triggered provider query (SB-P-Q6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BuyerQueryResult {
+    pub order: PaymentOrder,
+    /// False when the provider was skipped: throttled, unsupported, or nothing to ask about.
+    pub provider_contacted: bool,
+}
+
+impl AdminOrderOperations {
+    /// Runs a provider payment query on behalf of the order's owner (SB-P-Q1).
+    ///
+    /// Ownership is the caller's responsibility to establish before calling. This method
+    /// enforces the remaining preconditions: the order must be a v2 unpaid order, the Channel
+    /// must support `payment_query`, and the Attempt must not have contacted the provider
+    /// within `BUYER_QUERY_MIN_INTERVAL_MS`.
+    ///
+    /// A paid result is applied through the same verified-query path an Admin query uses, so
+    /// fulfillment and idempotency are identical regardless of who asked (SB-P-Q5). Unlike the
+    /// Admin path this never closes an Attempt or an order.
+    pub async fn query_for_buyer(
+        &self,
+        order: PaymentOrder,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<BuyerQueryResult, AdminOrderOperationError> {
+        if order.contract_version != 2 || order.payment_state != PaymentState::Unpaid {
+            return Ok(BuyerQueryResult { order, provider_contacted: false });
+        }
+        let orders = PaymentOrderStore::new(self.db.clone());
+        let attempt = orders
+            .list_attempts_admin(&order.id)
+            .await
+            .map_err(map_order_error)?
+            .into_iter()
+            .filter(|attempt| {
+                matches!(attempt.state.as_str(), "created" | "presented")
+                    && attempt.provider_object_id.is_some()
+            })
+            .next_back();
+        let Some(attempt) = attempt else {
+            return Ok(BuyerQueryResult { order, provider_contacted: false });
+        };
+        if !channel_supports_payment_query(&self.db, &attempt.channel_id).await? {
+            return Ok(BuyerQueryResult { order, provider_contacted: false });
+        }
+        // SB-P-Q2: the claim is conditional on the stored timestamp, so concurrent callers
+        // cannot both pass the interval check and contact the provider twice.
+        if !claim_buyer_query_slot(&self.db, &attempt.id, now).await? {
+            return Ok(BuyerQueryResult { order, provider_contacted: false });
+        }
+
+        let outcome = match self.query.query_attempt_with_context(&attempt.id).await {
+            Ok(outcome) => outcome,
+            // A provider that is unreachable or rejects the query must not fail the buyer's
+            // poll; the callback path remains authoritative and will still settle the order.
+            Err(_) => return Ok(BuyerQueryResult { order, provider_contacted: true }),
+        };
+        if outcome.order_id != order.id {
+            return Ok(BuyerQueryResult { order, provider_contacted: true });
+        }
+        if let ProviderPaymentState::Paid { provider_transaction_id } = &outcome.state {
+            self.project_paid_query(&outcome, provider_transaction_id).await?;
+        }
+        let order = orders
+            .get_order_admin(&order.id)
+            .await
+            .map_err(map_order_error)?
+            .ok_or(AdminOrderOperationError::NotFound)?;
+        Ok(BuyerQueryResult { order, provider_contacted: true })
+    }
+}
+
+/// Returns true when the Channel has a `supported` `payment_query` capability (SB-P-Q4).
+async fn channel_supports_payment_query(
+    db: &DbPool,
+    channel_id: &str,
+) -> Result<bool, AdminOrderOperationError> {
+    let row = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM store_merchant_capabilities
+             WHERE channel_id = $1 AND capability = 'payment_query' AND state = 'supported'",
+            vec![channel_id.into()],
+        ))
+        .await
+        .map_err(|error| AdminOrderOperationError::Storage(error.to_string()))?;
+    let count: i64 = match row {
+        Some(row) => row
+            .try_get("", "value")
+            .map_err(|error| AdminOrderOperationError::Storage(error.to_string()))?,
+        None => 0,
+    };
+    Ok(count > 0)
+}
+
+/// Claims the right to contact the provider for this Attempt, or reports that it is too soon.
+///
+/// The write is conditional on the stored `buyer_query_at`, so the database decides the
+/// winner when two requests race. Returning the claim from an `UPDATE ... WHERE` rather than
+/// a read-then-write is what makes SB-P-Q2 hold under concurrency.
+async fn claim_buyer_query_slot(
+    db: &DbPool,
+    attempt_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, AdminOrderOperationError> {
+    let cutoff = (now - chrono::Duration::milliseconds(BUYER_QUERY_MIN_INTERVAL_MS)).to_rfc3339();
+    let result = db
+        .write()
+        .await
+        .execute(db.stmt(
+            "UPDATE store_payment_attempts SET buyer_query_at = $2
+             WHERE id = $1 AND (buyer_query_at IS NULL OR buyer_query_at <= $3)",
+            vec![attempt_id.into(), now.to_rfc3339().into(), cutoff.into()],
+        ))
+        .await
+        .map_err(|error| AdminOrderOperationError::Storage(error.to_string()))?;
+    Ok(result.rows_affected() > 0)
+}

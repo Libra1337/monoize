@@ -2320,6 +2320,10 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::create_sales_claim),
         )
         .route(
+            "/dashboard/store/orders/{id}/query",
+            post(crate::dashboard_handlers::query_store_order_payment),
+        )
+        .route(
             "/dashboard/sales/discount",
             put(crate::dashboard_handlers::update_own_sales_discount),
         )

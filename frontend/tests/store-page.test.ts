@@ -115,8 +115,10 @@ describe("Store user pages", () => {
     expect(paymentSource).not.toContain("channels.filter");
   });
 
+  // SB-P-Q1: the poll asks the provider rather than re-reading the local order, because the
+  // provider callback is not timely. One production order waited 2m14s for its callback.
   test("polls a pending payment every two seconds and revalidates account data", () => {
-    expect(storeSource).toContain("storeApi.getOrder(pollingOrderId)");
+    expect(storeSource).toContain("storeApi.queryOrderPayment(pollingOrderId)");
     expect(storeSource).toContain("2_000");
     // The terminal branch of the poll revalidates the order list and the wallet
     // balance. `catalog.mutate()` belongs to the retry handler, not to polling.

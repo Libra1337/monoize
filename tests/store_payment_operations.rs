@@ -18,6 +18,7 @@ use monoize::store_billing::order::{
     PaymentOrderStore,
 };
 use monoize::store_billing::payment::{AdapterError, PaymentQuery, ProviderPaymentState};
+use monoize::store_billing::state_machine::PaymentState;
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
 use sha2::{Digest, Sha256};
@@ -1188,4 +1189,133 @@ async fn query_attempt_rejects_decrypted_account_identity_mismatch() {
         PaymentOperationsError::AccountIdentityMismatch
     );
     assert!(provider.calls.lock().unwrap().is_empty());
+}
+
+/// SB-P-Q2 and SB-P-Q3: one Attempt reaches the provider at most once per interval, no
+/// matter how many callers ask. Without this a two-second poll loop would hammer the
+/// provider and risk being rate limited by it.
+#[tokio::test]
+async fn a_buyer_query_contacts_the_provider_at_most_once_per_interval() {
+    let fixture = operations_fixture("stripe").await;
+    let provider = RecordingQueryProvider::returning(ProviderPaymentState::Unpaid);
+    let calls = provider.calls.clone();
+    let orders = PaymentOrderStore::new(fixture.db.clone());
+    let operations = AdminOrderOperations::new(
+        fixture.db.clone(),
+        Arc::new(fixture.key_ring),
+        Arc::new(provider),
+    );
+    let order = orders
+        .get_order_admin(&fixture.order_id)
+        .await
+        .unwrap()
+        .expect("fixture order");
+    let now = chrono::Utc::now();
+
+    let first = operations.query_for_buyer(order.clone(), now).await.unwrap();
+    assert!(first.provider_contacted, "the first query must reach the provider");
+    assert_eq!(calls.lock().unwrap().len(), 1);
+
+    // A poll two seconds later is inside the interval and must be served locally.
+    let second = operations
+        .query_for_buyer(order.clone(), now + chrono::Duration::seconds(2))
+        .await
+        .unwrap();
+    assert!(!second.provider_contacted, "a query inside the interval must not reach the provider");
+    assert_eq!(calls.lock().unwrap().len(), 1, "the provider must not be contacted twice");
+
+    // Past the interval the next poll is allowed through again.
+    let third = operations
+        .query_for_buyer(order, now + chrono::Duration::milliseconds(8_001))
+        .await
+        .unwrap();
+    assert!(third.provider_contacted);
+    assert_eq!(calls.lock().unwrap().len(), 2);
+}
+
+/// SB-P-Q5: a paid provider response settles the order on the buyer path exactly as it does
+/// on the Admin path. This is the whole point of the endpoint: the buyer stops waiting for a
+/// callback that took over two minutes to arrive in production.
+#[tokio::test]
+async fn a_buyer_query_settles_an_order_the_provider_reports_as_paid() {
+    let fixture = operations_fixture("stripe").await;
+    let provider = RecordingQueryProvider::returning(ProviderPaymentState::Paid {
+        provider_transaction_id: "pi-buyer-query".to_string(),
+    });
+    let orders = PaymentOrderStore::new(fixture.db.clone());
+    let operations = AdminOrderOperations::new(
+        fixture.db.clone(),
+        Arc::new(fixture.key_ring),
+        Arc::new(provider),
+    );
+    // Settling credits the buyer, so the buyer must exist. The shared fixture creates the
+    // order without one because its other tests never reach fulfillment.
+    fixture
+        .db
+        .write()
+        .await
+        .execute_unprepared(
+            "INSERT INTO users
+                (id, username, password_hash, role, created_at, updated_at, enabled,
+                 balance_nano_usd, balance_unlimited, group_id)
+             SELECT 'operations-user', 'operations-user', 'test', 'user',
+                    '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z', 1, '0', 0, id
+             FROM monoize_groups WHERE is_default = 1 LIMIT 1",
+        )
+        .await
+        .unwrap();
+    let order = orders
+        .get_order_admin(&fixture.order_id)
+        .await
+        .unwrap()
+        .expect("fixture order");
+    assert_eq!(order.payment_state, PaymentState::Unpaid);
+
+    let result = operations
+        .query_for_buyer(order, chrono::Utc::now())
+        .await
+        .unwrap();
+    assert!(result.provider_contacted);
+    assert_eq!(
+        result.order.payment_state,
+        PaymentState::Paid,
+        "the returned order must already reflect the settled payment"
+    );
+}
+
+/// SB-P-Q4: a Channel without the capability must degrade to a local read, not an error, so
+/// the buyer's poll loop keeps working on Channels that cannot be queried.
+#[tokio::test]
+async fn a_buyer_query_skips_a_channel_without_the_capability() {
+    let fixture = operations_fixture("stripe").await;
+    fixture
+        .db
+        .write()
+        .await
+        .execute(fixture.db.stmt(
+            "DELETE FROM store_merchant_capabilities WHERE capability = 'payment_query'",
+            vec![],
+        ))
+        .await
+        .unwrap();
+    let provider = RecordingQueryProvider::returning(ProviderPaymentState::Paid {
+        provider_transaction_id: "pi-never-asked".to_string(),
+    });
+    let calls = provider.calls.clone();
+    let orders = PaymentOrderStore::new(fixture.db.clone());
+    let operations = AdminOrderOperations::new(
+        fixture.db.clone(),
+        Arc::new(fixture.key_ring),
+        Arc::new(provider),
+    );
+    let order = orders
+        .get_order_admin(&fixture.order_id)
+        .await
+        .unwrap()
+        .expect("fixture order");
+
+    let result = operations.query_for_buyer(order, chrono::Utc::now()).await.unwrap();
+    assert!(!result.provider_contacted);
+    assert!(calls.lock().unwrap().is_empty());
+    assert_eq!(result.order.payment_state, PaymentState::Unpaid);
 }

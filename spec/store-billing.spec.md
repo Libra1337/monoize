@@ -899,6 +899,43 @@ MUST display a success indicator for 1800 ms and then close. When polling reache
 terminal condition (expiry, failure, or a 404 order), the dialog MUST close immediately
 without a success indicator.
 
+SB-P-Q1. The buyer MUST be able to trigger a provider payment query for their own order
+through `POST /dashboard/store/orders/{id}/query`. The endpoint MUST reject a caller who does
+not own the order with the same not-found response used for an unknown order. It MUST reject
+an order whose `contract_version` is not 2, and an order whose `payment_state` is not
+`unpaid`, without contacting the provider.
+
+Waiting only for the provider callback leaves the buyer with no signal: one observed order
+received its callback 2 minutes 14 seconds after creation, while another received it in 12
+seconds. The provider is authoritative about payment either way, so the buyer polling loop
+asks it directly instead of waiting.
+
+SB-P-Q2. A buyer query MUST contact the provider at most once per `SB-P-Q3` interval per
+Attempt, regardless of how many callers request it. The last provider contact time MUST be
+persisted on the Attempt as `buyer_query_at`, so the limit survives a restart and cannot be
+bypassed by opening more tabs. When the interval has not elapsed, the endpoint MUST return
+the current order without contacting the provider.
+
+SB-P-Q3. The minimum interval between provider contacts for one Attempt is 8000 ms.
+
+SB-P-Q4. A buyer query whose Channel lacks a `supported` `payment_query` merchant capability
+MUST return the current order without contacting the provider, and MUST NOT fail.
+
+SB-P-Q5. When the provider reports the payment as paid, a buyer query MUST apply it through
+the same verified-query event path an Admin query uses, so fulfillment, idempotency, and
+ledger effects are identical regardless of who triggered the query. A buyer query MUST NOT
+close an Attempt or an order under any provider response; closing remains Admin-only.
+
+SB-P-Q6. A buyer query MUST return the order as it stands after the query, using the same
+representation as `GET /dashboard/store/orders/{id}`. An `Ambiguous` provider response MUST
+return the current order rather than an error, because the buyer cannot act on it.
+
+SB-UI-10E. The success state of the QR dialog MUST render an animated check mark that draws
+its ring and its tick in sequence, followed by the success label. Under
+`prefers-reduced-motion: reduce` the mark MUST still reach its completed state. The mark is
+the confirmation the buyer waits for, so it MUST NOT depend on the dialog remaining open
+beyond the SB-UI-10C hold.
+
 SB-UI-10D. In the order history list and in every order detail surface, an order whose
 `quote.product.kind` is `balance` MUST title the order with the Coin amount derived from
 `quote.product.balance.actual_received_minor`, denominated in `quote.product.price_currency`.
