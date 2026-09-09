@@ -25,6 +25,7 @@ pub mod redemption;
 pub mod refund_operations;
 pub mod retention;
 pub mod sales;
+pub mod sales_store;
 pub mod settlement;
 pub mod state_machine;
 pub mod store;
