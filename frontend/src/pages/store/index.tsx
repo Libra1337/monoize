@@ -38,6 +38,7 @@ import {
   type StoreCurrency,
 } from "@/lib/store-money";
 import { cn } from "@/lib/utils";
+import { PaymentWatch, type PaymentWatchStatus } from "./payment-watch";
 import { OrderSummary } from "./order-summary";
 import { PaymentMethods } from "./payment-methods";
 import {
@@ -61,6 +62,9 @@ import {
 } from "./checkout-state";
 
 const CATALOG_KEY = "/api/dashboard/store/catalog";
+/** How long a successful payment stays on screen before the dialog closes. */
+const PAID_DIALOG_HOLD_MS = 1_800;
+
 const ORDERS_KEY = "/api/dashboard/store/orders";
 
 function optimisticOrder(
@@ -335,6 +339,11 @@ export function StorePage() {
   // the flag is cleared as soon as the buyer edits it.
   const [salesCodeInvalid, setSalesCodeInvalid] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [watch, setWatch] = useState<{
+    startedAt: number;
+    attempts: number;
+    status: PaymentWatchStatus;
+  }>(() => ({ startedAt: Date.now(), attempts: 0, status: "watching" }));
   const [pollingOrderId, setPollingOrderId] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
     return new URLSearchParams(window.location.search).get("order_id")
@@ -403,6 +412,7 @@ export function StorePage() {
 
     const poll = async () => {
       try {
+        setWatch((current) => ({ ...current, attempts: current.attempts + 1 }));
         const order = await storeApi.getOrder(pollingOrderId);
         await mutate<StoreOrder[]>(
           ORDERS_KEY,
@@ -418,7 +428,15 @@ export function StorePage() {
           await Promise.all([mutate(ORDERS_KEY), refreshUser()]);
           if (active) {
             setPollingOrderId(null);
-            setQrAction(null);
+            // SB-UI-10C: a paid order holds the dialog open briefly so the buyer sees the
+            // confirmation. Any other terminal state (expired, failed) closes at once,
+            // because the order list is the correct place to explain what went wrong.
+            if (order.payment_state === "paid") {
+              setWatch((current) => ({ ...current, status: "succeeded" }));
+              window.setTimeout(() => setQrAction(null), PAID_DIALOG_HOLD_MS);
+            } else {
+              setQrAction(null);
+            }
             const url = new URL(window.location.href);
             url.searchParams.delete("order_id");
             url.searchParams.delete("checkout");
@@ -535,6 +553,7 @@ export function StorePage() {
         return;
       }
       setQrAction({ action: checkout.action, method: validatedOption.method });
+      setWatch({ startedAt: Date.now(), attempts: 0, status: "watching" });
       setPollingOrderId(createdOrder.id);
     } catch (cause) {
       if (cause instanceof StoreApiError && cause.code.startsWith("sales_code")) {
@@ -584,6 +603,11 @@ export function StorePage() {
               />
             )}
           </div>
+          <PaymentWatch
+            startedAt={watch.startedAt}
+            attempts={watch.attempts}
+            status={watch.status}
+          />
         </DialogContent>
       </Dialog>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

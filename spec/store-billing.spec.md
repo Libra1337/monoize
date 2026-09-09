@@ -892,6 +892,13 @@ the wrong method therefore directs the payer into a guaranteed failure. When the
 option carries no method, the modal MUST use an instruction that names no method. The modal
 MUST NOT apply an exchange rate, alter, or re-encode the payload.
 
+SB-UI-10C. While the QR dialog is open and order polling is active, the dialog MUST display
+the elapsed whole seconds since polling began and the number of status checks issued, both
+updating at least once per second. When polling observes `payment_state = paid`, the dialog
+MUST display a success indicator for 1800 ms and then close. When polling reaches any other
+terminal condition (expiry, failure, or a 404 order), the dialog MUST close immediately
+without a success indicator.
+
 SB-UI-11. Store Management MUST have Products, Payment Channels, Orders, and Redemption Codes child pages with an animated active indicator.
 
 SB-UI-12. Orders MUST show payment and fulfillment state separately. It MUST expose query, verified event reprocess, close, refund, dispute, hold, and case actions according to role and state. Close MUST be hidden when another Attempt for the order has state `created` or `presented`. Each user-triggered order or refund mutation MUST use an SWR optimistic cache value, roll back that value on error, apply the returned record to the cache, and then revalidate order detail and list data. A successful refund query MUST clear the reauthentication password. It MUST NOT show manual Complete.
