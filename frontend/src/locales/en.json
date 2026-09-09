@@ -821,7 +821,14 @@
         "entryBuyer": "Buyer",
         "entryCommission": "Commission",
         "noEntries": "No commission yet",
-        "failed": "Request failed"
+        "failed": "Request failed",
+        "tabs": {
+          "label": "Sales management sections",
+          "agents": "Agents",
+          "withdrawals": "Withdrawals",
+          "commissions": "Commissions"
+        },
+        "discountReadOnly": "Discount {{percent}} — set by the agent"
       }
     },
     "fields": {
@@ -2148,7 +2155,26 @@
     "tabs": {
       "label": "Sales views",
       "overview": "Overview",
-      "records": "Records"
+      "records": "Records",
+      "account": "Account"
+    },
+    "account": {
+      "passwordTitle": "Change password",
+      "passwordDescription": "Replace the one-time password issued when your account was created.",
+      "currentPassword": "Current password",
+      "newPassword": "New password",
+      "confirmPassword": "Confirm new password",
+      "passwordTooShort": "Use at least {{min}} characters",
+      "passwordMismatch": "The two passwords do not match",
+      "changePassword": "Change password",
+      "passwordChanged": "Password changed",
+      "saving": "Saving…",
+      "discountTitle": "Your code discount",
+      "discountDescription": "A discount lowers what your buyer pays and is taken from your commission. The maximum is {{max}}.",
+      "discountLabel": "Discount in basis points (0–{{max}})",
+      "discountEffect": "Buyer saves {{discount}}; you earn {{commission}} of face value.",
+      "saveDiscount": "Save discount",
+      "discountSaved": "Discount saved"
     }
   },
   "salesAdmin": {

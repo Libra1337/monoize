@@ -821,7 +821,14 @@
         "entryBuyer": "買家",
         "entryCommission": "分成",
         "noEntries": "尚無分成記錄",
-        "failed": "請求失敗"
+        "failed": "請求失敗",
+        "tabs": {
+          "label": "銷售管理分區",
+          "agents": "銷售帳戶",
+          "withdrawals": "提現",
+          "commissions": "分成記錄"
+        },
+        "discountReadOnly": "折扣 {{percent}} — 由銷售本人設定"
       }
     },
     "fields": {
@@ -2145,7 +2152,26 @@
     "tabs": {
       "label": "銷售檢視",
       "overview": "概覽",
-      "records": "明細"
+      "records": "明細",
+      "account": "帳戶"
+    },
+    "account": {
+      "passwordTitle": "修改密碼",
+      "passwordDescription": "替換帳戶建立時簽發的一次性密碼。",
+      "currentPassword": "目前密碼",
+      "newPassword": "新密碼",
+      "confirmPassword": "確認新密碼",
+      "passwordTooShort": "至少 {{min}} 個字元",
+      "passwordMismatch": "兩次輸入的密碼不一致",
+      "changePassword": "修改密碼",
+      "passwordChanged": "密碼已修改",
+      "saving": "儲存中…",
+      "discountTitle": "你的銷售碼折扣",
+      "discountDescription": "折扣降低買家支付的金額，並從你的分成中扣除。上限為 {{max}}。",
+      "discountLabel": "折扣（基點，0–{{max}}）",
+      "discountEffect": "買家省 {{discount}}，你獲得面額的 {{commission}}。",
+      "saveDiscount": "儲存折扣",
+      "discountSaved": "折扣已儲存"
     }
   },
   "salesAdmin": {

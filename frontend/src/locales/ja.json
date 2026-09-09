@@ -821,7 +821,14 @@
         "entryBuyer": "購入者",
         "entryCommission": "報酬",
         "noEntries": "報酬記録はありません",
-        "failed": "リクエストに失敗しました"
+        "failed": "リクエストに失敗しました",
+        "tabs": {
+          "label": "販売管理セクション",
+          "agents": "販売アカウント",
+          "withdrawals": "出金",
+          "commissions": "報酬記録"
+        },
+        "discountReadOnly": "割引 {{percent}} — 担当者本人が設定"
       }
     },
     "fields": {
@@ -2144,7 +2151,26 @@
     "tabs": {
       "label": "セールス表示",
       "overview": "概要",
-      "records": "明細"
+      "records": "明細",
+      "account": "アカウント"
+    },
+    "account": {
+      "passwordTitle": "パスワードを変更",
+      "passwordDescription": "アカウント作成時に発行されたワンタイムパスワードを置き換えます。",
+      "currentPassword": "現在のパスワード",
+      "newPassword": "新しいパスワード",
+      "confirmPassword": "新しいパスワードの確認",
+      "passwordTooShort": "{{min}} 文字以上を使用してください",
+      "passwordMismatch": "2 つのパスワードが一致しません",
+      "changePassword": "パスワードを変更",
+      "passwordChanged": "パスワードを変更しました",
+      "saving": "保存中…",
+      "discountTitle": "あなたのコードの割引",
+      "discountDescription": "割引は購入者の支払額を下げ、あなたの報酬から差し引かれます。上限は {{max}} です。",
+      "discountLabel": "割引（ベーシスポイント、0–{{max}}）",
+      "discountEffect": "購入者は {{discount}} 割引、あなたは額面の {{commission}} を獲得します。",
+      "saveDiscount": "割引を保存",
+      "discountSaved": "割引を保存しました"
     }
   },
   "salesAdmin": {

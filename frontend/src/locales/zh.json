@@ -821,7 +821,14 @@
         "entryBuyer": "买家",
         "entryCommission": "分成",
         "noEntries": "暂无分成记录",
-        "failed": "请求失败"
+        "failed": "请求失败",
+        "tabs": {
+          "label": "销售管理分区",
+          "agents": "销售账户",
+          "withdrawals": "提现",
+          "commissions": "分成记录"
+        },
+        "discountReadOnly": "折扣 {{percent}} — 由销售本人设置"
       }
     },
     "fields": {
@@ -2148,7 +2155,26 @@
     "tabs": {
       "label": "销售视图",
       "overview": "概览",
-      "records": "明细"
+      "records": "明细",
+      "account": "账户"
+    },
+    "account": {
+      "passwordTitle": "修改密码",
+      "passwordDescription": "替换账户创建时签发的一次性密码。",
+      "currentPassword": "当前密码",
+      "newPassword": "新密码",
+      "confirmPassword": "确认新密码",
+      "passwordTooShort": "至少 {{min}} 个字符",
+      "passwordMismatch": "两次输入的密码不一致",
+      "changePassword": "修改密码",
+      "passwordChanged": "密码已修改",
+      "saving": "保存中…",
+      "discountTitle": "你的销售码折扣",
+      "discountDescription": "折扣降低买家支付的金额，并从你的分成中扣除。上限为 {{max}}。",
+      "discountLabel": "折扣（基点，0–{{max}}）",
+      "discountEffect": "买家省 {{discount}}，你获得面额的 {{commission}}。",
+      "saveDiscount": "保存折扣",
+      "discountSaved": "折扣已保存"
     }
   },
   "salesAdmin": {
