@@ -61,6 +61,20 @@ Add the `stream_force` transform to force `stream: true` toward the upstream. Mo
 
 ## Protocol conversion questions
 
+### `400 invalid_request` with `does not support thinking.type=adaptive`
+
+The full message is `Messages model <name> does not support thinking.type=adaptive`. Monoize validates every encoded Messages request before dispatch. It returns this error and calls no upstream.
+
+Claude Code sends `thinking: { "type": "adaptive" }` in its `/v1/messages` requests. Monoize preserves that object for a `messages` upstream. The upstream model name must denote an adaptive Claude model. The lowercased name must contain `claude`, or start with `opus-`, `sonnet-`, or `haiku-`. A name such as `DeepSeek/DeepSeek-V4-Pro` fails this test, so validation rejects the request.
+
+Apply one of these fixes:
+
+1. **Send the model over Chat Completions.** Set the Channel type to `chat_completion`. Alternatively, add an **API Type Overrides** rule on the Provider that maps the model pattern to `chat_completion`. The rule pattern matches the logical model name from the client, not the `redirect` target. Monoize then encodes the reasoning controls of the upstream model family.
+2. **Redirect Claude model names to Claude models only.** Read the Channel model mapping. A `redirect` that points an adaptive Claude name at another model family keeps the client's Claude-specific controls in the request. See [Providers and Channels](/en/docs/dashboard/providers-and-channels).
+3. **Disable extended thinking in the client.** A request with no `thinking` object passes validation for a non-Claude model. A request with `thinking.type=disabled` also passes.
+
+The mirror case returns `does not support thinking.type=enabled; use adaptive`. It occurs when the client sends a manual `budget_tokens` and the upstream model is Opus 4.7 or later, Sonnet 5 or later, Fable 5, or Mythos 5. The same fixes apply.
+
 ### Reasoning disappears after conversion
 
 Some upstreams return reasoning in nonstandard fields. Use the reasoning transforms to restore or reshape it. Start with [Transforms](/en/docs/transforms).

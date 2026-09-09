@@ -61,6 +61,20 @@ description: 解决认证、路由、计费和流式传输的常见错误。
 
 ## 协议转换问题
 
+### `400 invalid_request` 提示 `does not support thinking.type=adaptive`
+
+完整消息是 `Messages model <名称> does not support thinking.type=adaptive`。Monoize 在发出请求前校验每个已编码的 Messages 请求。它返回该错误，并且不调用任何上游。
+
+Claude Code 在 `/v1/messages` 请求中发送 `thinking: { "type": "adaptive" }`。Monoize 为 `messages` 上游保留该对象。上游模型名必须表示支持 adaptive 的 Claude 模型。小写后的名称必须包含 `claude`，或以 `opus-`、`sonnet-`、`haiku-` 开头。`DeepSeek/DeepSeek-V4-Pro` 这类名称不满足条件，因此校验拒绝该请求。
+
+采用以下任一修复方式：
+
+1. **改用 Chat Completions 发送该模型。** 把 Channel 类型设为 `chat_completion`。或者在 Provider 上添加一条 **API 类型覆盖规则**，把该模型模式映射到 `chat_completion`。规则模式匹配客户端发送的逻辑模型名，不是 `redirect` 目标。Monoize 随后按上游模型族编码推理控制字段。
+2. **只把 Claude 模型名重定向到 Claude 模型。** 检查 Channel 的模型映射。把支持 adaptive 的 Claude 名称 `redirect` 到其他模型族时，客户端的 Claude 专属控制字段仍留在请求中。参见 [Provider 与 Channel](/zh/docs/dashboard/providers-and-channels)。
+3. **在客户端关闭扩展思考。** 不含 `thinking` 对象的请求对非 Claude 模型可以通过校验。含 `thinking.type=disabled` 的请求同样可以通过。
+
+对称情形返回 `does not support thinking.type=enabled; use adaptive`。当客户端发送手动 `budget_tokens`，而上游模型是 Opus 4.7 及更高、Sonnet 5 及更高、Fable 5 或 Mythos 5 时，出现该错误。修复方式相同。
+
 ### 转换后推理内容消失
 
 某些上游用非标准字段返回推理内容。使用推理类变换还原或改写。从[变换](/zh/docs/transforms)开始。
