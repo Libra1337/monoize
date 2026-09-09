@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Copy, Check, Key, Edit, Globe, Layers, Settings2, ArrowRightLeft, X } from "lucide-react";
+import { Plus, Trash2, Copy, Check, Key, Edit, Globe, Layers, Settings2, ArrowRightLeft, X, BarChart3 } from "lucide-react";
+import { ApiKeyAnalyticsDialog } from "@/components/api-key-analytics-dialog";
 import { BadgeOverflowList } from "@/components/BadgeOverflowList";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { GroupMultiSelect } from "@/components/groups/GroupPicker";
@@ -446,6 +447,7 @@ export function ApiKeysPage() {
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [analyticsKey, setAnalyticsKey] = useState<ApiKey | null>(null);
 
   // Create form state
   const [newKeyName, setNewKeyName] = useState("");
@@ -1060,7 +1062,13 @@ export function ApiKeysPage() {
                     </VirtualTableCell>
                     <VirtualTableCell className="font-medium">
                       <div className="flex min-w-max items-center gap-2 whitespace-nowrap">
-                        <span>{key.name}</span>
+                        <button
+                          type="button"
+                          className="rounded-md text-left font-medium hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          onClick={() => setAnalyticsKey(key)}
+                        >
+                          {key.name}
+                        </button>
                         {key.group_ids.length > 0 && (
                           <GroupsBadge groupIds={key.group_ids} variant="secondary" />
                         )}
@@ -1112,6 +1120,15 @@ export function ApiKeysPage() {
                     </VirtualTableCell>
                     <VirtualTableCell>
                       <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-11 touch-manipulation sm:size-9"
+                          aria-label={t("apiKeys.analyticsTitle")}
+                          onClick={() => setAnalyticsKey(key)}
+                        >
+                          <BarChart3 className="h-4 w-4" />
+                        </Button>
                         {key.sub_account_enabled && (
                           <Button
                             variant="ghost"
@@ -1151,6 +1168,13 @@ export function ApiKeysPage() {
               />
         </DataTableShell>
       </motion.div>
+
+      <ApiKeyAnalyticsDialog
+        apiKey={analyticsKey}
+        onOpenChange={(open) => {
+          if (!open) setAnalyticsKey(null);
+        }}
+      />
 
       {/* Edit Dialog */}
       <Dialog open={!!editKey} onOpenChange={(open) => { if (!open) { setEditKey(null); resetCreateForm(); } }}>

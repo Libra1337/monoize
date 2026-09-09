@@ -13,6 +13,7 @@ const summarySource = readSource("../src/pages/store/order-summary.tsx");
 const skeletonSource = readSource("../src/pages/store/store-skeleton.tsx");
 const redemptionSource = readSource("../src/pages/store/redemption-panel.tsx");
 const checkoutStateSource = readSource("../src/pages/store/checkout-state.ts");
+const selectionSource = readSource("../src/pages/store/store-selection.ts");
 const ordersSource = readSource("../src/pages/orders.tsx");
 const moneySource = readSource("../src/lib/store-money.ts");
 const zhSource = readSource("../src/locales/zh.json");
@@ -46,7 +47,7 @@ describe("Store user pages", () => {
   test("replaces a failed custom payment image with the channel icon fallback", () => {
     expect(paymentSource).toContain("onError");
     expect(paymentSource).toContain("setImageFailed(true)");
-    expect(paymentSource).toContain("key={channel.icon_value ?? channel.id}");
+    expect(paymentSource).toContain("key={option.iconValue ?? option.id}");
   });
 
   test("does not mount payment methods or a summary for redemption", () => {
@@ -96,21 +97,18 @@ describe("Store user pages", () => {
     expect(checkoutStateSource).toContain("crypto.randomUUID()");
     expect(storeSource).toContain("window.sessionStorage");
     expect(storeSource).toContain("window.location.assign(checkout.action.url)");
-    expect(storeSource).toContain('stripe: "card"');
-    expect(storeSource).toContain('? "mobile_web" : "computer_web"');
-    expect(storeSource).toContain('validatedChannel.adapter_kind === "wechat"');
-    expect(storeSource).toContain('(max-width: 767px)');
-    expect(storeSource).toContain('? "h5" : "native"');
+    expect(storeSource).toContain("expectedPaymentMethod(validatedOption)");
+    expect(selectionSource).toContain('if (option.channel.adapter_kind === "epay") return option.method;');
+    expect(selectionSource).toContain('if (option.channel.adapter_kind === "stripe") return "card";');
   });
 
-  test("reacts to viewport changes and submits only a currently compatible Channel", () => {
+  test("revalidates the selected option against the current catalog before submitting", () => {
     expect(storeSource).toContain("filterCompatiblePaymentChannels");
     expect(storeSource).toContain("compatibleChannels");
-    expect(storeSource).toContain('addEventListener("change"');
-    expect(storeSource).toContain('removeEventListener("change"');
-    expect(storeSource).toContain("window.matchMedia(MOBILE_CHECKOUT_QUERY).matches");
-    expect(storeSource).toContain("validatedChannel");
-    expect(storeSource).toContain("channels={compatibleChannels}");
+    expect(storeSource).toContain("validatedOption");
+    expect(storeSource).toContain("options={paymentOptions}");
+    // Compatibility no longer depends on the viewport, so no media listener remains.
+    expect(storeSource).not.toContain("MOBILE_CHECKOUT_QUERY");
     expect(paymentSource).not.toContain("channels.filter");
   });
 

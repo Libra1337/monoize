@@ -19,7 +19,11 @@
 			"title": "使用量ランキング",
 			"description": "選択した期間の匿名ユーザーとモデルの Token 使用量を確認します。",
 			"rangeLabel": "ランキング期間",
-			"ranges": { "24h": "24時間", "7d": "7日", "30d": "30日" },
+			"ranges": {
+				"24h": "24時間",
+				"7d": "7日",
+				"30d": "30日"
+			},
 			"totalTokens": "合計 Tokens",
 			"totalCalls": "呼び出し回数",
 			"currentRanking": "現在のランキング",
@@ -246,8 +250,25 @@
 		"currentPlan": "現在のプラン",
 		"redemptionTitle": "コードを引き換える",
 		"recordsTitle": "残高履歴",
-		"tabs": { "ledger": "明細", "orders": "注文" },
-		"ledger": { "limit": "表示件数", "empty": "残高履歴はありません", "loadFailed": "残高履歴を読み込めませんでした", "kinds": { "store_recharge": "チャージ", "redemption_credit": "コード交換", "request_charge": "API 使用量", "admin_adjustment": "管理者調整", "admin_sub_account_adjustment": "管理者調整", "sub_account_refund": "サブアカウント返却", "sub_account_debt_transfer": "サブアカウント移動", "plan_grant": "プラン付与" } }
+		"tabs": {
+			"ledger": "明細",
+			"orders": "注文"
+		},
+		"ledger": {
+			"limit": "表示件数",
+			"empty": "残高履歴はありません",
+			"loadFailed": "残高履歴を読み込めませんでした",
+			"kinds": {
+				"store_recharge": "チャージ",
+				"redemption_credit": "コード交換",
+				"request_charge": "API 使用量",
+				"admin_adjustment": "管理者調整",
+				"admin_sub_account_adjustment": "管理者調整",
+				"sub_account_refund": "サブアカウント返却",
+				"sub_account_debt_transfer": "サブアカウント移動",
+				"plan_grant": "プラン付与"
+			}
+		}
 	},
 	"store": {
 		"ui": {
@@ -575,8 +596,7 @@
 				"dialogDescription": "支払いアダプターと表示アイコンを設定します。",
 				"kind": "支払いアダプター",
 				"kinds": {
-					"alipay": "Alipay",
-					"wechat": "WeChat Pay",
+					"epay": "EPay",
 					"stripe": "Stripe",
 					"http": "HTTP アダプター"
 				},
@@ -603,23 +623,16 @@
 					"secretKey": "シークレットキー",
 					"webhookSecret": "Webhook 署名シークレット",
 					"liveMode": "本番モード",
-					"appId": "アプリ ID",
-					"sellerId": "販売者 ID",
 					"merchantId": "加盟店 ID",
-					"environment": "環境",
-					"sandbox": "サンドボックス",
-					"production": "本番",
-					"merchantPrivateKey": "加盟店秘密鍵（PEM）",
-					"alipayPublicKey": "Alipay 公開鍵（PEM）",
-					"certificateSerial": "証明書シリアル",
-					"merchantCertificateSerial": "加盟店証明書シリアル",
-					"platformCertificateSerial": "プラットフォーム証明書シリアル",
-					"platformPublicKey": "プラットフォーム公開鍵（PEM）",
-					"apiV3Key": "API v3 キー",
 					"currentPassword": "現在の Admin パスワード",
 					"replace": "認証情報を置換",
 					"invalid": "すべての認証情報と現在の Admin パスワードを入力してください。",
-					"saved": "支払い認証情報を保存しました。チャネルは無効です。"
+					"saved": "支払い認証情報を保存しました。チャネルは無効です。",
+					"gatewayBaseUrl": "ゲートウェイのベース URL",
+					"merchantKey": "加盟店キー",
+					"alipayEnabled": "Alipay を有効にする",
+					"wxpayEnabled": "WeChat Pay を有効にする",
+					"epayCnyOnly": "EPay は人民元の注文のみを受け付けます。米ドルの決済には Stripe を使用してください。"
 				},
 				"deleteConfirm": "{{name}}を削除しますか？"
 			},
@@ -727,6 +740,20 @@
 				"usdMin": "USD最小額",
 				"usdMax": "USD最大額",
 				"invalid": "各制限は正数で、最小額は最大額以下にしてください。"
+			},
+			"epayMethods": {
+				"action": "EPay の決済方式",
+				"title": "EPay の決済方式",
+				"description": "各 EPay 決済方式の公開名、並び順、有効状態を設定します。",
+				"label": "公開名",
+				"sortOrder": "並び順",
+				"enabled": "有効",
+				"saved": "EPay の決済方式を保存しました",
+				"saveFailed": "EPay の決済方式を保存できませんでした",
+				"methods": {
+					"alipay": "Alipay",
+					"wxpay": "WeChat Pay"
+				}
 			}
 		},
 		"fields": {
@@ -898,7 +925,13 @@
 		"todaySummary": "本日 {{spend}} · {{calls}} 回",
 		"viewLogs": "ログを表示",
 		"group": "グループ",
-		"groupHelp": "各ユーザーは 1 つのグループにのみ所属し、利用できる Provider が決まります。"
+		"groupHelp": "各ユーザーは 1 つのグループにのみ所属し、利用できる Provider が決まります。",
+		"accountClassConfirmTitle": "アカウント種別を変更しますか？",
+		"accountClassConfirmAction": "Key を削除して変更",
+		"accountClassDeleteKeysWarning": "{{username}} を{{accountClass}}に変更します。この操作は、このユーザーの既存 API Key をすべて完全に削除します。",
+		"accountClassChanged": "アカウント種別を変更しました",
+		"accountClass": "アカウント種別",
+		"accountClassDescription": "種別を変更すると、ユーザーは分離されたモデルカタログへ移動します。"
 	},
 	"apiKeys": {
 		"title": "トークン管理",
@@ -974,7 +1007,23 @@
 		"channelSelectionHelp": "同じグループ内で複数の Provider が同じモデルを提供する場合は、Channel を 1 つ選択してください。",
 		"selectChannel": "Channel を選択",
 		"channelSelectionRequired": "残り {{count}} 件の競合で Channel を選択してください。",
-		"channelSelectionLoadError": "Channel の競合を取得できません。再試行してから保存してください。"
+		"channelSelectionLoadError": "Channel の競合を取得できません。再試行してから保存してください。",
+		"analyticsTitle": "API Key 使用量",
+		"analyticsDescription": "この API Key の正確な Tokens、呼び出し数、Coin 消費、残高、傾向、モデル使用量を表示します。",
+		"analyticsRange": "使用量の期間",
+		"analyticsAll": "すべて",
+		"analyticsTokens": "合計 Tokens",
+		"analyticsInput": "入力",
+		"analyticsCache": "キャッシュ読み取り",
+		"analyticsOutput": "出力",
+		"analyticsRequests": "呼び出し数",
+		"analyticsRequestsUnit": "回",
+		"analyticsCost": "Coin 消費",
+		"analyticsModels": "モデル使用量",
+		"analyticsWalletBalance": "ウォレット残高に従う",
+		"analyticsIndependentBalance": "Key 残高",
+		"analyticsLoadFailed": "API Key 使用量を読み込めませんでした",
+		"analyticsEmpty": "この期間の使用量はありません。"
 	},
 	"settings": {
 		"title": "設定",
@@ -1280,7 +1329,9 @@
 		},
 		"apiTypeOverrides": "API タイプオーバーライド",
 		"apiTypeOverridesDesc": "特定のモデルパターンを異なる API タイプにルーティングします。ルールは順に評価され、最初にマッチしたものが適用されます。未マッチのモデルは上のデフォルトタイプを使用します。",
-		"addOverride": "ルールを追加"
+		"addOverride": "ルールを追加",
+		"accountClass": "カタログ範囲",
+		"accountClassDescription": "1 つのアカウント種別の Group に属する Provider のみを表示します。"
 	},
 	"transforms": {
 		"titleProvider": "上流 Transform",
@@ -1937,7 +1988,9 @@
 		"emptyDescription": "デフォルトグループは初期化時に作成されます。",
 		"invalidName": "名前は 1〜64 文字で入力してください",
 		"invalidDescription": "説明は 256 文字以内で入力してください",
-		"invalidSortOrder": "並び順は整数で入力してください"
+		"invalidSortOrder": "並び順は整数で入力してください",
+		"accountClass": "カタログ範囲",
+		"accountClassDescription": "1 つのアカウント種別内で Group を作成、表示、並べ替えます。"
 	},
 	"groupPicker": {
 		"selectPlaceholder": "グループを選択",
@@ -1945,5 +1998,9 @@
 		"dragHint": "ドラッグで並べ替え：1 番目が最優先でルーティングされます。",
 		"noOptions": "選択できるグループがありません",
 		"unknownGroup": "不明なグループ"
+	},
+	"accountClass": {
+		"standard": "標準ユーザー",
+		"enterprise": "企業ユーザー"
 	}
 }

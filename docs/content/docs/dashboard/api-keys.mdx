@@ -58,3 +58,13 @@ The first matching rule rewrites the model before routing, billing, and model-li
 ## Per-key transforms
 
 A key can hold an ordered transform chain. Key transforms run inside a safety boundary: only transform types allowed at API-key scope are accepted. See [Transforms](/en/docs/transforms).
+
+## Review key usage
+
+Select a key row to open the usage dialog. The dialog stays on the API keys page and never navigates away.
+
+Choose the last 24 hours, the last 7 days, the last 30 days, or all retained history. The 24-hour range uses hourly buckets. The 7-day and 30-day ranges use daily buckets. All history uses monthly buckets when the retained span exceeds 90 days and daily buckets otherwise.
+
+The dialog reports total Tokens, input Tokens, cache-read Tokens, output Tokens, call count, consumed Coin, the key balance, a trend, and a model breakdown. Model rows sort by total Tokens descending, then by model name ascending.
+
+Consumed Coin is the sum of the recorded charges. Monoize never recomputes a historical charge from a current price. A key with no independent limit shows **Follows wallet balance** instead of a key balance. A disabled or expired key keeps its readable history.

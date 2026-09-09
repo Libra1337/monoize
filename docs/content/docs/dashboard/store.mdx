@@ -22,7 +22,7 @@ Monoize refreshes the USD/CNY rate at most once every 15 minutes. It keeps the l
 
 Monoize saves the payment attempt before it contacts the Provider. Stripe then opens its hosted Checkout page.
 
-Alipay submits a signed official payment form. WeChat Native shows a scannable QR code. WeChat H5 opens the official mobile payment page.
+EPay returns one action for the selected method. A QR payload opens a scannable code in the payment dialog. A payment URL opens an action that navigates after you select it. EPay accepts CNY orders only. Use Stripe for a USD order.
 
 Do not create another attempt when the Provider result is unknown. Wait for Monoize to reconcile the existing attempt.
 
@@ -38,17 +38,17 @@ Set the Stripe Webhook endpoint to `https://lynshen.org/api/store/callbacks/{cha
 
 Subscribe to `checkout.session.completed` and `checkout.session.async_payment_succeeded`. Save the endpoint signing secret in the encrypted Stripe credential.
 
-## Configure Alipay callbacks
+## Configure EPay
 
-Set the Alipay asynchronous notification URL to `https://lynshen.org/api/store/callbacks/{channel_id}`. Replace `{channel_id}` with the Alipay Channel ID.
+One EPay Channel serves both the Alipay method and the WeChat Pay method.
 
-Save the Alipay App ID, seller ID, merchant private key, Alipay public key, and environment in Store Management. Monoize verifies RSA2 and returns `success` only after it stores the verified event.
+Set the EPay asynchronous notification URL to `https://lynshen.org/api/store/callbacks/{channel_id}`. Replace `{channel_id}` with the EPay Channel ID. The endpoint accepts the documented `GET` notification.
 
-## Configure WeChat Pay callbacks
+Save the gateway base URL, the merchant ID, and the merchant key in Store Management. Enable the Alipay method, the WeChat Pay method, or both. The gateway base URL must end with `/` and must not point at a loopback, link-local, or private address.
 
-Set the WeChat Pay notification URL to `https://lynshen.org/api/store/callbacks/{channel_id}`. Replace `{channel_id}` with the WeChat Pay Channel ID.
+Monoize signs each request with lowercase MD5 over the ASCII-sorted fields, excluding `sign`, `sign_type`, and empty values. It returns `success` only after it verifies the signature, the merchant ID, the order number, the amount in CNY fen, and the expected method, and after the payment transition commits.
 
-Save the merchant ID, App ID, API v3 key, merchant certificate serial, merchant private key, platform certificate serial, and platform public key. Monoize verifies the platform signature and decrypts each payment resource before fulfillment.
+Open **EPay methods** on the Channel row to set the public label, the order, and the enabled state of each method. A method that is disabled here never appears in the Store.
 
 ## Buy a plan
 
@@ -83,13 +83,14 @@ Enter one unused code in **Redeem code**. A code grants balance or activates a p
 Administrators open `/dashboard/store-admin`. Use its four tabs to manage products, payment Channels, orders, and redemption codes.
 
 - Set separate custom recharge limits for CNY and USD.
-- Add an Alipay, WeChat Pay, Stripe, or draft HTTP Channel. Use a built-in icon, an HTTPS image URL, or an uploaded image.
-- Open an existing official Channel. Enter every credential field and your current Admin password. Select **Replace credential**. Monoize encrypts the new version, retires the prior version, and disables the Channel.
+- Add an EPay, Stripe, or draft HTTP Channel. Use a built-in icon, an HTTPS image URL, or an uploaded image.
+- Open an existing EPay or Stripe Channel. Enter every credential field and your current Admin password. Select **Replace credential**. Monoize encrypts the new version, retires the prior version, and disables the Channel.
+- Open **Governance** on an EPay Channel row and select **EPay methods** to configure the Alipay and WeChat Pay methods.
 - Keep an HTTP Channel disabled in Milestone 1.
 - Review payment state and fulfillment state separately. Do not use a manual completion action.
 - Generate 1 through 20 single-use codes. Copy the plaintext codes when Monoize shows them.
 - Open **Privacy records** and **Data retention** from the **Payment Channels** tab header.
-- Open **Governance** on an Alipay, WeChat Pay, or Stripe Channel row. Choose **Payment compliance**, **Merchant capabilities**, or **Channel readiness**. An HTTP Channel row does not show that control.
+- Open **Governance** on an EPay or Stripe Channel row. Choose **Payment compliance**, **Merchant capabilities**, **Channel readiness**, or **EPay methods**. An HTTP Channel row does not show that control.
 
 ## Review privacy records
 
@@ -124,7 +125,7 @@ A Channel stays unavailable until compliance, merchant capabilities, and readine
 
 ![Store payment Channels](/images/en/store-governance.webp)
 
-Open **Governance** on an Alipay, WeChat Pay, or Stripe Channel row.
+Open **Governance** on an EPay or Stripe Channel row.
 
 1. Select **Payment compliance**. Review the current Store payment terms. Confirm the terms with your Admin password. Monoize obtains a five-minute reauthentication grant with scope `compliance_confirm`.
 2. Select **Merchant capabilities**. Record each required merchant capability with its state, environment, provider product, evidence digest, and expiry.

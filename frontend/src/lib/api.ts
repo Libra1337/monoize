@@ -1,5 +1,7 @@
 const API_BASE = "/api/dashboard";
 
+export type AccountClass = "standard" | "enterprise";
+
 type UnauthorizedHandler = () => void;
 
 const unauthorizedHandlers = new Set<UnauthorizedHandler>();
@@ -23,9 +25,11 @@ export interface Group {
   description: string;
   is_default: boolean;
   user_selectable: boolean;
+  is_public: boolean;
   sort_order: number;
   created_at: string;
   updated_at: string;
+  account_class: AccountClass;
 }
 
 export interface CreateGroupInput {
@@ -33,7 +37,9 @@ export interface CreateGroupInput {
   confirm_public_exposure?: boolean;
   description?: string;
   user_selectable?: boolean;
+  is_public?: boolean;
   sort_order?: number;
+  account_class?: AccountClass;
 }
 
 export interface UpdateGroupInput {
@@ -41,6 +47,7 @@ export interface UpdateGroupInput {
   confirm_public_exposure?: boolean;
   description?: string;
   user_selectable?: boolean;
+  is_public?: boolean;
   sort_order?: number;
 }
 
@@ -73,6 +80,7 @@ export interface User {
   today_calls?: number;
   today_cost_nano_usd?: string;
   today_cost_usd?: string;
+  account_class: AccountClass;
 }
 
 export interface BillingPlan {
@@ -179,6 +187,46 @@ export interface ApiKey {
 }
 
 export type ApiKeyCreated = ApiKey;
+
+export type ApiKeyAnalyticsRange = "24h" | "7d" | "30d" | "all";
+
+export interface ApiKeyAnalyticsTrendPoint {
+  label: string;
+  input_tokens: string;
+  cache_read_tokens: string;
+  output_tokens: string;
+  total_tokens: string;
+  request_count: number;
+  consumed_coin_nano: string;
+}
+
+export interface ApiKeyAnalyticsModelRow {
+  model: string;
+  input_tokens: string;
+  cache_read_tokens: string;
+  output_tokens: string;
+  total_tokens: string;
+  request_count: number;
+  consumed_coin_nano: string;
+}
+
+export interface ApiKeyAnalytics {
+  key_id: string;
+  key_name: string;
+  range: ApiKeyAnalyticsRange;
+  time_from: string;
+  time_to: string;
+  total_tokens: string;
+  total_input_tokens: string;
+  total_cache_read_tokens: string;
+  total_output_tokens: string;
+  request_count: number;
+  consumed_coin_nano: string;
+  balance_mode: "wallet" | "independent";
+  independent_balance_nano: string | null;
+  trend: ApiKeyAnalyticsTrendPoint[];
+  models: ApiKeyAnalyticsModelRow[];
+}
 
 export interface CreateApiKeyInput {
   name: string;
@@ -1075,12 +1123,32 @@ class ApiClient {
     return this.request("/tokens");
   }
 
+  async updateUserAccountClass(
+    id: string,
+    account_class: AccountClass,
+  ): Promise<User> {
+    return this.request(`/users/${encodeURIComponent(id)}/account-class`, {
+      method: "PUT",
+      body: JSON.stringify({
+        account_class,
+        confirm_delete_api_keys: true,
+      }),
+    });
+  }
+
   async listApiKeyChannelConflicts(): Promise<ApiKeyChannelConflict[]> {
     return this.request("/tokens/channel-conflicts");
   }
 
   async getApiKey(id: string): Promise<ApiKey> {
     return this.request(`/tokens/${id}`);
+  }
+
+  async getApiKeyAnalytics(
+    id: string,
+    range: ApiKeyAnalyticsRange,
+  ): Promise<ApiKeyAnalytics> {
+    return this.request(`/tokens/${id}/analytics?range=${encodeURIComponent(range)}`);
   }
 
   async createApiKey(input: CreateApiKeyInput): Promise<ApiKeyCreated> {
