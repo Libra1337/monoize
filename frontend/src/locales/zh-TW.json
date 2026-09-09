@@ -391,7 +391,8 @@
 				"products": "商品",
 				"channels": "付款管道",
 				"orders": "訂單",
-				"redemptions": "兌換碼"
+				"redemptions": "兌換碼",
+				"sales": "銷售"
 			},
 			"channelAvailability": {
 				"configuredState": "設定狀態",
@@ -772,6 +773,53 @@
 					"alipay": "支付寶",
 					"wxpay": "微信支付"
 				}
+			},
+			"sales": {
+				"sales": "銷售",
+				"rate": "分成比例",
+				"newRate": "新比例 (%)",
+				"saveRate": "儲存",
+				"rateSaved": "分成比例已更新",
+				"rateInvalid": "請輸入百分比，例如 5 或 4.5",
+				"rateHelp": "對所有銷售生效。修改不影響已記錄的分成。",
+				"agents": "銷售帳號",
+				"create": "新增銷售",
+				"confirmCreate": "建立",
+				"cancel": "取消",
+				"discount": "折扣 (%)",
+				"discountInvalid": "請輸入百分比，例如 1 或 0.5",
+				"discountOf": "折扣 {{percent}}",
+				"enabled": "啟用",
+				"noAgents": "尚無銷售帳號",
+				"createdTitle": "銷售帳號已建立",
+				"createdCode": "銷售碼",
+				"createdPassword": "密碼",
+				"createdOnce": "密碼只顯示這一次，請立即複製，並把兩者一起交給銷售。",
+				"dismiss": "知道了",
+				"withdrawals": "提領",
+				"pendingCount": "{{count}} 筆待處理",
+				"noWithdrawals": "尚無提領記錄",
+				"markPaid": "已履約",
+				"reject": "駁回",
+				"decided": {
+					"paid": "已標記為已履約",
+					"rejected": "提領已駁回"
+				},
+				"claimTitle": "為銷售補記訂單",
+				"claimHelp": "判斷邏輯與銷售自助核銷一致：訂單必須已付款、已履約、以人民幣結算、買家對應，且尚未記過分成。",
+				"claimAgent": "銷售",
+				"claimSelect": "選擇銷售",
+				"claimOrder": "訂單號",
+				"claimUser": "買家使用者 ID",
+				"claimSubmit": "補記分成",
+				"claimSuccess": "補記成功",
+				"entries": "分成記錄",
+				"entryAgent": "銷售",
+				"entryOrder": "訂單",
+				"entryBuyer": "買家",
+				"entryCommission": "分成",
+				"noEntries": "尚無分成記錄",
+				"failed": "請求失敗"
 			}
 		},
 		"fields": {
@@ -800,6 +848,12 @@
 			"validityDays": "有效天數",
 			"expires": "到期時間",
 			"hint": "兌換碼尾號"
+		},
+		"salesCode": {
+			"label": "銷售碼",
+			"placeholder": "選填",
+			"optional": "選填，沒有可以留空。",
+			"invalid": "銷售碼有誤，請重新填寫。"
 		}
 	},
 	"roles": {

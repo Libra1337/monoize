@@ -57,7 +57,7 @@ describe("Store admin page", () => {
     expect(tabsSource).toContain('role="tablist"');
   });
 
-  test("server-renders four accessible tab controls", () => {
+  test("server-renders one accessible tab control per Store Management surface", () => {
     const html = renderToStaticMarkup(createElement(
       I18nextProvider,
       { i18n: testI18n },
@@ -66,7 +66,8 @@ describe("Store admin page", () => {
         onTabChange: () => undefined,
       }),
     ));
-    expect(html.match(/role="tab"/g)).toHaveLength(4);
+    // Products, Channels, Orders, Redemptions, and Sales (SC-UI-6).
+    expect(html.match(/role="tab"/g)).toHaveLength(5);
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain('aria-selected="false"');
   });

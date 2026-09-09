@@ -54,6 +54,7 @@ import { OrderDialog } from "./order-dialog";
 import { ProductDialog } from "./product-dialog";
 import { RedemptionDialog } from "./redemption-dialog";
 import { RedemptionAccessDialog } from "./redemption-access-dialog";
+import { SalesAdminPanel } from "./sales-panel";
 import { StoreAdminTabs, type StoreAdminTab } from "./store-admin-tabs";
 
 const PRODUCTS_KEY = "/api/dashboard/store/admin/products";
@@ -410,6 +411,7 @@ export function StoreAdminPage() {
       {activeTab === "channels" && <AdminLoadState loading={channels.isLoading} error={channels.error} onRetry={() => void channels.mutate()}><ChannelsPanel channels={channels.data ?? []} onCreate={() => { setSelectedChannel(null); setChannelDialogOpen(true); }} onPrivacyRecords={() => setPrivacyRecordsOpen(true)} onRetention={() => setRetentionOpen(true)} onCompliance={setComplianceChannel} onCapabilities={setCapabilitiesChannel} onReadiness={setReadinessChannel} onEpayMethods={setEpayMethodsChannel} onEdit={(channel) => { setSelectedChannel(channel); setChannelDialogOpen(true); }} onDelete={(channel) => setDeleteTarget({ kind: "channel", record: channel })} /></AdminLoadState>}
       {activeTab === "orders" && <AdminLoadState loading={orders.isLoading} error={orders.error} onRetry={() => void orders.mutate()}><OrdersPanel orders={orders.data ?? []} onSelectOrder={setSelectedOrderId} /></AdminLoadState>}
       {activeTab === "redemptions" && <AdminLoadState loading={redemptions.isLoading || products.isLoading} error={redemptions.error || products.error} onRetry={() => { void redemptions.mutate(); void products.mutate(); }}><RedemptionsPanel codes={redemptions.data ?? []} onGenerate={() => setRedemptionDialogOpen(true)} onReveal={(record) => setRedemptionAccess({ record, action: "reveal" })} onCopy={(record) => setRedemptionAccess({ record, action: "copy" })} /></AdminLoadState>}
+      {activeTab === "sales" && <SalesAdminPanel />}
     </div>
     <ProductDialog open={productDialogOpen} product={selectedProduct} groups={groups.data?.groups ?? []} saving={saving} onOpenChange={setProductDialogOpen} onSave={saveProduct} />
     <ChannelDialog open={channelDialogOpen} channel={selectedChannel} saving={saving} onOpenChange={setChannelDialogOpen} onSave={saveChannel} onSaveCredential={saveChannelCredential} />

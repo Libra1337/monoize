@@ -169,6 +169,9 @@ function ProductPicker({
   customMinimumMinor,
   customMaximumMinor,
   onCustomAmountChange,
+  salesCode,
+  salesCodeInvalid,
+  onSalesCodeChange,
 }: {
   products: StoreProduct[];
   kind: "balance" | "plan";
@@ -181,6 +184,9 @@ function ProductPicker({
   customMinimumMinor: string;
   customMaximumMinor: string;
   onCustomAmountChange: (amount: string) => void;
+  salesCode: string;
+  salesCodeInvalid: boolean;
+  onSalesCodeChange: (code: string) => void;
 }) {
   const { t } = useTranslation();
 
@@ -252,33 +258,63 @@ function ProductPicker({
       )}
       {kind === "balance" && products.length > 0 && (
         <Card className="rounded-2xl">
-          <CardContent className="p-5">
-            <label htmlFor="store-custom-amount" className="mb-2 block text-sm font-medium">
-              {t("store.balanceProduct.custom")}
-            </label>
-            <div className="relative max-w-sm">
-              <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-                {currency === "CNY" ? "CNY" : "USD"}
-              </span>
-              <Input
-                id="store-custom-amount"
-                inputMode="decimal"
-                value={customAmount}
-                aria-invalid={customAmountInvalid}
-                aria-describedby={customAmountInvalid ? "store-custom-amount-error" : undefined}
-                placeholder={t("store.balanceProduct.customPlaceholder")}
-                className={cn("h-11 rounded-xl pl-14", customAmountInvalid && "border-destructive")}
-                onChange={(event) => onCustomAmountChange(event.target.value)}
-              />
+          <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+            <div>
+              <label htmlFor="store-custom-amount" className="mb-2 block text-sm font-medium">
+                {t("store.balanceProduct.custom")}
+              </label>
+              <div className="relative">
+                <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+                  {currency === "CNY" ? "CNY" : "USD"}
+                </span>
+                <Input
+                  id="store-custom-amount"
+                  inputMode="decimal"
+                  value={customAmount}
+                  aria-invalid={customAmountInvalid}
+                  aria-describedby={customAmountInvalid ? "store-custom-amount-error" : undefined}
+                  placeholder={t("store.balanceProduct.customPlaceholder")}
+                  className={cn("h-11 rounded-xl pl-14", customAmountInvalid && "border-destructive")}
+                  onChange={(event) => onCustomAmountChange(event.target.value)}
+                />
+              </div>
+              {customAmountInvalid && (
+                <p id="store-custom-amount-error" className="mt-2 text-sm text-destructive" role="alert">
+                  {t("store.ui.customAmountInvalid", {
+                    minimum: formatMinor(customMinimumMinor, currency),
+                    maximum: formatMinor(customMaximumMinor, currency),
+                  })}
+                </p>
+              )}
             </div>
-            {customAmountInvalid && (
-              <p id="store-custom-amount-error" className="mt-2 text-sm text-destructive" role="alert">
-                {t("store.ui.customAmountInvalid", {
-                  minimum: formatMinor(customMinimumMinor, currency),
-                  maximum: formatMinor(customMaximumMinor, currency),
-                })}
-              </p>
-            )}
+            <div>
+              <label htmlFor="store-sales-code" className="mb-2 block text-sm font-medium">
+                {t("store.salesCode.label")}
+              </label>
+              <Input
+                id="store-sales-code"
+                value={salesCode}
+                aria-invalid={salesCodeInvalid}
+                aria-describedby={
+                  salesCodeInvalid ? "store-sales-code-error" : "store-sales-code-help"
+                }
+                placeholder={t("store.salesCode.placeholder")}
+                className={cn(
+                  "h-11 rounded-xl font-mono uppercase",
+                  salesCodeInvalid && "border-destructive",
+                )}
+                onChange={(event) => onSalesCodeChange(event.target.value)}
+              />
+              {salesCodeInvalid ? (
+                <p id="store-sales-code-error" className="mt-2 text-sm text-destructive" role="alert">
+                  {t("store.salesCode.invalid")}
+                </p>
+              ) : (
+                <p id="store-sales-code-help" className="mt-2 text-sm text-muted-foreground">
+                  {t("store.salesCode.optional")}
+                </p>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
@@ -294,6 +330,10 @@ export function StorePage() {
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedPaymentOptionId, setSelectedPaymentOptionId] = useState<string | null>(null);
   const [customAmount, setCustomAmount] = useState("");
+  const [salesCode, setSalesCode] = useState("");
+  // SC-UI-4: the order must not be submitted while a code is present and known to be bad, so
+  // the flag is cleared as soon as the buyer edits it.
+  const [salesCodeInvalid, setSalesCodeInvalid] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [pollingOrderId, setPollingOrderId] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
@@ -434,11 +474,15 @@ export function StorePage() {
       paymentMinor,
       rate,
     );
+    const trimmedSalesCode = salesCode.trim();
     const request: CreateStoreOrderInput = {
       product_id: selectedProduct.id,
       payment_channel_id: validatedChannel.id,
       payment_currency: currency,
       custom_recharge_minor: customRechargeMinor,
+      // An empty field means no code; the server rejects a code it cannot resolve rather
+      // than silently charging full price (SC-2.2).
+      sales_code: trimmedSalesCode === "" ? undefined : trimmedSalesCode,
     };
     const pendingCheckout = preparePendingCheckout(
       window.sessionStorage,
@@ -493,6 +537,9 @@ export function StorePage() {
       setQrAction({ action: checkout.action, method: validatedOption.method });
       setPollingOrderId(createdOrder.id);
     } catch (cause) {
+      if (cause instanceof StoreApiError && cause.code.startsWith("sales_code")) {
+        setSalesCodeInvalid(true);
+      }
       if (
         cause instanceof StoreApiError
         && pendingCheckout.orderId
@@ -579,6 +626,12 @@ export function StorePage() {
                   customMinimumMinor={customMinimumMinor}
                   customMaximumMinor={customMaximumMinor}
                   onCustomAmountChange={setCustomAmount}
+                  salesCode={salesCode}
+                  salesCodeInvalid={salesCodeInvalid}
+                  onSalesCodeChange={(code) => {
+                    setSalesCode(code);
+                    setSalesCodeInvalid(false);
+                  }}
                 />
                 <OrderSummary
                   product={selectedProduct}

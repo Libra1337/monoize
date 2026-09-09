@@ -391,7 +391,8 @@
 				"products": "商品",
 				"channels": "支払いチャネル",
 				"orders": "注文",
-				"redemptions": "引換コード"
+				"redemptions": "引換コード",
+				"sales": "セールス"
 			},
 			"channelAvailability": {
 				"configuredState": "設定状態",
@@ -772,6 +773,53 @@
 					"alipay": "Alipay",
 					"wxpay": "WeChat Pay"
 				}
+			},
+			"sales": {
+				"sales": "セールス",
+				"rate": "報酬率",
+				"newRate": "新しい率 (%)",
+				"saveRate": "保存",
+				"rateSaved": "報酬率を更新しました",
+				"rateInvalid": "5 や 4.5 のように百分率で入力してください",
+				"rateHelp": "全エージェントに適用されます。変更しても記録済みの報酬は変わりません。",
+				"agents": "セールスアカウント",
+				"create": "新規作成",
+				"confirmCreate": "作成",
+				"cancel": "キャンセル",
+				"discount": "割引 (%)",
+				"discountInvalid": "1 や 0.5 のように百分率で入力してください",
+				"discountOf": "割引 {{percent}}",
+				"enabled": "有効",
+				"noAgents": "アカウントがありません",
+				"createdTitle": "アカウントを作成しました",
+				"createdCode": "コード",
+				"createdPassword": "パスワード",
+				"createdOnce": "パスワードは一度だけ表示されます。今すぐコピーし、コードと一緒に渡してください。",
+				"dismiss": "閉じる",
+				"withdrawals": "出金",
+				"pendingCount": "{{count}} 件が処理待ち",
+				"noWithdrawals": "出金の記録はありません",
+				"markPaid": "支払済みにする",
+				"reject": "却下",
+				"decided": {
+					"paid": "支払済みにしました",
+					"rejected": "出金を却下しました"
+				},
+				"claimTitle": "エージェントに注文を計上",
+				"claimHelp": "エージェント自身の申請と同じ条件です。注文が支払済み・履行済み・CNY 建てで、購入者が一致し、まだ報酬が計上されていないことが必要です。",
+				"claimAgent": "エージェント",
+				"claimSelect": "エージェントを選択",
+				"claimOrder": "注文番号",
+				"claimUser": "購入者のユーザー ID",
+				"claimSubmit": "計上する",
+				"claimSuccess": "計上しました",
+				"entries": "報酬記録",
+				"entryAgent": "エージェント",
+				"entryOrder": "注文",
+				"entryBuyer": "購入者",
+				"entryCommission": "報酬",
+				"noEntries": "報酬記録はありません",
+				"failed": "リクエストに失敗しました"
 			}
 		},
 		"fields": {
@@ -800,6 +848,12 @@
 			"validityDays": "有効日数",
 			"expires": "有効期限",
 			"hint": "コード末尾"
+		},
+		"salesCode": {
+			"label": "セールスコード",
+			"placeholder": "任意",
+			"optional": "任意入力です。お持ちでない場合は空欄のままにしてください。",
+			"invalid": "セールスコードが正しくありません。確認して入力し直してください。"
 		}
 	},
 	"roles": {

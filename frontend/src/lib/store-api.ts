@@ -393,6 +393,8 @@ export interface CreateStoreOrderInput {
   payment_channel_id: string;
   payment_currency: StoreCurrency;
   custom_recharge_minor?: string | null;
+  /** SC-2.1: optional; a blank field means no code was applied. */
+  sales_code?: string;
 }
 
 export interface StoreProductSnapshot {

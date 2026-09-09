@@ -391,7 +391,8 @@
 				"products": "Products",
 				"channels": "Payment Channels",
 				"orders": "Orders",
-				"redemptions": "Redemption Codes"
+				"redemptions": "Redemption Codes",
+				"sales": "Sales"
 			},
 			"channelAvailability": {
 				"configuredState": "Configured state",
@@ -772,6 +773,53 @@
 					"alipay": "Alipay",
 					"wxpay": "WeChat Pay"
 				}
+			},
+			"sales": {
+				"sales": "Sales",
+				"rate": "Commission rate",
+				"newRate": "New rate (%)",
+				"saveRate": "Save",
+				"rateSaved": "Commission rate updated",
+				"rateInvalid": "Enter a percentage such as 5 or 4.5",
+				"rateHelp": "Applies to every agent. A change does not alter commission already recorded.",
+				"agents": "Sales agents",
+				"create": "New agent",
+				"confirmCreate": "Create",
+				"cancel": "Cancel",
+				"discount": "Discount (%)",
+				"discountInvalid": "Enter a percentage such as 1 or 0.5",
+				"discountOf": "Discount {{percent}}",
+				"enabled": "Enabled",
+				"noAgents": "No agents yet",
+				"createdTitle": "Agent created",
+				"createdCode": "Code",
+				"createdPassword": "Password",
+				"createdOnce": "The password is shown once. Copy it now and hand both to the agent.",
+				"dismiss": "Dismiss",
+				"withdrawals": "Withdrawals",
+				"pendingCount": "{{count}} pending",
+				"noWithdrawals": "No withdrawals yet",
+				"markPaid": "Mark paid",
+				"reject": "Reject",
+				"decided": {
+					"paid": "Marked as paid",
+					"rejected": "Withdrawal rejected"
+				},
+				"claimTitle": "Credit an order to an agent",
+				"claimHelp": "Same checks as an agent claim: the order must be paid, fulfilled, priced in CNY, match the buyer, and have no commission yet.",
+				"claimAgent": "Agent",
+				"claimSelect": "Select an agent",
+				"claimOrder": "Order number",
+				"claimUser": "Buyer user ID",
+				"claimSubmit": "Credit order",
+				"claimSuccess": "Order credited",
+				"entries": "Commission records",
+				"entryAgent": "Agent",
+				"entryOrder": "Order",
+				"entryBuyer": "Buyer",
+				"entryCommission": "Commission",
+				"noEntries": "No commission yet",
+				"failed": "Request failed"
 			}
 		},
 		"fields": {
@@ -800,6 +848,12 @@
 			"validityDays": "Validity days",
 			"expires": "Expires",
 			"hint": "Code hint"
+		},
+		"salesCode": {
+			"label": "Sales code",
+			"placeholder": "Optional",
+			"optional": "Optional. Leave blank if you do not have one.",
+			"invalid": "Sales code is invalid; check it and enter it again."
 		}
 	},
 	"roles": {

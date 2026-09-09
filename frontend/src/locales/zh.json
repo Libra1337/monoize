@@ -391,7 +391,8 @@
 				"products": "商品",
 				"channels": "支付渠道",
 				"orders": "订单",
-				"redemptions": "兑换码"
+				"redemptions": "兑换码",
+				"sales": "销售"
 			},
 			"channelAvailability": {
 				"configuredState": "配置状态",
@@ -772,6 +773,53 @@
 					"alipay": "支付宝",
 					"wxpay": "微信支付"
 				}
+			},
+			"sales": {
+				"sales": "销售",
+				"rate": "分成比例",
+				"newRate": "新比例 (%)",
+				"saveRate": "保存",
+				"rateSaved": "分成比例已更新",
+				"rateInvalid": "请输入百分比，例如 5 或 4.5",
+				"rateHelp": "对所有销售生效。修改不影响已记录的分成。",
+				"agents": "销售账户",
+				"create": "新建销售",
+				"confirmCreate": "创建",
+				"cancel": "取消",
+				"discount": "折扣 (%)",
+				"discountInvalid": "请输入百分比，例如 1 或 0.5",
+				"discountOf": "折扣 {{percent}}",
+				"enabled": "启用",
+				"noAgents": "暂无销售账户",
+				"createdTitle": "销售账户已创建",
+				"createdCode": "销售码",
+				"createdPassword": "密码",
+				"createdOnce": "密码只显示这一次，请立即复制，并把两者一起交给销售。",
+				"dismiss": "知道了",
+				"withdrawals": "提现",
+				"pendingCount": "{{count}} 笔待处理",
+				"noWithdrawals": "暂无提现记录",
+				"markPaid": "已履约",
+				"reject": "驳回",
+				"decided": {
+					"paid": "已标记为已履约",
+					"rejected": "提现已驳回"
+				},
+				"claimTitle": "为销售补记订单",
+				"claimHelp": "判断逻辑与销售自助核销一致：订单必须已支付、已履约、以人民币结算、买家对应，且尚未记过分成。",
+				"claimAgent": "销售",
+				"claimSelect": "选择销售",
+				"claimOrder": "订单号",
+				"claimUser": "买家用户 ID",
+				"claimSubmit": "补记分成",
+				"claimSuccess": "补记成功",
+				"entries": "分成记录",
+				"entryAgent": "销售",
+				"entryOrder": "订单",
+				"entryBuyer": "买家",
+				"entryCommission": "分成",
+				"noEntries": "暂无分成记录",
+				"failed": "请求失败"
 			}
 		},
 		"fields": {
@@ -800,6 +848,12 @@
 			"validityDays": "有效天数",
 			"expires": "到期时间",
 			"hint": "兑换码尾号"
+		},
+		"salesCode": {
+			"label": "销售码",
+			"placeholder": "选填",
+			"optional": "选填，没有可以留空。",
+			"invalid": "销售码有误，请重新填写。"
 		}
 	},
 	"roles": {
