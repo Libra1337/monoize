@@ -76,6 +76,12 @@ SB-P-3. A balance product MUST store recharge and bonus amounts in its price cur
 
 SB-P-4. A custom recharge MUST use the Admin minimum and maximum for its selected payment currency. Its bonus MUST be zero.
 
+SB-P-4a. The face value that SB-P-3 and SB-P-4 produce is the input to a sales-code
+discount, never its output. The equality between a fixed balance product's price and the
+order amount MUST be evaluated against that face value, so a discounted order does not read
+as a price mismatch. `sales-commission.spec.md` SC-2.4 through SC-2.6 define the resulting
+amounts.
+
 SB-P-5. A plan price and quota base MUST use CNY. A currency control MAY present the price in USD by using the active exchange rate.
 
 SB-P-6. A plan MUST have a duration from 3,600 through 31,536,000 seconds and at least one quota rule.
@@ -93,6 +99,14 @@ SB-P-11. A plan MAY contain zero or more Group IDs. Group IDs MUST follow `group
 SB-P-12. Product update, disable, emergency disable, and delete MUST require the expected revision. A stale revision MUST return HTTP `409` and change no row.
 
 SB-P-13. An order MUST contain an immutable versioned snapshot of product, price, reward, duration, Groups, quota rules, Channel public identity, settlement currency, rate rational, and payment contract version.
+
+SB-P-13a. The snapshot MUST also contain the sales code submitted at creation and the
+discount basis points that applied, as defined by `sales-commission.spec.md` SC-D5. A
+discount reduces `payment_minor` while leaving the balance quote's
+`actual_received_minor` at the face value, so the two amounts diverge by design and both MUST
+remain frozen. Fulfillment continues to credit `actual_received_minor` per SB-RC, and a
+refund continues to return `payment_minor` per SB-RC-25, which is the discounted amount the
+buyer actually paid.
 
 SB-P-14. Product edits MUST affect only orders created after the edit. A product referenced by an order MUST NOT be physically deleted.
 
