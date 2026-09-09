@@ -266,26 +266,12 @@ export function SalesWithdrawalPanel({
           </div>
         )}
 
+        {/* SC-6.7: only the most recent withdrawal belongs here. The full history is its own
+            sub-page, so this panel stays about requesting rather than reading. */}
         {withdrawals.length > 0 && (
           <div className="flex flex-col gap-2 border-t pt-3">
-            <h3 className="text-sm font-medium">{t("sales.withdrawal.log")}</h3>
-            <ul className="flex flex-col divide-y">
-              {withdrawals.map((withdrawal) => (
-                <li key={withdrawal.id} className="flex flex-col gap-1 py-2 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-mono tabular-nums">
-                      <CoinAmount value={coin(withdrawal.amount_minor)} />
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {t(`sales.withdrawal.state.${withdrawal.state}`)}
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {withdrawal.decided_at ?? withdrawal.requested_at}
-                  </p>
-                </li>
-              ))}
-            </ul>
+            <h3 className="text-sm font-medium">{t("sales.withdrawal.latest")}</h3>
+            <WithdrawalRow withdrawal={withdrawals[0]} />
           </div>
         )}
       </CardContent>
@@ -295,4 +281,51 @@ export function SalesWithdrawalPanel({
 
 export function SalesWithdrawalIcon() {
   return <Banknote className="size-11" />;
+}
+
+function WithdrawalRow({ withdrawal }: { withdrawal: SalesWithdrawal }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-1 py-2 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-mono tabular-nums">
+          <CoinAmount value={coin(withdrawal.amount_minor)} />
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {t(`sales.withdrawal.state.${withdrawal.state}`)}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {withdrawal.decided_at ?? withdrawal.requested_at}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Full withdrawal history (SC-6.7).
+ *
+ * Every state is listed, including cancelled and rejected requests, because an agent
+ * reconciling payouts needs the requests that produced no money as much as the ones that did.
+ */
+export function SalesWithdrawalLog({ withdrawals }: { withdrawals: SalesWithdrawal[] }) {
+  const { t } = useTranslation();
+  return (
+    <Card className="rounded-2xl">
+      <CardContent className="flex flex-col gap-3 p-5">
+        <h2 className="text-sm font-semibold">{t("sales.withdrawal.log")}</h2>
+        {withdrawals.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t("sales.withdrawal.logEmpty")}</p>
+        ) : (
+          <ul className="flex flex-col divide-y">
+            {withdrawals.map((withdrawal) => (
+              <li key={withdrawal.id}>
+                <WithdrawalRow withdrawal={withdrawal} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
 }

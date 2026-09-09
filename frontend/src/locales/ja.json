@@ -2146,13 +2146,16 @@
       "available": "出金可能：{{amount}}",
       "log": "出金ログ",
       "cancel": "申請を取り消す",
-      "cancelled": "出金申請を取り消しました"
+      "cancelled": "出金申請を取り消しました",
+      "latest": "直近の出金",
+      "logEmpty": "出金の記録はありません"
     },
     "tabs": {
       "label": "セールス表示",
       "overview": "概要",
       "records": "明細",
-      "account": "アカウント"
+      "account": "アカウント",
+      "withdrawals": "出金"
     },
     "account": {
       "passwordTitle": "パスワードを変更",

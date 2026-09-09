@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import useSWR from "swr";
 import { AlertCircle, LogOut, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
@@ -10,9 +11,14 @@ import { useAuth } from "@/hooks/use-auth";
 import { salesApi } from "@/lib/sales-api";
 import { SalesDiscountCard, SalesPasswordCard } from "./sales-account";
 import { SalesBalanceCard, SalesCodeCard, SalesWindowCard } from "./sales-cards";
-import { SalesClaimPanel, SalesEntryList, SalesWithdrawalPanel } from "./sales-panels";
+import {
+  SalesClaimPanel,
+  SalesEntryList,
+  SalesWithdrawalLog,
+  SalesWithdrawalPanel,
+} from "./sales-panels";
 
-type SalesTab = "overview" | "records" | "account";
+type SalesTab = "overview" | "records" | "withdrawals" | "account";
 
 const OVERVIEW_KEY = "sales:overview";
 const ENTRIES_KEY = "sales:entries";
@@ -83,15 +89,19 @@ export function SalesPage() {
             {t("sales.subtitle", { username: data.agent.username })}
           </p>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          className="h-11 shrink-0 rounded-xl"
-          onClick={() => void logout()}
-        >
-          <LogOut className="size-4" />
-          {t("sales.signOut")}
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* SC-6.8: an agent never reaches the dashboard, where the theme control lives. */}
+          <ThemeToggle label="" />
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 rounded-xl"
+            onClick={() => void logout()}
+          >
+            <LogOut className="size-4" />
+            {t("sales.signOut")}
+          </Button>
+        </div>
       </motion.header>
 
       <motion.div
@@ -101,11 +111,11 @@ export function SalesPage() {
         className="flex flex-col gap-6"
       >
         <div
-          className="grid w-full grid-cols-3 gap-1 rounded-xl bg-muted p-1"
+          className="grid w-full grid-cols-4 gap-1 rounded-xl bg-muted p-1"
           role="tablist"
           aria-label={t("sales.tabs.label")}
         >
-          {(["overview", "records", "account"] as SalesTab[]).map((item) => (
+          {(["overview", "records", "withdrawals", "account"] as SalesTab[]).map((item) => (
             <button
               key={item}
               type="button"
@@ -140,6 +150,20 @@ export function SalesPage() {
               </div>
             </section>
           </>
+        ) : tab === "withdrawals" ? (
+          <>
+            <SalesWithdrawalPanel
+              balanceMinor={data.agent.commission_balance_minor}
+              pending={data.pending_withdrawal}
+              withdrawals={withdrawals.data ?? []}
+              onRequested={refreshAll}
+            />
+            {withdrawals.isLoading && !withdrawals.data ? (
+              <Skeleton className="h-48 rounded-2xl" />
+            ) : (
+              <SalesWithdrawalLog withdrawals={withdrawals.data ?? []} />
+            )}
+          </>
         ) : tab === "account" ? (
           <div className="grid gap-4 lg:grid-cols-2">
             <SalesDiscountCard
@@ -151,15 +175,7 @@ export function SalesPage() {
           </div>
         ) : (
           <>
-            <div className="grid gap-4 lg:grid-cols-2">
-              <SalesClaimPanel onClaimed={refreshAll} />
-              <SalesWithdrawalPanel
-                balanceMinor={data.agent.commission_balance_minor}
-                pending={data.pending_withdrawal}
-                withdrawals={withdrawals.data ?? []}
-                onRequested={refreshAll}
-              />
-            </div>
+            <SalesClaimPanel onClaimed={refreshAll} />
             <section aria-labelledby="sales-entries" className="flex flex-col gap-3">
               <h2 id="sales-entries" className="text-sm font-semibold">
                 {t("sales.entries.title")}

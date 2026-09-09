@@ -2147,13 +2147,16 @@
       "available": "可提領：{{amount}}",
       "log": "提領日誌",
       "cancel": "撤銷申請",
-      "cancelled": "提領申請已撤銷"
+      "cancelled": "提領申請已撤銷",
+      "latest": "最近一次提現",
+      "logEmpty": "尚無提現記錄"
     },
     "tabs": {
       "label": "銷售檢視",
       "overview": "概覽",
       "records": "明細",
-      "account": "帳戶"
+      "account": "帳戶",
+      "withdrawals": "提現"
     },
     "account": {
       "passwordTitle": "修改密碼",

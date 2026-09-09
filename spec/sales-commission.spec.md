@@ -463,6 +463,17 @@ created with a generated one-time password (SC-7.2) and is redirected away from
 `/dashboard` (SC-6.2), so without this control the agent has no reachable way to replace
 that password.
 
+SC-6.7. The sales page MUST present the withdrawal history on its own sub-page listing every
+withdrawal in every state, including `cancelled` and `rejected`. The request panel MUST show
+at most the single most recent withdrawal.
+
+An agent reconciling payouts needs the requests that produced no money as much as the ones
+that did, but the request panel exists to submit a request, not to be read.
+
+SC-6.8. The sales page MUST expose a light, dark, and system theme selector. An agent is
+redirected away from `/dashboard` (SC-6.2), where the only other theme control lives, so
+without this an agent cannot change the theme at all.
+
 SC-7.0. The Admin sales page MUST present exactly three sub-pages: agents (commission rate,
 agent creation, agent roster), withdrawals (the decision queue), and commissions (delegated
 claims and the commission ledger). Exactly one sub-page MUST be visible at a time. The

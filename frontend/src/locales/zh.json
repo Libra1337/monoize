@@ -2150,13 +2150,16 @@
       "available": "可提现：{{amount}}",
       "log": "提现日志",
       "cancel": "撤销申请",
-      "cancelled": "提现申请已撤销"
+      "cancelled": "提现申请已撤销",
+      "latest": "最近一次提现",
+      "logEmpty": "暂无提现记录"
     },
     "tabs": {
       "label": "销售视图",
       "overview": "概览",
       "records": "明细",
-      "account": "账户"
+      "account": "账户",
+      "withdrawals": "提现"
     },
     "account": {
       "passwordTitle": "修改密码",

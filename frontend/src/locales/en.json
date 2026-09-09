@@ -2150,13 +2150,16 @@
       "available": "Available: {{amount}}",
       "log": "Withdrawal log",
       "cancel": "Cancel request",
-      "cancelled": "Withdrawal cancelled"
+      "cancelled": "Withdrawal cancelled",
+      "latest": "Most recent withdrawal",
+      "logEmpty": "No withdrawals yet"
     },
     "tabs": {
       "label": "Sales views",
       "overview": "Overview",
       "records": "Records",
-      "account": "Account"
+      "account": "Account",
+      "withdrawals": "Withdrawals"
     },
     "account": {
       "passwordTitle": "Change password",
