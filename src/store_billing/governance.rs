@@ -13,7 +13,7 @@ use super::models::{
     StoreChannelReadinessView, StoreComplianceView, StoreMerchantCapabilitiesView,
     StoreMerchantCapability, StorePaymentCompliance, StorePrivacyRecord, StorePrivacyRecordsView,
 };
-use super::money::{Currency, parse_minor};
+use super::money::{parse_minor, Currency};
 use super::store::StoreBillingError;
 use crate::db::DbPool;
 
@@ -29,14 +29,27 @@ const REQUIRED_CAPABILITIES: [&str; 4] = [
 ];
 
 /// SB-C-37: a Channel only has to prove the capabilities its protocol can actually perform.
-/// The EPay protocol has no refund-status query at all, and settlement retrieval exists only
-/// on gateways that implement `act=settle`, so demanding a `supported` verification for those
-/// two would leave every EPay Channel permanently unavailable.
+/// EPay is exempt entirely — see [`requires_evidence_attestations`].
 fn required_capabilities(adapter_kind: &str) -> &'static [&'static str] {
     match adapter_kind {
-        "epay" => &["payment_query", "refund"],
+        "epay" => &[],
         _ => &REQUIRED_CAPABILITIES,
     }
+}
+
+/// SB-C-38: whether the adapter's availability depends on externally issued evidence.
+///
+/// The capability, licence, runtime, availability, and privacy gates all require a SHA-256
+/// digest of a document produced by a third party — a card-network attestation, a payment
+/// licence, an audited availability report, a privacy review. Those documents exist for a
+/// regulated acquirer such as Stripe. EPay is a self-hosted gateway protocol with no issuer
+/// for any of them, so requiring the digests would leave every EPay Channel permanently
+/// unavailable with reasons its operator can never clear. EPay is therefore gated only on
+/// facts the deployment itself establishes: the Channel is enabled, an active credential
+/// matches the adapter, the terms are confirmed at the current version, and a current
+/// readiness profile supplies the currency, amount, and checkout-action metadata.
+fn requires_evidence_attestations(adapter_kind: &str) -> bool {
+    adapter_kind != "epay"
 }
 
 #[derive(Debug, Clone)]
@@ -345,7 +358,6 @@ impl PaymentGovernanceStore {
         mut input: PutStoreChannelReadinessInput,
         verifier_admin_id: &str,
     ) -> Result<StoreChannelReadinessProfile, StoreBillingError> {
-        validate_readiness_input(&input)?;
         input
             .supported_currencies
             .sort_by_key(|currency| currency_string(*currency));
@@ -376,6 +388,9 @@ impl PaymentGovernanceStore {
         let adapter_kind = channel
             .try_get::<String>("", "adapter_kind")
             .map_err(storage)?;
+        // Which attestations are mandatory depends on the adapter, so the shape check runs
+        // only once the Channel row has been read under the write lock.
+        validate_readiness_input(&input, &adapter_kind)?;
         parse_readiness_metadata(
             &adapter_kind,
             &supported_currencies_json,
@@ -398,37 +413,42 @@ impl PaymentGovernanceStore {
             .try_get::<String>("", "account_identity_digest")
             .map_err(storage)?;
         let verified_at = Utc::now();
-        let privacy = tx
-            .query_one(self.db.stmt(
-                "SELECT evidence_digest, approved_at, next_review_at, accepted
-                 FROM store_privacy_records WHERE id = $1",
-                vec![input.privacy_record_id.clone().into()],
-            ))
-            .await
-            .map_err(storage)?
-            .ok_or(StoreBillingError::Conflict)?;
-        let privacy_approved_at =
-            parse_timestamp(privacy.try_get("", "approved_at").map_err(storage)?)?;
-        let privacy_next_review_at =
-            parse_timestamp(privacy.try_get("", "next_review_at").map_err(storage)?)?;
-        let privacy_accepted = privacy.try_get::<i32>("", "accepted").map_err(storage)? == 1;
-        let privacy_digest = privacy
-            .try_get::<String>("", "evidence_digest")
-            .map_err(storage)?;
-        if !privacy_accepted
-            || privacy_approved_at > verified_at
-            || verified_at >= privacy_next_review_at
-            || !valid_digest(&privacy_digest)
-        {
-            return Err(StoreBillingError::Conflict);
-        }
+        let privacy_record_id = if requires_evidence_attestations(&adapter_kind) {
+            let privacy = tx
+                .query_one(self.db.stmt(
+                    "SELECT evidence_digest, approved_at, next_review_at, accepted
+                     FROM store_privacy_records WHERE id = $1",
+                    vec![input.privacy_record_id.clone().into()],
+                ))
+                .await
+                .map_err(storage)?
+                .ok_or(StoreBillingError::Conflict)?;
+            let privacy_approved_at =
+                parse_timestamp(privacy.try_get("", "approved_at").map_err(storage)?)?;
+            let privacy_next_review_at =
+                parse_timestamp(privacy.try_get("", "next_review_at").map_err(storage)?)?;
+            let privacy_accepted = privacy.try_get::<i32>("", "accepted").map_err(storage)? == 1;
+            let privacy_digest = privacy
+                .try_get::<String>("", "evidence_digest")
+                .map_err(storage)?;
+            if !privacy_accepted
+                || privacy_approved_at > verified_at
+                || verified_at >= privacy_next_review_at
+                || !valid_digest(&privacy_digest)
+            {
+                return Err(StoreBillingError::Conflict);
+            }
+            input.privacy_record_id.clone()
+        } else {
+            None
+        };
         let expires_at = verified_at
             .checked_add_signed(Duration::days(input.valid_for_days))
             .ok_or(StoreBillingError::InvalidInput)?;
         let record = StoreChannelReadinessProfile {
             channel_id: channel_id.to_string(),
             active_credential_digest,
-            privacy_record_id: input.privacy_record_id,
+            privacy_record_id,
             callback_verification_passed: input.callback_verification_passed,
             supported_currencies: input.supported_currencies,
             amount_limits: input.amount_limits,
@@ -1082,39 +1102,42 @@ fn evaluate_readiness_snapshot(
         reasons.push("callback_verification_pending".to_string());
         profile_current = false;
     }
-    for (digest, reason) in [
-        (
-            row.license_evidence_digest.as_deref(),
-            "license_gate_pending",
-        ),
-        (
-            row.runtime_evidence_digest.as_deref(),
-            "runtime_gate_pending",
-        ),
-        (
-            row.availability_evidence_digest.as_deref(),
-            "availability_evidence_pending",
-        ),
-    ] {
-        if !digest.is_some_and(valid_digest) {
-            reasons.push(reason.to_string());
+    // SB-C-38: the attestation gates apply only to adapters whose evidence has an issuer.
+    if requires_evidence_attestations(adapter_kind) {
+        for (digest, reason) in [
+            (
+                row.license_evidence_digest.as_deref(),
+                "license_gate_pending",
+            ),
+            (
+                row.runtime_evidence_digest.as_deref(),
+                "runtime_gate_pending",
+            ),
+            (
+                row.availability_evidence_digest.as_deref(),
+                "availability_evidence_pending",
+            ),
+        ] {
+            if !digest.is_some_and(valid_digest) {
+                reasons.push(reason.to_string());
+                profile_current = false;
+            }
+        }
+        let privacy_current = row
+            .privacy_record_id
+            .as_deref()
+            .and_then(|privacy_id| snapshot.privacy.get(privacy_id))
+            .is_some_and(|privacy| {
+                let approved_at = privacy.approved_at.clone().and_then(parse_rfc3339);
+                let next_review_at = privacy.next_review_at.clone().and_then(parse_rfc3339);
+                privacy.accepted == Some(1)
+                && privacy.evidence_digest.as_deref().is_some_and(valid_digest)
+                && matches!((approved_at, next_review_at), (Some(approved), Some(review)) if approved <= now && now < review && approved < review)
+            });
+        if !privacy_current {
+            reasons.push("privacy_gate_pending".to_string());
             profile_current = false;
         }
-    }
-    let privacy_current = row
-        .privacy_record_id
-        .as_deref()
-        .and_then(|privacy_id| snapshot.privacy.get(privacy_id))
-        .is_some_and(|privacy| {
-            let approved_at = privacy.approved_at.clone().and_then(parse_rfc3339);
-            let next_review_at = privacy.next_review_at.clone().and_then(parse_rfc3339);
-            privacy.accepted == Some(1)
-            && privacy.evidence_digest.as_deref().is_some_and(valid_digest)
-            && matches!((approved_at, next_review_at), (Some(approved), Some(review)) if approved <= now && now < review && approved < review)
-        });
-    if !privacy_current {
-        reasons.push("privacy_gate_pending".to_string());
-        profile_current = false;
     }
 
     let metadata = match (
@@ -1330,15 +1353,33 @@ fn validate_privacy_record_input(
     Ok(())
 }
 
+/// SB-C-38: an adapter subject to the attestation gates must supply every attestation, and an
+/// exempt adapter must supply none. A partially filled profile is rejected rather than stored,
+/// so an exempt Channel can never carry a digest that no gate will ever read.
 fn validate_readiness_input(
     input: &PutStoreChannelReadinessInput,
+    adapter_kind: &str,
 ) -> Result<(), StoreBillingError> {
-    if !valid_exact_trimmed(&input.privacy_record_id, 255)
-        || !valid_digest(&input.license_evidence_digest)
-        || !valid_digest(&input.runtime_evidence_digest)
-        || !valid_digest(&input.availability_evidence_digest)
-        || !(1..=90).contains(&input.valid_for_days)
-    {
+    if !(1..=90).contains(&input.valid_for_days) {
+        return Err(StoreBillingError::InvalidInput);
+    }
+    let digests = [
+        input.license_evidence_digest.as_deref(),
+        input.runtime_evidence_digest.as_deref(),
+        input.availability_evidence_digest.as_deref(),
+    ];
+    if requires_evidence_attestations(adapter_kind) {
+        if !input
+            .privacy_record_id
+            .as_deref()
+            .is_some_and(|id| valid_exact_trimmed(id, 255))
+            || !digests
+                .iter()
+                .all(|digest| digest.is_some_and(valid_digest))
+        {
+            return Err(StoreBillingError::InvalidInput);
+        }
+    } else if input.privacy_record_id.is_some() || digests.iter().any(Option::is_some) {
         return Err(StoreBillingError::InvalidInput);
     }
     Ok(())
@@ -1488,22 +1529,21 @@ fn storage(error: impl ToString) -> StoreBillingError {
 
 #[cfg(test)]
 mod tests {
-    use super::{REQUIRED_CAPABILITIES, required_capabilities};
+    use super::{required_capabilities, requires_evidence_attestations, REQUIRED_CAPABILITIES};
 
-    /// SB-C-37: a Channel must only prove the capabilities its protocol can perform. The EPay
-    /// protocol has no refund-status query, and settlement retrieval is gateway-optional, so
-    /// requiring a `supported` verification for either would leave every EPay Channel
-    /// permanently unavailable no matter how the Admin configures it.
+    /// SB-C-37: a Channel must only prove the capabilities its protocol can perform. EPay's
+    /// availability is decided by the readiness profile alone, so it requires no capability
+    /// verification at all; the other adapters keep the full four-capability gate.
     #[test]
-    fn epay_requires_only_the_capabilities_its_protocol_provides() {
-        assert_eq!(required_capabilities("epay"), &["payment_query", "refund"]);
-        for capability in ["refund_query", "settlement_report"] {
+    fn epay_does_not_require_capability_verification() {
+        assert!(required_capabilities("epay").is_empty());
+        for capability in REQUIRED_CAPABILITIES {
             assert!(
                 !required_capabilities("epay").contains(&capability),
                 "{capability} cannot be required for EPay"
             );
             // The capability stays a recognised verification target, so an Admin may still
-            // record it as unsupported or manual.
+            // record it as unsupported or manual for a non-EPay adapter.
             assert!(REQUIRED_CAPABILITIES.contains(&capability));
         }
     }
@@ -1514,5 +1554,145 @@ mod tests {
         for adapter in ["stripe", "http", "unknown"] {
             assert_eq!(required_capabilities(adapter), &REQUIRED_CAPABILITIES);
         }
+    }
+
+    /// SB-C-38: only an adapter whose evidence has a third-party issuer is held to the
+    /// attestation gates. EPay has no such issuer, so it is exempt.
+    #[test]
+    fn evidence_attestations_apply_to_every_adapter_except_epay() {
+        assert!(!requires_evidence_attestations("epay"));
+        for adapter in ["stripe", "http", "unknown"] {
+            assert!(requires_evidence_attestations(adapter));
+        }
+    }
+
+    use super::{
+        evaluate_snapshot_channel, GovernanceSnapshot, RawChannel, RawCredential, RawReadiness,
+        CURRENT_STORE_PAYMENT_TERMS_VERSION,
+    };
+    use chrono::Utc;
+    use std::collections::BTreeMap;
+
+    /// A fresh EPay Channel with an active credential, current terms, and a readiness profile
+    /// carrying only the currency, amount, and checkout-action metadata — no capability record,
+    /// no privacy record, no licence/runtime/availability evidence — MUST be available. This is
+    /// exactly the configuration an EPay operator can reach, and the one the gate previously
+    /// rejected as permanently unavailable.
+    #[test]
+    fn epay_channel_with_only_readiness_metadata_is_available() {
+        let now = Utc::now();
+        let digest = "aa11223344556677889900aabbccddeeff00112233445566778899aabbccddee";
+        let snapshot = GovernanceSnapshot {
+            channels: BTreeMap::from([(
+                "ch-epay".to_string(),
+                RawChannel {
+                    adapter_kind: Some("epay".to_string()),
+                    enabled: Some(1),
+                },
+            )]),
+            credentials: BTreeMap::from([(
+                "ch-epay".to_string(),
+                RawCredential {
+                    adapter_kind: Some("epay".to_string()),
+                    account_identity_digest: Some(digest.to_string()),
+                },
+            )]),
+            compliance: BTreeMap::from([(
+                "ch-epay".to_string(),
+                Some(CURRENT_STORE_PAYMENT_TERMS_VERSION.to_string()),
+            )]),
+            capabilities: BTreeMap::new(),
+            readiness: BTreeMap::from([(
+                "ch-epay".to_string(),
+                RawReadiness {
+                    active_credential_digest: Some(digest.to_string()),
+                    privacy_record_id: None,
+                    callback_verification_passed: Some(1),
+                    supported_currencies_json: Some(r#"["CNY"]"#.to_string()),
+                    amount_limits_json: Some(
+                        r#"{"CNY":{"min_minor":"1","max_minor":"100000000"}}"#.to_string(),
+                    ),
+                    checkout_action_kinds_json: Some(r#"["qr","redirect"]"#.to_string()),
+                    license_evidence_digest: None,
+                    runtime_evidence_digest: None,
+                    availability_evidence_digest: None,
+                    verified_at: Some(now.to_rfc3339()),
+                    expires_at: Some((now + chrono::Duration::days(30)).to_rfc3339()),
+                },
+            )]),
+            privacy: BTreeMap::new(),
+        };
+
+        let result = evaluate_snapshot_channel(&snapshot, "ch-epay", now);
+        assert!(
+            result.unavailable_reasons.is_empty(),
+            "an EPay Channel with only readiness metadata must be available, got {:?}",
+            result.unavailable_reasons
+        );
+        assert_eq!(
+            result.supported_currencies,
+            vec![crate::store_billing::Currency::CNY]
+        );
+    }
+
+    /// Stripe still requires every capability and every attestation. A Stripe Channel configured
+    /// only as far as EPay would be must remain unavailable, and the reasons must name the
+    /// missing capability and the orphaned readiness profile.
+    #[test]
+    fn stripe_channel_with_only_readiness_metadata_is_unavailable() {
+        let now = Utc::now();
+        let digest = "aa11223344556677889900aabbccddeeff00112233445566778899aabbccddee";
+        let snapshot = GovernanceSnapshot {
+            channels: BTreeMap::from([(
+                "ch-stripe".to_string(),
+                RawChannel {
+                    adapter_kind: Some("stripe".to_string()),
+                    enabled: Some(1),
+                },
+            )]),
+            credentials: BTreeMap::from([(
+                "ch-stripe".to_string(),
+                RawCredential {
+                    adapter_kind: Some("stripe".to_string()),
+                    account_identity_digest: Some(digest.to_string()),
+                },
+            )]),
+            compliance: BTreeMap::from([(
+                "ch-stripe".to_string(),
+                Some(CURRENT_STORE_PAYMENT_TERMS_VERSION.to_string()),
+            )]),
+            capabilities: BTreeMap::new(),
+            readiness: BTreeMap::from([(
+                "ch-stripe".to_string(),
+                RawReadiness {
+                    active_credential_digest: Some(digest.to_string()),
+                    privacy_record_id: None,
+                    callback_verification_passed: Some(1),
+                    supported_currencies_json: Some(r#"["CNY"]"#.to_string()),
+                    amount_limits_json: Some(
+                        r#"{"CNY":{"min_minor":"1","max_minor":"100000000"}}"#.to_string(),
+                    ),
+                    checkout_action_kinds_json: Some(r#"["redirect"]"#.to_string()),
+                    license_evidence_digest: None,
+                    runtime_evidence_digest: None,
+                    availability_evidence_digest: None,
+                    verified_at: Some(now.to_rfc3339()),
+                    expires_at: Some((now + chrono::Duration::days(30)).to_rfc3339()),
+                },
+            )]),
+            privacy: BTreeMap::new(),
+        };
+
+        let result = evaluate_snapshot_channel(&snapshot, "ch-stripe", now);
+        assert!(
+            !result.unavailable_reasons.is_empty(),
+            "a Stripe Channel missing its capabilities and attestations must be unavailable"
+        );
+        assert!(result
+            .unavailable_reasons
+            .contains(&"capability_payment_query_missing".to_string()));
+        assert!(result
+            .unavailable_reasons
+            .contains(&"privacy_gate_pending".to_string()));
     }
 }

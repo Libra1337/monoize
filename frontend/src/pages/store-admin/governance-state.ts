@@ -107,10 +107,26 @@ export function validateReadinessInput(
   const uniqueCurrencies = new Set(currencies);
   const uniqueActions = new Set(actions);
   const limitKeys = Object.keys(input.amount_limits);
+  // SB-C-38: EPay has no third-party issuer for a licence, runtime, availability, or privacy
+  // attestation, so those fields are not required of it. Every other adapter must supply them.
+  const requiresAttestations = adapterKind !== "epay";
+  const privacyId = input.privacy_record_id;
+  const digests = [
+    input.license_evidence_digest,
+    input.runtime_evidence_digest,
+    input.availability_evidence_digest,
+  ];
+  // The server rejects a partially filled profile, so an exempt adapter must carry none of
+  // these fields and a gated adapter must carry all of them.
+  const attestationsValid = requiresAttestations
+    ? privacyId !== undefined
+      && privacyId === privacyId.trim()
+      && byteLength(privacyId) >= 1
+      && byteLength(privacyId) <= 255
+      && digests.every((value) => value !== undefined && DIGEST_PATTERN.test(value))
+    : privacyId === undefined && digests.every((value) => value === undefined);
   const metadataValid =
-    input.privacy_record_id === input.privacy_record_id.trim()
-    && byteLength(input.privacy_record_id) >= 1
-    && byteLength(input.privacy_record_id) <= 255
+    attestationsValid
     && currencies.length > 0
     && currencies.length === uniqueCurrencies.size
     && actions.length > 0
@@ -126,11 +142,6 @@ export function validateReadinessInput(
         && decimalLessThanOrEqual(limit.min_minor, limit.max_minor),
       );
     })
-    && [
-      input.license_evidence_digest,
-      input.runtime_evidence_digest,
-      input.availability_evidence_digest,
-    ].every((value) => DIGEST_PATTERN.test(value))
     && Number.isInteger(input.valid_for_days)
     && input.valid_for_days >= 1
     && input.valid_for_days <= 90;
@@ -163,14 +174,14 @@ export function optimisticReadiness(
       verifier_admin_id: current?.readiness?.verifier_admin_id ?? "pending",
       verified_at: now.toISOString(),
       expires_at: new Date(now.getTime() + input.valid_for_days * 86_400_000).toISOString(),
-      privacy_record_id: input.privacy_record_id,
+      privacy_record_id: input.privacy_record_id ?? "",
       callback_verification_passed: input.callback_verification_passed,
       supported_currencies: input.supported_currencies,
       amount_limits: input.amount_limits,
       checkout_action_kinds: input.checkout_action_kinds,
-      license_evidence_digest: input.license_evidence_digest,
-      runtime_evidence_digest: input.runtime_evidence_digest,
-      availability_evidence_digest: input.availability_evidence_digest,
+      license_evidence_digest: input.license_evidence_digest ?? "",
+      runtime_evidence_digest: input.runtime_evidence_digest ?? "",
+      availability_evidence_digest: input.availability_evidence_digest ?? "",
     },
   };
 }

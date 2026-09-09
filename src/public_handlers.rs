@@ -433,16 +433,29 @@ fn rate_range(rates: &[PublicRate], usage_class: &str) -> Option<RateRange> {
     })
 }
 
+/// Account class whose catalogue the caller is entitled to see.
+///
+/// The marketplace and status endpoints are reachable without a session, so an anonymous
+/// visitor gets the standard catalogue. A signed-in user gets their own class, which is what
+/// keeps an enterprise account from being shown standard Groups, models, and rates.
+async fn viewer_account_class(state: &AppState, headers: &HeaderMap) -> crate::users::AccountClass {
+    crate::dashboard_handlers::session_helpers::optional_current_user(headers, state)
+        .await
+        .map(|user| user.account_class)
+        .unwrap_or_default()
+}
+
 fn groups_by_id(
     state: &AppState,
+    account_class: crate::users::AccountClass,
 ) -> impl std::future::Future<Output = Result<HashMap<String, String>, String>> + '_ {
     async move {
         let rows = state
             .db_pool
             .read()
             .query_all(state.db_pool.stmt(
-                "SELECT id, public_name AS group_public_name FROM monoize_groups WHERE account_class = 'standard'",
-                vec![],
+                "SELECT id, public_name AS group_public_name FROM monoize_groups WHERE account_class = $1",
+                vec![account_class.as_str().into()],
             ))
             .await
             .map_err(|error| error.to_string())?
@@ -571,7 +584,8 @@ pub async fn list_marketplace(
         .as_deref()
         .map(marketplace_group_filter)
         .transpose()?;
-    let groups = groups_by_id(&state)
+    let account_class = viewer_account_class(&state, &headers).await;
+    let groups = groups_by_id(&state, account_class)
         .await
         .map_err(marketplace_source_error)?;
     let providers = state
@@ -720,7 +734,8 @@ pub async fn marketplace_offers(
     if !(1..=50).contains(&limit) {
         return Err(invalid("limit must be between 1 and 50"));
     }
-    let groups = groups_by_id(&state)
+    let account_class = viewer_account_class(&state, &headers).await;
+    let groups = groups_by_id(&state, account_class)
         .await
         .map_err(marketplace_source_error)?;
     let providers = state
@@ -862,7 +877,10 @@ pub async fn public_status(
     let latest_bucket_start = data_through_unix_ms.div_euclid(HALF_HOUR_MS) * HALF_HOUR_MS;
     let first_bucket_start = latest_bucket_start.saturating_sub(47 * HALF_HOUR_MS);
 
-    let groups = groups_by_id(&state).await.map_err(status_source_error)?;
+    let account_class = viewer_account_class(&state, &headers).await;
+    let groups = groups_by_id(&state, account_class)
+        .await
+        .map_err(status_source_error)?;
     let group_order = state
         .user_store
         .list_groups()
@@ -977,7 +995,7 @@ pub async fn public_status(
     let mut output = Vec::new();
     for group_row in group_order
         .into_iter()
-        .filter(|group| group.account_class == crate::users::AccountClass::Standard)
+        .filter(|group| group.account_class == account_class)
     {
         let Some(group) = group_accumulators.remove(&group_row.id) else {
             continue;
@@ -1256,6 +1274,177 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    /// MM-ENT2 and MM-ENT5: the catalogue an authenticated caller sees is the one for their
+    /// own account class, and an anonymous caller sees the standard class. Before this was
+    /// enforced the endpoint pinned the class to `standard`, so an Enterprise user was shown
+    /// the standard Groups, models, and rates instead of their own.
+    #[tokio::test]
+    async fn marketplace_returns_the_catalog_for_the_callers_account_class() {
+        use crate::users::{AccountClass, CreateGroupInput};
+
+        let state = make_state().await;
+
+        // One Group and priced Provider per class, so a leak in either direction is visible.
+        let standard_group_id = state
+            .user_store
+            .default_group_id()
+            .await
+            .expect("default group exists");
+        let enterprise_group = state
+            .user_store
+            .create_group(CreateGroupInput {
+                name: "Enterprise Group".to_string(),
+                confirm_public_exposure: true,
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 1,
+                account_class: AccountClass::Enterprise,
+            })
+            .await
+            .expect("enterprise group creates");
+
+        for (group_id, label, model) in [
+            (standard_group_id.clone(), "Standard", "standard-model"),
+            (
+                enterprise_group.id.clone(),
+                "Enterprise",
+                "enterprise-model",
+            ),
+        ] {
+            state
+                .monoize_store
+                .create_provider(
+                    serde_json::from_value(serde_json::json!({
+                        "name": format!("{label} Provider"),
+                        "confirm_public_exposure": true,
+                        "group_id": group_id,
+                        "enabled": true,
+                        "pricing_profile": format!("{model}-profile"),
+                        "channel": {
+                            "name": format!("{label} Channel"),
+                            "provider_type": "responses",
+                            "base_url": "https://example.invalid",
+                            "api_key": "secret",
+                            "enabled": true,
+                            "models": { model: { "redirect": null } }
+                        }
+                    }))
+                    .expect("provider payload deserializes"),
+                )
+                .await
+                .expect("provider creates");
+            for (suffix, usage_class) in [("input", "input_uncached"), ("output", "output")] {
+                state
+                    .billing_rate_store
+                    .upsert_billing_rate(
+                        &format!("{model}-{suffix}"),
+                        serde_json::from_value::<UpsertBillingRateInput>(serde_json::json!({
+                            "source": "test",
+                            "pricing_profile": format!("{model}-profile"),
+                            "model_pattern": model,
+                            "provider_type": "responses",
+                            "rate_kind": "token",
+                            "usage_class": usage_class,
+                            "unit": "token",
+                            "unit_price_nano_usd": "1",
+                            "enabled": true
+                        }))
+                        .expect("rate input deserializes"),
+                    )
+                    .await
+                    .expect("rate inserts");
+            }
+        }
+
+        let user = state
+            .user_store
+            .create_user(
+                "enterprise_viewer",
+                "correct horse battery staple",
+                crate::users::UserRole::User,
+                None,
+            )
+            .await
+            .expect("user creates");
+        state
+            .user_store
+            .change_user_account_class(&user.id, AccountClass::Enterprise, &user.id)
+            .await
+            .expect("account class changes");
+        let session = state
+            .user_store
+            .create_session(&user.id, 7)
+            .await
+            .expect("session creates");
+
+        let models = |headers: HeaderMap| {
+            let state = state.clone();
+            async move {
+                let response = list_marketplace(
+                    State(state),
+                    headers,
+                    Query(MarketplaceQuery {
+                        q: None,
+                        group: None,
+                        model: None,
+                        limit: Some(50),
+                        cursor: None,
+                    }),
+                )
+                .await
+                .expect("marketplace list succeeds")
+                .into_response();
+                let body = response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("body reads")
+                    .to_bytes();
+                let json: serde_json::Value =
+                    serde_json::from_slice(&body).expect("body is JSON");
+                json["items"]
+                    .as_array()
+                    .expect("items is an array")
+                    .iter()
+                    .map(|item| item["model"].as_str().expect("model is a string").to_string())
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        let mut authenticated = HeaderMap::new();
+        authenticated.insert(
+            axum::http::header::COOKIE,
+            format!("monoize_session={}", session.token)
+                .parse()
+                .expect("cookie header is valid"),
+        );
+
+        assert_eq!(
+            models(authenticated).await,
+            vec!["enterprise-model".to_string()],
+            "an Enterprise caller must see only the Enterprise catalog"
+        );
+        assert_eq!(
+            models(HeaderMap::new()).await,
+            vec!["standard-model".to_string()],
+            "an anonymous caller must see only the standard catalog"
+        );
+
+        // A stale or forged cookie must not fail the request; it falls back to standard.
+        let mut stale = HeaderMap::new();
+        stale.insert(
+            axum::http::header::COOKIE,
+            "monoize_session=urp_session_deadbeef"
+                .parse()
+                .expect("cookie header is valid"),
+        );
+        assert_eq!(
+            models(stale).await,
+            vec!["standard-model".to_string()],
+            "an invalid session must resolve the standard class, not error"
+        );
     }
 
     #[test]

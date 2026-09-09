@@ -236,15 +236,20 @@ export interface CreateStoreRetentionContainmentInput {
   evidence_digest: string;
 }
 
+/**
+ * SB-C-38: an adapter subject to the attestation gates MUST send every attestation field and
+ * an exempt adapter (EPay) MUST omit all of them. The server rejects a partially filled
+ * profile, so these are omitted rather than sent as empty strings.
+ */
 export interface PutStoreChannelReadinessInput {
-  privacy_record_id: string;
+  privacy_record_id?: string;
   callback_verification_passed: boolean;
   supported_currencies: StoreCurrency[];
   amount_limits: Partial<Record<StoreCurrency, StoreAmountLimit>>;
   checkout_action_kinds: StoreCheckoutActionKind[];
-  license_evidence_digest: string;
-  runtime_evidence_digest: string;
-  availability_evidence_digest: string;
+  license_evidence_digest?: string;
+  runtime_evidence_digest?: string;
+  availability_evidence_digest?: string;
   valid_for_days: number;
 }
 
