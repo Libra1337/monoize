@@ -485,26 +485,74 @@ async fn create_user_rejects_a_group_from_the_other_account_class() {
 /// index, and it must still reject a value outside the three permitted ones.
 #[tokio::test]
 async fn migration_071_admits_private_without_losing_rows_or_indexes() {
-    let db = Database::connect("sqlite::memory:")
+    // Connect through DbPool rather than a bare connection: it sets `foreign_keys(true)` on
+    // every connection, which is what production does. A bare connection leaves them off, and
+    // the rebuild then appears to work here while failing on a real database.
+    let pool = monoize::db::DbPool::connect("sqlite::memory:")
         .await
         .expect("connect SQLite");
-    Migrator::up(&db, None).await.expect("run migrations");
+    {
+        let write = pool.write().await;
+        Migrator::up(&*write, None).await.expect("run migrations");
+    }
+    let db = pool.read();
+
+    let enforced = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "PRAGMA foreign_keys".to_string(),
+        ))
+        .await
+        .expect("read the pragma")
+        .expect("the pragma returns a row");
+    assert_eq!(
+        enforced.try_get::<i32>("", "foreign_keys").unwrap(),
+        1,
+        "the rebuild must be exercised with foreign keys enforced"
+    );
 
     // Rows written before the rebuild must survive it.
+    // The user points at a Group, as every production user does. That reference is what makes
+    // rebuilding `monoize_groups` trip the constraint.
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
-        "INSERT INTO users (id, username, password_hash, role, created_at, updated_at, account_class)
-         VALUES ('survivor', 'survivor', 'hash', 'user', '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z', 'enterprise')"
+        "INSERT INTO users (id, username, password_hash, role, created_at, updated_at,
+                            account_class, group_id)
+         SELECT 'survivor', 'survivor', 'hash', 'user', '2026-09-09T00:00:00Z',
+                '2026-09-09T00:00:00Z', 'enterprise', id
+         FROM monoize_groups WHERE is_default = 1 LIMIT 1"
             .to_string(),
     ))
     .await
     .expect("seed a pre-existing user");
 
+    // `api_keys` and `sessions` reference `users` with ON DELETE CASCADE. A migration that
+    // rebuilds `users` by dropping it does not fail on these rows: it deletes them. Seeding
+    // both is what turns that silent data loss into a test failure.
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "INSERT INTO sessions (id, user_id, token, created_at, expires_at)
+         VALUES ('survivor-session', 'survivor', 'token', '2026-09-09T00:00:00Z',
+                 '2099-01-01T00:00:00Z')"
+            .to_string(),
+    ))
+    .await
+    .expect("seed a session referencing the user");
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "INSERT INTO api_keys (id, user_id, name, key_prefix, key, created_at)
+         VALUES ('survivor-key', 'survivor', 'key', 'sk-test', 'secret',
+                 '2026-09-09T00:00:00Z')"
+            .to_string(),
+    ))
+    .await
+    .expect("seed an API key referencing the user");
+
     for (table, column) in [
         ("users", "account_class"),
         ("monoize_groups", "account_class"),
     ] {
-        let columns = sqlite_columns(&db, table).await;
+        let columns = sqlite_columns(db, table).await;
         assert!(
             columns.iter().any(|(name, kind, not_null, default)| {
                 name == column
@@ -578,4 +626,40 @@ async fn migration_071_admits_private_without_losing_rows_or_indexes() {
     ))
     .await
     .expect_err("an unknown account class must still be rejected");
+
+    // The cascading children must still be there. This is the assertion that fails when the
+    // migration drops and recreates `users` instead of editing its schema in place.
+    for (table, id) in [("sessions", "survivor-session"), ("api_keys", "survivor-key")] {
+        let count = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                format!("SELECT COUNT(*) AS value FROM {table} WHERE id = '{id}'"),
+            ))
+            .await
+            .expect("count rows")
+            .expect("count returns a row")
+            .try_get::<i64>("", "value")
+            .unwrap();
+        assert_eq!(count, 1, "{table} row was destroyed by the migration");
+    }
+
+    // The constraint must still be live rather than disabled.
+    let orphans = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "PRAGMA foreign_key_check".to_string(),
+        ))
+        .await
+        .expect("run the foreign key check");
+    assert!(orphans.is_empty(), "the rebuild left dangling references");
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "INSERT INTO sessions (id, user_id, token, created_at, expires_at)
+         VALUES ('absent-user-session', 'no-such-user', 'token2', '2026-09-09T00:00:00Z',
+                 '2099-01-01T00:00:00Z')"
+            .to_string(),
+    ))
+    .await
+    .expect_err("the foreign key must still be enforced after the rebuild");
 }
+

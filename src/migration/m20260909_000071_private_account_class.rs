@@ -23,13 +23,6 @@ impl MigrationTrait for Migration {
         let tx = manager.get_connection().begin().await?;
         match backend {
             DbBackend::Sqlite => {
-                // Rewriting the stored DDL keeps every column, default, and unrelated
-                // constraint intact, which restating the schema by hand would not.
-                tx.execute(Statement::from_string(
-                    backend,
-                    "PRAGMA legacy_alter_table = ON".to_string(),
-                ))
-                .await?;
                 for (table, columns) in [
                     ("users", vec!["account_class"]),
                     ("monoize_groups", vec!["account_class"]),
@@ -40,11 +33,6 @@ impl MigrationTrait for Migration {
                 ] {
                     rebuild_sqlite_table(&tx, backend, table, &columns).await?;
                 }
-                tx.execute(Statement::from_string(
-                    backend,
-                    "PRAGMA legacy_alter_table = OFF".to_string(),
-                ))
-                .await?;
             }
             _ => {
                 for (table, column) in [
@@ -100,11 +88,6 @@ impl MigrationTrait for Migration {
         .await?;
         match backend {
             DbBackend::Sqlite => {
-                tx.execute(Statement::from_string(
-                    backend,
-                    "PRAGMA legacy_alter_table = ON".to_string(),
-                ))
-                .await?;
                 for (table, columns) in [
                     ("users", vec!["account_class"]),
                     ("monoize_groups", vec!["account_class"]),
@@ -115,11 +98,6 @@ impl MigrationTrait for Migration {
                 ] {
                     narrow_sqlite_table(&tx, backend, table, &columns).await?;
                 }
-                tx.execute(Statement::from_string(
-                    backend,
-                    "PRAGMA legacy_alter_table = OFF".to_string(),
-                ))
-                .await?;
             }
             _ => {
                 for (table, column) in [
@@ -171,10 +149,18 @@ async fn narrow_sqlite_table<C: ConnectionTrait>(
     replace_sqlite_check(tx, backend, table, columns, THREE_CLASS_CHECK, TWO_CLASS_CHECK).await
 }
 
-/// Rebuilds one SQLite table with its account-class `CHECK` text replaced.
+/// Rewrites one table's account-class `CHECK` text in place.
 ///
-/// The replacement is applied only to the named columns' constraint text, so a table whose
-/// other columns happen to contain the same literal is not altered elsewhere.
+/// The obvious approach, rebuilding the table and copying rows, cannot be used here.
+/// `api_keys` and `sessions` reference `users` with `ON DELETE CASCADE`, so the rebuild's
+/// `DROP TABLE users` does not fail: it silently deletes every API key and every session.
+/// `PRAGMA foreign_keys` is a no-op inside a transaction, and sea-orm runs each migration in
+/// one, so the constraint cannot be turned off around the rebuild either.
+///
+/// Editing `sqlite_master` under `PRAGMA writable_schema` changes only the stored DDL. No row
+/// is read, written, or deleted, no cascade fires, and every index survives. `writable_schema
+/// = RESET` then makes the connection re-read the schema, and `integrity_check` confirms the
+/// edited DDL parses.
 async fn replace_sqlite_check<C: ConnectionTrait>(
     tx: &C,
     backend: DbBackend,
@@ -193,7 +179,7 @@ async fn replace_sqlite_check<C: ConnectionTrait>(
         .ok_or_else(|| DbErr::Custom(format!("table {table} is missing")))?;
     let ddl: String = row.try_get("", "sql")?;
 
-    let mut rebuilt = ddl.clone();
+    let mut rewritten = ddl.clone();
     for column in columns {
         // The constraint text may quote the column name; the surrounding CHECK keeps the
         // match unambiguous either way.
@@ -203,64 +189,58 @@ async fn replace_sqlite_check<C: ConnectionTrait>(
         ];
         let Some((needle, replacement)) = candidates
             .iter()
-            .find(|(needle, _)| rebuilt.contains(needle.as_str()))
+            .find(|(needle, _)| rewritten.contains(needle.as_str()))
         else {
             return Err(DbErr::Custom(format!(
-                "table {table} has no account-class check for {column}: {rebuilt}"
+                "table {table} has no account-class check for {column}: {rewritten}"
             )));
         };
-        rebuilt = rebuilt.replace(needle.as_str(), replacement.as_str());
+        rewritten = rewritten.replace(needle.as_str(), replacement.as_str());
     }
-    // The stored DDL may or may not quote the table name, depending on how it was created,
-    // so both forms are tried before giving up rather than silently emitting a statement that
-    // recreates the original table.
-    let next_table = format!("{table}_account_class_next");
-    let rebuilt = {
-        let quoted = format!("CREATE TABLE \"{table}\"");
-        let bare = format!("CREATE TABLE {table}");
-        let target = format!("CREATE TABLE {next_table}");
-        if rebuilt.contains(&quoted) {
-            rebuilt.replacen(&quoted, &target, 1)
-        } else if rebuilt.contains(&bare) {
-            rebuilt.replacen(&bare, &target, 1)
-        } else {
-            return Err(DbErr::Custom(format!(
-                "table {table} has unrecognized DDL: {rebuilt}"
-            )));
-        }
-    };
+    if rewritten == ddl {
+        return Err(DbErr::Custom(format!("table {table} DDL did not change")));
+    }
 
-    let indexes = tx
-        .query_all(Statement::from_sql_and_values(
+    tx.execute(Statement::from_string(
+        backend,
+        "PRAGMA writable_schema = ON".to_string(),
+    ))
+    .await?;
+    let updated = tx
+        .execute(Statement::from_sql_and_values(
             backend,
-            "SELECT sql FROM sqlite_master
-             WHERE type = 'index' AND tbl_name = ?1 AND sql IS NOT NULL",
-            [table.into()],
+            "UPDATE sqlite_master SET sql = ?1 WHERE type = 'table' AND name = ?2",
+            [rewritten.into(), table.into()],
+        ))
+        .await;
+    // The schema must be re-read whether or not the update succeeded, or the connection is
+    // left able to write to `sqlite_master`.
+    let reset = tx
+        .execute(Statement::from_string(
+            backend,
+            "PRAGMA writable_schema = RESET".to_string(),
+        ))
+        .await;
+    let updated = updated?;
+    reset?;
+    if updated.rows_affected() != 1 {
+        return Err(DbErr::Custom(format!(
+            "table {table} schema row was not updated"
+        )));
+    }
+
+    let check = tx
+        .query_one(Statement::from_string(
+            backend,
+            "PRAGMA integrity_check".to_string(),
         ))
         .await?
-        .into_iter()
-        .map(|row| row.try_get::<String>("", "sql"))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    tx.execute(Statement::from_string(backend, rebuilt)).await?;
-    tx.execute(Statement::from_string(
-        backend,
-        format!("INSERT INTO {next_table} SELECT * FROM {table}"),
-    ))
-    .await?;
-    tx.execute(Statement::from_string(
-        backend,
-        format!("DROP TABLE {table}"),
-    ))
-    .await?;
-    tx.execute(Statement::from_string(
-        backend,
-        format!("ALTER TABLE {next_table} RENAME TO {table}"),
-    ))
-    .await?;
-    // Dropping the table dropped its indexes, so they are recreated from their stored DDL.
-    for index in indexes {
-        tx.execute(Statement::from_string(backend, index)).await?;
+        .ok_or_else(|| DbErr::Custom("integrity_check returned no row".to_string()))?;
+    let result: String = check.try_get("", "integrity_check")?;
+    if result != "ok" {
+        return Err(DbErr::Custom(format!(
+            "schema edit left the database inconsistent: {result}"
+        )));
     }
     Ok(())
 }
