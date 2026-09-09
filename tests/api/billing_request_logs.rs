@@ -1598,6 +1598,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
                 max_input_tokens: None,
                 max_output_tokens: None,
                 max_tokens: None,
+                price_currency: Some("USD".to_string()),
             },
         )
         .await
@@ -1754,6 +1755,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
                 max_input_tokens: None,
                 max_output_tokens: None,
                 max_tokens: None,
+                price_currency: Some("USD".to_string()),
             },
         )
         .await

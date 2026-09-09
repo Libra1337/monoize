@@ -301,9 +301,19 @@ M3. Table MUST contain at least:
 - `max_tokens: INTEGER NULL`
 - `raw_json: TEXT`
 - `source: TEXT`
+- `price_currency: TEXT NOT NULL`
 - `updated_at: TEXT`
 
-M4. Price fields in this table MUST use nano-dollar integer strings.
+M4. Price fields in this table MUST use nano-unit integer strings, denominated in the row's
+`price_currency`. A nano-unit is one billionth of one unit of that currency.
+
+M4a. `price_currency` MUST equal `"CNY"` or `"USD"`. It applies to every price field of the
+row. One row MUST NOT mix currencies across its price fields.
+
+M4b. A row written by Models.dev sync MUST use `price_currency = "USD"`, because S4 prices
+are USD. A row created by an admin manual edit MUST default to `price_currency = "CNY"`. An
+update that omits the currency MUST preserve the stored value, so that editing a
+non-price field of a USD row cannot silently redenominate its prices.
 
 ## 8. Models.dev sync
 
@@ -315,7 +325,8 @@ S2. The response is a JSON object keyed by provider ID, each containing a `model
 
 S3. For each `provider/model` pair, sync MUST normalize the upstream model name to the canonical bare `model_id` used by billing lookups (for example `"openai/gpt-4o"` stores as `"gpt-4o"`). The source provider identity for the chosen sync variant MUST be stored separately in `models_dev_provider`.
 
-S4. Cost fields in models.dev are denominated in USD per 1M tokens. Conversion to nano-dollar per token:
+S4. Cost fields in models.dev are denominated in USD per 1M tokens. A synced row therefore
+MUST record `price_currency = "USD"` under M4b. Conversion to nano-unit per token:
 
 ```
 nano_per_token = trunc(cost_per_1m * 1_000_000_000 / 1_000_000) = trunc(cost_per_1m * 1000)

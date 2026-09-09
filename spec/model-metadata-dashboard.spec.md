@@ -39,7 +39,13 @@ MD3. `source` column distinguishes record origin:
 | `models_dev` | Populated or last updated by Models.dev sync |
 | `manual` | Created or last updated by admin manual edit |
 
-MD4. All pricing fields are nano-dollar integer strings (same precision as billing spec).
+MD4. All pricing fields are nano-unit integer strings (same precision as the billing spec),
+denominated in the row's `price_currency` as defined by
+`user-billing-and-model-metadata.spec.md` M4 and M4a.
+
+MD4a. `price_currency` MUST equal `"CNY"` or `"USD"`. A row created by manual edit MUST
+default to `"CNY"`; a row written by Models.dev sync MUST use `"USD"`. An update that omits
+the field MUST preserve the stored value.
 
 MD5. `raw_json` stores all provider variants from models.dev as `{ "providers": { "openai": {...}, "azure": {...}, ... } }`. Every value inside a variant's `cost` object MUST be stored and returned as its exact decimal string rather than a JSON number. This enables the edit UI to switch pricing source without JavaScript binary-floating-point conversion.
 
@@ -49,11 +55,22 @@ MD7. Billing computation MUST NOT read model pricing directly from `model_metada
 
 MD8. When a model metadata row is created, updated, or synced with token prices, the server MUST mirror the present token prices into `billing_rate_records` rows whose `source` identifies the metadata origin.
 
-MD8a. A mirrored `billing_rate_records` row MUST set `unit_price_currency = "USD"`, because MD4 metadata prices are nano-USD. The mirror MUST NOT inherit the CNY default of the dashboard billing-rate API.
+MD8a. A mirrored `billing_rate_records` row MUST set `unit_price_currency` to the
+`price_currency` of the metadata row it mirrors. The mirror carries the price unchanged, so
+it MUST carry the same denomination; it MUST NOT substitute a fixed currency and MUST NOT
+inherit the default of the dashboard billing-rate API.
 
 MD9. Every non-null metadata price and every billing-rate `unit_price_nano` MUST be a canonical non-negative integer string. A negative, signed-plus, fractional, exponent, or out-of-range value MUST be rejected with `400 invalid_request`.
 
-MD10. Models.dev decimal USD-per-million prices MUST be parsed directly from their JSON decimal token. The conversion to nano-USD per token is `trunc(price_usd_per_million * 1000)`. This conversion MUST NOT pass through `f32` or `f64`. For example, `1.001` MUST become `"1001"`.
+MD10. Models.dev decimal USD-per-million prices MUST be parsed directly from their JSON decimal token. The conversion to nano-unit per token is `trunc(price_usd_per_million * 1000)`. This conversion MUST NOT pass through `f32` or `f64`. For example, `1.001` MUST become `"1001"`. The synced row records `price_currency = "USD"` under MD4a, so the number is not converted between currencies at sync time.
+
+MD10a. Migration `m20260909_000067_model_metadata_price_currency` MUST add
+`price_currency` to `model_metadata_records` with a `CHECK` constraint admitting only `CNY`
+and `USD`, set it to `"CNY"` for every row whose `source = "manual"`, and set it to
+`"USD"` for every other row. It MUST then set `unit_price_currency` on every
+`billing_rate_records` row whose `id` matches `model_metadata:{model_id}:{usage_class}` to
+the `price_currency` of that `model_id`, so that MD8a holds for rows mirrored before this
+migration. It MUST NOT change any `unit_price_nano` or metadata price digit.
 
 ## 2. Sync Priority & Merge
 
@@ -196,8 +213,8 @@ UI5. Default display MUST be a compact virtualized table (`TableVirtuoso`) with 
 | Column | Content |
 |--------|---------|
 | Model | Provider icon (from `models_dev_provider`) + `model_id` (bare name) |
-| Input | `input_cost_per_token_nano` formatted as `$X.XX / 1M tokens` |
-| Output | `output_cost_per_token_nano` formatted as `$X.XX / 1M tokens` |
+| Input | `input_cost_per_token_nano` under the row's `price_currency` symbol |
+| Output | `output_cost_per_token_nano` under the row's `price_currency` symbol |
 | Context | `max_tokens` formatted with `K` suffix |
 | Source | Badge showing `models_dev` or `manual` |
 | Updated | Relative timestamp |
@@ -206,11 +223,14 @@ UI5.1. In the Model column badge, GLM-series icon compatibility MUST follow `das
 
 UI6. Each row MUST be clickable to open an edit dialog.
 
-UI7. Price display: `nano_per_token / 1000` = dollars per 1M tokens. Display up to 4 decimal places.
+UI7. Price display: `nano_per_token / 1000` = currency units per 1M tokens. Display up to 4
+decimal places. The prefix MUST be `¥` when the row's `price_currency` is `CNY` and `$` when
+it is `USD`. The page MUST NOT apply an exchange rate to a metadata price: the number shown
+is the stored number, under its own currency.
 
 UI7a. Model Database and Billing Profiles MUST keep nano-unit prices and per-million form values as decimal strings. Conversion, provider switching, form editing, validation, and API serialization MUST NOT pass a price through JavaScript `Number`, `parseFloat`, `toFixed`, or binary floating-point arithmetic.
 
-UI7b. Converting a per-million input to a nano-unit price per token MUST compute `trunc(input * 1000)` with decimal-string arithmetic. A negative or syntactically invalid input MUST be blocked before the mutation request. For example, `1.001` MUST serialize as `"1001"` and round-trip back to `1.001`. This conversion is currency-independent: it applies to a USD-per-million metadata input and to a CNY-per-million billing-rate input identically.
+UI7b. Converting a per-million input to a nano-unit price per token MUST compute `trunc(input * 1000)` with decimal-string arithmetic. A negative or syntactically invalid input MUST be blocked before the mutation request. For example, `1.001` MUST serialize as `"1001"` and round-trip back to `1.001`. This conversion is currency-independent: it applies to a CNY-per-million and to a USD-per-million input identically.
 
 ### 4.4 Search and filter
 
@@ -223,6 +243,13 @@ UI9. When `raw_json.providers` contains multiple entries, the edit dialog MUST s
 UI10. Selecting a provider MUST auto-fill all pricing and limit fields from that provider's data in `raw_json.providers[provider]`.
 
 UI11. The user MAY further edit the auto-filled values. Any save always sets `source = 'manual'`.
+
+UI11a. The edit dialog MUST expose the row's `price_currency` as a `CNY`/`USD` control and
+MUST send it with the save. A create dialog MUST preselect `CNY`. An edit dialog MUST
+preselect the stored value. Because UI10 auto-fills from Models.dev USD data, selecting a
+provider MUST also set the control to `USD`, so that auto-filled USD numbers are not saved
+under a CNY label. The per-million values shown beside each provider option in the selector
+MUST carry the `$` prefix, since `raw_json` prices are always USD.
 
 ### 4.6 Actions
 

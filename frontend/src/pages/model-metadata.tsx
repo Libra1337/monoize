@@ -80,9 +80,9 @@ import {
   perMillionToNanoPerToken,
 } from "@/lib/exact-decimal";
 
-// MD4: model-metadata prices stay nano-USD, so this tab keeps the USD symbol.
-function nanoToPerMillion(nano?: string | null): string {
-  const formatted = formatNanoPerTokenPerMillion(nano, "USD");
+// UI7: a metadata price renders under its own row currency, with no exchange rate applied.
+function nanoToPerMillion(nano?: string | null, currency: RateCurrency = "USD"): string {
+  const formatted = formatNanoPerTokenPerMillion(nano, currency);
   return formatted === "—" ? "-" : formatted;
 }
 
@@ -128,6 +128,7 @@ interface EditFormData {
   maxInputTokens: string;
   maxOutputTokens: string;
   maxTokens: string;
+  priceCurrency: RateCurrency;
 }
 
 const emptyForm: EditFormData = {
@@ -142,6 +143,8 @@ const emptyForm: EditFormData = {
   maxInputTokens: "",
   maxOutputTokens: "",
   maxTokens: "",
+  // UI11a: a model priced by hand is priced in CNY.
+  priceCurrency: "CNY",
 };
 
 function recordToForm(r: ModelMetadataRecord): EditFormData {
@@ -157,6 +160,7 @@ function recordToForm(r: ModelMetadataRecord): EditFormData {
     maxInputTokens: r.max_input_tokens?.toString() ?? "",
     maxOutputTokens: r.max_output_tokens?.toString() ?? "",
     maxTokens: r.max_tokens?.toString() ?? "",
+    priceCurrency: r.price_currency,
   };
 }
 
@@ -172,6 +176,7 @@ function formToInput(form: EditFormData): UpsertModelMetadataInput {
     max_input_tokens: form.maxInputTokens ? Number(form.maxInputTokens) : null,
     max_output_tokens: form.maxOutputTokens ? Number(form.maxOutputTokens) : null,
     max_tokens: form.maxTokens ? Number(form.maxTokens) : null,
+    price_currency: form.priceCurrency,
   };
 }
 
@@ -216,9 +221,12 @@ function extractProviderVariants(rawJson: Record<string, unknown>): ProviderVari
   return result.sort((a, b) => a.provider.localeCompare(b.provider));
 }
 
+// UI11a: the auto-filled numbers come from Models.dev `raw_json`, which is USD, so selecting
+// a provider must move the currency with them. Leaving it on CNY would relabel a USD price.
 function applyVariantToForm(form: EditFormData, variant: ProviderVariant): EditFormData {
   return {
     ...form,
+    priceCurrency: "USD",
     modelsDevProvider: variant.provider,
     inputCostPerM: variant.inputCostPerM,
     outputCostPerM: variant.outputCostPerM,
@@ -409,6 +417,19 @@ export function ModelMetadataPage() {
           </div>
           <div className="space-y-1">
             <Label className="text-muted-foreground text-xs">{t("modelMetadata.pricing")}</Label>
+            <div className="space-y-1">
+              <Label className="text-xs">{t("modelMetadata.priceCurrency", "Price currency")}</Label>
+              <Select
+                value={form.priceCurrency}
+                onValueChange={(value) => setForm({ ...form, priceCurrency: value as RateCurrency })}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="CNY">{t("modelMetadata.currencyCny", "CNY per 1M tokens")}</SelectItem>
+                  <SelectItem value="USD">{t("modelMetadata.currencyUsd", "USD per 1M tokens")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs">{t("modelMetadata.inputCost")}</Label>
@@ -672,13 +693,13 @@ export function ModelMetadataPage() {
                       className="font-mono text-xs"
                       onClick={() => openEdit(record)}
                     >
-                      {nanoToPerMillion(record.input_cost_per_token_nano)}
+                      {nanoToPerMillion(record.input_cost_per_token_nano, record.price_currency)}
                     </VirtualTableCell>
                     <VirtualTableCell
                       className="font-mono text-xs"
                       onClick={() => openEdit(record)}
                     >
-                      {nanoToPerMillion(record.output_cost_per_token_nano)}
+                      {nanoToPerMillion(record.output_cost_per_token_nano, record.price_currency)}
                     </VirtualTableCell>
                     <VirtualTableCell
                       className="font-mono text-xs"

@@ -74,6 +74,8 @@ pub struct DbModelMetadataRecord {
     pub max_tokens: Option<i64>,
     pub raw_json: Value,
     pub source: String,
+    /// Currency of every price field on this row (M4a): `CNY` or `USD`.
+    pub price_currency: String,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -108,6 +110,9 @@ pub struct UpsertModelMetadataInput {
     pub max_output_tokens: Option<Option<i64>>,
     #[serde(default, deserialize_with = "deserialize_nullable_field")]
     pub max_tokens: Option<Option<i64>>,
+    /// M4b: absent means keep the stored currency, or `CNY` when creating a row.
+    #[serde(default)]
+    pub price_currency: Option<String>,
 }
 
 fn deserialize_nullable_field<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
@@ -394,7 +399,7 @@ impl ModelRegistryStore {
                         output_cost_per_token_nano, cache_read_input_cost_per_token_nano,
                         cache_creation_input_cost_per_token_nano,
                         output_cost_per_reasoning_token_nano, max_input_tokens, max_output_tokens,
-                        max_tokens, raw_json, source, updated_at
+                        max_tokens, raw_json, source, price_currency, updated_at
                  FROM model_metadata_records
                  ORDER BY model_id ASC",
                 vec![],
@@ -449,7 +454,7 @@ impl ModelRegistryStore {
                         output_cost_per_token_nano, cache_read_input_cost_per_token_nano,
                         cache_creation_input_cost_per_token_nano,
                         output_cost_per_reasoning_token_nano, max_input_tokens, max_output_tokens,
-                        max_tokens, raw_json, source, updated_at
+                        max_tokens, raw_json, source, price_currency, updated_at
                  FROM model_metadata_records
                  WHERE model_id = $1",
                 vec![model_id.into()],
@@ -578,6 +583,11 @@ impl ModelRegistryStore {
             "output_cost_per_reasoning_token_nano",
             input.output_cost_per_reasoning_token_nano.as_ref(),
         )?;
+        if let Some(currency) = input.price_currency.as_deref()
+            && !matches!(currency, "CNY" | "USD")
+        {
+            return Err("price_currency must be CNY or USD".to_string());
+        }
 
         let now = Utc::now().to_rfc3339();
         let write_guard = self.db.write().await;
@@ -643,13 +653,21 @@ impl ModelRegistryStore {
             input.max_tokens,
             existing.as_ref().and_then(|record| record.max_tokens),
         );
+        // M4b: an omitted currency preserves the stored one, so editing a non-price field of a
+        // USD row cannot redenominate its prices. A new row defaults to CNY.
+        let price_currency = input.price_currency.unwrap_or_else(|| {
+            existing
+                .as_ref()
+                .map(|record| record.price_currency.clone())
+                .unwrap_or_else(|| "CNY".to_string())
+        });
 
         txn.execute(self.db.stmt(
                 "INSERT INTO model_metadata_records
                  (model_id, models_dev_provider, mode, input_cost_per_token_nano, output_cost_per_token_nano,
                   cache_read_input_cost_per_token_nano, cache_creation_input_cost_per_token_nano, output_cost_per_reasoning_token_nano,
-                  max_input_tokens, max_output_tokens, max_tokens, raw_json, source, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, '{}', 'manual', $12)
+                  max_input_tokens, max_output_tokens, max_tokens, raw_json, source, price_currency, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, '{}', 'manual', $12, $13)
                  ON CONFLICT(model_id) DO UPDATE SET
                    models_dev_provider = excluded.models_dev_provider,
                    mode = excluded.mode,
@@ -662,6 +680,7 @@ impl ModelRegistryStore {
                    max_output_tokens = excluded.max_output_tokens,
                    max_tokens = excluded.max_tokens,
                    source = 'manual',
+                   price_currency = excluded.price_currency,
                    updated_at = excluded.updated_at",
                 vec![
                     model_id.into(),
@@ -675,6 +694,7 @@ impl ModelRegistryStore {
                     max_input_tokens.into(),
                     max_output_tokens.into(),
                     max_tokens.into(),
+                    price_currency.into(),
                     now.into(),
                 ],
             ))
@@ -917,6 +937,8 @@ impl ModelRegistryStore {
                     .map(|index| format!("${index}"))
                     .collect::<Vec<_>>();
                 placeholders.push("'models_dev'".to_string());
+                // M4b/S4: Models.dev quotes USD, so a synced row is always USD.
+                placeholders.push("'USD'".to_string());
                 placeholders.push(format!("${}", start + 12));
                 rows.push(format!("({})", placeholders.join(", ")));
             }
@@ -927,7 +949,8 @@ impl ModelRegistryStore {
                       output_cost_per_token_nano, cache_read_input_cost_per_token_nano,
                       cache_creation_input_cost_per_token_nano,
                       output_cost_per_reasoning_token_nano, max_input_tokens,
-                      max_output_tokens, max_tokens, raw_json, source, updated_at)
+                      max_output_tokens, max_tokens, raw_json, source, price_currency,
+                      updated_at)
                      VALUES {}
                      ON CONFLICT(model_id) DO UPDATE SET
                        models_dev_provider=excluded.models_dev_provider,
@@ -942,6 +965,7 @@ impl ModelRegistryStore {
                        max_tokens=excluded.max_tokens,
                        raw_json=excluded.raw_json,
                        source=excluded.source,
+                       price_currency=excluded.price_currency,
                        updated_at=excluded.updated_at",
                     rows.join(", ")
                 ),
@@ -1025,7 +1049,8 @@ const fn marketplace_model_metadata_sql() -> &'static str {
             m.cache_read_input_cost_per_token_nano,
             m.cache_creation_input_cost_per_token_nano,
             m.output_cost_per_reasoning_token_nano, m.max_input_tokens,
-            m.max_output_tokens, m.max_tokens, m.raw_json, m.source, m.updated_at
+            m.max_output_tokens, m.max_tokens, m.raw_json, m.source, m.price_currency,
+            m.updated_at
      FROM model_metadata_records AS m
      INNER JOIN monoize_provider_models AS pm ON pm.model_name = m.model_id
      INNER JOIN monoize_providers AS p ON p.id = pm.provider_id
@@ -1107,6 +1132,9 @@ fn row_to_model_metadata(row: &sea_orm::QueryResult) -> Result<DbModelMetadataRe
         max_tokens: row.try_get("", "max_tokens").map_err(|e| e.to_string())?,
         raw_json,
         source: row.try_get("", "source").map_err(|e| e.to_string())?,
+        price_currency: row
+            .try_get("", "price_currency")
+            .map_err(|e| e.to_string())?,
         updated_at,
     })
 }
@@ -1124,7 +1152,7 @@ async fn get_model_metadata_with<C: ConnectionTrait>(
                     output_cost_per_token_nano, cache_read_input_cost_per_token_nano,
                     cache_creation_input_cost_per_token_nano,
                     output_cost_per_reasoning_token_nano, max_input_tokens, max_output_tokens,
-                    max_tokens, raw_json, source, updated_at
+                    max_tokens, raw_json, source, price_currency, updated_at
              FROM model_metadata_records
              WHERE model_id = $1{lock_suffix}"
             ),
@@ -1229,7 +1257,7 @@ async fn upsert_model_metadata_billing_rates(
                  (id, source, pricing_profile, model_pattern, provider_type, rate_kind, usage_class,
                   unit, unit_price_nano, unit_price_currency, match_json, priority, enabled,
                   raw_json, updated_at)
-                 VALUES ($1, $2, $3, $4, NULL, 'token', $5, 'token', $6, 'USD', '{}', 0, 1, $7, $8)
+                 VALUES ($1, $2, $3, $4, NULL, 'token', $5, 'token', $6, $7, '{}', 0, 1, $8, $9)
                  ON CONFLICT(id) DO UPDATE SET
                    source = excluded.source,
                    pricing_profile = excluded.pricing_profile,
@@ -1246,6 +1274,8 @@ async fn upsert_model_metadata_billing_rates(
                     record.model_id.clone().into(),
                     usage_class.into(),
                     price.clone().into(),
+                    // MD8a: the mirror copies the digits, so it must copy the denomination.
+                    record.price_currency.clone().into(),
                     serde_json::json!({ "source": "model_metadata_records" })
                         .to_string()
                         .into(),

@@ -145,10 +145,30 @@ DL5. Sidebar main navigation (always visible to authenticated users) MUST includ
 - `/dashboard/marketplace`
 - `/dashboard/api-docs`
 - `/dashboard/store`
+- `/dashboard/wallet`
 - `/dashboard/orders`
 
 DL5a. `/dashboard/logs` MUST retain the existing request-log page. Usage Analysis MUST NOT
 replace, mount, or redirect that route.
+
+DL5c. When the authenticated user's `account_class` is `enterprise`, the sidebar main
+navigation MUST instead include exactly:
+
+- `/dashboard/wallet`
+- `/dashboard/store`
+- `/dashboard/orders`
+- `/dashboard/tokens`
+- `/dashboard/usage`
+- `/dashboard/logs`
+- `/dashboard/marketplace`
+- `/dashboard/api-docs`
+
+This set omits the standard-user overview and playground entries. It MUST retain
+`/dashboard/store` and `/dashboard/orders`: Store checkout is not restricted by account
+class, no clause of `store-billing.spec.md` excludes an enterprise caller, and
+`api-token-management.spec.md` TM-ENT4 requires an account-class change to preserve orders
+and redemption history. Omitting them leaves an enterprise user with no self-service way to
+add balance.
 
 DL5b. The expanded, collapsed, and mobile sidebar brand link MUST target `/`. The mobile
 brand link MUST invoke the existing navigation-close callback.

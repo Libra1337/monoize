@@ -5294,6 +5294,7 @@ async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&s
                     max_input_tokens: None,
                     max_output_tokens: None,
                     max_tokens: None,
+                    price_currency: Some("USD".to_string()),
                 },
             )
             .await

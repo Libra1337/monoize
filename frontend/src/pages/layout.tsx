@@ -148,8 +148,13 @@ function Sidebar({
     { to: "/dashboard/orders", icon: ReceiptText, label: t("nav.orders") },
   ];
 
+  // DL5c: a concise Enterprise set that still reaches Store and Orders. Store checkout is not
+  // scoped by account class, so omitting them left an Enterprise user with no self-service
+  // way to add balance.
   const enterpriseNavItems = [
     { to: "/dashboard/wallet", icon: WalletCards, label: t("nav.wallet") },
+    { to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") },
+    { to: "/dashboard/orders", icon: ReceiptText, label: t("nav.orders") },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },

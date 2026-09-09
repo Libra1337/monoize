@@ -65,9 +65,16 @@ MB-D3c. Write-path currency defaults are:
 - A rate written through the dashboard billing-rate API or the billing-profile editor MUST default to `unit_price_currency = "CNY"` when the request omits the field. The dashboard price form is denominated in CNY per 1,000,000 tokens.
 - An update that omits `unit_price_currency` for an existing row MUST preserve the stored currency. An omitted field MUST NOT re-denominate a stored price.
 
-MB-D3d. A rate row mirrored from `model_metadata_records` has `id` of the form `model_metadata:{model_id}:{usage_class}` and MUST use `unit_price_currency = "USD"`, even when its `source` is `manual`. Its price originates from the nano-USD metadata fields of `model-metadata-dashboard.spec.md` MD4, not from a CNY price form.
+MB-D3d. A rate row mirrored from `model_metadata_records` has `id` of the form `model_metadata:{model_id}:{usage_class}` and MUST use the `price_currency` of the metadata row it mirrors, as required by `model-metadata-dashboard.spec.md` MD8a. The mirror copies the price digits unchanged, so it MUST copy the denomination with them. A metadata row synced from Models.dev is USD and mirrors as USD; a manually priced metadata row is CNY by default and mirrors as CNY.
 
 MB-D3e. Migration `m20260909_000066_billing_rate_currency` MUST rename `unit_price_nano_usd` to `unit_price_nano`, add `unit_price_currency` with the MB-D3b `CHECK` constraint and default `USD`, and then set `unit_price_currency = "CNY"` for exactly the rows where `source = "manual"` and `id` does not start with `model_metadata:`. It MUST NOT change any `unit_price_nano` value and MUST NOT apply an exchange rate: a pre-migration manual price of `9000` MUST become `9000` CNY, not a converted value. The migration MUST preserve the `idx_billing_rate_records_lookup` index of migration `m20260619_000019_billing_rate_records`.
+
+MB-D3f. Migration `m20260909_000067_model_metadata_price_currency` MUST then relabel the
+mirrored rows that MB-D3e deliberately left as `USD`, setting each to the `price_currency`
+of its metadata row per `model-metadata-dashboard.spec.md` MD10a. MB-D3e excluded them
+because the metadata layer carried no currency at that time; MD4 now denominates each
+metadata row explicitly, so the mirror follows it. This migration MUST NOT change any
+`unit_price_nano` value and MUST NOT apply an exchange rate.
 
 MB-D4. `match_json` and `raw_json` MUST be JSON object strings. Decoding a persisted value that is malformed JSON or is not a JSON object MUST return a storage error that identifies the billing-rate row and column. A get, list, or matching-rate query MUST propagate that error; it MUST NOT replace the value with `{}`, omit the row, or treat the row as an unconditional rate. Create, update, and catalog-sync paths MUST reject an explicit non-object value before persistence. An omitted value MAY default to `{}` before persistence.
 

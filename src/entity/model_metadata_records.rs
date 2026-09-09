@@ -27,6 +27,9 @@ pub struct Model {
     pub raw_json: String,
     #[sea_orm(column_type = "Text")]
     pub source: String,
+    /// Currency of every price field on this row (M4a): `CNY` or `USD`.
+    #[sea_orm(column_type = "Text")]
+    pub price_currency: String,
     #[sea_orm(column_type = "Text")]
     pub updated_at: String,
 }

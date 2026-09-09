@@ -87,15 +87,32 @@ describe("Enterprise administration", () => {
 });
 
 describe("Enterprise navigation", () => {
-  test("keeps only the approved concise Enterprise destinations", () => {
+  // DL5c: assert against the Enterprise array itself. A whole-file `toContain` cannot tell
+  // the two navigation sets apart, because every Enterprise route also appears in the
+  // standard one, so it would pass even if Store were missing from Enterprise.
+  test("keeps the approved concise Enterprise destinations, including Store", () => {
     expect(layoutSource).toContain("enterpriseNavItems");
     expect(layoutSource).toContain('user?.account_class === "enterprise"');
-    expect(layoutSource).toContain('to: "/dashboard/wallet"');
-    expect(layoutSource).toContain('to: "/dashboard/tokens"');
-    expect(layoutSource).toContain('to: "/dashboard/usage"');
-    expect(layoutSource).toContain('to: "/dashboard/logs"');
-    expect(layoutSource).toContain('to: "/dashboard/marketplace"');
-    expect(layoutSource).toContain('to: "/dashboard/api-docs"');
+
+    const start = layoutSource.indexOf("const enterpriseNavItems = [");
+    expect(start).toBeGreaterThan(-1);
+    const block = layoutSource.slice(start, layoutSource.indexOf("];", start));
+    const routes = [...block.matchAll(/to: "([^"]+)"/g)].map((match) => match[1]);
+
+    expect(routes).toEqual([
+      "/dashboard/wallet",
+      "/dashboard/store",
+      "/dashboard/orders",
+      "/dashboard/tokens",
+      "/dashboard/usage",
+      "/dashboard/logs",
+      "/dashboard/marketplace",
+      "/dashboard/api-docs",
+    ]);
+    // Store checkout is the only self-service way to add balance, so it must stay reachable.
+    expect(routes).toContain("/dashboard/store");
+    expect(routes).not.toContain("/dashboard/playground");
+    expect(routes).not.toContain("/dashboard/usage-ranking");
   });
 
   test("ships class labels and destructive warnings in all locales", () => {

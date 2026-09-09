@@ -535,6 +535,8 @@ export interface ModelMetadataRecord {
   max_tokens?: number;
   raw_json: Record<string, unknown>;
   source: string;
+  /** Currency of every price field on this row (M4a). */
+  price_currency: RateCurrency;
   updated_at: string;
 }
 
@@ -549,6 +551,8 @@ export interface UpsertModelMetadataInput {
   max_input_tokens?: number | null;
   max_output_tokens?: number | null;
   max_tokens?: number | null;
+  /** M4b: omit to keep the stored currency; a new row defaults to CNY. */
+  price_currency?: RateCurrency;
 }
 
 export interface ModelMetadataSyncResult {

@@ -871,6 +871,7 @@ async fn seed_model_pricing(state: &AppState, model: &str) {
                 max_input_tokens: None,
                 max_output_tokens: None,
                 max_tokens: None,
+                price_currency: Some("USD".to_string()),
             },
         )
         .await
@@ -2418,6 +2419,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
                 max_input_tokens: None,
                 max_output_tokens: None,
                 max_tokens: None,
+                price_currency: Some("USD".to_string()),
             },
         )
         .await
@@ -2438,6 +2440,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
                 max_input_tokens: None,
                 max_output_tokens: None,
                 max_tokens: None,
+                price_currency: Some("USD".to_string()),
             },
         )
         .await
@@ -2552,6 +2555,7 @@ async fn build_monoize_attempts_does_not_use_metadata_pricing_profile_fallback()
                 max_input_tokens: None,
                 max_output_tokens: None,
                 max_tokens: None,
+                price_currency: Some("USD".to_string()),
             },
         )
         .await

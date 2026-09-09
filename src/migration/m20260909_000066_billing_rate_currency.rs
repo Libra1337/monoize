@@ -14,8 +14,11 @@ const MANUAL_SOURCE: &str = "manual";
 /// Id prefix of a rate mirrored from `model_metadata_records`.
 ///
 /// A mirror row inherits the metadata row's `source`, so it reads as `manual` after an Admin
-/// edits the metadata. Its price is still nano-USD from the Models.dev catalogue, so it is
-/// excluded from the CNY re-labelling (MB-D3d).
+/// edits the metadata. At this migration the metadata layer carried no currency of its own,
+/// so `manual` could not distinguish an operator-priced row from an edited Models.dev row and
+/// relabelling here risked multiplying a USD catalogue price by the exchange rate. These rows
+/// are therefore left as USD; migration 067 adds `model_metadata_records.price_currency` and
+/// relabels each mirror to follow its own metadata row (MB-D3f).
 const METADATA_MIRROR_ID_PREFIX: &str = "model_metadata:";
 
 #[async_trait::async_trait]
@@ -148,9 +151,10 @@ mod tests {
     /// MB-D3e: a manual rate keeps its exact number and becomes CNY. An ingested rate keeps
     /// its number and stays USD. No exchange rate is applied to either.
     ///
-    /// MB-D3d: a `model_metadata:` mirror row reads as `manual` once an Admin edits the
-    /// metadata, but its price came from the Models.dev USD catalogue, so re-labelling it
-    /// would silently multiply the operator's price by the exchange rate.
+    /// A `model_metadata:` mirror row reads as `manual` once an Admin edits the metadata, and
+    /// at this migration nothing distinguished an operator-priced row from an edited USD
+    /// catalogue row, so mirrors stay USD here and migration 067 relabels them from the
+    /// metadata currency it introduces.
     #[tokio::test]
     async fn manual_rates_become_cny_at_the_same_number() {
         let db = database_before_066().await;

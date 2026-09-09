@@ -1051,6 +1051,12 @@ export async function upsertModelMetadataOptimistic(
     max_input_tokens: input.max_input_tokens ?? undefined,
     max_output_tokens: input.max_output_tokens ?? undefined,
     max_tokens: input.max_tokens ?? undefined,
+    // M4b: an omitted currency keeps the stored one, or defaults to CNY for a new row, which
+    // is what the server does, so the optimistic row must not guess differently.
+    price_currency:
+      input.price_currency
+      ?? currentRecords.find((record) => record.model_id === modelId)?.price_currency
+      ?? "CNY",
   };
   const exists = currentRecords.some((r) => r.model_id === modelId);
   const optimistic = exists
