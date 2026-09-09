@@ -61,6 +61,20 @@ description: 認証・ルーティング・課金・ストリーミングの一�
 
 ## プロトコル変換に関する質問
 
+### `400 invalid_request` が `does not support thinking.type=adaptive` を返す
+
+完全なメッセージは `Messages model <名称> does not support thinking.type=adaptive` です。Monoize は送信前にエンコード済みの Messages リクエストを検証します。このエラーを返し、上流を呼び出しません。
+
+Claude Code は `/v1/messages` リクエストで `thinking: { "type": "adaptive" }` を送信します。Monoize は `messages` 上流向けにそのオブジェクトを保持します。上流のモデル名は adaptive 対応の Claude モデルを示す必要があります。小文字化した名前が `claude` を含むか、`opus-`、`sonnet-`、`haiku-` で始まる必要があります。`DeepSeek/DeepSeek-V4-Pro` のような名前はこの条件を満たさないため、検証はリクエストを拒否します。
+
+次のいずれかの方法で修正します。
+
+1. **そのモデルを Chat Completions で送信する。** Channel のタイプを `chat_completion` に設定します。または Provider に **API タイプオーバーライド** のルールを追加し、そのモデルパターンを `chat_completion` にマッピングします。ルールのパターンはクライアントが送信した論理モデル名に一致します。`redirect` 先には一致しません。Monoize は上流モデルファミリーの推論制御フィールドをエンコードします。
+2. **Claude のモデル名は Claude モデルにのみリダイレクトする。** Channel のモデルマッピングを確認します。adaptive 対応の Claude 名を別のモデルファミリーへ `redirect` すると、クライアントの Claude 固有の制御フィールドがリクエストに残ります。[Provider と Channel](/ja/docs/dashboard/providers-and-channels) を参照してください。
+3. **クライアントで拡張思考を無効にする。** `thinking` オブジェクトを含まないリクエストは、Claude 以外のモデルでも検証を通過します。`thinking.type=disabled` を含むリクエストも通過します。
+
+対称のケースは `does not support thinking.type=enabled; use adaptive` を返します。クライアントが手動の `budget_tokens` を送信し、上流モデルが Opus 4.7 以降、Sonnet 5 以降、Fable 5、または Mythos 5 の場合に発生します。修正方法は同じです。
+
 ### 変換後に推論内容が消える
 
 一部の上流は非標準フィールドで推論内容を返します。推論系の変換ルールで復元または整形します。[変換ルール](/ja/docs/transforms)から始めてください。
