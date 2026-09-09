@@ -23,7 +23,8 @@ export interface MarketplaceResponse {
 export interface MarketplaceOfferRate {
   usage_class: string;
   unit: string;
-  display_rate_nano_usd: string;
+  /** Nano-CNY per unit, already normalized by the server (MM-P2a). */
+  display_rate_nano: string;
   context_tier: string | null;
   service_tier: string | null;
   modality: string | null;

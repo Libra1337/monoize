@@ -84,7 +84,9 @@ struct RateRange {
 struct PublicRate {
     usage_class: String,
     unit: String,
-    display_rate_nano_usd: String,
+    /// Nano-Coin per unit. CN-3 fixes `1 C = 1 CNY`, so a CNY-basis rate passes through and a
+    /// USD-basis rate is converted once here, at the display boundary.
+    display_rate_nano: String,
     context_tier: Option<String>,
     service_tier: Option<String>,
     modality: Option<String>,
@@ -333,13 +335,21 @@ fn now_string() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true)
 }
 
-fn multiplier_decimal(multiplier: &Multiplier, base: &str) -> Option<String> {
+/// MM-P2: `base * multiplier * currency_factor` in one exact-decimal expression.
+///
+/// The two factors are applied together so the published rate is rounded at most once, at the
+/// final display unit.
+fn multiplier_decimal_scaled(
+    multiplier: &Multiplier,
+    base: &str,
+    scale: Decimal,
+) -> Option<String> {
     let base = Decimal::from_str(base).ok()?;
     let multiplier = Decimal::from_str(&multiplier.to_string()).ok()?;
-    if base.is_sign_negative() || multiplier.is_sign_negative() {
+    if base.is_sign_negative() || multiplier.is_sign_negative() || scale.is_sign_negative() {
         return None;
     }
-    Some((base * multiplier).normalize().to_string())
+    Some((base * multiplier * scale).normalize().to_string())
 }
 
 async fn model_rates(
@@ -349,6 +359,7 @@ async fn model_rates(
     provider_type: &str,
     pricing_profile: &str,
     multiplier: &Multiplier,
+    cny_per_usd: Option<&Decimal>,
 ) -> Vec<PublicRate> {
     let reasoning_suffix_map = {
         let runtime = state.monoize_runtime.read().await;
@@ -381,7 +392,7 @@ async fn model_rates(
     let rates = select_complete_marketplace_rates(upstream_rates, logical_rates, models_differ);
     rates
         .into_iter()
-        .filter_map(|rate| public_rate(rate, multiplier))
+        .filter_map(|rate| public_rate(rate, multiplier, cny_per_usd))
         .collect()
 }
 
@@ -401,11 +412,30 @@ fn select_complete_marketplace_rates(
     Vec::new()
 }
 
-fn public_rate(rate: DbBillingRateRecord, multiplier: &Multiplier) -> Option<PublicRate> {
+/// CN-4: converts one stored rate into the Coin display unit.
+///
+/// The provider multiplier and the currency conversion are applied together so rounding
+/// happens exactly once. `cny_per_usd` is `None` only when no exchange-rate snapshot has ever
+/// been stored; a USD-basis rate is then unrepresentable as Coin and is omitted rather than
+/// shown at the wrong magnitude.
+fn public_rate(
+    rate: DbBillingRateRecord,
+    multiplier: &Multiplier,
+    cny_per_usd: Option<&Decimal>,
+) -> Option<PublicRate> {
+    let coin_factor = if rate.is_cny_basis() {
+        Decimal::ONE
+    } else {
+        *cny_per_usd?
+    };
     Some(PublicRate {
         usage_class: rate.usage_class,
         unit: rate.unit,
-        display_rate_nano_usd: multiplier_decimal(multiplier, &rate.unit_price_nano_usd)?,
+        display_rate_nano: multiplier_decimal_scaled(
+            multiplier,
+            &rate.unit_price_nano,
+            coin_factor,
+        )?,
         context_tier: rate.context_tier,
         service_tier: rate.service_tier,
         modality: rate.modality,
@@ -418,7 +448,7 @@ fn rate_range(rates: &[PublicRate], usage_class: &str) -> Option<RateRange> {
         .iter()
         .filter(|rate| rate.usage_class == usage_class)
         .filter_map(|rate| {
-            Decimal::from_str(&rate.display_rate_nano_usd)
+            Decimal::from_str(&rate.display_rate_nano)
                 .ok()
                 .map(|v| (v, rate))
         })
@@ -427,8 +457,8 @@ fn rate_range(rates: &[PublicRate], usage_class: &str) -> Option<RateRange> {
     let (_, first) = values.first()?.clone();
     let (_, last) = values.last()?.clone();
     Some(RateRange {
-        min: first.display_rate_nano_usd.clone(),
-        max: last.display_rate_nano_usd.clone(),
+        min: first.display_rate_nano.clone(),
+        max: last.display_rate_nano.clone(),
         unit: first.unit.clone(),
     })
 }
@@ -443,6 +473,18 @@ async fn viewer_account_class(state: &AppState, headers: &HeaderMap) -> crate::u
         .await
         .map(|user| user.account_class)
         .unwrap_or_default()
+}
+
+/// CNY per USD from the current snapshot, used to express a USD-basis rate in Coin.
+///
+/// Returns `None` when no snapshot has ever been stored. A USD-basis rate is then omitted
+/// from the catalogue rather than displayed at a USD magnitude under a Coin label.
+async fn coin_rate_per_usd(state: &AppState) -> Option<Decimal> {
+    let snapshot = state.exchange_rate_service.current().await.ok()?;
+    Decimal::from_str(&snapshot.cny_per_usd)
+        .ok()
+        // `Decimal::ZERO` reports a positive sign, so zero must be excluded explicitly.
+        .filter(|rate| rate.is_sign_positive() && !rate.is_zero())
 }
 
 fn groups_by_id(
@@ -585,6 +627,7 @@ pub async fn list_marketplace(
         .map(marketplace_group_filter)
         .transpose()?;
     let account_class = viewer_account_class(&state, &headers).await;
+    let coin_rate = coin_rate_per_usd(&state).await;
     let groups = groups_by_id(&state, account_class)
         .await
         .map_err(marketplace_source_error)?;
@@ -657,6 +700,7 @@ pub async fn list_marketplace(
                         provider_type.as_str(),
                         profile,
                         &multiplier,
+                        coin_rate.as_ref(),
                     )
                     .await;
                     if rates.is_empty() {
@@ -735,6 +779,7 @@ pub async fn marketplace_offers(
         return Err(invalid("limit must be between 1 and 50"));
     }
     let account_class = viewer_account_class(&state, &headers).await;
+    let coin_rate = coin_rate_per_usd(&state).await;
     let groups = groups_by_id(&state, account_class)
         .await
         .map_err(marketplace_source_error)?;
@@ -783,6 +828,7 @@ pub async fn marketplace_offers(
                 provider_type.as_str(),
                 profile,
                 &multiplier,
+                coin_rate.as_ref(),
             )
             .await;
             if rates.is_empty() {
@@ -1106,7 +1152,8 @@ mod tests {
             rate_kind: "token".to_string(),
             usage_class: usage_class.to_string(),
             unit: "token".to_string(),
-            unit_price_nano_usd: "1".to_string(),
+            unit_price_nano: "1".to_string(),
+            unit_price_currency: crate::billing_rate_store::RATE_CURRENCY_USD.to_string(),
             context_tier: None,
             service_tier: None,
             modality: None,
@@ -1132,7 +1179,7 @@ mod tests {
                     "rate_kind": "token",
                     "usage_class": usage_class,
                     "unit": "token",
-                    "unit_price_nano_usd": "1",
+                    "unit_price_nano": "1",
                     "enabled": true
                 }))
                 .expect("rate input deserializes"),
@@ -1348,7 +1395,7 @@ mod tests {
                             "rate_kind": "token",
                             "usage_class": usage_class,
                             "unit": "token",
-                            "unit_price_nano_usd": "1",
+                            "unit_price_nano": "1",
                             "enabled": true
                         }))
                         .expect("rate input deserializes"),

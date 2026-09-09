@@ -2,11 +2,30 @@ use monoize::migration::Migrator;
 use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
 use sea_orm_migration::MigratorTrait;
 
+/// Steps needed to roll back `name` and every migration above it.
+///
+/// Derived from the migration list rather than hardcoded: a shallower count leaves the target
+/// migration applied, which makes the re-execution assertions below pass without testing
+/// anything, so adding a migration must not silently change the depth.
+fn rollback_steps_through(name: &str) -> u32 {
+    let migrations = Migrator::migrations();
+    let position = migrations
+        .iter()
+        .position(|migration| migration.name() == name)
+        .expect("migration is registered");
+    u32::try_from(migrations.len() - position).expect("rollback step count")
+}
+
 #[tokio::test]
 async fn migration_055_preserves_grants_adds_refund_scope_and_recreates_indexes() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     Migrator::up(&db, None).await.unwrap();
-    Migrator::down(&db, Some(6)).await.unwrap();
+    Migrator::down(
+        &db,
+        Some(rollback_steps_through("m20260828_000055_store_refund_reauth")),
+    )
+    .await
+    .unwrap();
 
     db.execute(Statement::from_string(
         DbBackend::Sqlite,

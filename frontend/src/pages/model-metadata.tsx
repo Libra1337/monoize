@@ -62,6 +62,7 @@ import type {
   BillingRateRecord,
   PricingProfilePattern,
   ModelMetadataRecord,
+  RateCurrency,
   UpsertBillingRateInput,
   UpsertModelMetadataInput,
 } from "@/lib/api";
@@ -75,24 +76,25 @@ import { TableVirtuoso } from "react-virtuoso";
 import { BillingProfilesTab } from "./model-metadata/BillingProfilesTab";
 import {
   formatNanoPerTokenPerMillion,
-  nanoPerTokenToUsdPerMillion,
-  usdPerMillionToNanoPerToken,
+  nanoPerTokenToPerMillion,
+  perMillionToNanoPerToken,
 } from "@/lib/exact-decimal";
 
+// MD4: model-metadata prices stay nano-USD, so this tab keeps the USD symbol.
 function nanoToPerMillion(nano?: string | null): string {
-  const formatted = formatNanoPerTokenPerMillion(nano);
+  const formatted = formatNanoPerTokenPerMillion(nano, "USD");
   return formatted === "—" ? "-" : formatted;
 }
 
 function perMillionToNano(value: string): string | null {
   if (!value.trim()) return null;
-  const converted = usdPerMillionToNanoPerToken(value);
+  const converted = perMillionToNanoPerToken(value);
   if (converted == null) throw new Error("Price must be a non-negative decimal");
   return converted;
 }
 
 function nanoToPerMillionInput(nano?: string | null): string {
-  return nanoPerTokenToUsdPerMillion(nano) ?? "";
+  return nanoPerTokenToPerMillion(nano) ?? "";
 }
 
 function formatTokens(tokens?: number | null): string {
@@ -196,7 +198,7 @@ function extractProviderVariants(rawJson: Record<string, unknown>): ProviderVari
     const limit = obj.limit as Record<string, unknown> | undefined;
     const costStr = (v: unknown): string => {
       if (typeof v !== "string") return "";
-      return usdPerMillionToNanoPerToken(v) == null ? "" : v;
+      return perMillionToNanoPerToken(v) == null ? "" : v;
     };
     const toStr = (v: unknown): string => (v != null ? String(v) : "");
     result.push({
@@ -757,7 +759,8 @@ interface BillingRateFormData {
   rateKind: string;
   usageClass: string;
   unit: string;
-  unitPriceNanoUsd: string;
+  unitPriceNano: string;
+  unitPriceCurrency: RateCurrency;
   contextTier: string;
   serviceTier: string;
   modality: string;
@@ -777,7 +780,9 @@ const emptyBillingRateForm: BillingRateFormData = {
   rateKind: "token",
   usageClass: "",
   unit: "token",
-  unitPriceNanoUsd: "",
+  unitPriceNano: "",
+  // UI23: a new low-level rate defaults to the same currency as the price form.
+  unitPriceCurrency: "CNY",
   contextTier: "",
   serviceTier: "",
   modality: "",
@@ -807,7 +812,8 @@ function billingRateToForm(rate: BillingRateRecord): BillingRateFormData {
     rateKind: rate.rate_kind,
     usageClass: rate.usage_class,
     unit: rate.unit,
-    unitPriceNanoUsd: rate.unit_price_nano_usd,
+    unitPriceNano: rate.unit_price_nano,
+    unitPriceCurrency: rate.unit_price_currency,
     contextTier: rate.context_tier ?? "",
     serviceTier: rate.service_tier ?? "",
     modality: rate.modality ?? "",
@@ -832,8 +838,8 @@ function formToBillingRateInput(form: BillingRateFormData): UpsertBillingRateInp
   if (!form.pricingProfile.trim()) throw new Error("pricing profile is required");
   if (!form.usageClass.trim()) throw new Error("usage class is required");
   if (!form.unit.trim()) throw new Error("unit is required");
-  if (!/^(?:0|[1-9]\d*)$/.test(form.unitPriceNanoUsd.trim())) {
-    throw new Error("unit price must be a non-negative integer nano-USD string");
+  if (!/^(?:0|[1-9]\d*)$/.test(form.unitPriceNano.trim())) {
+    throw new Error("unit price must be a non-negative integer nano-unit string");
   }
   const priority = Number(form.priority || "0");
   if (!Number.isInteger(priority)) throw new Error("priority must be an integer");
@@ -845,7 +851,8 @@ function formToBillingRateInput(form: BillingRateFormData): UpsertBillingRateInp
     rate_kind: form.rateKind.trim() || "token",
     usage_class: form.usageClass.trim(),
     unit: form.unit.trim(),
-    unit_price_nano_usd: form.unitPriceNanoUsd.trim(),
+    unit_price_nano: form.unitPriceNano.trim(),
+    unit_price_currency: form.unitPriceCurrency,
     context_tier: nullableText(form.contextTier),
     service_tier: nullableText(form.serviceTier),
     modality: nullableText(form.modality),
@@ -1028,8 +1035,18 @@ function BillingRatesTab() {
                 <Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="token" />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">{t("modelMetadata.billingRates.unitPrice", "Nano-USD / Unit")}</Label>
-                <Input value={form.unitPriceNanoUsd} onChange={(e) => setForm({ ...form, unitPriceNanoUsd: e.target.value })} placeholder="1000" />
+                <Label className="text-xs">{t("modelMetadata.billingRates.unitPrice", "Nano-unit / Unit")}</Label>
+                <Input value={form.unitPriceNano} onChange={(e) => setForm({ ...form, unitPriceNano: e.target.value })} placeholder="1000" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">{t("modelMetadata.billingRates.unitPriceCurrency", "Price Currency")}</Label>
+                <Select value={form.unitPriceCurrency} onValueChange={(value) => setForm({ ...form, unitPriceCurrency: value as RateCurrency })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="CNY">CNY</SelectItem>
+                    <SelectItem value="USD">USD</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">{t("modelMetadata.billingRates.contextTier", "Context Tier")}</Label>
@@ -1175,7 +1192,7 @@ function BillingRatesTab() {
                 {rate.rate_kind}:{rate.usage_class}
               </VirtualTableCell>
               <VirtualTableCell className="font-mono text-xs" onClick={() => openEdit(rate)}>
-                {rate.unit_price_nano_usd} / {rate.unit}
+                {rate.unit_price_nano} {rate.unit_price_currency} / {rate.unit}
               </VirtualTableCell>
               <VirtualTableCell className="font-mono text-xs" onClick={() => openEdit(rate)}>
                 {[rate.context_tier, rate.service_tier, rate.modality, rate.cache_ttl].filter(Boolean).join(" / ") || "-"}

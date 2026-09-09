@@ -1,5 +1,8 @@
 use super::*;
 use crate::billing_rate_store::DbBillingRateRecord;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
+use std::str::FromStr as _;
 #[cfg(test)]
 use crate::model_registry_store::ModelPricing;
 use sha2::Digest as _;
@@ -9,6 +12,45 @@ pub(super) struct BillingRateResolution {
     pub(super) pricing_profile: String,
     pub(super) pricing_model: String,
     pub(super) rates: Vec<DbBillingRateRecord>,
+    /// FX snapshot captured when the rates were loaded, used to express a CNY-basis rate in
+    /// the nano-USD unit every balance is denominated in. `None` when no snapshot exists.
+    pub(super) cny_per_usd: Option<Decimal>,
+}
+
+/// MB-C1a: converts one line-item charge into nano-USD.
+///
+/// The conversion is applied to the charge rather than to the unit price. A unit price is a
+/// nano-value per token and can be as small as a single digit, so dividing it by the exchange
+/// rate before multiplying by the quantity would quantise a cheap rate into uselessness — a
+/// 10 nano-CNY/token rate becomes 1 nano-USD, a 29 percent error. Multiplying first keeps the
+/// dividend large, so the rounding error never exceeds half a nano-USD on the whole line.
+pub(crate) fn nano_charge_to_usd(
+    charge: i128,
+    is_cny_basis: bool,
+    cny_per_usd: Option<Decimal>,
+    rate_id: &str,
+) -> Result<i128, String> {
+    if !is_cny_basis {
+        return Ok(charge);
+    }
+    let fx = cny_per_usd
+        .filter(|value| value.is_sign_positive() && !value.is_zero())
+        .ok_or_else(|| format!("no exchange-rate snapshot for CNY-basis rate {rate_id}"))?;
+    let charge = Decimal::from_i128_with_scale(charge, 0)
+        .checked_div(fx)
+        .ok_or_else(|| format!("CNY charge conversion overflow for rate {rate_id}"))?;
+    charge
+        .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        .to_i128()
+        .ok_or_else(|| format!("CNY charge does not fit i128 for rate {rate_id}"))
+}
+
+pub(super) fn charge_in_usd(
+    charge: i128,
+    rate: &DbBillingRateRecord,
+    cny_per_usd: Option<Decimal>,
+) -> Result<i128, String> {
+    nano_charge_to_usd(charge, rate.is_cny_basis(), cny_per_usd, &rate.id)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -125,7 +167,10 @@ pub(super) fn plan_maximum_charge_nano(
     if max_input_tokens == 0 || max_output_tokens == Some(0) {
         return None;
     }
-    let maximum_token_rate = |output: bool| {
+    // The maximum is taken over per-rate charges already expressed in nano-USD, not over raw
+    // unit prices. A CNY-basis and a USD-basis rate are not comparable before conversion, so
+    // picking the larger unit price first would reserve against the wrong currency.
+    let maximum_token_charge = |output: bool, tokens: u64| {
         resolution
             .rates
             .iter()
@@ -139,17 +184,17 @@ pub(super) fn plan_maximum_charge_nano(
                             || rate.usage_class.starts_with("cache_")
                     }
             })
-            .map(DbBillingRateRecord::unit_price_nano)
-            .collect::<Result<Vec<_>, _>>()
-            .ok()?
+            .map(|rate| {
+                let charge = i128::from(tokens).checked_mul(rate.unit_price_nano().ok()?)?;
+                charge_in_usd(charge, rate, resolution.cny_per_usd).ok()
+            })
+            .collect::<Option<Vec<_>>>()?
             .into_iter()
             .max()
     };
-    let input_rate = maximum_token_rate(false)?;
-    let mut maximum = i128::from(max_input_tokens).checked_mul(input_rate)?;
+    let mut maximum = maximum_token_charge(false, max_input_tokens)?;
     if let Some(max_output_tokens) = max_output_tokens {
-        let output_rate = maximum_token_rate(true)?;
-        maximum = maximum.checked_add(i128::from(max_output_tokens).checked_mul(output_rate)?)?;
+        maximum = maximum.checked_add(maximum_token_charge(true, max_output_tokens)?)?;
     }
     for usage_class in server_tool_usage_classes {
         let meter_maximum = resolution
@@ -163,7 +208,8 @@ pub(super) fn plan_maximum_charge_nano(
                     .match_json
                     .get("maximum_units")
                     .and_then(parse_u64_value)?;
-                i128::from(units).checked_mul(rate.unit_price_nano().ok()?)
+                let charge = i128::from(units).checked_mul(rate.unit_price_nano().ok()?)?;
+                charge_in_usd(charge, rate, resolution.cny_per_usd).ok()
             })
             .collect::<Option<Vec<_>>>()?
             .into_iter()
@@ -597,6 +643,14 @@ pub(super) async fn build_billing_rate_resolution_snapshot(
         .list_candidate_rates_for_profiles_and_provider_types(&candidate_profiles, &provider_types)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    // Captured once per request so every line item of one request bills at the same rate.
+    let cny_per_usd = state
+        .exchange_rate_service
+        .current()
+        .await
+        .ok()
+        .and_then(|snapshot| Decimal::from_str(&snapshot.cny_per_usd).ok())
+        .filter(|rate| rate.is_sign_positive() && !rate.is_zero());
     let resolutions = pairs
         .into_iter()
         .map(|(model, provider_type, pricing_profile)| {
@@ -605,6 +659,7 @@ pub(super) async fn build_billing_rate_resolution_snapshot(
                 &model,
                 &provider_type,
                 &pricing_profile,
+                cny_per_usd,
             );
             ((model, provider_type, pricing_profile), resolution)
         })
@@ -620,6 +675,7 @@ fn resolve_billing_rate_matrix_from_snapshot(
     model: &str,
     provider_type: &str,
     pricing_profile: &str,
+    cny_per_usd: Option<Decimal>,
 ) -> Option<BillingRateResolution> {
     let profile_rates = candidate_rates
         .iter()
@@ -640,6 +696,7 @@ fn resolve_billing_rate_matrix_from_snapshot(
         pricing_profile: pricing_profile.to_string(),
         pricing_model: model.to_string(),
         rates: profile_rates,
+        cny_per_usd,
     })
 }
 
@@ -649,12 +706,18 @@ pub(super) fn billing_rate_matrix_allows_request(
 ) -> Result<bool, String> {
     for rate in &resolution.rates {
         let unit_price = rate.unit_price_nano()?;
-        if unit_price < 0 || unit_price.to_string() != rate.unit_price_nano_usd {
+        if unit_price < 0 || unit_price.to_string() != rate.unit_price_nano {
             return Err(format!(
-                "non-canonical or negative unit_price_nano_usd for billing rate {}",
+                "non-canonical or negative unit_price_nano for billing rate {}",
                 rate.id
             ));
         }
+    }
+    // MB-R9a: a CNY-basis rate is unsettleable without an FX snapshot. Reporting the matrix
+    // incomplete excludes the mapping before dispatch, so the request fails with
+    // `model_pricing_required` instead of failing after upstream bytes were delivered.
+    if resolution.cny_per_usd.is_none() && resolution.rates.iter().any(|rate| rate.is_cny_basis()) {
+        return Ok(false);
     }
     let context_tiers: std::collections::BTreeSet<String> = resolution
         .rates
@@ -747,6 +810,11 @@ pub(crate) fn billing_rates_form_complete_matrix(rates: &[DbBillingRateRecord]) 
         pricing_profile: String::new(),
         pricing_model: String::new(),
         rates: rates.to_vec(),
+        // This helper answers a structural question — whether the usage-class and tier matrix
+        // is complete — not whether the matrix can be settled right now. A placeholder rate
+        // keeps the MB-R9a gate from reporting a correctly configured CNY matrix as
+        // incomplete just because the FX snapshot is not in scope here.
+        cny_per_usd: Some(Decimal::ONE),
     };
     billing_rate_matrix_allows_request(&resolution, &[]).is_ok_and(|complete| complete)
 }
@@ -1003,6 +1071,7 @@ fn add_token_line(
     context_tier: Option<&str>,
     service_tier: Option<&str>,
     cache_ttl: Option<&str>,
+    cny_per_usd: Option<Decimal>,
 ) -> Result<i128, String> {
     add_token_line_for_usage_classes(
         line_items,
@@ -1013,6 +1082,7 @@ fn add_token_line(
         context_tier,
         service_tier,
         cache_ttl,
+        cny_per_usd,
     )
 }
 
@@ -1025,6 +1095,7 @@ fn add_token_line_for_usage_classes(
     context_tier: Option<&str>,
     service_tier: Option<&str>,
     cache_ttl: Option<&str>,
+    cny_per_usd: Option<Decimal>,
 ) -> Result<i128, String> {
     if quantity == 0 {
         return Ok(0);
@@ -1048,11 +1119,13 @@ fn add_token_line_for_usage_classes(
     let charge = i128::from(quantity)
         .checked_mul(unit_price)
         .ok_or_else(|| "token charge overflow".to_string())?;
+    let charge = charge_in_usd(charge, rate, cny_per_usd)?;
     line_items.push(json!({
         "rate_id": rate.id,
         "usage_class": rate.usage_class,
         "unit": rate.unit,
         "unit_price_nano": unit_price.to_string(),
+        "unit_price_currency": rate.unit_price_currency,
         "quantity": quantity,
         "charge_nano": charge.to_string(),
         "modality": modality,
@@ -1071,6 +1144,7 @@ fn add_modality_token_lines(
     fallback_quantity: u64,
     context_tier: Option<&str>,
     service_tier: Option<&str>,
+    cny_per_usd: Option<Decimal>,
 ) -> Result<i128, String> {
     if !has_matching_modality_rates(rates, usage_classes, context_tier, service_tier, None) {
         return add_token_line_for_usage_classes(
@@ -1082,6 +1156,7 @@ fn add_modality_token_lines(
             context_tier,
             service_tier,
             None,
+            cny_per_usd,
         );
     }
     // Zero tokens need no modality breakdown — charge is 0 regardless of rates.
@@ -1098,6 +1173,7 @@ fn add_modality_token_lines(
             context_tier,
             service_tier,
             None,
+            cny_per_usd,
         );
     };
     validate_modality_sum(usage_classes[0], breakdown, fallback_quantity)?;
@@ -1119,6 +1195,7 @@ fn add_modality_token_lines(
                 context_tier,
                 service_tier,
                 None,
+                cny_per_usd,
             )?)
             .ok_or_else(|| "token charge overflow".to_string())?;
     }
@@ -1132,6 +1209,7 @@ fn add_cache_read_lines(
     quantity: u64,
     context_tier: Option<&str>,
     service_tier: Option<&str>,
+    cny_per_usd: Option<Decimal>,
 ) -> Result<i128, String> {
     let usage_classes = ["cache_read", "input_cached"];
     if breakdown.is_some()
@@ -1145,6 +1223,7 @@ fn add_cache_read_lines(
             quantity,
             context_tier,
             service_tier,
+            cny_per_usd,
         );
     }
     if find_rate_for_usage_classes(
@@ -1167,6 +1246,7 @@ fn add_cache_read_lines(
             context_tier,
             service_tier,
             None,
+            cny_per_usd,
         );
     }
     add_token_line(
@@ -1178,6 +1258,7 @@ fn add_cache_read_lines(
         context_tier,
         service_tier,
         None,
+        cny_per_usd,
     )
 }
 
@@ -1189,6 +1270,7 @@ fn add_cache_write_line(
     context_tier: Option<&str>,
     service_tier: Option<&str>,
     cache_ttl: &str,
+    cny_per_usd: Option<Decimal>,
 ) -> Result<i128, String> {
     if find_rate(
         rates,
@@ -1210,6 +1292,7 @@ fn add_cache_write_line(
             context_tier,
             service_tier,
             Some(cache_ttl),
+            cny_per_usd,
         );
     }
     add_token_line(
@@ -1221,6 +1304,7 @@ fn add_cache_write_line(
         context_tier,
         service_tier,
         None,
+        cny_per_usd,
     )
 }
 
@@ -1299,6 +1383,7 @@ fn add_meter_lines(
     requested_usage_classes: &[String],
     context_tier: Option<&str>,
     service_tier: Option<&str>,
+    cny_per_usd: Option<Decimal>,
 ) -> Result<i128, String> {
     let mut total = 0i128;
     let mut selected_usage_classes = HashSet::new();
@@ -1358,11 +1443,13 @@ fn add_meter_lines(
         let charge = i128::from(quantity)
             .checked_mul(unit_price)
             .ok_or_else(|| "meter charge overflow".to_string())?;
+        let charge = charge_in_usd(charge, rate, cny_per_usd)?;
         line_items.push(json!({
             "rate_id": rate.id,
             "usage_class": rate.usage_class,
             "unit": rate.unit,
             "unit_price_nano": unit_price.to_string(),
+            "unit_price_currency": rate.unit_price_currency,
             "quantity": quantity,
             "charge_nano": charge.to_string(),
             "authoritative": authoritative.is_some(),
@@ -1431,6 +1518,9 @@ pub(super) fn calculate_rate_matrix_charge_components(
 ) -> Result<MatrixChargeComponents, String> {
     let input_details = usage.input_details.as_ref();
     let output_details = usage.output_details.as_ref();
+    // One FX snapshot for the whole request, so every line item of one charge converts at the
+    // same rate no matter how long the request ran.
+    let cny_per_usd = resolution.cny_per_usd;
     let context_tier = determine_context_tier(usage, &resolution.rates)?;
     let service_tier = response_service_tier
         .map(str::trim)
@@ -1508,6 +1598,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
             uncached_tokens,
             context_tier_ref,
             service_tier_ref,
+            cny_per_usd,
         )?)
         .ok_or_else(|| "token charge overflow".to_string())?;
     token_total = token_total
@@ -1518,6 +1609,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
             cached_tokens,
             context_tier_ref,
             service_tier_ref,
+            cny_per_usd,
         )?)
         .ok_or_else(|| "token charge overflow".to_string())?;
 
@@ -1582,6 +1674,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
                 context_tier_ref,
                 service_tier_ref,
                 None,
+                cny_per_usd,
             )?)
             .ok_or_else(|| "token charge overflow".to_string())?;
     } else {
@@ -1594,6 +1687,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
                 context_tier_ref,
                 service_tier_ref,
                 "5m",
+                cny_per_usd,
             )?)
             .ok_or_else(|| "token charge overflow".to_string())?;
         token_total = token_total
@@ -1605,6 +1699,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
                 context_tier_ref,
                 service_tier_ref,
                 "1h",
+                cny_per_usd,
             )?)
             .ok_or_else(|| "token charge overflow".to_string())?;
     }
@@ -1617,6 +1712,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
             non_reasoning_output_tokens,
             context_tier_ref,
             service_tier_ref,
+            cny_per_usd,
         )?)
         .ok_or_else(|| "token charge overflow".to_string())?;
     token_total = token_total
@@ -1629,6 +1725,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
             context_tier_ref,
             service_tier_ref,
             None,
+            cny_per_usd,
         )?)
         .ok_or_else(|| "token charge overflow".to_string())?;
 
@@ -1641,6 +1738,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
         requested_usage_classes,
         context_tier_ref,
         service_tier_ref,
+        cny_per_usd,
     )?;
     let base_charge = token_total
         .checked_add(meter_total)
@@ -1679,6 +1777,10 @@ fn build_matrix_billing_breakdown(
         },
         "token_line_items": components.token_line_items,
         "meter_line_items": components.meter_line_items,
+        // MB-C4: the snapshot that normalized every CNY-basis line item of this charge. It is
+        // recorded even when no line item used it, so a later audit can tell "no CNY rate was
+        // applied" apart from "the rate in force is unknown".
+        "cny_per_usd": resolution.cny_per_usd.map(|rate| rate.to_string()),
         "base_charge_nano": components.base_charge.to_string(),
         "final_charge_nano": components.final_charge.to_string(),
     })

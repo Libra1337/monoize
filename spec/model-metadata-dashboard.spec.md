@@ -49,7 +49,9 @@ MD7. Billing computation MUST NOT read model pricing directly from `model_metada
 
 MD8. When a model metadata row is created, updated, or synced with token prices, the server MUST mirror the present token prices into `billing_rate_records` rows whose `source` identifies the metadata origin.
 
-MD9. Every non-null metadata price and every billing-rate `unit_price_nano_usd` MUST be a canonical non-negative integer string. A negative, signed-plus, fractional, exponent, or out-of-range value MUST be rejected with `400 invalid_request`.
+MD8a. A mirrored `billing_rate_records` row MUST set `unit_price_currency = "USD"`, because MD4 metadata prices are nano-USD. The mirror MUST NOT inherit the CNY default of the dashboard billing-rate API.
+
+MD9. Every non-null metadata price and every billing-rate `unit_price_nano` MUST be a canonical non-negative integer string. A negative, signed-plus, fractional, exponent, or out-of-range value MUST be rejected with `400 invalid_request`.
 
 MD10. Models.dev decimal USD-per-million prices MUST be parsed directly from their JSON decimal token. The conversion to nano-USD per token is `trunc(price_usd_per_million * 1000)`. This conversion MUST NOT pass through `f32` or `f64`. For example, `1.001` MUST become `"1001"`.
 
@@ -138,7 +140,8 @@ SP8. Admin MAY explicitly reset a manual record back to sync-managed by updating
 - Auth: admin required.
 - Body: any mutable fields from `billing_rate_records` except `id` and `updated_at`.
 - Response: full updated `BillingRateRecord`.
-- Errors: `400 invalid_request` if required fields are absent for a new row or `unit_price_nano_usd` is not a non-negative integer string.
+- Errors: `400 invalid_request` if required fields are absent for a new row, `unit_price_nano` is not a non-negative integer string, or `unit_price_currency` is present and is neither `USD` nor `CNY`.
+- A created row that omits `unit_price_currency` MUST use `CNY`; an updated row that omits it MUST keep its stored currency, per `metered-billing.spec.md` MB-A2c.
 
 - Method/Path: `DELETE /api/dashboard/billing-rates/{id}`
 - Auth: admin required.
@@ -205,9 +208,9 @@ UI6. Each row MUST be clickable to open an edit dialog.
 
 UI7. Price display: `nano_per_token / 1000` = dollars per 1M tokens. Display up to 4 decimal places.
 
-UI7a. Model Database and Billing Profiles MUST keep nano-USD prices and USD-per-million form values as decimal strings. Conversion, provider switching, form editing, validation, and API serialization MUST NOT pass a price through JavaScript `Number`, `parseFloat`, `toFixed`, or binary floating-point arithmetic.
+UI7a. Model Database and Billing Profiles MUST keep nano-unit prices and per-million form values as decimal strings. Conversion, provider switching, form editing, validation, and API serialization MUST NOT pass a price through JavaScript `Number`, `parseFloat`, `toFixed`, or binary floating-point arithmetic.
 
-UI7b. Converting a USD-per-million input to nano-USD per token MUST compute `trunc(input * 1000)` with decimal-string arithmetic. A negative or syntactically invalid input MUST be blocked before the mutation request. For example, `1.001` MUST serialize as `"1001"` and round-trip back to `1.001`.
+UI7b. Converting a per-million input to a nano-unit price per token MUST compute `trunc(input * 1000)` with decimal-string arithmetic. A negative or syntactically invalid input MUST be blocked before the mutation request. For example, `1.001` MUST serialize as `"1001"` and round-trip back to `1.001`. This conversion is currency-independent: it applies to a USD-per-million metadata input and to a CNY-per-million billing-rate input identically.
 
 ### 4.4 Search and filter
 
@@ -239,18 +242,20 @@ UI15. Skeleton placeholders while loading.
 
 UI17. The Billing Profiles tab MUST group models.dev rate records by `pricing_profile` and present a master-detail workbench.
 
-UI17a. Desktop (`lg` and above) MUST render a left profile list and a right detail pane. The detail pane MUST show model ID plus input, cache-read, and output token prices formatted as USD per one million tokens.
+UI17a. Desktop (`lg` and above) MUST render a left profile list and a right detail pane. The detail pane MUST show model ID plus input, cache-read, and output token prices formatted as the price per one million tokens, prefixed by the symbol of that row's `unit_price_currency`: `¥` for `CNY` and `$` for `USD`. A price MUST NOT be shown under a currency symbol that does not match its stored `unit_price_currency`.
 
 UI17b. Mobile (`< lg`) MUST render a horizontally scrollable profile selector and stacked model-price rows. No pricing table may require horizontal page scrolling.
 
-UI18. Billing Profiles MUST provide model search and source/status filters without exposing nano-USD units or raw JSON in the primary flow.
+UI18. Billing Profiles MUST provide model search and source/status filters without exposing nano-unit prices or raw JSON in the primary flow.
 
 UI19. Billing Profiles MUST provide:
 
 - a `Sync models.dev` action that calls `POST /api/dashboard/model-metadata/sync/models-dev`;
 - a visible last-sync/source status derived from synchronized records;
 - an ordered match-rule editor backed by `GET/PUT /api/dashboard/pricing-profile-patterns`;
-- a manual-override action that creates or updates manual `billing_rate_records` using human-readable USD-per-million inputs.
+- a manual-override action that creates or updates manual `billing_rate_records` using human-readable CNY-per-million inputs.
+
+UI19c. The manual-override dialog MUST be denominated in CNY per one million tokens. Each price input MUST carry the `¥` symbol, and the dialog MUST state that prices are CNY per one million tokens. Every rate it writes MUST send `unit_price_currency = "CNY"`. The dialog MUST NOT offer a currency selector, and it MUST NOT apply an exchange rate to the typed number.
 
 UI19a. When metadata and billing rates have finished loading and no `models_dev` records exist, the UI MUST trigger at most one automatic models.dev sync for that mounted page instance. A failed automatic sync MUST show a retry action and MUST NOT loop.
 
@@ -260,11 +265,11 @@ UI20. Manual overrides MUST be visually separated from synchronized rates. Manua
 
 ### 4.9 Advanced Rates tab
 
-UI21. The Advanced Rates tab MUST list `billing_rate_records` with every low-level mutable field, including nano-USD and JSON match fields.
+UI21. The Advanced Rates tab MUST list `billing_rate_records` with every low-level mutable field, including the nano-unit price, its currency, and JSON match fields. The price column MUST render `unit_price_nano`, its `unit_price_currency`, and `unit`.
 
 UI22. Advanced Rates MUST provide catalog sync, search, add, edit, and delete actions.
 
-UI23. The low-level rate edit dialog MUST allow editing every mutable field exposed by the Billing-rate CRUD API. JSON fields MUST be edited as JSON text and rejected client-side when not valid JSON.
+UI23. The low-level rate edit dialog MUST allow editing every mutable field exposed by the Billing-rate CRUD API, including `unit_price_currency` as a choice between `CNY` and `USD`. A new row MUST default that control to `CNY`. JSON fields MUST be edited as JSON text and rejected client-side when not valid JSON.
 
 UI24. Empty pricing-profile match-rule `pattern` or `pricing_profile` values MUST be blocked before submitting.
 

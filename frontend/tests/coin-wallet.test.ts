@@ -2,11 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   formatCoinFromNanoUsd,
-  formatCoinPerMillionUsd,
+  formatCoinPerUnitCny,
   formatCoinFromMinor,
   formatCoinFromMinorForCurrency,
   formatCoinFromNanoUsdForCurrency,
-  formatCoinRate,
 } from "../src/lib/store-money";
 
 describe("Coin display", () => {
@@ -17,9 +16,11 @@ describe("Coin display", () => {
     expect(formatCoinFromNanoUsd("1000000000", "7.2")).toBe("C7.20");
   });
 
-  test("keeps USD-basis model prices numerically stable in Coin", () => {
-    expect(formatCoinPerMillionUsd("1000")).toBe("C1.00 / 1M tokens");
-    expect(formatCoinPerMillionUsd("10000000")).toBe("C10000.00 / 1M tokens");
+  // CN-4: a published rate is already CNY, so `1 C = 1 CNY` needs no exchange rate.
+  test("renders a server-normalized CNY rate as Coin without conversion", () => {
+    expect(formatCoinPerUnitCny("1000", "token")).toBe("C1.00 / 1M tokens");
+    expect(formatCoinPerUnitCny("10000000", "token")).toBe("C10000.00 / 1M tokens");
+    expect(formatCoinPerUnitCny("1250000000.5", "call")).toBe("C1.25 / call");
   });
 
   test("uses CNY as the Coin basis for CNY recharge products", () => {
@@ -35,11 +36,6 @@ describe("Coin display", () => {
     expect(formatCoinFromMinorForCurrency("720", "CNY", "USD", "7.2")).toBe("C1.00");
     expect(formatCoinFromNanoUsdForCurrency("1000000000", "CNY", "7.2")).toBe("C7.20");
     expect(formatCoinFromNanoUsdForCurrency("1000000000", "USD", "7.2")).toBe("C1.00");
-  });
-
-  test("applies display currency to model rate Coin values", () => {
-    expect(formatCoinRate("1000", "token", "CNY", "7.2")).toBe("C7.20 / 1M tokens");
-    expect(formatCoinRate("1000", "token", "USD", "7.2")).toBe("C1.00 / 1M tokens");
   });
 
   test("wallet exposes a user-scoped ledger and Coin mark", () => {

@@ -22,7 +22,24 @@ export function isSignedIntegerString(value: string): boolean {
 	return /^-?(?:0|[1-9]\d*)$/.test(value)
 }
 
-export function usdPerMillionToNanoPerToken(value: string): string | null {
+/** Currency a billing rate is denominated in (MB-D3b). */
+export type RateCurrency = 'CNY' | 'USD'
+
+export function rateCurrencySymbol(currency: RateCurrency): string {
+	return currency === 'CNY' ? '¥' : '$'
+}
+
+/**
+ * Reads the currency of a stored rate or breakdown line item.
+ *
+ * A breakdown written before migration 066 has no currency field, and every price it holds
+ * is nano-USD, so an absent value reads as `USD` rather than as the current write default.
+ */
+export function readRateCurrency(value: unknown): RateCurrency {
+	return value === 'CNY' ? 'CNY' : 'USD'
+}
+
+export function perMillionToNanoPerToken(value: string): string | null {
 	const trimmed = value.trim()
 	if (!/^\d+(?:\.\d*)?$/.test(trimmed)) return null
 	const [wholeRaw, fractionRaw = ''] = trimmed.split('.')
@@ -32,7 +49,7 @@ export function usdPerMillionToNanoPerToken(value: string): string | null {
 	return nano <= I128_MAX ? nano.toString() : null
 }
 
-export function nanoPerTokenToUsdPerMillion(value?: string | null): string | null {
+export function nanoPerTokenToPerMillion(value?: string | null): string | null {
 	if (value == null || !isCanonicalIntegerString(value)) return null
 	const nano = BigInt(value)
 	const whole = nano / 1000n
@@ -40,9 +57,14 @@ export function nanoPerTokenToUsdPerMillion(value?: string | null): string | nul
 	return fraction ? `${whole}.${fraction}` : whole.toString()
 }
 
-export function formatNanoPerTokenPerMillion(value?: string | null): string {
-	const decimal = nanoPerTokenToUsdPerMillion(value)
-	return decimal == null ? '—' : `$${groupInteger(decimal.split('.')[0])}${decimal.includes('.') ? `.${decimal.split('.')[1]}` : ''}`
+export function formatNanoPerTokenPerMillion(
+	value?: string | null,
+	currency: RateCurrency = 'USD'
+): string {
+	const decimal = nanoPerTokenToPerMillion(value)
+	if (decimal == null) return '—'
+	const [whole, fraction] = decimal.split('.')
+	return `${rateCurrencySymbol(currency)}${groupInteger(whole)}${fraction ? `.${fraction}` : ''}`
 }
 
 export function normalizeMultiplier(value: string): string | null {
@@ -56,11 +78,18 @@ export function normalizeMultiplier(value: string): string | null {
 	return fraction ? `${whole || '0'}.${fraction}` : whole || '0'
 }
 
-export function formatNanoUsd(value: string | bigint | null | undefined, fractionalDigits = 6): string {
-	if (!Number.isInteger(fractionalDigits) || fractionalDigits < 0 || fractionalDigits > 9) return '$0.000000'
+export function formatNanoAmount(
+	value: string | bigint | null | undefined,
+	currency: RateCurrency = 'USD',
+	fractionalDigits = 6
+): string {
+	const symbol = rateCurrencySymbol(currency)
+	if (!Number.isInteger(fractionalDigits) || fractionalDigits < 0 || fractionalDigits > 9) {
+		return `${symbol}0.000000`
+	}
 	const raw = typeof value === 'bigint' ? value.toString() : value
 	if (raw == null || !isSignedIntegerString(raw)) {
-		return `$${formatScaledInteger(0n, fractionalDigits)}`
+		return `${symbol}${formatScaledInteger(0n, fractionalDigits)}`
 	}
 	const nano = BigInt(raw)
 	const negative = nano < 0n
@@ -68,7 +97,11 @@ export function formatNanoUsd(value: string | bigint | null | undefined, fractio
 	const divisor = 10n ** BigInt(9 - fractionalDigits)
 	let rounded = absolute / divisor
 	if ((absolute % divisor) * 2n >= divisor) rounded += 1n
-	return `${negative ? '-' : ''}$${formatScaledInteger(rounded, fractionalDigits)}`
+	return `${negative ? '-' : ''}${symbol}${formatScaledInteger(rounded, fractionalDigits)}`
+}
+
+export function formatNanoUsd(value: string | bigint | null | undefined, fractionalDigits = 6): string {
+	return formatNanoAmount(value, 'USD', fractionalDigits)
 }
 
 export function formatUsdDecimal(value: string | null | undefined, fractionalDigits = 2): string {

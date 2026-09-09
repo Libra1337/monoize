@@ -331,7 +331,7 @@ fn missing_required_usage_classes(rates: &[DbBillingRateRecord]) -> Vec<String> 
     let mut missing = HashSet::new();
     let canonical_price = |rate: &DbBillingRateRecord| {
         rate.unit_price_nano()
-            .is_ok_and(|value| value >= 0 && value.to_string() == rate.unit_price_nano_usd)
+            .is_ok_and(|value| value >= 0 && value.to_string() == rate.unit_price_nano)
     };
     let has_fallback = |usage_class: &str, context_tier: Option<&str>| {
         rates.iter().any(|rate| {
@@ -1804,7 +1804,8 @@ mod tests {
                         rate_kind: Some("token".to_string()),
                         usage_class: Some("input_uncached".to_string()),
                         unit: Some("token".to_string()),
-                        unit_price_nano_usd: Some("1".to_string()),
+                        unit_price_nano: Some("1".to_string()),
+                        unit_price_currency: None,
                         context_tier: Some(None),
                         service_tier: Some(None),
                         modality: Some(None),
@@ -2003,7 +2004,8 @@ mod tests {
                         rate_kind: Some("token".to_string()),
                         usage_class: Some("input_uncached".to_string()),
                         unit: Some("token".to_string()),
-                        unit_price_nano_usd: Some("1".to_string()),
+                        unit_price_nano: Some("1".to_string()),
+                        unit_price_currency: None,
                         context_tier: Some(None),
                         service_tier: Some(None),
                         modality: Some(None),

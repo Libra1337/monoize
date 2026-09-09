@@ -904,7 +904,7 @@ fn expected_offer_rates(manifest: &FixtureManifest, model: &str) -> Vec<OfferRat
             (0..rate.public_repeat_count).map(move |_| OfferRate {
                 usage_class: rate.usage_class.clone(),
                 unit: "token".to_owned(),
-                display_rate_nano_usd: rate.unit_price.clone(),
+                display_rate_nano: rate.unit_price.clone(),
                 context_tier: None,
                 service_tier: None,
                 modality: None,
@@ -1618,7 +1618,7 @@ impl Enrichment {
                 (0..rate.public_repeat_count).map(|_| OfferRate {
                     usage_class: rate.usage_class.clone(),
                     unit: "token".to_owned(),
-                    display_rate_nano_usd: rate.unit_price.clone(),
+                    display_rate_nano: rate.unit_price.clone(),
                     context_tier: None,
                     service_tier: None,
                     modality: None,

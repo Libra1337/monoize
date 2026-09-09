@@ -1128,7 +1128,10 @@ export async function upsertBillingRateOptimistic(
     rate_kind: input.rate_kind ?? "token",
     usage_class: input.usage_class ?? "",
     unit: input.unit ?? "token",
-    unit_price_nano_usd: input.unit_price_nano_usd ?? "0",
+    unit_price_nano: input.unit_price_nano ?? "0",
+    // MB-A2c: mirrors the server default for a newly created rate, so the optimistic row
+    // shows the same currency the server will persist.
+    unit_price_currency: input.unit_price_currency ?? "CNY",
     context_tier: input.context_tier ?? null,
     service_tier: input.service_tier ?? null,
     modality: input.modality ?? null,

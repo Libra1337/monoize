@@ -967,7 +967,7 @@ impl ModelRegistryStore {
                     fetched_at.clone().into(),
                 ]);
                 rows.push(format!(
-                    "(${}, 'models_dev', ${}, ${}, NULL, 'token', ${}, 'token', ${}, '{{}}', 0, 1, ${}, ${})",
+                    "(${}, 'models_dev', ${}, ${}, NULL, 'token', ${}, 'token', ${}, 'USD', '{{}}', 0, 1, ${}, ${})",
                     start,
                     start + 1,
                     start + 2,
@@ -981,8 +981,8 @@ impl ModelRegistryStore {
                 &format!(
                     "INSERT INTO billing_rate_records
                      (id, source, pricing_profile, model_pattern, provider_type, rate_kind,
-                      usage_class, unit, unit_price_nano_usd, match_json, priority, enabled,
-                      raw_json, updated_at)
+                      usage_class, unit, unit_price_nano, unit_price_currency, match_json,
+                      priority, enabled, raw_json, updated_at)
                      VALUES {}
                      ON CONFLICT(id) DO UPDATE SET
                        source=excluded.source,
@@ -992,7 +992,8 @@ impl ModelRegistryStore {
                        rate_kind=excluded.rate_kind,
                        usage_class=excluded.usage_class,
                        unit=excluded.unit,
-                       unit_price_nano_usd=excluded.unit_price_nano_usd,
+                       unit_price_nano=excluded.unit_price_nano,
+                       unit_price_currency=excluded.unit_price_currency,
                        match_json=excluded.match_json,
                        priority=excluded.priority,
                        enabled=excluded.enabled,
@@ -1226,14 +1227,16 @@ async fn upsert_model_metadata_billing_rates(
         conn.execute(db.stmt(
             "INSERT INTO billing_rate_records
                  (id, source, pricing_profile, model_pattern, provider_type, rate_kind, usage_class,
-                  unit, unit_price_nano_usd, match_json, priority, enabled, raw_json, updated_at)
-                 VALUES ($1, $2, $3, $4, NULL, 'token', $5, 'token', $6, '{}', 0, 1, $7, $8)
+                  unit, unit_price_nano, unit_price_currency, match_json, priority, enabled,
+                  raw_json, updated_at)
+                 VALUES ($1, $2, $3, $4, NULL, 'token', $5, 'token', $6, 'USD', '{}', 0, 1, $7, $8)
                  ON CONFLICT(id) DO UPDATE SET
                    source = excluded.source,
                    pricing_profile = excluded.pricing_profile,
                    model_pattern = excluded.model_pattern,
                    usage_class = excluded.usage_class,
-                   unit_price_nano_usd = excluded.unit_price_nano_usd,
+                   unit_price_nano = excluded.unit_price_nano,
+                   unit_price_currency = excluded.unit_price_currency,
                    raw_json = excluded.raw_json,
                    updated_at = excluded.updated_at",
             vec![

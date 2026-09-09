@@ -103,7 +103,7 @@ fn offers_and_status_use_exact_nested_allow_lists() {
             rates: vec![OfferRate {
                 usage_class: "input".to_owned(),
                 unit: "token".to_owned(),
-                display_rate_nano_usd: "1.2".to_owned(),
+                display_rate_nano: "1.2".to_owned(),
                 context_tier: None,
                 service_tier: None,
                 modality: None,

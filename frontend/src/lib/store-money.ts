@@ -136,47 +136,22 @@ export function formatCoinFromNanoUsdForCurrency(
   return formatCoinFromNanoUsd(nanoUsd, cnyPerUsd);
 }
 
-/** Format a USD-basis model rate as Coin in the selected display currency. */
-export function formatCoinRate(
-  nanoUsdPerUnit: string,
-  unit: string,
-  displayCurrency: StoreCurrency,
-  cnyPerUsd: string,
-): string {
-  const amount = parseNonnegativeDecimal(nanoUsdPerUnit);
-  let numerator = amount.numerator;
-  let denominator = amount.denominator;
-  if (displayCurrency === "CNY") {
-    const exchange = parseRate(cnyPerUsd);
-    numerator *= exchange.numerator;
-    denominator *= exchange.denominator;
-  }
+/**
+ * Format a CNY-denominated nano rate as Coin per unit.
+ *
+ * The input is already CNY under MM-P2a, and CN-3 fixes `1 C = 1 CNY`, so this applies no
+ * exchange rate. A token rate is quoted per 1,000,000 tokens; any other unit is quoted per
+ * one unit.
+ */
+export function formatCoinPerUnitCny(nanoCnyPerUnit: string, unit: string): string {
+  const amount = parseNonnegativeDecimal(nanoCnyPerUnit);
   const multiplier = unit.toLowerCase() === "token" ? 1_000_000n : 1n;
   const minor = divideRoundHalfAwayFromZero(
-    numerator * multiplier,
-    denominator * 10_000_000n,
+    amount.numerator * multiplier,
+    amount.denominator * 10_000_000n,
   );
   const suffix = unit.toLowerCase() === "token" ? " / 1M tokens" : ` / ${unit}`;
   return `${formatCoinMinor(minor)}${suffix}`;
-}
-
-/** Format a USD-basis model rate as Coin without applying the wallet FX rate. */
-export function formatCoinPerMillionUsd(nanoUsdPerToken: string): string {
-  const rate = parseNonnegativeDecimal(nanoUsdPerToken);
-  const minor = divideRoundHalfAwayFromZero(
-    rate.numerator * 1_000_000n,
-    rate.denominator * 10_000_000n,
-  );
-  return `${formatCoinMinor(minor)} / 1M tokens`;
-}
-
-export function formatCoinDecimalUsd(nanoUsd: string, unit: string): string {
-  const amount = parseNonnegativeDecimal(nanoUsd);
-  const minor = divideRoundHalfAwayFromZero(
-    amount.numerator,
-    amount.denominator * 10_000_000n,
-  );
-  return `${formatCoinMinor(minor)} / ${unit}`;
 }
 
 export function convertMinor(

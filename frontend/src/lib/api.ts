@@ -558,6 +558,9 @@ export interface ModelMetadataSyncResult {
   fetched_at: string;
 }
 
+/** Currency a billing rate is denominated in (MB-D3b). */
+export type RateCurrency = "CNY" | "USD";
+
 export interface BillingRateRecord {
   id: string;
   source: string;
@@ -567,7 +570,8 @@ export interface BillingRateRecord {
   rate_kind: string;
   usage_class: string;
   unit: string;
-  unit_price_nano_usd: string;
+  unit_price_nano: string;
+  unit_price_currency: RateCurrency;
   context_tier?: string | null;
   service_tier?: string | null;
   modality?: string | null;
@@ -587,7 +591,8 @@ export interface UpsertBillingRateInput {
   rate_kind?: string;
   usage_class?: string;
   unit?: string;
-  unit_price_nano_usd?: string;
+  unit_price_nano?: string;
+  unit_price_currency?: RateCurrency;
   context_tier?: string | null;
   service_tier?: string | null;
   modality?: string | null;

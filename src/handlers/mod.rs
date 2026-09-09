@@ -1,6 +1,6 @@
 mod account_balance;
 mod billing;
-pub(crate) use billing::billing_rates_form_complete_matrix;
+pub(crate) use billing::{billing_rates_form_complete_matrix, nano_charge_to_usd};
 mod compact;
 pub(crate) mod helpers;
 pub(crate) mod image_api;

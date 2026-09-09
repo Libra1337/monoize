@@ -84,7 +84,8 @@ fn dashboard_rate(id: &str, usage_class: &str, context_tier: Option<&str>) -> Db
         rate_kind: "token".to_string(),
         usage_class: usage_class.to_string(),
         unit: "token".to_string(),
-        unit_price_nano_usd: "1".to_string(),
+        unit_price_nano: "1".to_string(),
+        unit_price_currency: crate::billing_rate_store::RATE_CURRENCY_USD.to_string(),
         context_tier: context_tier.map(str::to_string),
         service_tier: None,
         modality: None,
@@ -143,7 +144,7 @@ fn provider_dashboard_rate_matrix_requires_canonical_dimensionless_fallbacks() {
     ]));
 
     let mut non_canonical = dashboard_rate("input", "input_uncached", None);
-    non_canonical.unit_price_nano_usd = "01".to_string();
+    non_canonical.unit_price_nano = "01".to_string();
     assert!(!provider_dashboard_rate_matrix_is_complete(&[
         non_canonical,
         dashboard_rate("output", "output", None),

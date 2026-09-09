@@ -241,6 +241,11 @@ ISM4.8a. `billing_rate_records` columns:
 - `raw_json` TEXT NOT NULL
 - `updated_at` TEXT NOT NULL
 
+ISM4.8b. `unit_price_nano_usd` above is the column name created by this migration only.
+Migration `m20260909_000066_billing_rate_currency` renames it to `unit_price_nano` and adds
+`unit_price_currency`, per `metered-billing.spec.md` MB-D3e. A migration authored after
+`m20260909_000066` MUST use the new names.
+
 ISM4.9. `monoize_providers` columns:
 
 - `id` TEXT PK

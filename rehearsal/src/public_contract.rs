@@ -38,7 +38,7 @@ pub struct MarketplaceListResponse {
 pub struct OfferRate {
     pub usage_class: String,
     pub unit: String,
-    pub display_rate_nano_usd: String,
+    pub display_rate_nano: String,
     pub context_tier: Option<String>,
     pub service_tier: Option<String>,
     pub modality: Option<String>,

@@ -596,6 +596,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     let probe_routing_config_revision = routing_config_revision.clone();
     let probe_user_store = user_store.clone();
     let probe_billing_rate_store = billing_rate_store.clone();
+    let probe_exchange_rate_service = exchange_rate_service.clone();
     let probe_user_id = active_probe_user_id;
     let probe_shutdown = background_shutdown.clone();
     let probe_task_registration = RequestLogTaskRegistration::new(request_log_tasks.clone());
@@ -622,6 +623,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             let rt_snap = probe_runtime.read().await.clone();
             let pricing_snapshot = match build_active_probe_pricing_snapshot(
                 &probe_billing_rate_store,
+                &probe_exchange_rate_service,
                 &providers,
                 &rt_snap,
             )
@@ -1248,7 +1250,13 @@ struct ActiveProbeRateResolution {
     pricing_profile: String,
     pricing_model: String,
     input_rate_nano: i128,
+    input_is_cny: bool,
     output_rate_nano: i128,
+    output_is_cny: bool,
+    /// FX snapshot captured once per scheduler tick, so every probe of one tick converts a
+    /// CNY-basis rate at the same rate (MB-C1b). `None` when no snapshot exists, which
+    /// MB-R9a makes unreachable for a CNY-basis resolution.
+    cny_per_usd: Option<rust_decimal::Decimal>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1278,7 +1286,7 @@ fn is_dimensionless_probe_rate(rate: &DbBillingRateRecord, usage_class: &str) ->
 fn first_dimensionless_probe_rate(
     rates: &[DbBillingRateRecord],
     usage_class: &str,
-) -> Result<Option<i128>, String> {
+) -> Result<Option<(i128, bool)>, String> {
     let Some(rate) = rates
         .iter()
         .find(|rate| is_dimensionless_probe_rate(rate, usage_class))
@@ -1286,13 +1294,13 @@ fn first_dimensionless_probe_rate(
         return Ok(None);
     };
     let price = rate.unit_price_nano()?;
-    if price < 0 || price.to_string() != rate.unit_price_nano_usd {
+    if price < 0 || price.to_string() != rate.unit_price_nano {
         return Err(format!(
-            "non-canonical or negative unit_price_nano_usd for billing rate {}",
+            "non-canonical or negative unit_price_nano for billing rate {}",
             rate.id
         ));
     }
-    Ok(Some(price))
+    Ok(Some((price, rate.is_cny_basis())))
 }
 
 fn resolve_active_probe_rates_for_model(
@@ -1300,6 +1308,7 @@ fn resolve_active_probe_rates_for_model(
     pricing_model: &str,
     provider_type: &str,
     pricing_profile: &str,
+    cny_per_usd: Option<rust_decimal::Decimal>,
 ) -> Result<Option<ActiveProbeRateResolution>, String> {
     let rates = candidate_rates
         .iter()
@@ -1315,14 +1324,24 @@ fn resolve_active_probe_rates_for_model(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let input_rate_nano = first_dimensionless_probe_rate(&rates, "input_uncached")?;
-    let output_rate_nano = first_dimensionless_probe_rate(&rates, "output")?;
-    if let (Some(input_rate_nano), Some(output_rate_nano)) = (input_rate_nano, output_rate_nano) {
+    let input = first_dimensionless_probe_rate(&rates, "input_uncached")?;
+    let output = first_dimensionless_probe_rate(&rates, "output")?;
+    if let (Some((input_rate_nano, input_is_cny)), Some((output_rate_nano, output_is_cny))) =
+        (input, output)
+    {
+        // MB-R9a: a CNY-basis rate without an FX snapshot is unpriced, not free. Reporting no
+        // resolution keeps the probe from charging a CNY number as if it were USD.
+        if (input_is_cny || output_is_cny) && cny_per_usd.is_none() {
+            return Ok(None);
+        }
         return Ok(Some(ActiveProbeRateResolution {
             pricing_profile: pricing_profile.to_string(),
             pricing_model: pricing_model.to_string(),
             input_rate_nano,
+            input_is_cny,
             output_rate_nano,
+            output_is_cny,
+            cny_per_usd,
         }));
     }
     Ok(None)
@@ -1378,6 +1397,7 @@ impl ActiveProbePricingSnapshot {
 
 async fn build_active_probe_pricing_snapshot(
     billing_rate_store: &BillingRateStore,
+    exchange_rate_service: &ExchangeRateService,
     providers: &[crate::monoize_routing::MonoizeProvider],
     runtime: &MonoizeRuntimeConfig,
 ) -> Result<ActiveProbePricingSnapshot, String> {
@@ -1454,6 +1474,13 @@ async fn build_active_probe_pricing_snapshot(
     let candidate_rates = billing_rate_store
         .list_candidate_rates_for_profiles_and_provider_types(&profiles, &provider_types)
         .await?;
+    // MB-C1b: read once per tick so every probe of this tick converts at the same rate.
+    let cny_per_usd = exchange_rate_service
+        .current()
+        .await
+        .ok()
+        .and_then(|snapshot| snapshot.cny_per_usd.parse::<rust_decimal::Decimal>().ok())
+        .filter(|rate| rate.is_sign_positive() && !rate.is_zero());
     let resolutions = pairs
         .into_iter()
         .map(|(model, provider_type, pricing_profile)| {
@@ -1462,6 +1489,7 @@ async fn build_active_probe_pricing_snapshot(
                 &model,
                 &provider_type,
                 &pricing_profile,
+                cny_per_usd,
             );
             ((model, provider_type, pricing_profile), resolution)
         })
@@ -1481,9 +1509,21 @@ fn calculate_active_probe_charge(
     let prompt_charge_nano = i128::from(prompt_tokens)
         .checked_mul(pricing.input_rate_nano)
         .ok_or_else(|| "active probe prompt charge overflow".to_string())?;
+    let prompt_charge_nano = crate::handlers::nano_charge_to_usd(
+        prompt_charge_nano,
+        pricing.input_is_cny,
+        pricing.cny_per_usd,
+        &pricing.pricing_model,
+    )?;
     let completion_charge_nano = i128::from(completion_tokens)
         .checked_mul(pricing.output_rate_nano)
         .ok_or_else(|| "active probe completion charge overflow".to_string())?;
+    let completion_charge_nano = crate::handlers::nano_charge_to_usd(
+        completion_charge_nano,
+        pricing.output_is_cny,
+        pricing.cny_per_usd,
+        &pricing.pricing_model,
+    )?;
     let base_charge_nano = prompt_charge_nano
         .checked_add(completion_charge_nano)
         .ok_or_else(|| "active probe base charge overflow".to_string())?;
@@ -1838,7 +1878,7 @@ mod active_probe_billing_tests {
     fn rate(
         id: &str,
         usage_class: &str,
-        unit_price_nano_usd: &str,
+        unit_price_nano: &str,
         modality: Option<&str>,
     ) -> DbBillingRateRecord {
         DbBillingRateRecord {
@@ -1850,7 +1890,8 @@ mod active_probe_billing_tests {
             rate_kind: "token".to_string(),
             usage_class: usage_class.to_string(),
             unit: "token".to_string(),
-            unit_price_nano_usd: unit_price_nano_usd.to_string(),
+            unit_price_nano: unit_price_nano.to_string(),
+            unit_price_currency: crate::billing_rate_store::RATE_CURRENCY_USD.to_string(),
             context_tier: None,
             service_tier: None,
             modality: modality.map(str::to_string),
@@ -1872,7 +1913,7 @@ mod active_probe_billing_tests {
         ];
         assert_eq!(
             first_dimensionless_probe_rate(&rates, "input_uncached").unwrap(),
-            Some(1001)
+            Some((1001, false))
         );
     }
 
@@ -1891,6 +1932,7 @@ mod active_probe_billing_tests {
             "upstream-model",
             "responses",
             "provider-profile",
+            None,
         )
         .unwrap();
         assert!(upstream.is_none());
@@ -1899,11 +1941,53 @@ mod active_probe_billing_tests {
             "logical-model",
             "responses",
             "provider-profile",
+            None,
         )
         .unwrap()
         .expect("explicit profile resolves");
         assert_eq!(logical.pricing_profile, "provider-profile");
         assert_eq!(logical.input_rate_nano, 11);
+    }
+
+    /// MB-R9a: a CNY-basis probe rate resolves only while an FX snapshot exists. Without one
+    /// the probe must report no pricing rather than charge the CNY number as USD.
+    #[test]
+    fn probe_cny_rates_need_an_exchange_rate_snapshot() {
+        let mut input = rate("input", "input_uncached", "7100", None);
+        input.unit_price_currency = crate::billing_rate_store::RATE_CURRENCY_CNY.to_string();
+        let mut output = input.clone();
+        output.id = "output".to_string();
+        output.usage_class = "output".to_string();
+        let candidate_rates = vec![input, output];
+
+        assert!(
+            resolve_active_probe_rates_for_model(
+                &candidate_rates,
+                "test-model",
+                "responses",
+                "test-profile",
+                None,
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        let fx = "7.1"
+            .parse::<rust_decimal::Decimal>()
+            .expect("rate parses");
+        let resolved = resolve_active_probe_rates_for_model(
+            &candidate_rates,
+            "test-model",
+            "responses",
+            "test-profile",
+            Some(fx),
+        )
+        .unwrap()
+        .expect("CNY rate resolves with a snapshot");
+        // 1,000,000 tokens x 7100 nano-CNY = 7.1e9 nano-CNY, which is exactly 1e9 nano-USD.
+        let charge =
+            calculate_active_probe_charge(1_000_000, 0, &resolved, Multiplier::ONE).unwrap();
+        assert_eq!(charge.prompt_charge_nano, 1_000_000_000);
     }
 
     #[test]
@@ -1912,7 +1996,10 @@ mod active_probe_billing_tests {
             pricing_profile: "test-profile".to_string(),
             pricing_model: "test-model".to_string(),
             input_rate_nano: 1000,
+            input_is_cny: false,
             output_rate_nano: 2000,
+            output_is_cny: false,
+            cny_per_usd: None,
         };
         let charge =
             calculate_active_probe_charge(1, 1, &pricing, Multiplier::parse("1.001").unwrap())

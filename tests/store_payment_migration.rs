@@ -2,6 +2,20 @@ use monoize::migration::Migrator;
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement, TryGetable};
 use sea_orm_migration::MigratorTrait;
 
+/// Steps needed to roll back `name` and every migration above it.
+///
+/// Derived from the migration list rather than hardcoded: a shallower count leaves the target
+/// migration applied, which makes the re-execution assertions pass without testing anything,
+/// so adding a migration must not silently change the depth.
+fn rollback_steps_through(name: &str) -> u32 {
+    let migrations = Migrator::migrations();
+    let position = migrations
+        .iter()
+        .position(|migration| migration.name() == name)
+        .expect("migration is registered");
+    u32::try_from(migrations.len() - position).expect("rollback step count")
+}
+
 const PAYMENT_TABLES: &[&str] = &[
     "store_channel_credentials",
     "store_reauth_grants",
@@ -499,7 +513,14 @@ async fn migration_059_repairs_released_entitlements_and_order_expiry() {
 #[tokio::test]
 async fn migration_059_preserves_complete_current_entitlement_schema() {
     let db = migrated_database().await;
-    Migrator::down(&db, Some(6)).await.unwrap();
+    Migrator::down(
+        &db,
+        Some(rollback_steps_through(
+            "m20260829_000059_store_released_schema_repair",
+        )),
+    )
+    .await
+    .unwrap();
 
     let group = db
         .query_one(Statement::from_string(
@@ -567,7 +588,14 @@ async fn migration_059_preserves_complete_current_entitlement_schema() {
 async fn migration_059_rejects_partial_or_mixed_entitlement_schema() {
     let db = migrated_database().await;
     // Later migrations follow 059, so each must be rolled back before 059 can be re-executed.
-    Migrator::down(&db, Some(6)).await.unwrap();
+    Migrator::down(
+        &db,
+        Some(rollback_steps_through(
+            "m20260829_000059_store_released_schema_repair",
+        )),
+    )
+    .await
+    .unwrap();
     db.execute_unprepared("DROP TABLE store_plan_entitlement_current")
         .await
         .unwrap();

@@ -43,27 +43,16 @@ describe("authenticated Model Marketplace", () => {
     expect(appendMarketplacePage(state, "all", nextRevision, 3)).toBe(state);
   });
 
+  // MM-P2a/MM-UA5: `display_rate_nano` arrives in nano-CNY, and `1 C = 1 CNY`, so the client
+  // only scales to the display unit and rounds once. No exchange rate is applied here.
   test("renders human per-million prices with exact final rounding", () => {
-    // Rates render as Coin with the `C` symbol, so the display currency changes the
-    // converted amount rather than the symbol.
-    expect(formatMarketplaceRate("2505", "token", "USD", "7.200000")).toBe(
-      "C2.51 / 1M tokens",
-    );
-    expect(formatMarketplaceRate("2504.999999999", "token", "USD", "7.200000")).toBe(
-      "C2.50 / 1M tokens",
-    );
-    expect(formatMarketplaceRate("2500.000000001", "token", "CNY", "7.200000")).toBe(
-      "C18.00 / 1M tokens",
-    );
-    expect(formatMarketplaceRate("1250000000.5", "call", "USD", "7.200000")).toBe(
-      "C1.25 / call",
-    );
+    expect(formatMarketplaceRate("2505", "token")).toBe("C2.51 / 1M tokens");
+    expect(formatMarketplaceRate("2504.999999999", "token")).toBe("C2.50 / 1M tokens");
+    expect(formatMarketplaceRate("1250000000.5", "call")).toBe("C1.25 / call");
     // A range carries one leading symbol; the upper bound omits it.
-    expect(formatMarketplaceRateRange(
-      { min: "1000", max: "2500", unit: "token" },
-      "USD",
-      "7.200000",
-    )).toBe("C1.00–2.50 / 1M tokens");
+    expect(formatMarketplaceRateRange({ min: "1000", max: "2500", unit: "token" })).toBe(
+      "C1.00–2.50 / 1M tokens",
+    );
   });
 
   test("keeps the route inside DashboardLayout and uses public allow-listed data", () => {
@@ -71,16 +60,14 @@ describe("authenticated Model Marketplace", () => {
     expect(appSource).toContain('<Route path="marketplace" element={<ModelMarketplacePage />} />');
     expect(marketplaceSource).toContain("/api/public/marketplace?");
     expect(marketplaceSource).toContain("/api/public/marketplace/offers?");
-    expect(marketplaceSource).toContain("useStoreExchangeRate()");
-    expect(marketplaceSource).toContain("useStoreCurrency");
+    // MM-UA5: the page must not reach for the exchange rate or a display currency.
+    expect(marketplaceSource).not.toContain("useStoreExchangeRate");
+    expect(marketplaceSource).not.toContain("useStoreCurrency");
     expect(marketplaceSource).toContain("keepPreviousData: true");
     expect(marketplaceSource).toContain("<Dialog");
     expect(marketplaceSource).toContain("public_group_name");
     expect(marketplaceSource).toContain("capabilities");
     expect(marketplaceSource).toContain("selected?.capabilities.map");
-    // The rate carries its own 60-second refresh interval, so a retry revalidates
-    // the list and offers rather than the rate.
-    expect(marketplaceSource).toContain("useStoreExchangeRate()");
     expect(marketplaceSource).toContain("list.mutate()");
     expect(marketplaceSource).toContain("offers.mutate()");
     expect(marketplaceSource.match(/rememberGroups\(page\);/g)?.length).toBe(2);
@@ -100,7 +87,7 @@ describe("authenticated Model Marketplace", () => {
     expect(marketplaceSource).not.toContain("nano-USD /");
     const skeletonSource = marketplaceSource.slice(
       marketplaceSource.indexOf("function MarketplaceSkeleton"),
-      marketplaceSource.indexOf("function CurrencyControl"),
+      marketplaceSource.indexOf("function ModelRow"),
     );
     expect(skeletonSource).not.toContain("lg:grid-cols");
   });

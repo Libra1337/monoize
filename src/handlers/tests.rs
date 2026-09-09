@@ -51,7 +51,8 @@ fn test_rate(
         rate_kind: "token".to_string(),
         usage_class: usage_class.to_string(),
         unit: "token".to_string(),
-        unit_price_nano_usd: unit_price.to_string(),
+        unit_price_nano: unit_price.to_string(),
+        unit_price_currency: crate::billing_rate_store::RATE_CURRENCY_USD.to_string(),
         context_tier: context_tier.map(str::to_string),
         service_tier: None,
         modality: modality.map(str::to_string),
@@ -80,7 +81,8 @@ fn test_meter_rate(
         rate_kind: "meter".to_string(),
         usage_class: usage_class.to_string(),
         unit: unit.to_string(),
-        unit_price_nano_usd: unit_price.to_string(),
+        unit_price_nano: unit_price.to_string(),
+        unit_price_currency: crate::billing_rate_store::RATE_CURRENCY_USD.to_string(),
         context_tier: None,
         service_tier: None,
         modality: None,
@@ -93,11 +95,56 @@ fn test_meter_rate(
     }
 }
 
+/// PP-CUR-4: the charge, not the unit price, is converted.
+///
+/// Converting the unit price first would destroy cheap rates: the operator's cheapest rate is
+/// 10 nano-CNY per token, and `10 / 7.1` rounds to 1, a 29 percent error. Multiplying by the
+/// quantity first keeps the dividend large enough that the error stays under one nano-USD for
+/// the whole line.
+#[test]
+fn cny_charges_convert_after_multiplication_not_before() {
+    use crate::billing_rate_store::{RATE_CURRENCY_CNY, RATE_CURRENCY_USD};
+    use crate::handlers::billing::charge_in_usd;
+    use rust_decimal::Decimal;
+    use std::str::FromStr as _;
+
+    let fx = Decimal::from_str("7.1").expect("rate parses");
+    let mut cny = test_rate("cny", "input_uncached", 10, None, None, None, json!({}));
+    cny.unit_price_currency = RATE_CURRENCY_CNY.to_string();
+    let mut usd = test_rate("usd", "input_uncached", 10, None, None, None, json!({}));
+    usd.unit_price_currency = RATE_CURRENCY_USD.to_string();
+
+    // 1,000,000 tokens x 10 nano-CNY = 10,000,000 nano-CNY; / 7.1 = 1,408,450.7 -> 1,408,451.
+    let charge = 1_000_000_i128 * 10;
+    assert_eq!(
+        charge_in_usd(charge, &cny, Some(fx)).expect("converts"),
+        1_408_451
+    );
+
+    // Quantising the unit price first would give 1 nano-USD/token = 1,000,000 for the same
+    // line, which is 29 percent low. The implementation must not produce that.
+    assert_ne!(
+        charge_in_usd(charge, &cny, Some(fx)).expect("converts"),
+        1_000_000
+    );
+
+    // A USD-basis rate is returned untouched, with or without a snapshot.
+    assert_eq!(charge_in_usd(charge, &usd, Some(fx)).expect("passes"), charge);
+    assert_eq!(charge_in_usd(charge, &usd, None).expect("passes"), charge);
+
+    // A CNY rate cannot be billed without a snapshot; it must fail rather than bill at the
+    // USD magnitude, which would overcharge by the exchange rate.
+    assert!(charge_in_usd(charge, &cny, None).is_err());
+    assert!(charge_in_usd(charge, &cny, Some(Decimal::ZERO)).is_err());
+}
+
 fn test_resolution(rates: Vec<DbBillingRateRecord>) -> BillingRateResolution {
     BillingRateResolution {
         pricing_profile: "test".to_string(),
         pricing_model: "test-model".to_string(),
         rates,
+        // The fixtures are USD-basis, so no exchange rate is needed to bill them.
+        cny_per_usd: None,
     }
 }
 

@@ -11,9 +11,12 @@ import { ModelBadge } from '@/components/ModelBadge'
 import { cn } from '@/lib/utils'
 import type { RequestLog } from '@/lib/api'
 import {
+	formatNanoAmount,
 	formatNanoPerTokenPerMillion,
 	isZeroIntegerString,
-	normalizeMultiplier
+	normalizeMultiplier,
+	readRateCurrency,
+	type RateCurrency
 } from '@/lib/exact-decimal'
 import {
 	asObject,
@@ -211,9 +214,12 @@ export function LogRowCells({
 
 	const formatTokenCount = (value: number | null | undefined) =>
 		value == null ? '-' : new Intl.NumberFormat('en-US').format(value)
-	const formatRatePerMillion = (nanoPerToken: string | null) => {
+	const formatRatePerMillion = (
+		nanoPerToken: string | null,
+		currency: RateCurrency = 'USD'
+	) => {
 		if (!nanoPerToken) return '-'
-		const formatted = formatNanoPerTokenPerMillion(nanoPerToken)
+		const formatted = formatNanoPerTokenPerMillion(nanoPerToken, currency)
 		return formatted === '—' ? '-' : `${formatted}/1M`
 	}
 	const localizeBillingValue = (
@@ -224,13 +230,17 @@ export function LogRowCells({
 		const translationKey = billingValueTranslationKey(dimension, value)
 		return translationKey ? t(translationKey) : value
 	}
-	const formatUnitRate = (nanoPerUnit: string | null, unit: unknown) => {
+	const formatUnitRate = (
+		nanoPerUnit: string | null,
+		unit: unknown,
+		currency: RateCurrency
+	) => {
 		const rawUnit = typeof unit === 'string' && unit ? unit : null
 		const unitLabel =
 			localizeBillingValue('unit', rawUnit) ?? t('requestLogs.billingUnitGeneric')
 		return rawUnit === 'token' ?
-				formatRatePerMillion(nanoPerUnit)
-			:	`${formatCost(nanoPerUnit)}/${unitLabel}`
+				formatRatePerMillion(nanoPerUnit, currency)
+			:	`${formatNanoAmount(nanoPerUnit, currency)}/${unitLabel}`
 	}
 	const formatRateTimesUsage = (
 		tokens: number | null,
@@ -242,6 +252,8 @@ export function LogRowCells({
 		}
 		return `${formatTokenCount(tokens)} × ${formatRatePerMillion(rateNano)} = ${formatCost(chargeNano)}`
 	}
+	// MB-C4a: the unit price carries the rate's own currency, while `charge_nano` is already
+	// normalized to nano-USD. Showing both under one symbol would misstate a CNY-basis rate.
 	const formatLineItemDetail = (item: Record<string, unknown>) => {
 		const quantity = readNumber(item.quantity)
 		const unitPrice = readNanoString(item, 'unit_price_nano')
@@ -249,7 +261,8 @@ export function LogRowCells({
 		if (quantity == null || !unitPrice || !charge || isZeroIntegerString(charge)) {
 			return null
 		}
-		return `${formatTokenCount(quantity)} × ${formatUnitRate(unitPrice, item.unit)} = ${formatCost(charge)}`
+		const currency = readRateCurrency(item.unit_price_currency)
+		return `${formatTokenCount(quantity)} × ${formatUnitRate(unitPrice, item.unit, currency)} = ${formatCost(charge)}`
 	}
 	const lineItemLabel = (item: Record<string, unknown>) => {
 		const usageClass = localizeBillingValue('usageClass', item.usage_class)

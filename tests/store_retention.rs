@@ -88,8 +88,16 @@ async fn migration_058_down_up_round_trip_recreates_retained_table_indexes() {
     Migrator::up(&*db.write().await, None)
         .await
         .expect("run migrations");
-    // Migrations 059 through 064 sit above 058 and must be rolled back with it.
-    Migrator::down(&*db.write().await, Some(7))
+    // Every migration above 058 must be rolled back with it. The step count is derived from
+    // the migration list rather than hardcoded, so adding a migration cannot silently turn
+    // this into a shallower rollback that leaves 058 applied and the assertions vacuous.
+    let migrations = Migrator::migrations();
+    let position = migrations
+        .iter()
+        .position(|migration| migration.name() == "m20260828_000058_store_retention_runtime")
+        .expect("migration 058 is registered");
+    let steps = u32::try_from(migrations.len() - position).expect("rollback step count");
+    Migrator::down(&*db.write().await, Some(steps))
         .await
         .expect("roll back migration 058");
 

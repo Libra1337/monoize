@@ -85,7 +85,8 @@ Each request body MUST contain:
 - `model_pattern = "gpt-4o-mini"`
 - `rate_kind = "token"`
 - `unit = "token"`
-- `unit_price_nano_usd = "1"`
+- `unit_price_nano = "1"`
+- `unit_price_currency = "USD"`
 - `priority = 100`
 - `enabled = true`
 

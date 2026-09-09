@@ -27,7 +27,9 @@ Channel 的模型条目可以用 `redirect` 指定真实的上游模型名。
 2. 为上游模型或逻辑模型选择完整费率矩阵；
 3. 应用模型倍率覆盖或 Provider 倍率。
 
-费用以纳美元（nano-dollar）为单位累计到每个用户的流水账。
+每条费率记录同时保存价格和价格货币。手动录入的费率默认以 `CNY / 1M tokens` 计价。从 Models.dev 导入的费率保持 `USD`。
+
+Monoize 用当前的 CNY/USD 汇率快照换算 `CNY` 价格，并以纳美元（nano-dollar）为单位把费用累计到每个用户的流水账。如果某个模型使用 `CNY` 价格而当前没有可用的汇率快照，该模型的请求返回 `model_pricing_required`，不会按估算汇率扣费。
 
 ## 模型列表
 

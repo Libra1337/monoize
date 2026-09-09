@@ -40,7 +40,8 @@ MB-D2. `billing_rate_records` MUST contain these columns:
 - `rate_kind: TEXT`
 - `usage_class: TEXT`
 - `unit: TEXT`
-- `unit_price_nano_usd: TEXT`
+- `unit_price_nano: TEXT`
+- `unit_price_currency: TEXT`
 - `context_tier: TEXT NULL`
 - `service_tier: TEXT NULL`
 - `modality: TEXT NULL`
@@ -51,9 +52,22 @@ MB-D2. `billing_rate_records` MUST contain these columns:
 - `raw_json: TEXT`
 - `updated_at: TEXT`
 
-MB-D3. `unit_price_nano_usd` MUST be an integer string denominated in nano-USD per one `unit`.
+MB-D3. `unit_price_nano` MUST be an integer string denominated in nano-units of `unit_price_currency` per one `unit`. One nano-unit is `10^-9` of one major unit of that currency.
 
-MB-D3a. `unit_price_nano_usd` MUST be non-negative and representable as `i128`. Create, update, sync, and metadata-mirror paths MUST reject a negative or malformed rate before persistence.
+MB-D3a. `unit_price_nano` MUST be non-negative and representable as `i128`. Create, update, sync, and metadata-mirror paths MUST reject a negative or malformed rate before persistence.
+
+MB-D3b. `unit_price_currency` MUST be exactly `USD` or `CNY`. The database MUST enforce this domain with a `CHECK` constraint. A create or update path MUST reject any other value with `400 invalid_request`.
+
+MB-D3c. Write-path currency defaults are:
+
+- A rate written by Models.dev sync (`source = "models_dev"`) MUST set `unit_price_currency = "USD"`, because Models.dev publishes list prices in USD.
+- A rate written by bundled-catalog sync (`source = "catalog"`) MUST set `unit_price_currency = "USD"`, because `billing-rates.catalog.json` stores USD list prices in its `unit_price_nano_usd` field.
+- A rate written through the dashboard billing-rate API or the billing-profile editor MUST default to `unit_price_currency = "CNY"` when the request omits the field. The dashboard price form is denominated in CNY per 1,000,000 tokens.
+- An update that omits `unit_price_currency` for an existing row MUST preserve the stored currency. An omitted field MUST NOT re-denominate a stored price.
+
+MB-D3d. A rate row mirrored from `model_metadata_records` has `id` of the form `model_metadata:{model_id}:{usage_class}` and MUST use `unit_price_currency = "USD"`, even when its `source` is `manual`. Its price originates from the nano-USD metadata fields of `model-metadata-dashboard.spec.md` MD4, not from a CNY price form.
+
+MB-D3e. Migration `m20260909_000066_billing_rate_currency` MUST rename `unit_price_nano_usd` to `unit_price_nano`, add `unit_price_currency` with the MB-D3b `CHECK` constraint and default `USD`, and then set `unit_price_currency = "CNY"` for exactly the rows where `source = "manual"` and `id` does not start with `model_metadata:`. It MUST NOT change any `unit_price_nano` value and MUST NOT apply an exchange rate: a pre-migration manual price of `9000` MUST become `9000` CNY, not a converted value. The migration MUST preserve the `idx_billing_rate_records_lookup` index of migration `m20260619_000019_billing_rate_records`.
 
 MB-D4. `match_json` and `raw_json` MUST be JSON object strings. Decoding a persisted value that is malformed JSON or is not a JSON object MUST return a storage error that identifies the billing-rate row and column. A get, list, or matching-rate query MUST propagate that error; it MUST NOT replace the value with `{}`, omit the row, or treat the row as an unconditional rate. Create, update, and catalog-sync paths MUST reject an explicit non-object value before persistence. An omitted value MAY default to `{}` before persistence.
 
@@ -144,7 +158,9 @@ MB-R7. If a tiered matrix has no deterministic tier selector under MB-R6, prefli
 
 MB-R8. For a context-tiered matrix, every non-default context tier present for a requested token class MUST have a matching rate for that token class. Missing tier rows MUST reject with HTTP `403` and code `model_pricing_required`.
 
-MB-R9. Preflight MUST parse `unit_price_nano_usd` for every candidate row as a canonical non-negative `i128` string. One malformed, non-canonical, or negative candidate row MUST make the matrix incomplete.
+MB-R9. Preflight MUST parse `unit_price_nano` for every candidate row as a canonical non-negative `i128` string. One malformed, non-canonical, or negative candidate row MUST make the matrix incomplete.
+
+MB-R9a. When at least one candidate row has `unit_price_currency = "CNY"` and no exchange-rate snapshot with a positive `cny_per_usd` exists, the matrix MUST be incomplete. The mapping MUST then be excluded before upstream dispatch under MB-MIG-3, and a request whose every eligible mapping is excluded for this reason MUST return HTTP `503` and code `model_pricing_required`. A CNY-basis rate MUST NOT be settled at its USD magnitude, and settlement MUST NOT be the first place this condition is detected.
 
 MB-R10. A complete matrix MUST contain dimensionless fallback rows for `input_uncached` and `output`. A dimensionless fallback row has `modality = null`, `cache_ttl = null`, and `service_tier` equal to null or `default`. For a non-tiered matrix, its `context_tier` MUST equal null or `default`. For a context-tiered matrix, each tier required by MB-R8 MUST contain such a fallback row. Preflight MUST reject a matrix that lacks one of these rows.
 
@@ -215,6 +231,26 @@ MB-C1. Base charge is:
 base_charge = sum(token_line_items.charge_nano) + sum(meter_line_items.charge_nano)
 ```
 
+Every `charge_nano` is denominated in nano-USD, because wallet balances, holds, and ledger entries are nano-USD.
+
+MB-C1a. For a rate row with `unit_price_currency = "USD"`, the line charge is:
+
+```text
+charge_nano = quantity * unit_price_nano
+```
+
+For a rate row with `unit_price_currency = "CNY"`, the line charge is:
+
+```text
+charge_nano = round_half_away_from_zero((quantity * unit_price_nano) / cny_per_usd)
+```
+
+The division MUST be applied to the product, not to `unit_price_nano`. Dividing the unit price first quantises a small rate: at `cny_per_usd = 7.1`, a `unit_price_nano` of `10` would round to `1`, a 29 percent error. Applying the division after multiplication bounds the error of one line item at half a nano-USD. The arithmetic MUST use exact decimal or checked integer operations and MUST NOT pass through `f32` or `f64`.
+
+MB-C1b. `cny_per_usd` is the value of one exchange-rate snapshot read at most once per forwarding request, before pricing any attempt. Every line item of one request MUST use that single value, so the same snapshot applies no matter how long the request ran. If the snapshot is absent or its `cny_per_usd` is not a positive decimal, a CNY-basis line item MUST fail with a billing error and MUST NOT be charged at its USD magnitude.
+
+MB-C1c. A reserved maximum charge under a hold MUST be computed as the maximum over per-rate charges already normalized to nano-USD by MB-C1a. It MUST NOT be computed as the maximum over raw `unit_price_nano` values, because a CNY-basis price and a USD-basis price are not comparable before normalization.
+
 MB-C2. Final charge is:
 
 ```text
@@ -235,6 +271,9 @@ MB-C4. A successful billing snapshot MUST persist `billing_breakdown_json` with:
 - `provider_multiplier`
 - `base_charge_nano`
 - `final_charge_nano`
+- `cny_per_usd`: the decimal string of the MB-C1b snapshot, or `null` when no snapshot existed
+
+MB-C4a. Each token and meter line item in `billing_breakdown_json` MUST record `unit_price_nano` and `unit_price_currency` of the applied rate row, and `charge_nano` in nano-USD after MB-C1a. A stored breakdown MUST therefore be sufficient to recompute the charge without reading `billing_rate_records` or the exchange-rate history.
 
 MB-C5. A billable non-stream response or buffered synthetic stream without normalized usage MUST be rejected before delivery when the selected Channel has `allow_missing_usage = false`. A pass-through stream without terminal normalized usage MUST settle from an estimate whose input quantity is `ceil(serialized_upstream_request_utf8_bytes / 4)` and whose output quantity is `ceil(decoded_visible_output_utf8_bytes / 4)` when the selected Channel has `allow_missing_usage = false`; the resulting billing snapshot MUST contain `estimated = true`. When the selected Channel has `allow_missing_usage = true`, each of these missing-usage cases MUST instead settle with normalized input and output token quantities of zero and a total charge of zero. Present upstream usage MUST always take precedence over this Channel flag.
 
@@ -247,6 +286,8 @@ MB-A1. Admin endpoint `GET /api/dashboard/billing-rates` MUST return all billing
 MB-A2. Admin endpoint `PUT /api/dashboard/billing-rates/{id}` MUST upsert one billing-rate row.
 
 MB-A2a. If the request body omits `source`, the upserted row MUST use `source = "manual"`, even when a row with the same `id` already exists from `source = "catalog"` or `source = "models_dev"`.
+
+MB-A2c. When `PUT /api/dashboard/billing-rates/{id}` creates a row and omits `unit_price_currency`, the created row MUST use `CNY`. When it updates a row and omits the field, the row MUST keep its stored currency. The response MUST always include the effective `unit_price_currency`.
 
 MB-A2b. A billing-rate partial upsert MUST preserve omitted fields at the database write boundary. Concurrent partial upserts to distinct fields MUST NOT restore omitted fields from a stale pre-update snapshot on SQLite or PostgreSQL.
 

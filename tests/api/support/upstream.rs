@@ -5319,7 +5319,8 @@ async fn seed_test_server_tool_meter_rates(state: &monoize::app::AppState) {
                     rate_kind: Some("meter".to_string()),
                     usage_class: Some(usage_class.to_string()),
                     unit: Some(unit.to_string()),
-                    unit_price_nano_usd: Some("0".to_string()),
+                    unit_price_nano: Some("0".to_string()),
+                    unit_price_currency: Some("USD".to_string()),
                     context_tier: Some(None),
                     service_tier: Some(None),
                     modality: Some(None),
@@ -5336,7 +5337,7 @@ async fn seed_test_server_tool_meter_rates(state: &monoize::app::AppState) {
 }
 
 async fn seed_test_priority_token_rates(state: &monoize::app::AppState) {
-    for (usage_class, unit_price_nano_usd) in [("input_uncached", "2000"), ("output", "3000")] {
+    for (usage_class, unit_price_nano) in [("input_uncached", "2000"), ("output", "3000")] {
         state
             .billing_rate_store
             .upsert_billing_rate(
@@ -5349,7 +5350,8 @@ async fn seed_test_priority_token_rates(state: &monoize::app::AppState) {
                     rate_kind: Some("token".to_string()),
                     usage_class: Some(usage_class.to_string()),
                     unit: Some("token".to_string()),
-                    unit_price_nano_usd: Some(unit_price_nano_usd.to_string()),
+                    unit_price_nano: Some(unit_price_nano.to_string()),
+                    unit_price_currency: Some("USD".to_string()),
                     context_tier: Some(None),
                     service_tier: Some(Some("priority".to_string())),
                     modality: Some(None),
@@ -5366,7 +5368,7 @@ async fn seed_test_priority_token_rates(state: &monoize::app::AppState) {
 }
 
 async fn seed_test_fast_token_rates(state: &monoize::app::AppState) {
-    for (usage_class, unit_price_nano_usd) in [("input_uncached", "2000"), ("output", "3000")] {
+    for (usage_class, unit_price_nano) in [("input_uncached", "2000"), ("output", "3000")] {
         state
             .billing_rate_store
             .upsert_billing_rate(
@@ -5379,7 +5381,8 @@ async fn seed_test_fast_token_rates(state: &monoize::app::AppState) {
                     rate_kind: Some("token".to_string()),
                     usage_class: Some(usage_class.to_string()),
                     unit: Some("token".to_string()),
-                    unit_price_nano_usd: Some(unit_price_nano_usd.to_string()),
+                    unit_price_nano: Some(unit_price_nano.to_string()),
+                    unit_price_currency: Some("USD".to_string()),
                     context_tier: Some(None),
                     service_tier: Some(Some("fast".to_string())),
                     modality: Some(None),

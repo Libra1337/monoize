@@ -41,8 +41,8 @@ import {
 import type { BillingRateRecord, PricingProfilePattern } from '@/lib/api'
 import {
 	formatNanoPerTokenPerMillion,
-	nanoPerTokenToUsdPerMillion,
-	usdPerMillionToNanoPerToken
+	nanoPerTokenToPerMillion,
+	perMillionToNanoPerToken
 } from '@/lib/exact-decimal'
 import { cn } from '@/lib/utils'
 
@@ -54,16 +54,25 @@ const visibleUsageClasses: Array<{ id: UsageClass; label: string }> = [
 	{ id: 'output', label: 'Output' }
 ]
 
-function nanoToPerMillion(value?: string | null): string {
-	return formatNanoPerTokenPerMillion(value)
+/// UI17a: a rate renders under the symbol of its own stored currency.
+function nanoToPerMillion(rate?: BillingRateRecord): string {
+	return formatNanoPerTokenPerMillion(rate?.unit_price_nano, rate?.unit_price_currency)
 }
 
-function nanoToInput(value?: string | null): string {
-	return nanoPerTokenToUsdPerMillion(value) ?? ''
+/**
+ * Prefills the CNY override form from an existing rate.
+ *
+ * Only a CNY-basis rate is prefilled. Copying a models.dev USD number into a CNY field would
+ * keep the digits and change their meaning, turning a $3.00 list price into a ¥3.00 charge,
+ * so a USD-basis rate leaves the field empty and the operator types the CNY price.
+ */
+function nanoToInput(rate?: BillingRateRecord): string {
+	if (!rate || rate.unit_price_currency !== 'CNY') return ''
+	return nanoPerTokenToPerMillion(rate.unit_price_nano) ?? ''
 }
 
 function perMillionToNano(value: string): string {
-	const converted = usdPerMillionToNanoPerToken(value)
+	const converted = perMillionToNanoPerToken(value)
 	if (converted == null) throw new Error('Price must be a non-negative decimal')
 	return converted
 }
@@ -183,9 +192,9 @@ export function BillingProfilesTab() {
 	const openOverride = (profile: string, model: string, modelRates: BillingRateRecord[]) => {
 		setOverrideTarget({ profile, model })
 		setOverrideForm({
-			input: nanoToInput(effectiveRate(modelRates, 'input_uncached')?.unit_price_nano_usd),
-			cache: nanoToInput(effectiveRate(modelRates, 'cache_read')?.unit_price_nano_usd),
-			output: nanoToInput(effectiveRate(modelRates, 'output')?.unit_price_nano_usd)
+			input: nanoToInput(effectiveRate(modelRates, 'input_uncached')),
+			cache: nanoToInput(effectiveRate(modelRates, 'cache_read')),
+			output: nanoToInput(effectiveRate(modelRates, 'output'))
 		})
 	}
 
@@ -222,7 +231,10 @@ export function BillingProfilesTab() {
 					rate_kind: 'token',
 					usage_class: usageClass,
 					unit: 'token',
-					unit_price_nano_usd: perMillionToNano(value),
+					unit_price_nano: perMillionToNano(value),
+					// UI19c: this dialog is denominated in CNY, so the currency is stated on
+					// every write instead of relying on the server default.
+					unit_price_currency: 'CNY',
 					priority: 1000,
 					enabled: true,
 					match_json: {},
@@ -282,7 +294,7 @@ export function BillingProfilesTab() {
 				</aside>
 
 				<section className='min-w-0 p-4 sm:p-5'>
-					<div className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'><div><div className='flex flex-wrap items-center gap-2'><h3 className='text-lg font-semibold'>{selectedProfile || c('选择 Profile', 'Select a profile')}</h3><Badge variant='secondary'>{selectedModelRates.length} models</Badge></div><p className='mt-1 text-sm text-muted-foreground'>{c('默认显示 USD / 100 万 tokens；手动覆盖优先于同步价格。', 'Prices are shown as USD per 1M tokens. Manual overrides take precedence.')}</p></div><div className='relative w-full sm:w-72'><Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={c('搜索模型', 'Search models')} className='pl-9' /></div></div>
+					<div className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'><div><div className='flex flex-wrap items-center gap-2'><h3 className='text-lg font-semibold'>{selectedProfile || c('选择 Profile', 'Select a profile')}</h3><Badge variant='secondary'>{selectedModelRates.length} models</Badge></div><p className='mt-1 text-sm text-muted-foreground'>{c('价格按每 100 万 tokens 显示，¥ 为 CNY，$ 为同步的 USD 价格；手动覆盖优先于同步价格。', 'Prices are shown per 1M tokens. ¥ marks a CNY price, $ marks a synced USD price. Manual overrides take precedence.')}</p></div><div className='relative w-full sm:w-72'><Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={c('搜索模型', 'Search models')} className='pl-9' /></div></div>
 
 					<div className='mt-5 hidden grid-cols-[minmax(220px,1fr)_110px_110px_110px_90px] gap-2 border-b px-3 pb-2 text-xs font-medium text-muted-foreground md:grid'><span>Model</span><span>Input / 1M</span><span>Cache / 1M</span><span>Output / 1M</span><span /></div>
 					<div className='mt-2 flex flex-col gap-2'>
@@ -291,7 +303,7 @@ export function BillingProfilesTab() {
 							const metadataItem = metadata.find(item => item.model_id === model)
 							return <div key={model} className='grid gap-3 rounded-lg border p-3 transition-colors hover:bg-muted/30 md:grid-cols-[minmax(220px,1fr)_110px_110px_110px_90px] md:items-center'>
 								<div className='flex min-w-0 items-center gap-2'><ModelBadge model={model} provider={metadataItem?.models_dev_provider || selectedProfile} showDetails={false} /><div className='min-w-0'>{manual ? <Badge variant='default' className='mt-1'>{c('手动覆盖', 'Manual')}</Badge> : null}</div></div>
-								{visibleUsageClasses.map(item => <div key={item.id} className='flex items-center justify-between gap-3 md:block'><span className='text-xs text-muted-foreground md:hidden'>{item.label}</span><span className='font-mono text-sm'>{nanoToPerMillion(effectiveRate(modelRates, item.id)?.unit_price_nano_usd)}</span></div>)}
+								{visibleUsageClasses.map(item => <div key={item.id} className='flex items-center justify-between gap-3 md:block'><span className='text-xs text-muted-foreground md:hidden'>{item.label}</span><span className='font-mono text-sm'>{nanoToPerMillion(effectiveRate(modelRates, item.id))}</span></div>)}
 								<div className='flex justify-end gap-1'><Button size='sm' variant='ghost' onClick={() => openOverride(selectedProfile, model, modelRates)}>{c('编辑', 'Edit')}</Button>{manual ? <Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' onClick={() => void deleteManualOverrides(modelRates)} aria-label={c('删除手动覆盖', 'Delete manual override')}><Trash2 data-icon /></Button> : null}</div>
 							</div>
 						})}
@@ -310,7 +322,7 @@ export function BillingProfilesTab() {
 		</div>
 
 		<Dialog open={!!overrideTarget} onOpenChange={open => { if (!open) setOverrideTarget(null) }}>
-			<DialogContent className='max-w-lg'><DialogHeader><DialogTitle>{c('手动价格覆盖', 'Manual price override')}</DialogTitle><DialogDescription>{overrideTarget ? `${overrideTarget.profile} / ${overrideTarget.model}` : ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('输入 USD / 100 万 tokens。留空 Cache 表示不覆盖缓存价格。', 'Enter USD per 1M tokens. Leave cache blank to keep it unspecified.')}</p><div className='grid gap-4 sm:grid-cols-3'>{[{ key: 'input', label: 'Input' }, { key: 'cache', label: 'Cache read' }, { key: 'output', label: 'Output' }].map(item => <div key={item.key} className='flex flex-col gap-2'><Label>{item.label}</Label><div className='relative'><span className='absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground'>$</span><Input type='text' inputMode='decimal' className='pl-7' value={overrideForm[item.key as keyof typeof overrideForm]} onChange={event => setOverrideForm(previous => ({ ...previous, [item.key]: event.target.value }))} /></div></div>)}</div></div><DialogFooter><Button variant='outline' onClick={() => setOverrideTarget(null)}>{c('取消', 'Cancel')}</Button><Button disabled={savingOverride} onClick={() => void saveOverride()}>{savingOverride ? c('保存中…', 'Saving…') : c('保存覆盖', 'Save override')}</Button></DialogFooter></DialogContent>
+			<DialogContent className='max-w-lg'><DialogHeader><DialogTitle>{c('手动价格覆盖', 'Manual price override')}</DialogTitle><DialogDescription>{overrideTarget ? `${overrideTarget.profile} / ${overrideTarget.model}` : ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('输入 CNY / 100 万 tokens。留空 Cache 表示不覆盖缓存价格。', 'Enter CNY per 1M tokens. Leave cache blank to keep it unspecified.')}</p><div className='grid gap-4 sm:grid-cols-3'>{[{ key: 'input', label: 'Input' }, { key: 'cache', label: 'Cache read' }, { key: 'output', label: 'Output' }].map(item => <div key={item.key} className='flex flex-col gap-2'><Label>{item.label}</Label><div className='relative'><span className='absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground'>¥</span><Input type='text' inputMode='decimal' className='pl-7' value={overrideForm[item.key as keyof typeof overrideForm]} onChange={event => setOverrideForm(previous => ({ ...previous, [item.key]: event.target.value }))} /></div></div>)}</div></div><DialogFooter><Button variant='outline' onClick={() => setOverrideTarget(null)}>{c('取消', 'Cancel')}</Button><Button disabled={savingOverride} onClick={() => void saveOverride()}>{savingOverride ? c('保存中…', 'Saving…') : c('保存覆盖', 'Save override')}</Button></DialogFooter></DialogContent>
 		</Dialog>
 	</>
 }

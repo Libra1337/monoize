@@ -80,7 +80,7 @@ offers: Array<{
   rates: Array<{
     usage_class: string,
     unit: string,
-    display_rate_nano_usd: decimal string,
+    display_rate_nano: decimal string,
     context_tier: string | null,
     service_tier: string | null,
     modality: string | null,
@@ -239,8 +239,19 @@ MM-P1a. A disabled Provider contributes zero items to `GET /api/public/marketpla
 zero offers to `GET /api/public/marketplace/offers`, even when its embedded Channel and
 priced model mapping remain enabled.
 
-MM-P2. For one integer nano-USD base rate `r` and exact decimal effective multiplier `m`,
-the displayed rate is exact decimal `r * m` without per-unit truncation.
+MM-P2. For one integer base rate `r` from `billing_rate_records.unit_price_nano`, exact
+decimal effective multiplier `m`, and currency factor `f`, the displayed rate is exact
+decimal `r * m * f` without per-unit truncation. `f` is `1` when the rate row has
+`unit_price_currency = "CNY"`, and the current snapshot `cny_per_usd` when the row has
+`unit_price_currency = "USD"`. The two factors MUST be applied in one multiplication so
+rounding occurs at most once, at the final display unit.
+
+MM-P2a. `display_rate_nano` is therefore denominated in nano-CNY per source unit, which is
+nano-Coin under `coin-wallet-navigation.spec.md` CN-3. A rate with
+`unit_price_currency = "USD"` MUST be omitted from the response when no exchange-rate
+snapshot with a positive `cny_per_usd` exists; it MUST NOT be published at its USD
+magnitude under a Coin label. An offer whose rate list becomes empty MUST be omitted under
+MM-P1.
 
 MM-P3. Input and output ranges use minimum and maximum MM-P2 values within one Group and
 logical model. Different Groups MUST render separately.
@@ -248,9 +259,10 @@ logical model. Different Groups MUST render separately.
 MM-P4. Display rates are informational. The API and modal MUST state that billing sums
 integer line items, applies one multiplier, and truncates once at final charge.
 
-MM-P5. Public rates MUST serialize as canonical non-negative decimal strings in nano-USD
+MM-P5. Public rates MUST serialize as canonical non-negative decimal strings in nano-CNY
 per source unit, with at most nine fractional digits and no exponent. Frontend MUST NOT
-parse them through JavaScript `Number` or calculate multiplier products.
+parse them through JavaScript `Number`, calculate multiplier products, or apply a second
+currency conversion.
 
 ## 7. Browser behavior
 
@@ -296,17 +308,19 @@ names, or internal errors.
 MM-UA3. The page MUST render Group sections explicitly. A model in two Groups MUST render
 once in each Group. Two Groups MUST NOT share one combined price range.
 
-MM-UA4. The toolbar MUST provide Group and capability filters plus a CNY/USD segmented
-control. The currency value MUST use the same in-memory Store currency provider as
-`/dashboard/store`. It MUST NOT use `localStorage`.
+MM-UA4. The toolbar MUST provide Group and capability filters. It MUST NOT provide a
+currency control, because MM-P2 normalizes every published rate to one unit and a display
+currency cannot change it.
 
-MM-UA5. Currency conversion MUST use the current Store exchange-rate snapshot. CNY and USD
-prices MUST render as `¥<amount> / 1M tokens` and `$<amount> / 1M tokens`, respectively.
-The page MUST NOT show nano-USD values to a user.
+MM-UA5. Prices MUST render as Coin through the shared Coin mark of
+`coin-wallet-navigation.spec.md` CN-16, in the form `<coin mark><amount> / 1M tokens` for a
+token unit and `<coin mark><amount> / <unit>` otherwise. The page MUST NOT show a nano value
+to a user, MUST NOT read the exchange-rate snapshot, and MUST NOT apply an exchange rate to
+`display_rate_nano`.
 
-MM-UA6. A per-token nano-USD rate MUST first multiply by exactly 1,000,000 source units.
-Currency conversion MUST use exact integer or rational arithmetic. Rounding MUST occur once
-at the final currency minor unit.
+MM-UA6. A per-token rate MUST first multiply by exactly 1,000,000 source units. The
+computation MUST use exact integer or rational arithmetic. Rounding MUST occur once, at the
+Coin minor unit.
 
 MM-UA7. The list MUST use compact model rows that expand naturally with the number of Groups
 and models. It MUST NOT use a fixed viewport table height.

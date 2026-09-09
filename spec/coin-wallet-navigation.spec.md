@@ -10,7 +10,7 @@ CN-2. The UI renders Coin with a graphical coin mark and a numeric amount for al
 
 CN-3. Wallet and usage amounts originate from internal nano-USD balances. The UI converts them to CNY minor units using the current `cny_per_usd` snapshot and then displays Coin, where `1 C = 1 CNY`.
 
-CN-4. A recharge product priced in CNY displays its CNY amount as Coin. A recharge product priced in USD displays its USD amount multiplied by the current `cny_per_usd` snapshot as Coin. Marketplace model rates retain their source billing basis: a USD-basis rate uses `1 C = 1 USD`, while a CNY-basis rate uses `1 C = 1 CNY`. Conversion MUST occur once at the final display unit.
+CN-4. A recharge product priced in CNY displays its CNY amount as Coin. A recharge product priced in USD displays its USD amount multiplied by the current `cny_per_usd` snapshot as Coin. A Marketplace model rate is normalized to CNY by the server under `model-marketplace.spec.md` MM-P2: a rate with `unit_price_currency = "CNY"` passes through, and a rate with `unit_price_currency = "USD"` is multiplied by the current `cny_per_usd` snapshot. Conversion MUST occur once at the final display unit. The frontend MUST render `display_rate_nano` as Coin without applying a second conversion, and the display-currency selection MUST NOT change a Marketplace rate amount.
 
 CN-5. Payment orders retain `CNY` or `USD` as the settlement currency and persist the exchange-rate snapshot. Coin is a display unit and is not sent as a payment-provider currency.
 

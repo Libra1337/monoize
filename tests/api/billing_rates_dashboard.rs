@@ -79,7 +79,7 @@ async fn billing_rates_crud_catalog_sync_and_profile_patterns_api() {
         "rate_kind": "token",
         "usage_class": "input_uncached",
         "unit": "token",
-        "unit_price_nano_usd": "999",
+        "unit_price_nano": "999",
         "modality": "text",
         "priority": 999,
         "enabled": true,
@@ -96,7 +96,26 @@ async fn billing_rates_crud_catalog_sync_and_profile_patterns_api() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(created["id"], json!(rate_id));
-    assert_eq!(created["unit_price_nano_usd"], json!("999"));
+    assert_eq!(created["unit_price_nano"], json!("999"));
+    // MB-A2c: a dashboard-created rate is CNY unless the caller names a currency.
+    assert_eq!(created["unit_price_currency"], json!("CNY"));
+
+    let (status, rejected) = json_request(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/billing-rates/openai:gpt-image-2:text:rejected",
+        Some(json!({
+            "pricing_profile": "openai",
+            "rate_kind": "token",
+            "usage_class": "input_uncached",
+            "unit": "token",
+            "unit_price_nano": "1",
+            "unit_price_currency": "EUR"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(rejected["error"]["code"], json!("invalid_request"));
 
     let (status, sync_result) = json_request(
         &ctx,
@@ -122,19 +141,21 @@ async fn billing_rates_crud_catalog_sync_and_profile_patterns_api() {
         .find(|rate| rate["id"] == rate_id)
         .expect("manual catalog override remains");
     assert_eq!(preserved["source"], json!("manual"));
-    assert_eq!(preserved["unit_price_nano_usd"], json!("999"));
+    assert_eq!(preserved["unit_price_nano"], json!("999"));
 
     let catalog_rate_id = "openai:gpt-image-2:image:output";
     let (status, updated_catalog) = json_request(
         &ctx,
         Method::PUT,
         &format!("/api/dashboard/billing-rates/{catalog_rate_id}"),
-        Some(json!({ "unit_price_nano_usd": "12345" })),
+        Some(json!({ "unit_price_nano": "12345" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated_catalog["source"], json!("manual"));
-    assert_eq!(updated_catalog["unit_price_nano_usd"], json!("12345"));
+    assert_eq!(updated_catalog["unit_price_nano"], json!("12345"));
+    // MB-A2c: editing the price of an ingested USD row must not re-denominate it as CNY.
+    assert_eq!(updated_catalog["unit_price_currency"], json!("USD"));
 
     let (status, resync_result) = json_request(
         &ctx,
@@ -159,7 +180,7 @@ async fn billing_rates_crud_catalog_sync_and_profile_patterns_api() {
         .expect("manual edit of catalog row remains");
     assert_eq!(preserved_catalog_edit["source"], json!("manual"));
     assert_eq!(
-        preserved_catalog_edit["unit_price_nano_usd"],
+        preserved_catalog_edit["unit_price_nano"],
         json!("12345")
     );
 

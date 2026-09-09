@@ -68,6 +68,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260908_000063_enterprise_account_class::Migration),
             Box::new(m20260908_000064_epay_adapter::Migration),
             Box::new(m20260909_000065_readiness_optional_evidence::Migration),
+            Box::new(m20260909_000066_billing_rate_currency::Migration),
         ]
     }
 }
@@ -265,6 +266,7 @@ mod m20260904_000062_group_visibility;
 mod m20260908_000063_enterprise_account_class;
 mod m20260908_000064_epay_adapter;
 mod m20260909_000065_readiness_optional_evidence;
+mod m20260909_000066_billing_rate_currency;
 
 #[cfg(test)]
 mod tests {

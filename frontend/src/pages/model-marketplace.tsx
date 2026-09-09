@@ -1,7 +1,7 @@
 import { useDeferredValue, useRef, useState } from "react";
 import useSWR from "swr";
 import { useTranslation } from "react-i18next";
-import { Boxes, CircleDollarSign, RefreshCw, Search, Store } from "lucide-react";
+import { Boxes, RefreshCw, Search, Store } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { CoinAmount } from "@/components/coin-amount";
 import { Button } from "@/components/ui/button";
@@ -24,9 +24,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
-import { useStoreCurrency } from "@/hooks/use-store-currency";
-import type { StoreCurrency } from "@/lib/store-money";
 import {
   marketplaceRequest,
   type MarketplaceItem,
@@ -71,33 +68,19 @@ function MarketplaceSkeleton() {
   );
 }
 
-function CurrencyControl({ unavailable: _unavailable }: { unavailable: boolean }) {
-  const { t } = useTranslation();
-  const { currency, setCurrency } = useStoreCurrency();
-  void _unavailable;
-  return <div className="grid min-h-11 grid-cols-2 rounded-lg border bg-muted/45 p-1" role="group" aria-label={t("modelMarketplace.currency")}>
-    {(["CNY", "USD"] as StoreCurrency[]).map((value) => <button key={value} type="button" aria-pressed={currency === value} onClick={() => setCurrency(value)} className={`rounded-md px-3 text-xs font-medium transition-colors ${currency === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-      {value === "CNY" ? "¥ CNY" : "$ USD"}
-    </button>)}
-  </div>;
-}
-
 function ModelRow({
   item,
-  currencyRate,
-  currency,
   onOpen,
 }: {
   item: MarketplaceItem;
-  currencyRate: string | null;
-  currency: StoreCurrency;
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
-  const canPrice = currencyRate !== null;
+  // MM-UA5: the server publishes one normalized unit, so a range either exists or the model
+  // has no published price. There is no client-side conversion that can fail.
   const price = (range: MarketplaceItem["input_rate_range"]) => {
-    if (!range || !canPrice) return t("modelMarketplace.unavailable");
-    return formatMarketplaceRateRange(range, currency, currencyRate ?? "1");
+    if (!range) return t("modelMarketplace.unavailable");
+    return formatMarketplaceRateRange(range);
   };
 
   return (
@@ -114,11 +97,11 @@ function ModelRow({
       </div>
       <div>
         <div className="text-xs text-muted-foreground">{t("modelMarketplace.inputPrice")}</div>
-        <div className="mt-1 font-mono text-xs font-medium tabular-nums">{item.input_rate_range && canPrice ? <CoinAmount value={price(item.input_rate_range)} /> : price(item.input_rate_range)}</div>
+        <div className="mt-1 font-mono text-xs font-medium tabular-nums">{item.input_rate_range ? <CoinAmount value={price(item.input_rate_range)} /> : price(item.input_rate_range)}</div>
       </div>
       <div>
         <div className="text-xs text-muted-foreground">{t("modelMarketplace.outputPrice")}</div>
-        <div className="mt-1 font-mono text-xs font-medium tabular-nums">{item.output_rate_range && canPrice ? <CoinAmount value={price(item.output_rate_range)} /> : price(item.output_rate_range)}</div>
+        <div className="mt-1 font-mono text-xs font-medium tabular-nums">{item.output_rate_range ? <CoinAmount value={price(item.output_rate_range)} /> : price(item.output_rate_range)}</div>
       </div>
       <Badge className="w-fit justify-self-start md:justify-self-end" variant="secondary">
         {t("modelMarketplace.offerCount", { count: item.offer_count })}
@@ -129,7 +112,6 @@ function ModelRow({
 
 export function ModelMarketplacePage() {
   const { t } = useTranslation();
-  const { currency } = useStoreCurrency();
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search.trim());
   const [group, setGroup] = useState(ALL);
@@ -181,7 +163,6 @@ export function ModelMarketplacePage() {
       },
     },
   );
-  const exchangeRate = useStoreExchangeRate();
   const offerListKey = selected
     ? JSON.stringify([selected.revision, selected.public_group_name, selected.model])
     : null;
@@ -240,8 +221,6 @@ export function ModelMarketplacePage() {
     : [];
   const visibleOffers = resolvedOfferPages.flatMap((page) => page.offers);
   const nextOfferCursor = resolvedOfferPages.at(-1)?.next_cursor ?? null;
-  const cnyRate = exchangeRate.data?.cny_per_usd ?? null;
-  const cnyUnavailable = !exchangeRate.isLoading && (!cnyRate || Boolean(exchangeRate.error));
 
   return (
     <PageWrapper className="flex min-w-0 flex-col gap-6">
@@ -269,10 +248,7 @@ export function ModelMarketplacePage() {
             <SelectTrigger className="h-11" aria-label={t("modelMarketplace.capabilityFilter")}><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem value={ALL}>{t("modelMarketplace.allCapabilities")}</SelectItem>{capabilities.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent>
           </Select>
-          <CurrencyControl unavailable={cnyUnavailable} />
         </div>
-
-        {cnyUnavailable ? <div className="flex items-center gap-2 rounded-lg border border-warning/45 bg-warning/10 px-4 py-3 text-sm"><CircleDollarSign className="size-4 text-warning" />{t("modelMarketplace.currencyUnavailable")}</div> : null}
 
         {list.isLoading && !list.data ? <MarketplaceSkeleton /> : list.error ? (
           <div className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-5">
@@ -302,8 +278,6 @@ export function ModelMarketplacePage() {
                     <ModelRow
                       key={`${item.public_group_name}:${item.model}`}
                       item={item}
-                      currencyRate={cnyRate}
-                      currency={currency}
                       onOpen={() => {
                         setSelected({ ...item, revision: catalogRevision });
                         setOfferLoadCursor(null);
@@ -376,7 +350,7 @@ export function ModelMarketplacePage() {
                           {[rate.context_tier, rate.service_tier, rate.modality, rate.cache_ttl].filter(Boolean).map((value) => <Badge key={value} variant="secondary">{value}</Badge>)}
                         </dt>
                         <dd className="font-mono text-xs font-medium tabular-nums">
-                          {cnyRate ? <CoinAmount value={formatMarketplaceRate(rate.display_rate_nano_usd, rate.unit, currency, cnyRate)} /> : t("modelMarketplace.unavailable")}
+                          <CoinAmount value={formatMarketplaceRate(rate.display_rate_nano, rate.unit)} />
                         </dd>
                       </div>
                     ))}
