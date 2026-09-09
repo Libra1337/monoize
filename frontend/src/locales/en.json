@@ -2038,9 +2038,8 @@
 			"discount": "Buyers using this code pay {{percent}} less. The discount comes out of your commission."
 		},
 		"balance": {
-			"available": "Commission balance",
-			"owed": "Amount owed",
-			"owedHelp": "A refunded order reversed its commission. Later commission repays this before you can withdraw."
+			"label": "Commission balance",
+			"negative": "negative"
 		},
 		"window": {
 			"title": "Performance",

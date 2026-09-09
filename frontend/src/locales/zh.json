@@ -2038,9 +2038,8 @@
 			"discount": "使用此码的买家可少付 {{percent}}，该折扣从你的分成中扣除。"
 		},
 		"balance": {
-			"available": "分成余额",
-			"owed": "欠款金额",
-			"owedHelp": "有订单退款并冲销了分成。后续分成会先抵扣这笔欠款，还清后才能提现。"
+			"label": "分成余额",
+			"negative": "负"
 		},
 		"window": {
 			"title": "业绩",

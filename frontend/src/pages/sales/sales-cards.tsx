@@ -48,35 +48,31 @@ export function SalesCodeCard({ agent }: { agent: SalesAgent }) {
 }
 
 /**
- * The commission balance.
+ * The commission balance, shown signed (SC-UI-2b).
  *
- * A negative balance is a debt from a refunded order, not available money, so it is labelled
- * as owed and styled destructive (SC-UI-2b).
+ * A refund reverses an accrual the agent may already have withdrawn, so the balance can go
+ * negative. The sign is rendered directly rather than relabelled, because the formatter only
+ * accepts a nonnegative amount.
  */
 export function SalesBalanceCard({ balanceMinor }: { balanceMinor: string }) {
   const { t } = useTranslation();
-  const owed = balanceMinor.startsWith("-");
-  const magnitude = owed ? balanceMinor.slice(1) : balanceMinor;
+  const negative = balanceMinor.startsWith("-");
+  const magnitude = negative ? balanceMinor.slice(1) : balanceMinor;
 
   return (
-    <Card className={cn("rounded-2xl", owed && "border-destructive/40")}>
+    <Card className={cn("rounded-2xl", negative && "border-destructive/40")}>
       <CardContent className="p-5">
-        <p className="text-sm text-muted-foreground">
-          {owed ? t("sales.balance.owed") : t("sales.balance.available")}
-        </p>
+        <p className="text-sm text-muted-foreground">{t("sales.balance.label")}</p>
         <p
           className={cn(
             "mt-1 font-mono text-2xl font-semibold tabular-nums",
-            owed && "text-destructive",
+            negative && "text-destructive",
           )}
         >
+          {negative && <span aria-hidden="true">-</span>}
+          <span className="sr-only">{negative ? t("sales.balance.negative") : ""}</span>
           <CoinAmount value={coin(magnitude)} />
         </p>
-        {owed && (
-          <p className="mt-2 text-sm text-destructive text-pretty">
-            {t("sales.balance.owedHelp")}
-          </p>
-        )}
       </CardContent>
     </Card>
   );

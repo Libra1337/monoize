@@ -389,10 +389,12 @@ Coin mark of `coin-wallet-navigation.spec.md` CN-16. The surface MUST NOT show a
 and MUST NOT apply an exchange rate, because SC-0.3 stores commission in Coin minor units
 already.
 
-SC-UI-2b. A negative balance MUST render with `destructive` styling, labelled as an amount
-owed rather than as available, and MUST state that later commission repays it before a
-withdrawal is possible. A reversed entry MUST be visibly marked as reversed in the SC-6.3
-list and MUST NOT be silently omitted, because it is the origin of the debt.
+SC-UI-2b. The balance MUST render under one label with its sign, so a debt reads as
+`-<amount>` rather than being relabelled. It MUST carry `destructive` styling when negative.
+The sign MUST be rendered separately from the amount, because the Coin formatter accepts only
+a nonnegative value, and a screen reader MUST receive the sign as a word rather than only as
+a hyphen glyph. A reversed entry MUST be visibly marked as reversed in the SC-6.3 list and
+MUST NOT be silently omitted, because it is the origin of the debt.
 
 SC-UI-3. The Store purchase panel MUST render a sales-code input beside the custom-amount
 input, each occupying half of the row at `sm` and above and stacking below it. The field MUST

@@ -2035,9 +2035,8 @@
 			"discount": "使用此碼的買家可少付 {{percent}}，該折扣從你的分成中扣除。"
 		},
 		"balance": {
-			"available": "分成餘額",
-			"owed": "欠款金額",
-			"owedHelp": "有訂單退款並沖銷了分成。後續分成會先抵扣這筆欠款，還清後才能提領。"
+			"label": "分成餘額",
+			"negative": "負"
 		},
 		"window": {
 			"title": "業績",
