@@ -334,11 +334,32 @@ pub async fn create_sales_agent_admin(
     ))
 }
 
+/// SC-1.2a.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateOwnDiscountRequest {
+    pub discount_bp: i64,
+}
+
+/// Sets the calling agent's own discount (SC-1.2a).
+pub async fn update_own_sales_discount(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<UpdateOwnDiscountRequest>, JsonRejection>,
+) -> AppResult<impl IntoResponse> {
+    let agent = require_agent(&headers, &state).await?;
+    let input = parse_body(body)?;
+    let agent = SalesStore::new(state.db_pool.clone())
+        .set_own_discount(&agent.user_id, input.discount_bp)
+        .await
+        .map_err(map_sales_error)?;
+    Ok(Json(agent))
+}
+
 /// SC-7.3.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateSalesAgentRequest {
-    pub discount_bp: i64,
     pub enabled: bool,
 }
 
@@ -351,7 +372,7 @@ pub async fn update_sales_agent_admin(
     require_admin_user(&headers, &state).await?;
     let input = parse_body(body)?;
     let agent = SalesStore::new(state.db_pool.clone())
-        .update_agent(&user_id, input.discount_bp, input.enabled)
+        .set_agent_enabled(&user_id, input.enabled)
         .await
         .map_err(map_sales_error)?;
     Ok(Json(agent))

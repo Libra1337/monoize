@@ -46,6 +46,13 @@ negative. Lowering `commission_rate_bp` below an existing agent's `discount_bp` 
 rejected with the same code rather than silently clamping, so no agent is left owing money
 on a sale.
 
+SC-1.2a. `discount_bp` MUST be settable only by the agent who owns the code, via
+`PUT /dashboard/sales/discount`. Admin endpoints MUST expose `discount_bp` as read-only:
+`PUT /dashboard/store/admin/sales/agents/{user_id}` MUST accept only `enabled` and MUST
+reject a body containing `discount_bp`. The discount is funded from the agent's own
+commission (SC-1.5), so the agent bears its full cost and is the only party entitled to
+choose it.
+
 SC-1.3. For an order with face value `base_fen`, applied rate `r = commission_rate_bp`, and
 an applied code with `discount_bp = d`:
 
@@ -450,6 +457,18 @@ SC-UI-7. Every string introduced by this document MUST exist in `en`, `zh`, `zh-
 
 ## 9. Admin agent creation
 
+SC-6.6. The sales page MUST expose a password change control for the calling agent, using
+`PUT /dashboard/auth/password` with the account's current password. An agent account is
+created with a generated one-time password (SC-7.2) and is redirected away from
+`/dashboard` (SC-6.2), so without this control the agent has no reachable way to replace
+that password.
+
+SC-7.0. The Admin sales page MUST present exactly three sub-pages: agents (commission rate,
+agent creation, agent roster), withdrawals (the decision queue), and commissions (delegated
+claims and the commission ledger). Exactly one sub-page MUST be visible at a time. The
+withdrawals tab MUST display the count of withdrawals in state `requested` when that count is
+greater than zero.
+
 SC-7.1. `POST /api/dashboard/store/admin/sales/agents` MUST require an Admin session and the
 SB-S-2 Origin check. Its exact body MUST be `{ "discount_bp": integer }`. The Admin supplies
 neither a username nor a password.
@@ -465,6 +484,9 @@ SC-7.2a. The generated password MUST be returned exactly once, in the creation r
 MUST NOT be retrievable afterwards, because only its hash is stored. The agent MAY change
 both username and password afterwards through the existing account endpoints; the sales code
 MUST NOT change with the username, because orders already reference the code.
+
+SC-7.3a. Admin agent update MUST change only `enabled`. An attempt to set `discount_bp`
+through the admin endpoint MUST fail with `invalid_request` under `deny_unknown_fields`.
 
 SC-7.3. `PUT /api/dashboard/store/admin/sales/agents/{user_id}` MUST accept
 `{ "discount_bp": integer, "enabled": boolean }`. A changed `discount_bp` MUST NOT alter any

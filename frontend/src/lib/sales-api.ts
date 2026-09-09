@@ -105,6 +105,12 @@ export const salesApi = {
     salesRequest<SalesWithdrawal>(`/sales/withdrawals/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
+  /** SC-1.2a: an agent sets their own discount; Admin cannot set it for them. */
+  updateOwnDiscount: (discountBp: number) =>
+    salesRequest<SalesAgent>("/sales/discount", {
+      method: "PUT",
+      body: JSON.stringify({ discount_bp: discountBp }),
+    }),
   requestWithdrawal: (amountMinor: string) =>
     salesRequest<SalesWithdrawal>("/sales/withdrawals", {
       method: "POST",
@@ -117,10 +123,11 @@ export const salesApi = {
         method: "POST",
         body: JSON.stringify({ discount_bp: discountBp }),
       }),
-    updateAgent: (userId: string, discountBp: number, enabled: boolean) =>
+    /** SC-7.3a: only the enabled flag; the discount belongs to the agent. */
+    setAgentEnabled: (userId: string, enabled: boolean) =>
       salesRequest<SalesAgent>(`/store/admin/sales/agents/${encodeURIComponent(userId)}`, {
         method: "PUT",
-        body: JSON.stringify({ discount_bp: discountBp, enabled }),
+        body: JSON.stringify({ enabled }),
       }),
     listEntries: (agentUserId?: string) =>
       salesRequest<AdminSalesEntry[]>(

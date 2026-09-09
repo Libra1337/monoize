@@ -387,11 +387,40 @@ impl SalesStore {
     }
 
     /// SC-7.3.
-    pub async fn update_agent(
+    /// Sets an agent's enabled state (SC-7.3).
+    ///
+    /// The discount is deliberately not settable here: it is the agent's own commission
+    /// being given away, so only the agent may change it (SC-1.2a).
+    pub async fn set_agent_enabled(
+        &self,
+        user_id: &str,
+        enabled: bool,
+    ) -> Result<SalesAgent, SalesStoreError> {
+        let now = timestamp(Utc::now());
+        self.db
+            .write()
+            .await
+            .execute(self.db.stmt(
+                "UPDATE sales_agents SET enabled = $2, updated_at = $3
+                 WHERE user_id = $1",
+                vec![user_id.into(), i64::from(enabled).into(), now.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        self.agent_for_user(user_id)
+            .await?
+            .ok_or(SalesStoreError::NotAgent)
+    }
+
+    /// SC-6.2 aggregates over non-reversed entries.
+    /// Sets an agent's own discount (SC-1.2a).
+    ///
+    /// Bounded by the current commission rate because the discount is funded from the
+    /// commission; a larger discount would make the agent's own commission negative.
+    pub async fn set_own_discount(
         &self,
         user_id: &str,
         discount_bp: i64,
-        enabled: bool,
     ) -> Result<SalesAgent, SalesStoreError> {
         let rate_bp = self.commission_rate_bp().await?;
         if !(0..=rate_bp).contains(&discount_bp) {
@@ -402,14 +431,9 @@ impl SalesStore {
             .write()
             .await
             .execute(self.db.stmt(
-                "UPDATE sales_agents SET discount_bp = $2, enabled = $3, updated_at = $4
+                "UPDATE sales_agents SET discount_bp = $2, updated_at = $3
                  WHERE user_id = $1",
-                vec![
-                    user_id.into(),
-                    discount_bp.into(),
-                    i64::from(enabled).into(),
-                    now.into(),
-                ],
+                vec![user_id.into(), discount_bp.into(), now.into()],
             ))
             .await
             .map_err(storage)?;
@@ -418,7 +442,6 @@ impl SalesStore {
             .ok_or(SalesStoreError::NotAgent)
     }
 
-    /// SC-6.2 aggregates over non-reversed entries.
     pub async fn windows(
         &self,
         agent_user_id: &str,

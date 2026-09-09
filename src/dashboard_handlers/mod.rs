@@ -69,7 +69,8 @@ pub use sales::{
     decide_sales_withdrawal_admin, get_sales_overview, get_sales_settings_admin,
     list_sales_agents_admin, list_sales_entries, list_sales_entries_admin,
     list_sales_withdrawals,
-    list_sales_withdrawals_admin, update_sales_agent_admin, update_sales_settings_admin,
+    list_sales_withdrawals_admin, update_own_sales_discount, update_sales_agent_admin,
+    update_sales_settings_admin,
 };
 pub use settings::{
     UpdateSettingsRequest, get_config_overview, get_dashboard_stats, get_public_settings,
