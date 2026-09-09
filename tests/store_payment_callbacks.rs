@@ -20,6 +20,16 @@ use sea_orm_migration::MigratorTrait;
 use sha2::Digest as _;
 
 async fn setup() -> (DbPool, String, String, String) {
+    setup_with_sales(None).await
+}
+
+/// Builds the fixture, optionally with a sales code applied to the order.
+///
+/// When a code is supplied, an enabled agent owning that code is seeded first, because
+/// accrual resolves the agent through the code frozen on the order.
+async fn setup_with_sales(
+    sales: Option<monoize::store_billing::order::AppliedSalesCode>,
+) -> (DbPool, String, String, String) {
     let db = DbPool::connect("sqlite::memory:")
         .await
         .expect("connect SQLite");
@@ -142,6 +152,33 @@ async fn setup() -> (DbPool, String, String, String) {
             )
             .await
             .expect("insert readiness profile");
+        if let Some(applied) = sales.as_ref() {
+            write
+                .execute_unprepared(
+                    "INSERT INTO users
+                        (id, username, password_hash, role, created_at, updated_at, enabled,
+                         balance_nano_usd, balance_unlimited, group_id)
+                     SELECT 'callback-agent', 'callback-agent', 'test', 'user',
+                            '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z', 1, '0', 0, id
+                     FROM monoize_groups WHERE is_default = 1 LIMIT 1",
+                )
+                .await
+                .expect("insert agent user");
+            write
+                .execute(db.stmt(
+                    "INSERT INTO sales_agents
+                        (user_id, code, discount_bp, commission_balance_fen, enabled,
+                         created_at, updated_at)
+                     VALUES ('callback-agent', $1, $2, '0', 1,
+                             '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z')",
+                    vec![
+                        applied.code.clone().into(),
+                        applied.discount_bp.into(),
+                    ],
+                ))
+                .await
+                .expect("insert sales agent");
+        }
     }
     let orders = PaymentOrderStore::new(db.clone());
     let order = orders
@@ -153,7 +190,7 @@ async fn setup() -> (DbPool, String, String, String) {
                 payment_channel_id: "store-channel-stripe".to_string(),
                 payment_currency: Currency::CNY,
                 custom_recharge_minor: None,
-                sales: None,
+                sales: sales.clone(),
             },
             &ExchangeRateSnapshot {
                 base: "USD".to_string(),
@@ -188,6 +225,17 @@ async fn setup() -> (DbPool, String, String, String) {
 }
 
 fn success_event(order_id: &str, order_number: &str, attempt_id: &str) -> ApplyProviderEventInput {
+    success_event_for_amount(order_id, order_number, attempt_id, "1000")
+}
+
+/// A discounted order is charged its discounted `payment_minor`, so reconciliation compares
+/// the callback against that amount rather than the face value (SB-P-4a).
+fn success_event_for_amount(
+    order_id: &str,
+    order_number: &str,
+    attempt_id: &str,
+    amount_minor: &str,
+) -> ApplyProviderEventInput {
     ApplyProviderEventInput {
         event_row_id: uuid::Uuid::new_v4().to_string(),
         credential_version_id: "callback-credential".to_string(),
@@ -200,7 +248,7 @@ fn success_event(order_id: &str, order_number: &str, attempt_id: &str) -> ApplyP
         provider_object_id: "cs-callback".to_string(),
         order_number: order_number.to_string(),
         merchant_account_identity: "a".repeat(64),
-        amount_minor: "1000".to_string(),
+        amount_minor: amount_minor.to_string(),
         currency: Currency::CNY,
         body_digest: "a".repeat(64),
         parsed_json: serde_json::json!({"type":"payment_succeeded"}),
@@ -486,6 +534,95 @@ async fn projection_rejects_a_second_null_provider_candidate_created_after_looku
         .unwrap()
         .unwrap();
     assert_eq!(application_count.try_get::<i64>("", "value").unwrap(), 0);
+}
+
+/// SC-3.1 and SC-3.2 end to end: a coded order that is paid must credit the agent.
+///
+/// This is the path that failed in production. The arithmetic had unit coverage and the
+/// dialog worked, but nothing exercised order creation through fulfillment together, so a
+/// dropped column between them credited nothing while every test still passed.
+#[tokio::test]
+async fn a_paid_coded_order_credits_the_agent() {
+    let (db, order_id, order_number, attempt_id) = setup_with_sales(Some(
+        monoize::store_billing::order::AppliedSalesCode {
+            code: "CBACK234".to_string(),
+            discount_bp: 100,
+            commission_rate_bp: 500,
+        },
+    ))
+    .await;
+
+    // The provider charges the discounted amount, so that is what the callback carries.
+    let applied = PaymentCallbackStore::new(db.clone())
+        .apply_verified_payment(success_event_for_amount(
+            &order_id,
+            &order_number,
+            &attempt_id,
+            "990",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(applied, CallbackApplyResult::Applied);
+
+    let read = db.read();
+    let entry = read
+        .query_one(db.stmt(
+            "SELECT agent_user_id, commission_fen, base_fen, discount_bp, origin
+             FROM sales_commission_entries WHERE order_id = $1",
+            vec![order_id.clone().into()],
+        ))
+        .await
+        .unwrap()
+        .expect("a paid coded order must produce exactly one commission entry");
+
+    assert_eq!(
+        entry.try_get::<String>("", "agent_user_id").unwrap(),
+        "callback-agent"
+    );
+    // 1000 fen face value, 5% rate, 1% discount: the buyer saves 10 and the agent keeps 40,
+    // leaving the platform 950 either way (SC-1.4).
+    assert_eq!(
+        entry.try_get::<String>("", "base_fen").unwrap(),
+        "1000",
+        "the commission base is the undiscounted face value"
+    );
+    assert_eq!(entry.try_get::<i64>("", "discount_bp").unwrap(), 100);
+    assert_eq!(entry.try_get::<String>("", "commission_fen").unwrap(), "40");
+    assert_eq!(entry.try_get::<String>("", "origin").unwrap(), "code");
+
+    let balance = read
+        .query_one(db.stmt(
+            "SELECT commission_balance_fen FROM sales_agents WHERE user_id = 'callback-agent'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<String>("", "commission_balance_fen")
+        .unwrap();
+    assert_eq!(balance, "40", "the entry must also move the agent's balance");
+}
+
+/// An uncoded order must leave the ledger empty, so accrual cannot credit an unrelated agent.
+#[tokio::test]
+async fn a_paid_uncoded_order_credits_nobody() {
+    let (db, order_id, order_number, attempt_id) = setup().await;
+    PaymentCallbackStore::new(db.clone())
+        .apply_verified_payment(success_event(&order_id, &order_number, &attempt_id))
+        .await
+        .unwrap();
+    let count: i64 = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT COUNT(*) AS value FROM sales_commission_entries",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "value")
+        .unwrap();
+    assert_eq!(count, 0);
 }
 
 #[tokio::test]
