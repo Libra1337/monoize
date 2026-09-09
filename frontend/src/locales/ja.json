@@ -2020,5 +2020,67 @@
 	"accountClass": {
 		"standard": "標準ユーザー",
 		"enterprise": "企業ユーザー"
+	},
+	"sales": {
+		"title": "セールス",
+		"subtitle": "ログイン中：{{username}}",
+		"signOut": "ログアウト",
+		"loadFailed": "セールスデータの読み込みに失敗しました",
+		"retry": "再試行",
+		"code": {
+			"label": "あなたのセールスコード",
+			"copy": "コピー",
+			"copied": "コピーしました",
+			"discount": "このコードを使う購入者は {{percent}} 割引になります。割引はあなたの報酬から差し引かれます。"
+		},
+		"balance": {
+			"available": "報酬残高",
+			"owed": "負債額",
+			"owedHelp": "返金された注文の報酬が取り消されました。以降の報酬でこの負債を返済してから出金できます。"
+		},
+		"window": {
+			"title": "実績",
+			"today": "本日",
+			"last7d": "過去 7 日",
+			"last30d": "過去 30 日",
+			"sales": "売上",
+			"commission": "報酬",
+			"orders": "注文数"
+		},
+		"entries": {
+			"title": "報酬記録",
+			"order": "注文",
+			"amount": "注文金額",
+			"commission": "報酬",
+			"when": "日時",
+			"claimed": "後から申請",
+			"reversed": "取消済み",
+			"empty": "報酬はまだありません",
+			"emptyHelp": "購入者があなたのコードで支払うと、ここに記録が表示されます。"
+		},
+		"claim": {
+			"title": "過去の注文を申請",
+			"description": "購入者がコードを入力し忘れた場合は、注文番号と購入者のユーザー ID を入力します。失敗してもその注文の機会は消費されません。",
+			"orderNumber": "注文番号",
+			"userId": "購入者のユーザー ID",
+			"submit": "申請する",
+			"success": "申請が成功しました",
+			"failed": "申請に失敗しました"
+		},
+		"withdrawal": {
+			"title": "出金",
+			"description": "出金を申請すると運営が送金し、完了後に支払済みとして記録します。",
+			"amount": "金額",
+			"minimum": "最低 100 CNY。",
+			"submit": "出金を申請",
+			"requested": "出金を申請しました",
+			"failed": "申請に失敗しました",
+			"pending": "処理待ちの出金があります",
+			"state": {
+				"requested": "処理待ち",
+				"paid": "支払済み",
+				"rejected": "却下"
+			}
+		}
 	}
 }

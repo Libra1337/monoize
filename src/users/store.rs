@@ -1471,6 +1471,23 @@ impl UserStore {
         Ok(result.rows_affected())
     }
 
+    /// Whether this user is a sales agent (SC-UI-1).
+    ///
+    /// The Sales surface lives outside the dashboard, so the client needs this before it can
+    /// route. Absence of the table is treated as "not an agent" rather than an error, so a
+    /// database that predates migration 068 still serves the session endpoints.
+    pub async fn is_sales_agent(&self, user_id: &str) -> Result<bool, String> {
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                "SELECT 1 AS present FROM sales_agents WHERE user_id = $1",
+                vec![user_id.into()],
+            ))
+            .await;
+        Ok(matches!(row, Ok(Some(_))))
+    }
+
     pub async fn get_session_by_token(&self, token: &str) -> Result<Option<Session>, String> {
         let row = self
             .db

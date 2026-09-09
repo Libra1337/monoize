@@ -415,6 +415,8 @@ export async function createUserOptimistic(
     // The server creates every user as standard, so the placeholder must match or the edit
     // dialog renders an account class the row does not have.
     account_class: "standard",
+    // A sales agent is only ever created through the sales endpoint, never here.
+    is_sales_agent: false,
     enabled: true,
     created_at: new Date().toISOString(),
     last_login_at: undefined,

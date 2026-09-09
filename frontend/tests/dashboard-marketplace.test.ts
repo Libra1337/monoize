@@ -56,7 +56,11 @@ describe("authenticated Model Marketplace", () => {
   });
 
   test("keeps the route inside DashboardLayout and uses public allow-listed data", () => {
-    expect(appSource).toContain('<Route path="/dashboard" element={<DashboardLayout />}>');
+    // MM-UA1 requires the route to stay inside the dashboard shell. The shell is now
+    // wrapped by the SC-UI-1 guard that redirects a sales agent to their own surface, so the
+    // assertion checks the nesting rather than one exact element string.
+    expect(appSource).toContain('<Route path="/dashboard" element={<DashboardGuard><DashboardLayout /></DashboardGuard>}>');
+    expect(appSource).toContain('<Route path="marketplace" element={<ModelMarketplacePage />} />');
     expect(appSource).toContain('<Route path="marketplace" element={<ModelMarketplacePage />} />');
     expect(marketplaceSource).toContain("/api/public/marketplace?");
     expect(marketplaceSource).toContain("/api/public/marketplace/offers?");

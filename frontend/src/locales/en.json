@@ -2024,5 +2024,67 @@
 	"accountClass": {
 		"standard": "Standard",
 		"enterprise": "Enterprise"
+	},
+	"sales": {
+		"title": "Sales",
+		"subtitle": "Signed in as {{username}}",
+		"signOut": "Sign out",
+		"loadFailed": "Sales data failed to load",
+		"retry": "Retry",
+		"code": {
+			"label": "Your sales code",
+			"copy": "Copy",
+			"copied": "Copied",
+			"discount": "Buyers using this code pay {{percent}} less. The discount comes out of your commission."
+		},
+		"balance": {
+			"available": "Commission balance",
+			"owed": "Amount owed",
+			"owedHelp": "A refunded order reversed its commission. Later commission repays this before you can withdraw."
+		},
+		"window": {
+			"title": "Performance",
+			"today": "Today",
+			"last7d": "Last 7 days",
+			"last30d": "Last 30 days",
+			"sales": "Sales",
+			"commission": "Commission",
+			"orders": "Orders"
+		},
+		"entries": {
+			"title": "Commission records",
+			"order": "Order",
+			"amount": "Order amount",
+			"commission": "Commission",
+			"when": "Date",
+			"claimed": "Claimed",
+			"reversed": "Reversed",
+			"empty": "No commission yet",
+			"emptyHelp": "A record appears here after a buyer pays with your code."
+		},
+		"claim": {
+			"title": "Claim a past order",
+			"description": "If a buyer forgot your code, enter the order number and their user ID. A failed attempt does not use up the order.",
+			"orderNumber": "Order number",
+			"userId": "Buyer user ID",
+			"submit": "Claim order",
+			"success": "Order claimed",
+			"failed": "Claim failed"
+		},
+		"withdrawal": {
+			"title": "Withdraw",
+			"description": "Request a withdrawal and the operator transfers the money, then marks it paid.",
+			"amount": "Amount",
+			"minimum": "Minimum 100 CNY.",
+			"submit": "Request withdrawal",
+			"requested": "Withdrawal requested",
+			"failed": "Request failed",
+			"pending": "Withdrawal pending",
+			"state": {
+				"requested": "Pending",
+				"paid": "Paid",
+				"rejected": "Rejected"
+			}
+		}
 	}
 }

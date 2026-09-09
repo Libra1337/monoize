@@ -2024,5 +2024,67 @@
 	"accountClass": {
 		"standard": "普通用户",
 		"enterprise": "企业用户"
+	},
+	"sales": {
+		"title": "销售",
+		"subtitle": "当前登录：{{username}}",
+		"signOut": "退出登录",
+		"loadFailed": "销售数据加载失败",
+		"retry": "重试",
+		"code": {
+			"label": "你的销售码",
+			"copy": "复制",
+			"copied": "已复制",
+			"discount": "使用此码的买家可少付 {{percent}}，该折扣从你的分成中扣除。"
+		},
+		"balance": {
+			"available": "分成余额",
+			"owed": "欠款金额",
+			"owedHelp": "有订单退款并冲销了分成。后续分成会先抵扣这笔欠款，还清后才能提现。"
+		},
+		"window": {
+			"title": "业绩",
+			"today": "今日",
+			"last7d": "近 7 天",
+			"last30d": "近 30 天",
+			"sales": "销售额",
+			"commission": "分成",
+			"orders": "订单数"
+		},
+		"entries": {
+			"title": "分成记录",
+			"order": "订单",
+			"amount": "订单金额",
+			"commission": "分成",
+			"when": "时间",
+			"claimed": "补核销",
+			"reversed": "已冲销",
+			"empty": "暂无分成",
+			"emptyHelp": "买家使用你的销售码付款后，记录会出现在这里。"
+		},
+		"claim": {
+			"title": "补核销订单",
+			"description": "如果买家忘记填你的销售码，在此输入订单号和买家的用户 ID。核销失败不会占用该订单的机会。",
+			"orderNumber": "订单号",
+			"userId": "买家用户 ID",
+			"submit": "提交核销",
+			"success": "核销成功",
+			"failed": "核销失败"
+		},
+		"withdrawal": {
+			"title": "提现",
+			"description": "提交提现申请后由运营转账，转账完成后会标记为已履约。",
+			"amount": "金额",
+			"minimum": "最低 100 元。",
+			"submit": "申请提现",
+			"requested": "提现申请已提交",
+			"failed": "申请失败",
+			"pending": "有一笔提现待处理",
+			"state": {
+				"requested": "待处理",
+				"paid": "已履约",
+				"rejected": "已驳回"
+			}
+		}
 	}
 }

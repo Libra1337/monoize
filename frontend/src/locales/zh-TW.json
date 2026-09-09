@@ -2021,5 +2021,67 @@
 	"accountClass": {
 		"standard": "一般使用者",
 		"enterprise": "企業使用者"
+	},
+	"sales": {
+		"title": "銷售",
+		"subtitle": "目前登入：{{username}}",
+		"signOut": "登出",
+		"loadFailed": "銷售資料載入失敗",
+		"retry": "重試",
+		"code": {
+			"label": "你的銷售碼",
+			"copy": "複製",
+			"copied": "已複製",
+			"discount": "使用此碼的買家可少付 {{percent}}，該折扣從你的分成中扣除。"
+		},
+		"balance": {
+			"available": "分成餘額",
+			"owed": "欠款金額",
+			"owedHelp": "有訂單退款並沖銷了分成。後續分成會先抵扣這筆欠款，還清後才能提領。"
+		},
+		"window": {
+			"title": "業績",
+			"today": "今日",
+			"last7d": "近 7 天",
+			"last30d": "近 30 天",
+			"sales": "銷售額",
+			"commission": "分成",
+			"orders": "訂單數"
+		},
+		"entries": {
+			"title": "分成記錄",
+			"order": "訂單",
+			"amount": "訂單金額",
+			"commission": "分成",
+			"when": "時間",
+			"claimed": "補核銷",
+			"reversed": "已沖銷",
+			"empty": "暫無分成",
+			"emptyHelp": "買家使用你的銷售碼付款後，記錄會出現在這裡。"
+		},
+		"claim": {
+			"title": "補核銷訂單",
+			"description": "如果買家忘記填你的銷售碼，在此輸入訂單號和買家的使用者 ID。核銷失敗不會佔用該訂單的機會。",
+			"orderNumber": "訂單號",
+			"userId": "買家使用者 ID",
+			"submit": "提交核銷",
+			"success": "核銷成功",
+			"failed": "核銷失敗"
+		},
+		"withdrawal": {
+			"title": "提領",
+			"description": "提交提領申請後由營運轉帳，轉帳完成後會標記為已履約。",
+			"amount": "金額",
+			"minimum": "最低 100 元。",
+			"submit": "申請提領",
+			"requested": "提領申請已提交",
+			"failed": "申請失敗",
+			"pending": "有一筆提領待處理",
+			"state": {
+				"requested": "待處理",
+				"paid": "已履約",
+				"rejected": "已駁回"
+			}
+		}
 	}
 }

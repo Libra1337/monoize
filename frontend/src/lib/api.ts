@@ -80,6 +80,8 @@ export interface User {
   today_calls?: number;
   today_cost_nano_usd?: string;
   today_cost_usd?: string;
+  /** SC-UI-1: the Sales surface is outside the dashboard, so routing needs this. */
+  is_sales_agent: boolean;
   account_class: AccountClass;
 }
 

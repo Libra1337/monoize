@@ -93,10 +93,22 @@ pub struct UserResponse {
     pub today_cost_nano_usd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub today_cost_usd: Option<String>,
+    /// SC-UI-1: the Sales surface lives outside the dashboard, so the client must know which
+    /// of the two to route to before it renders either.
+    pub is_sales_agent: bool,
 }
 
 impl UserResponse {
     pub fn from_user(u: User, plan: Option<BillingPlan>, today: Option<&UserTodayUsage>) -> Self {
+        Self::from_user_with_sales(u, plan, today, false)
+    }
+
+    pub fn from_user_with_sales(
+        u: User,
+        plan: Option<BillingPlan>,
+        today: Option<&UserTodayUsage>,
+        is_sales_agent: bool,
+    ) -> Self {
         let balance_nano = u
             .balance_nano_usd
             .parse::<i128>()
@@ -129,6 +141,7 @@ impl UserResponse {
             today_calls,
             today_cost_nano_usd,
             today_cost_usd,
+            is_sales_agent,
         }
     }
 }
@@ -147,7 +160,13 @@ pub async fn user_response_from_store(
         Some(id) => store.get_billing_plan_by_id(id).await?,
         None => None,
     };
-    Ok(UserResponse::from_user(user, plan, None))
+    let is_sales_agent = store.is_sales_agent(&user.id).await?;
+    Ok(UserResponse::from_user_with_sales(
+        user,
+        plan,
+        None,
+        is_sales_agent,
+    ))
 }
 
 fn map_user_response_error(error: String) -> AppError {

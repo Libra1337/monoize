@@ -28,6 +28,7 @@ import { PublicStatusPage } from "@/pages/public-status";
 import { PublicUsageRankingPage } from "@/pages/public-usage-ranking";
 import { PUBLIC_PATHS } from "@/public-routes";
 import { StorePage } from "@/pages/store";
+import { DashboardGuard, SalesRoute } from "@/pages/sales/sales-route";
 import { OrdersPage } from "@/pages/orders";
 import { StoreAdminPage } from "@/pages/store-admin";
 import { UsageAnalysisPage } from "@/pages/usage-analysis";
@@ -84,8 +85,10 @@ function App() {
             <Route path={PUBLIC_PATHS.marketplace} element={<PublicMarketplacePage />} />
             <Route path={PUBLIC_PATHS.usageRanking} element={<PublicUsageRankingPage />} />
           </Route>
+          {/* Sales surface - outside the dashboard shell (SC-UI-1) */}
+          <Route path="/sales" element={<SalesRoute />} />
           {/* Dashboard routes - admin panel */}
-          <Route path="/dashboard" element={<DashboardLayout />}>
+          <Route path="/dashboard" element={<DashboardGuard><DashboardLayout /></DashboardGuard>}>
             <Route index element={<DashboardPage />} />
             <Route path="usage" element={<UsageAnalysisPage />} />
             <Route path="usage-ranking" element={<AdminUsagePage />} />
