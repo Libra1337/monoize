@@ -7,6 +7,7 @@ import {
 	ChevronRight,
 	CircleDollarSign,
 	CloudDownload,
+	Copy,
 	Plus,
 	RefreshCw,
 	Search,
@@ -30,6 +31,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
+	copyPricingProfile,
 	deleteBillingRateOptimistic,
 	syncModelMetadata,
 	updatePricingProfilePatternsOptimistic,
@@ -106,6 +108,9 @@ export function BillingProfilesTab() {
 	const [overrideTarget, setOverrideTarget] = useState<{ profile: string; model: string } | null>(null)
 	const [overrideForm, setOverrideForm] = useState({ input: '', cache: '', output: '' })
 	const [savingOverride, setSavingOverride] = useState(false)
+	const [copyTarget, setCopyTarget] = useState<string | null>(null)
+	const [copyName, setCopyName] = useState('')
+	const [copying, setCopying] = useState(false)
 	const [patternDraft, setPatternDraft] = useState<PricingProfilePattern[]>([])
 	const [patternsDirty, setPatternsDirty] = useState(false)
 	const [savingPatterns, setSavingPatterns] = useState(false)
@@ -128,6 +133,26 @@ export function BillingProfilesTab() {
 	useEffect(() => {
 		if (!patternsDirty) setPatternDraft(patterns.map(pattern => ({ ...pattern })))
 	}, [patterns, patternsDirty])
+
+	// MB-A7: profile names must stay disjoint across account classes, so an operator who wants
+	// the same prices for both classes copies the rate set under a second name.
+	const runCopy = async () => {
+		if (!copyTarget) return
+		const target = copyName.trim()
+		if (!target) return
+		setCopying(true)
+		try {
+			const result = await copyPricingProfile(copyTarget, target)
+			toast.success(c(`已复制 ${result.copied} 条费率到 ${result.target_profile}`, `Copied ${result.copied} rates to ${result.target_profile}`))
+			setSelectedProfile(result.target_profile)
+			setCopyTarget(null)
+			setCopyName('')
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : c('复制失败', 'Copy failed'))
+		} finally {
+			setCopying(false)
+		}
+	}
 
 	const runSync = async (automatic = false) => {
 		setSyncing(true)
@@ -294,7 +319,7 @@ export function BillingProfilesTab() {
 				</aside>
 
 				<section className='min-w-0 p-4 sm:p-5'>
-					<div className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'><div><div className='flex flex-wrap items-center gap-2'><h3 className='text-lg font-semibold'>{selectedProfile || c('选择 Profile', 'Select a profile')}</h3><Badge variant='secondary'>{selectedModelRates.length} models</Badge></div><p className='mt-1 text-sm text-muted-foreground'>{c('价格按每 100 万 tokens 显示，¥ 为 CNY，$ 为同步的 USD 价格；手动覆盖优先于同步价格。', 'Prices are shown per 1M tokens. ¥ marks a CNY price, $ marks a synced USD price. Manual overrides take precedence.')}</p></div><div className='relative w-full sm:w-72'><Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={c('搜索模型', 'Search models')} className='pl-9' /></div></div>
+					<div className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'><div><div className='flex flex-wrap items-center gap-2'><h3 className='text-lg font-semibold'>{selectedProfile || c('选择 Profile', 'Select a profile')}</h3><Badge variant='secondary'>{selectedModelRates.length} models</Badge>{selectedProfile ? <Button size='sm' variant='outline' onClick={() => { setCopyTarget(selectedProfile); setCopyName(`${selectedProfile}-copy`) }}><Copy data-icon />{c('复制为新 Profile', 'Copy to new profile')}</Button> : null}</div><p className='mt-1 text-sm text-muted-foreground'>{c('价格按每 100 万 tokens 显示，¥ 为 CNY，$ 为同步的 USD 价格；手动覆盖优先于同步价格。', 'Prices are shown per 1M tokens. ¥ marks a CNY price, $ marks a synced USD price. Manual overrides take precedence.')}</p></div><div className='relative w-full sm:w-72'><Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={c('搜索模型', 'Search models')} className='pl-9' /></div></div>
 
 					<div className='mt-5 hidden grid-cols-[minmax(220px,1fr)_110px_110px_110px_90px] gap-2 border-b px-3 pb-2 text-xs font-medium text-muted-foreground md:grid'><span>Model</span><span>Input / 1M</span><span>Cache / 1M</span><span>Output / 1M</span><span /></div>
 					<div className='mt-2 flex flex-col gap-2'>
@@ -320,6 +345,10 @@ export function BillingProfilesTab() {
 				</section>
 			</div>
 		</div>
+
+		<Dialog open={copyTarget !== null} onOpenChange={open => { if (!open) { setCopyTarget(null); setCopyName('') } }}>
+			<DialogContent className='max-w-lg'><DialogHeader><DialogTitle>{c('复制 Profile', 'Copy profile')}</DialogTitle><DialogDescription>{copyTarget ?? ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('把这个 Profile 的所有费率复制到一个新名字。企业分组和普通分组不能共用同一个 Profile 名，所以两边同价需要两份副本。', 'Copies every rate of this profile under a new name. Enterprise and standard Groups cannot share a profile name, so matching prices need two copies.')}</p><div className='flex flex-col gap-2'><Label htmlFor='copy-profile-name'>{c('新 Profile 名', 'New profile name')}</Label><Input id='copy-profile-name' value={copyName} onChange={event => setCopyName(event.target.value)} placeholder='deepseek-std' /><p className='text-xs text-muted-foreground'>{c('目标 Profile 必须不存在任何费率，否则复制会被拒绝，以免覆盖正在计费的价格。', 'The target profile must have no rates. A non-empty target is refused so prices already billing traffic are never overwritten.')}</p></div></div><DialogFooter><Button variant='outline' onClick={() => { setCopyTarget(null); setCopyName('') }}>{c('取消', 'Cancel')}</Button><Button disabled={copying || !copyName.trim() || copyName.trim() === copyTarget} onClick={() => void runCopy()}>{copying ? c('复制中…', 'Copying…') : c('复制', 'Copy')}</Button></DialogFooter></DialogContent>
+		</Dialog>
 
 		<Dialog open={!!overrideTarget} onOpenChange={open => { if (!open) setOverrideTarget(null) }}>
 			<DialogContent className='max-w-lg'><DialogHeader><DialogTitle>{c('手动价格覆盖', 'Manual price override')}</DialogTitle><DialogDescription>{overrideTarget ? `${overrideTarget.profile} / ${overrideTarget.model}` : ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('输入 CNY / 100 万 tokens。留空 Cache 表示不覆盖缓存价格。', 'Enter CNY per 1M tokens. Leave cache blank to keep it unspecified.')}</p><div className='grid gap-4 sm:grid-cols-3'>{[{ key: 'input', label: 'Input' }, { key: 'cache', label: 'Cache read' }, { key: 'output', label: 'Output' }].map(item => <div key={item.key} className='flex flex-col gap-2'><Label>{item.label}</Label><div className='relative'><span className='absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground'>¥</span><Input type='text' inputMode='decimal' className='pl-7' value={overrideForm[item.key as keyof typeof overrideForm]} onChange={event => setOverrideForm(previous => ({ ...previous, [item.key]: event.target.value }))} /></div></div>)}</div></div><DialogFooter><Button variant='outline' onClick={() => setOverrideTarget(null)}>{c('取消', 'Cancel')}</Button><Button disabled={savingOverride} onClick={() => void saveOverride()}>{savingOverride ? c('保存中…', 'Saving…') : c('保存覆盖', 'Save override')}</Button></DialogFooter></DialogContent>

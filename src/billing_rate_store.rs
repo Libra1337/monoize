@@ -500,6 +500,100 @@ impl BillingRateStore {
             .ok_or_else(|| "upsert succeeded but billing rate not found".to_string())
     }
 
+    /// Copies every rate row of `source_profile` to `target_profile` (MB-A7).
+    ///
+    /// Returns the number of rows copied. The whole copy runs in one transaction, so a
+    /// partially copied profile is never visible: a profile that bills traffic must be
+    /// complete or absent.
+    ///
+    /// Copied rows become `manual` and take ids outside the `model_metadata:` namespace
+    /// (MB-A7b). Both are required for the copy to survive: catalog sync deletes every
+    /// `catalog` row, and deleting a model metadata record deletes every rate whose id starts
+    /// with `model_metadata:`. A copy that inherited either property would vanish when its
+    /// unrelated source was next synced or removed.
+    pub async fn copy_profile(
+        &self,
+        source_profile: &str,
+        target_profile: &str,
+    ) -> Result<usize, CopyProfileError> {
+        let target = target_profile.trim();
+        if target.is_empty() {
+            return Err(CopyProfileError::InvalidTarget);
+        }
+        if target == source_profile {
+            return Err(CopyProfileError::SameProfile);
+        }
+
+        let write_guard = self.db.write().await;
+        let txn = write_guard
+            .begin()
+            .await
+            .map_err(|e| CopyProfileError::Storage(e.to_string()))?;
+        if self.db.is_postgres() {
+            txn.execute_unprepared("LOCK TABLE billing_rate_records IN SHARE ROW EXCLUSIVE MODE")
+                .await
+                .map_err(|e| CopyProfileError::Storage(e.to_string()))?;
+        }
+
+        let target_count: i64 = txn
+            .query_one(self.db.stmt(
+                "SELECT COUNT(*) AS value FROM billing_rate_records WHERE pricing_profile = $1",
+                vec![target.into()],
+            ))
+            .await
+            .map_err(|e| CopyProfileError::Storage(e.to_string()))?
+            .map(|row| row.try_get::<i64>("", "value").unwrap_or(0))
+            .unwrap_or(0);
+        if target_count > 0 {
+            return Err(CopyProfileError::TargetNotEmpty);
+        }
+
+        let rows = txn
+            .query_all(self.db.stmt(
+                "SELECT id, model_pattern, provider_type, rate_kind, usage_class, unit,
+                        unit_price_nano, unit_price_currency, context_tier, service_tier,
+                        modality, cache_ttl, match_json, priority, enabled, raw_json
+                 FROM billing_rate_records WHERE pricing_profile = $1 ORDER BY id ASC",
+                vec![source_profile.into()],
+            ))
+            .await
+            .map_err(|e| CopyProfileError::Storage(e.to_string()))?;
+        if rows.is_empty() {
+            return Err(CopyProfileError::SourceNotFound);
+        }
+
+        let now = Utc::now().to_rfc3339();
+        for row in &rows {
+            let source_id: String = row
+                .try_get("", "id")
+                .map_err(|e| CopyProfileError::Storage(e.to_string()))?;
+            let copied_id = copied_rate_id(target, &source_id);
+            txn.execute(self.db.stmt(
+                "INSERT INTO billing_rate_records
+                 (id, source, pricing_profile, model_pattern, provider_type, rate_kind,
+                  usage_class, unit, unit_price_nano, unit_price_currency, context_tier,
+                  service_tier, modality, cache_ttl, match_json, priority, enabled, raw_json,
+                  updated_at)
+                 SELECT $1, 'manual', $2, model_pattern, provider_type, rate_kind, usage_class,
+                        unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                        modality, cache_ttl, match_json, priority, enabled, raw_json, $4
+                 FROM billing_rate_records WHERE id = $3",
+                vec![
+                    copied_id.into(),
+                    target.into(),
+                    source_id.into(),
+                    now.clone().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| CopyProfileError::Storage(e.to_string()))?;
+        }
+        txn.commit()
+            .await
+            .map_err(|e| CopyProfileError::Storage(e.to_string()))?;
+        Ok(rows.len())
+    }
+
     pub async fn get_billing_rate(&self, id: &str) -> Result<Option<DbBillingRateRecord>, String> {
         let row = self
             .db
@@ -754,12 +848,126 @@ fn decode_billing_rate_row(row: &sea_orm::QueryResult) -> Result<DbBillingRateRe
 
 #[cfg(test)]
 mod tests {
-    use super::{BillingRateStore, UpsertBillingRateInput, glob_matches, select_pricing_profile};
+
+    use super::{
+        BillingRateStore, CopyProfileError, UpsertBillingRateInput, glob_matches,
+        select_pricing_profile,
+    };
     use crate::db::DbPool;
     use crate::migration::Migrator;
     use crate::settings::PricingProfilePattern;
     use sea_orm::ConnectionTrait;
     use sea_orm_migration::MigratorTrait;
+
+    async fn store_with_rate(profile: &str, id: &str, price: &str) -> BillingRateStore {
+        let db = DbPool::connect("sqlite::memory:").await.expect("connect");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None)
+                .await
+                .expect("migrate");
+        }
+        let store = BillingRateStore::new(db).await.expect("store");
+        store
+            .upsert_billing_rate(
+                id,
+                UpsertBillingRateInput {
+                    source: Some("catalog".to_string()),
+                    pricing_profile: Some(profile.to_string()),
+                    model_pattern: Some(Some("deepseek-*".to_string())),
+                    rate_kind: Some("token".to_string()),
+                    usage_class: Some("input".to_string()),
+                    unit: Some("token".to_string()),
+                    unit_price_nano: Some(price.to_string()),
+                    unit_price_currency: Some("CNY".to_string()),
+                    priority: Some(7),
+                    enabled: Some(true),
+                    provider_type: None,
+                    context_tier: None,
+                    service_tier: None,
+                    modality: None,
+                    cache_ttl: None,
+                    match_json: None,
+                    raw_json: None,
+                },
+            )
+            .await
+            .expect("seed rate");
+        store
+    }
+
+    /// MB-A7b: a copy must keep every price digit but must not keep the properties that would
+    /// let an unrelated sync delete it.
+    #[tokio::test]
+    async fn copying_a_profile_preserves_prices_and_detaches_from_sync() {
+        let store = store_with_rate("DeepSeek", "catalog:deepseek:input", "1234").await;
+
+        let copied = store.copy_profile("DeepSeek", "deepseek-std").await.unwrap();
+        assert_eq!(copied, 1);
+
+        let rows = store.list_billing_rates().await.unwrap();
+        let copy = rows
+            .iter()
+            .find(|row| row.pricing_profile == "deepseek-std")
+            .expect("the copied row must exist");
+        assert_eq!(copy.unit_price_nano, "1234", "prices must copy exactly");
+        assert_eq!(copy.unit_price_currency, "CNY");
+        assert_eq!(copy.priority, 7);
+        assert_eq!(copy.model_pattern.as_deref(), Some("deepseek-*"));
+        assert_eq!(
+            copy.source, "manual",
+            "a catalog source would be deleted by the next catalog sync"
+        );
+        assert!(
+            !copy.id.starts_with("model_metadata:"),
+            "that namespace is deleted with its metadata record: {}",
+            copy.id
+        );
+
+        // The source is untouched.
+        let source = rows
+            .iter()
+            .find(|row| row.pricing_profile == "DeepSeek")
+            .expect("source row");
+        assert_eq!(source.source, "catalog");
+        assert_eq!(source.unit_price_nano, "1234");
+    }
+
+    /// MB-A7a: copying onto a profile that already prices traffic would silently reprice it,
+    /// so a non-empty target is refused and a repeated call fails rather than duplicating.
+    #[tokio::test]
+    async fn copying_refuses_a_target_that_already_has_rates() {
+        let store = store_with_rate("DeepSeek", "catalog:deepseek:input", "1234").await;
+        store.copy_profile("DeepSeek", "deepseek-std").await.unwrap();
+
+        assert_eq!(
+            store.copy_profile("DeepSeek", "deepseek-std").await,
+            Err(CopyProfileError::TargetNotEmpty)
+        );
+        assert_eq!(
+            store.list_billing_rates().await.unwrap().len(),
+            2,
+            "the refused copy must not add rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn copying_rejects_an_unusable_target_or_source() {
+        let store = store_with_rate("DeepSeek", "catalog:deepseek:input", "1234").await;
+        assert_eq!(
+            store.copy_profile("DeepSeek", "   ").await,
+            Err(CopyProfileError::InvalidTarget)
+        );
+        assert_eq!(
+            store.copy_profile("DeepSeek", "DeepSeek").await,
+            Err(CopyProfileError::SameProfile)
+        );
+        assert_eq!(
+            store.copy_profile("absent", "somewhere").await,
+            Err(CopyProfileError::SourceNotFound)
+        );
+        assert_eq!(store.list_billing_rates().await.unwrap().len(), 1);
+    }
 
     #[test]
     fn glob_matching_is_case_insensitive_and_orderable() {
@@ -905,4 +1113,27 @@ mod tests {
                 .is_none()
         );
     }
+}
+
+/// Failure modes of [`BillingRateStore::copy_profile`] (MB-A7a).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CopyProfileError {
+    #[error("target profile must not be empty")]
+    InvalidTarget,
+    #[error("target profile must differ from the source profile")]
+    SameProfile,
+    #[error("source profile has no rates")]
+    SourceNotFound,
+    #[error("target profile already has rates")]
+    TargetNotEmpty,
+    #[error("storage failure: {0}")]
+    Storage(String),
+}
+
+/// Builds the id of a copied rate row (MB-A7b).
+///
+/// The target profile leads so copies of one profile sort together, and the source id is
+/// retained so a copied row can be traced back to what it was copied from.
+fn copied_rate_id(target_profile: &str, source_id: &str) -> String {
+    format!("manual:profile-copy:{target_profile}:{source_id}")
 }

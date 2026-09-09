@@ -589,6 +589,11 @@ export interface BillingRateRecord {
   updated_at: string;
 }
 
+export interface CopyPricingProfileResult {
+  target_profile: string;
+  copied: number;
+}
+
 export interface UpsertBillingRateInput {
   source?: string;
   pricing_profile?: string;
@@ -1351,6 +1356,22 @@ class ApiClient {
     return this.request(`/billing-rates/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
+  }
+
+  /**
+   * Copies every rate of one pricing profile under a new name (MB-A7).
+   *
+   * Profile names must stay disjoint across account classes, so serving both classes the
+   * same prices requires two named copies of the rate set.
+   */
+  async copyPricingProfile(
+    profile: string,
+    targetProfile: string,
+  ): Promise<CopyPricingProfileResult> {
+    return this.request(
+      `/billing-rates/profiles/${encodeURIComponent(profile)}/copy`,
+      { method: "POST", body: JSON.stringify({ target_profile: targetProfile }) },
+    );
   }
 
   async syncBillingRatesCatalog(): Promise<BillingRateSyncResult> {

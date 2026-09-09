@@ -1,6 +1,6 @@
 use crate::app::AppState;
 use crate::billing_rate_store::{
-    BillingRateSyncResult, DbBillingRateRecord, UpsertBillingRateInput,
+    BillingRateSyncResult, CopyProfileError, DbBillingRateRecord, UpsertBillingRateInput,
 };
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
@@ -23,6 +23,57 @@ pub async fn list_billing_rates(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     Ok(Json(rows))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CopyPricingProfileRequest {
+    pub target_profile: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CopyPricingProfileResponse {
+    pub target_profile: String,
+    pub copied: usize,
+}
+
+/// Copies a pricing profile's rates under a new name (MB-A7).
+///
+/// Profile names must stay disjoint across account classes (PP-ENT6), so giving both classes
+/// the same prices requires two named copies of the rate set.
+pub async fn copy_pricing_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(profile): Path<String>,
+    Json(body): Json<CopyPricingProfileRequest>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let target = body.target_profile.trim().to_string();
+    let copied = state
+        .billing_rate_store
+        .copy_profile(&profile, &target)
+        .await
+        .map_err(|error| match error {
+            CopyProfileError::InvalidTarget | CopyProfileError::SameProfile => AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                error.to_string(),
+            ),
+            CopyProfileError::SourceNotFound => {
+                AppError::new(StatusCode::NOT_FOUND, "not_found", error.to_string())
+            }
+            CopyProfileError::TargetNotEmpty => AppError::new(
+                StatusCode::CONFLICT,
+                "pricing_profile_not_empty",
+                error.to_string(),
+            ),
+            CopyProfileError::Storage(message) => {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+            }
+        })?;
+    Ok(Json(CopyPricingProfileResponse {
+        target_profile: target,
+        copied,
+    }))
 }
 
 pub async fn upsert_billing_rate(

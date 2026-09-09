@@ -309,3 +309,32 @@ MB-A4b. Bulk pricing-profile, Provider-type, and model-metadata lookup methods M
 MB-A5. Admin endpoint `GET /api/dashboard/pricing-profile-patterns` MUST return the ordered profile-pattern setting.
 
 MB-A6. Admin endpoint `PUT /api/dashboard/pricing-profile-patterns` MUST replace the ordered profile-pattern setting after rejecting empty `pattern` or `pricing_profile` strings.
+
+MB-A7. Admin endpoint `POST /api/dashboard/billing-rates/profiles/{profile}/copy` MUST copy
+every `billing_rate_records` row whose `pricing_profile` equals `{profile}` to the
+`target_profile` given in the body, and MUST return the number of rows copied.
+
+Profile names must stay disjoint across account classes (PP-ENT6), so an operator who wants
+the same prices for both classes must hold two named copies. Recreating a profile of several
+hundred rows by hand is not a workable alternative.
+
+MB-A7a. The endpoint MUST reject, without writing any row:
+- a `target_profile` that is empty or whitespace only, with `invalid_request`;
+- a `target_profile` equal to `{profile}`, with `invalid_request`;
+- a `{profile}` that has no rows, with `not_found`;
+- a `target_profile` that already has at least one row, with HTTP `409` and code
+  `pricing_profile_not_empty`.
+
+Refusing a non-empty target is what keeps the operation from silently repricing a profile
+that is already billing traffic. It also makes a repeated call fail rather than duplicate.
+
+MB-A7b. Each copied row MUST take a new globally unique `id` derived from the target profile
+and the source row id, MUST set `source` to `manual`, and MUST otherwise preserve every
+field of the source row, including `unit_price_nano`, `unit_price_currency`, `priority`, and
+`enabled`.
+
+`source = manual` and an id outside the `model_metadata:` namespace are both required for the
+copy to survive. Catalog sync deletes every `source = 'catalog'` row, and deleting a model
+metadata record deletes every rate whose id begins with `model_metadata:`. A copy that kept
+either property would disappear when its unrelated source was next synced or removed.
+

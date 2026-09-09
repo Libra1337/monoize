@@ -1194,6 +1194,30 @@ export async function deleteBillingRateOptimistic(
   }
 }
 
+/**
+ * Copies a pricing profile's rates under a new name (MB-A7).
+ *
+ * Not optimistic: the server decides how many rows exist and refuses a target that already
+ * prices traffic, so guessing the result would show a profile that may not be created.
+ */
+export async function copyPricingProfile(
+  profile: string,
+  targetProfile: string,
+  onError?: (error: Error) => void,
+) {
+  try {
+    const result = await api.copyPricingProfile(profile, targetProfile);
+    await mutate(SWR_KEYS.BILLING_RATES);
+    mutate(SWR_KEYS.PROVIDERS);
+    return result;
+  } catch (error) {
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
 export async function syncBillingRatesCatalog(
   onError?: (error: Error) => void
 ) {

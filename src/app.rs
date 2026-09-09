@@ -2808,6 +2808,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             get(crate::dashboard_handlers::list_billing_rates),
         )
         .route(
+            "/dashboard/billing-rates/profiles/{profile}/copy",
+            post(crate::dashboard_handlers::copy_pricing_profile),
+        )
+        .route(
             "/dashboard/billing-rates/sync/catalog",
             post(crate::dashboard_handlers::sync_billing_rates_catalog),
         )
