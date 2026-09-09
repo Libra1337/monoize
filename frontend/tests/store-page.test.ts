@@ -126,9 +126,27 @@ describe("Store user pages", () => {
     expect(ordersSource).toContain("isPaymentPollingTerminal(current.payment_state)");
   });
 
-  test("renders a scannable SVG for WeChat Native checkout", () => {
+  test("renders a scannable SVG for QR checkout", () => {
     expect(storeSource).toContain("QRCodeSVG");
-    expect(storeSource).toContain("value={qrAction.payload}");
+    expect(storeSource).toContain("value={qrAction.action.payload}");
+  });
+
+  // SB-UI-10B: an EPay Channel can enable both alipay and wxpay, and the returned code is
+  // bound to the method sent upstream, so a fixed instruction sends the payer to the wrong
+  // wallet and the gateway rejects the scan.
+  test("names the selected payment method in the QR modal", () => {
+    expect(storeSource).toContain("method: validatedOption.method");
+    expect(storeSource).toContain("store.payment.methods.${qrAction.method}");
+    expect(storeSource).toContain("store.payment.qrDescriptionGeneric");
+
+    const zh = JSON.parse(zhSource) as {
+      store: { payment: { qrDescription: string; methods: Record<string, string> } };
+    };
+    expect(zh.store.payment.qrDescription).toContain("{{method}}");
+    expect(zh.store.payment.methods.alipay).toBe("支付宝");
+    expect(zh.store.payment.methods.wxpay).toBe("微信支付");
+    // The old copy asserted WeChat for every order, including Alipay ones.
+    expect(zh.store.payment.qrDescription).not.toBe("使用微信支付完成此订单。");
   });
 
   test("rotates an attempt key only after a definite provider failure", () => {

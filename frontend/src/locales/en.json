@@ -327,7 +327,12 @@
 			"empty": "No payment method is available",
 			"select": "Select {{name}}",
 			"qrTitle": "Payment code",
-			"qrDescription": "Use WeChat Pay to complete this order."
+			"qrDescription": "Scan this code with {{method}} to pay. Scanning it with another wallet is rejected.",
+			"qrDescriptionGeneric": "Scan this code to pay.",
+			"methods": {
+				"alipay": "Alipay",
+				"wxpay": "WeChat Pay"
+			}
 		},
 		"summary": {
 			"title": "Order summary",

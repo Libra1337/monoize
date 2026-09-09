@@ -327,7 +327,12 @@
 			"empty": "暂无可用支付方式",
 			"select": "选择 {{name}}",
 			"qrTitle": "支付码",
-			"qrDescription": "使用微信支付完成此订单。"
+			"qrDescription": "使用{{method}}扫描此二维码完成付款。用其他钱包扫描会被拒绝。",
+			"qrDescriptionGeneric": "扫描此二维码完成付款。",
+			"methods": {
+				"alipay": "支付宝",
+				"wxpay": "微信支付"
+			}
 		},
 		"summary": {
 			"title": "订单摘要",

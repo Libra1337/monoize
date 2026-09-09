@@ -23,6 +23,7 @@ import {
   storeApi,
   StoreApiError,
   type CreateStoreOrderInput,
+  type EpayMethodKind,
   type StoreCheckoutAction,
   type StoreOrder,
   type StorePaymentChannel,
@@ -300,7 +301,12 @@ export function StorePage() {
       ?? loadPendingCheckout(window.sessionStorage)?.orderId
       ?? null;
   });
-  const [qrAction, setQrAction] = useState<Extract<StoreCheckoutAction, { kind: "qr" }> | null>(null);
+  // The payment method travels with the action: the code is bound to the method the order was
+  // created for, and scanning it with the other wallet is rejected upstream.
+  const [qrAction, setQrAction] = useState<{
+    action: Extract<StoreCheckoutAction, { kind: "qr" }>;
+    method: EpayMethodKind | null;
+  } | null>(null);
   const catalog = useSWR(CATALOG_KEY, storeApi.getCatalog);
   const exchangeRate = useStoreExchangeRate();
   const loading = catalog.isLoading || exchangeRate.isLoading;
@@ -484,7 +490,7 @@ export function StorePage() {
         form.submit();
         return;
       }
-      setQrAction(checkout.action);
+      setQrAction({ action: checkout.action, method: validatedOption.method });
       setPollingOrderId(createdOrder.id);
     } catch (cause) {
       if (
@@ -510,12 +516,18 @@ export function StorePage() {
         <DialogContent className="max-w-sm rounded-2xl" closeLabel={t("store.ui.close")}>
           <DialogHeader>
             <DialogTitle>{t("store.payment.qrTitle")}</DialogTitle>
-            <DialogDescription>{t("store.payment.qrDescription")}</DialogDescription>
+            <DialogDescription>
+              {qrAction?.method
+                ? t("store.payment.qrDescription", {
+                    method: t(`store.payment.methods.${qrAction.method}`),
+                  })
+                : t("store.payment.qrDescriptionGeneric")}
+            </DialogDescription>
           </DialogHeader>
           <div className="mx-auto grid size-[252px] place-items-center rounded-2xl border bg-white p-4 shadow-sm">
             {qrAction && (
               <QRCodeSVG
-                value={qrAction.payload}
+                value={qrAction.action.payload}
                 size={220}
                 level="M"
                 marginSize={1}

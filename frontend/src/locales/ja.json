@@ -327,7 +327,12 @@
 			"empty": "利用できる支払い方法はありません",
 			"select": "{{name}} を選択",
 			"qrTitle": "支払いコード",
-			"qrDescription": "WeChat Pay でこの注文を完了します。"
+			"qrDescription": "{{method}}でこのコードを読み取って支払います。他のウォレットで読み取ると拒否されます。",
+			"qrDescriptionGeneric": "このコードを読み取って支払います。",
+			"methods": {
+				"alipay": "Alipay",
+				"wxpay": "WeChat Pay"
+			}
 		},
 		"summary": {
 			"title": "注文概要",

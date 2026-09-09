@@ -865,6 +865,14 @@ SB-UI-10. Alipay and Stripe MUST use provider redirects. WeChat desktop MUST use
 
 SB-UI-10A. The WeChat Native QR modal MUST render the exact verified Provider payload as a scannable SVG QR code. It MUST NOT display the payload as plain text instead of a QR code.
 
+SB-UI-10B. A QR modal MUST name the payment method the attempt was created with, taken from
+the selected payment option rather than from a fixed string. An EPay Channel may enable both
+`alipay` and `wxpay`, and the returned code is bound to the `type` sent upstream, so scanning
+it with the other wallet is rejected by the gateway with a method-not-supported error. Naming
+the wrong method therefore directs the payer into a guaranteed failure. When the selected
+option carries no method, the modal MUST use an instruction that names no method. The modal
+MUST NOT apply an exchange rate, alter, or re-encode the payload.
+
 SB-UI-11. Store Management MUST have Products, Payment Channels, Orders, and Redemption Codes child pages with an animated active indicator.
 
 SB-UI-12. Orders MUST show payment and fulfillment state separately. It MUST expose query, verified event reprocess, close, refund, dispute, hold, and case actions according to role and state. Close MUST be hidden when another Attempt for the order has state `created` or `presented`. Each user-triggered order or refund mutation MUST use an SWR optimistic cache value, roll back that value on error, apply the returned record to the cache, and then revalidate order detail and list data. A successful refund query MUST clear the reauthentication password. It MUST NOT show manual Complete.

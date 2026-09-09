@@ -327,7 +327,12 @@
 			"empty": "沒有可用付款方式",
 			"select": "選擇 {{name}}",
 			"qrTitle": "付款碼",
-			"qrDescription": "使用微信支付完成此訂單。"
+			"qrDescription": "使用{{method}}掃描此二維碼完成付款。用其他錢包掃描會被拒絕。",
+			"qrDescriptionGeneric": "掃描此二維碼完成付款。",
+			"methods": {
+				"alipay": "支付寶",
+				"wxpay": "微信支付"
+			}
 		},
 		"summary": {
 			"title": "訂單摘要",
