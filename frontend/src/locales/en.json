@@ -480,7 +480,16 @@
 					"runConsequence": "A retention run permanently deletes records that are past their retention period.",
 					"contain": "Resolve alert",
 					"containConsequence": "Resolving the alert clears it and resumes checkout immediately.",
-					"ran": "Retention run started",
+					"ran": "Retention run succeeded",
+					"runFailed": "Retention run failed: {{category}}. Three consecutive failures pause checkout.",
+					"unknownCategory": "unknown cause",
+					"lastRun": "Last run",
+					"noRuns": "No retention run has been recorded.",
+					"state": {
+						"running": "Running",
+						"succeeded": "Succeeded",
+						"failed": "Failed"
+					},
 					"contained": "Alert resolved, checkout resumed",
 					"reason": "Reason"
 				},

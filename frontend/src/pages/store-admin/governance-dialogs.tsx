@@ -502,10 +502,22 @@ export function RetentionDialog({
     }
     setBusy(true);
     try {
-      await withRetentionReauth((token) => storeApi.admin.runRetention(reason.trim(), token));
-      toast.success(t("store.admin.governance.retention.ran"));
-      setReason("");
-      setPassword("");
+      const run = await withRetentionReauth((token) =>
+        storeApi.admin.runRetention(reason.trim(), token),
+      );
+      // SB-UI-20: the endpoint returns 201 for a run that started, so the outcome is `state`.
+      // Reporting success on 201 alone would hide the failures that pause checkout at three.
+      if (run.state === "failed") {
+        toast.error(
+          t("store.admin.governance.retention.runFailed", {
+            category: run.error_category ?? t("store.admin.governance.retention.unknownCategory"),
+          }),
+        );
+      } else {
+        toast.success(t("store.admin.governance.retention.ran"));
+        setReason("");
+        setPassword("");
+      }
       await mutate();
     } catch {
       toast.error(t("store.admin.governance.invalid"));
@@ -592,6 +604,21 @@ export function RetentionDialog({
                 {t("store.admin.governance.retention.runs")}: {data.runs.length} ·{" "}
                 {t("store.admin.governance.retention.holds")}: {data.holds.length}
               </p>
+              {data.runs.length > 0 ? (
+                <p>
+                  {t("store.admin.governance.retention.lastRun")}:{" "}
+                  {t(`store.admin.governance.retention.state.${data.runs[0].state}`)} ·{" "}
+                  {data.runs[0].started_at}
+                  {data.runs[0].error_category ? (
+                    <>
+                      {" · "}
+                      <span className="font-mono text-xs">{data.runs[0].error_category}</span>
+                    </>
+                  ) : null}
+                </p>
+              ) : (
+                <p>{t("store.admin.governance.retention.noRuns")}</p>
+              )}
             </div>
             <div className="grid gap-3">
               <div className="grid gap-2">

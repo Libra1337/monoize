@@ -209,12 +209,21 @@ describe("Store admin page", () => {
     expect(governanceDialogsSource).toContain("disabled={busy || !containReady}");
     expect(governanceDialogsSource).toContain("runConsequence");
     expect(governanceDialogsSource).toContain("containConsequence");
+    // SB-UI-20: a run returns 201 even when it failed, so the dialog must branch on `state`
+    // and surface the failure category instead of reporting an unconditional success.
+    expect(governanceDialogsSource).toContain('run.state === "failed"');
+    expect(governanceDialogsSource).toContain("retention.runFailed");
+    expect(governanceDialogsSource).toContain("run.error_category");
+    expect(governanceDialogsSource).toContain("data.runs[0].error_category");
+    expect(governanceDialogsSource).toContain("retention.lastRun");
+    expect(governanceDialogsSource).toContain("retention.noRuns");
   });
 
   test("keeps governance locale keys for retention, compliance, and capabilities", () => {
     const retentionKeys = [
       "action", "checkout", "contain", "containConsequence", "contained", "description", "failures",
-      "holds", "open", "paused", "ran", "reason", "run", "runConsequence", "runs", "title",
+      "holds", "lastRun", "noRuns", "open", "paused", "ran", "reason", "run", "runConsequence",
+      "runFailed", "runs", "state", "title", "unknownCategory",
     ];
     const complianceKeys = ["action", "confirm", "currentTerms", "description", "saved", "termsAcknowledgment", "title"];
     const capabilityKeys = ["action", "description", "kinds", "saved", "select", "states", "title"];

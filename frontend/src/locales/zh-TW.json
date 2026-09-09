@@ -480,7 +480,16 @@
 					"runConsequence": "執行後將永久刪除超出保留期限的記錄。",
 					"contain": "處理警示",
 					"containConsequence": "送出後將清除目前警示並立即恢復結帳。",
-					"ran": "保留工作已啟動",
+					"ran": "保留工作執行成功",
+					"runFailed": "保留工作執行失敗：{{category}}。連續失敗三次會暫停結帳。",
+					"unknownCategory": "原因未知",
+					"lastRun": "最近一次執行",
+					"noRuns": "尚無保留工作執行記錄。",
+					"state": {
+						"running": "執行中",
+						"succeeded": "成功",
+						"failed": "失敗"
+					},
 					"contained": "警示已處理，結帳已恢復",
 					"reason": "原因"
 				},

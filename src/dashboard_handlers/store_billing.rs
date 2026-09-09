@@ -1288,6 +1288,8 @@ pub async fn run_store_retention_admin(
         })
         .await
         .map_err(map_retention_error)?;
+    // SB-PR-14B1: a run that started returns 201 even when it failed, because the caller needs
+    // the created record to identify the failure. The outcome is `run.state`, not the status.
     Ok((StatusCode::CREATED, no_store_headers(), Json(run)))
 }
 
