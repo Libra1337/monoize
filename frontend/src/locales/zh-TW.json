@@ -970,6 +970,16 @@
       "input": "輸入",
       "cache_read": "快取讀取",
       "output": "輸出"
+    },
+    "cacheByModel": {
+      "title": "各模型快取命中率",
+      "description": "快取讀取 Token 除以輸入 Token，依輸入量排序。高輸入量模型命中率偏低，表示用戶端每次請求送出的提示詞前綴都在變化。",
+      "grades": {
+        "insufficient": "資料量不足",
+        "low": "偏低",
+        "partial": "部分命中",
+        "high": "正常"
+      }
     }
   },
   "users": {

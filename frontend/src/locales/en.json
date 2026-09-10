@@ -970,6 +970,16 @@
       "input": "Input",
       "cache_read": "Cache read",
       "output": "Output"
+    },
+    "cacheByModel": {
+      "title": "Cache hit rate by model",
+      "description": "Cache-read Tokens divided by input Tokens, ordered by input volume. A low rate on a high-volume model means the client sends a prompt prefix that changes between requests.",
+      "grades": {
+        "insufficient": "too little data",
+        "low": "low",
+        "partial": "partial",
+        "high": "healthy"
+      }
     }
   },
   "users": {

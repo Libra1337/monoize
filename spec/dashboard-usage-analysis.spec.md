@@ -124,3 +124,55 @@ without starting a selection animation. Reduced-motion mode MUST render the
 selected chart data without Line, sector, or progress-bar interpolation.
 
 UA-23. Every visible string MUST use an i18n key present in `en`, `zh`, `zh-TW`, and `ja`.
+
+## 6. Cache Hit Rate By Model
+
+UA-24. The page MUST render one full-width panel that reports cache hit rate per logical
+model. The panel MUST derive its rows from the same `GET /api/dashboard/analytics`
+response as the trend and distribution panels. It MUST NOT issue an additional request.
+
+UA-25. For every logical model `m` in the selected range, let `input(m)` be the sum of
+`input_tokens_by_model[m]` and `cacheRead(m)` be the sum of `cache_read_tokens_by_model[m]`
+across all selected-range buckets. The panel MUST contain exactly one row for every `m`
+with `input(m) > 0` and no row for any other `m`. Model-name normalization follows UA-14a.
+
+UA-26. `hitBasisPoints(m)` equals `(cacheRead(m) * 10000 + input(m) / 2) / input(m)` under
+`BigInt` integer division. All three quantities MUST be computed as `BigInt`. Rounding to a
+displayed percentage occurs only in the final display formatter.
+
+UA-27. Rows MUST sort by `input(m)` descending, because input volume determines the cost
+impact of a low hit rate. Equal `input(m)` values MUST sort by model name in ascending byte
+order.
+
+UA-28. Each row MUST show the model name, the exact `cacheRead(m)` value, the exact
+`input(m)` value, and `hitBasisPoints(m)` rendered as a percentage with at most one decimal
+digit.
+
+UA-29. Each row MUST carry exactly one grade, assigned by the following total function of
+`(input(m), hitBasisPoints(m))`:
+
+| Precondition | Grade |
+| --- | --- |
+| `input(m) < 50000` | `insufficient` |
+| `input(m) >= 50000` and `hitBasisPoints(m) < 3000` | `low` |
+| `input(m) >= 50000` and `3000 <= hitBasisPoints(m) < 6000` | `partial` |
+| `input(m) >= 50000` and `hitBasisPoints(m) >= 6000` | `high` |
+
+The 50,000-Token floor exists because a hit rate measured over a smaller input total is
+dominated by the unavoidable cache-miss cost of the first request in a conversation.
+
+UA-30. The `low` grade MUST render with the destructive color token, `partial` with the
+warning token, `high` with the success token, and `insufficient` with the muted-foreground
+token. A grade MUST also be conveyed by a localized text label, so color is not the only
+carrier of the distinction.
+
+UA-31. A row grade MUST NOT change when the selected metric changes. Cache hit rate is a
+ratio of input Tokens and is independent of the metric control.
+
+UA-32. Initial loading MUST render shape-matched Skeletons for the panel. A resolved
+response with no row satisfying UA-25 MUST render the localized empty state of UA-18.
+
+UA-33. When the selected range changes, each row's ratio bar MUST transition to the
+selected value over 1,000 milliseconds. Model names, exact Token values, and percentages
+MUST remain visible during the transition. Reduced-motion mode MUST render the selected
+values without interpolation.
