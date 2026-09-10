@@ -550,3 +550,90 @@ async fn auto_session_affinity_is_stable_per_conversation_and_distinct_across_se
         ]
     );
 }
+
+/// §2.2.2: the legacy endpoint must reach the same upstream as the chat endpoint and return
+/// the legacy shape.
+///
+/// The prompt is asserted to arrive upstream as a chat message, which is what proves the
+/// translation happened rather than the request taking some separate path.
+#[tokio::test]
+async fn legacy_completions_translates_to_chat_and_back() {
+    let ctx = setup().await;
+
+    let (status, response) = json_post(
+        &ctx,
+        "/v1/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "prompt": "legacy-prompt-marker",
+            "max_tokens": 64
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+
+    let upstream = last_captured_body(&ctx, "chat");
+    assert_eq!(
+        upstream["messages"][0]["content"], json!("legacy-prompt-marker"),
+        "the prompt must reach upstream as a chat message: {upstream}"
+    );
+    assert!(
+        upstream.get("prompt").is_none(),
+        "the legacy field must not be forwarded: {upstream}"
+    );
+
+    let body: Value = serde_json::from_str(&response).expect("JSON response");
+    assert_eq!(body["object"], json!("text_completion"), "{body}");
+    assert!(
+        body["choices"][0]["text"].is_string(),
+        "a legacy choice carries text, not a message: {body}"
+    );
+    assert!(body["choices"][0].get("message").is_none(), "{body}");
+    assert!(body["usage"]["total_tokens"].is_number(), "{body}");
+}
+
+/// The streamed form must carry text deltas and terminate, so a legacy client that streams
+/// sees the same frame sequence it would from OpenAI.
+#[tokio::test]
+async fn legacy_completions_streams_text_frames() {
+    let ctx = setup().await;
+
+    let (status, response) = json_post(
+        &ctx,
+        "/v1/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "prompt": "legacy-stream-marker",
+            "max_tokens": 64,
+            "stream": true
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert!(response.contains("\"object\":\"text_completion\""), "{response}");
+    assert!(response.contains("\"text\""), "{response}");
+    assert!(!response.contains("\"delta\""), "no chat delta may leak: {response}");
+    assert!(response.contains("data: [DONE]"), "{response}");
+}
+
+/// LC2 and LC4 must be refused before any upstream call, so an unsupported request costs
+/// nothing and returns a reason.
+#[tokio::test]
+async fn legacy_completions_refuses_what_it_cannot_express() {
+    let ctx = setup().await;
+
+    for body in [
+        json!({ "model": "gpt-5-mini-chat", "prompt": ["a", "b"] }),
+        json!({ "model": "gpt-5-mini-chat", "prompt": [1, 2, 3] }),
+        json!({ "model": "gpt-5-mini-chat" }),
+        json!({ "model": "gpt-5-mini-chat", "prompt": "x", "echo": true }),
+        json!({ "model": "gpt-5-mini-chat", "prompt": "x", "best_of": 2 }),
+    ] {
+        let (status, response) = json_post(&ctx, "/v1/completions", body.clone()).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "must refuse {body}: {response}"
+        );
+    }
+}

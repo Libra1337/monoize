@@ -2249,6 +2249,8 @@ fn build_v1_router() -> Router<AppState> {
             "/chat/completions",
             post(crate::handlers::create_chat_completions),
         )
+        .route("/v1/completions", post(crate::handlers::create_completions))
+        .route("/completions", post(crate::handlers::create_completions))
         .route("/v1/embeddings", post(crate::handlers::create_embeddings))
         .route("/embeddings", post(crate::handlers::create_embeddings))
         .route("/v1/messages", post(crate::handlers::create_messages))

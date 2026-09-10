@@ -54,6 +54,7 @@ Monoize MUST implement:
 - `GET /v1/responses` when the request is a WebSocket upgrade
 - `POST /v1/responses/compact`
 - `POST /v1/chat/completions` (adapter)
+- `POST /v1/completions` (legacy text completion adapter, §2.2.2)
 - `POST /v1/messages` (adapter)
 - `POST /v1/embeddings` (pass-through)
 - `GET /v1/models` (model listing)
@@ -64,11 +65,47 @@ AP1. For every endpoint above, Monoize MUST also accept the same request at `/ap
 
 AP2. Monoize MUST also accept the forwarding endpoints without the `/v1` path
 prefix. The supported root aliases are `/models`, `/responses`,
-`/responses/compact`, `/chat/completions`, `/messages`, `/embeddings`,
-`/images/generations`, and `/images/edits`. Each root alias MUST have identical
+`/responses/compact`, `/chat/completions`, `/completions`, `/messages`,
+`/embeddings`, `/images/generations`, and `/images/edits`. Each root alias MUST have identical
 authentication, request validation, routing, billing, response, and error
 semantics to its corresponding `/v1` endpoint. The same root aliases MUST be
 available below the `/api` prefix.
+
+### 2.2.2 Legacy text completion endpoint
+
+LC1. `POST /v1/completions` MUST accept the OpenAI legacy text completion request shape and
+MUST be translated to a chat completion internally, so routing, model redirects, allowlists,
+billing, request logging, and capture behave exactly as they do for
+`POST /v1/chat/completions`. The endpoint MUST NOT introduce a separate forwarding path.
+
+LC2. `prompt` MUST be present and MUST be either a string or an array containing exactly one
+string. It MUST become a single user message whose content is that string. An array of
+integers, an array of arrays, or an array of length other than one MUST be rejected with HTTP
+`400` and code `invalid_request_error`, because token-array prompts and batched prompts
+cannot be expressed as one chat completion and silently collapsing them would return output
+for a request the caller did not make.
+
+LC3. `model`, `max_tokens`, `temperature`, `top_p`, `n`, `stop`, `stream`, `presence_penalty`,
+`frequency_penalty`, `seed`, `user`, and `logit_bias` MUST be forwarded unchanged.
+
+LC4. `suffix`, `echo`, `best_of`, and `logprobs` MUST be rejected with HTTP `400` and code
+`invalid_request_error` naming the unsupported field. A chat completion cannot express them,
+and accepting them silently would return a response that does not honor the request.
+
+LC5. A non-streaming response MUST be the upstream chat completion with `object` set to
+`text_completion` and each choice rewritten from `{ index, message: { content }, finish_reason }`
+to `{ index, text, logprobs: null, finish_reason }`. `id`, `created`, `model`, and `usage`
+MUST be preserved unchanged.
+
+LC6. A streaming response MUST emit one `data:` frame per upstream chat completion chunk,
+with `object` set to `text_completion` and each choice rewritten from
+`{ index, delta: { content }, finish_reason }` to `{ index, text, logprobs: null, finish_reason }`.
+A chunk carrying no content delta MUST yield `text` equal to the empty string rather than
+being dropped, so a caller counting frames sees the same sequence the upstream produced. The
+terminal `data: [DONE]` frame MUST be forwarded unchanged.
+
+LC7. An upstream error frame in a stream MUST be forwarded unchanged, without the LC6
+rewrite, so the caller receives the error verbatim rather than an empty completion.
 
 ### 2.2.1 Responses WebSocket downstream
 

@@ -2,6 +2,7 @@ mod account_balance;
 mod billing;
 pub(crate) use billing::{billing_rates_form_complete_matrix, nano_charge_to_usd};
 mod compact;
+mod legacy_completions;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
 mod nonstream;
@@ -15,6 +16,8 @@ pub(crate) mod usage;
 
 #[cfg(test)]
 mod tests;
+
+pub use legacy_completions::create_completions;
 
 use crate::app::AppState;
 use crate::config::{ProviderAuthConfig, ProviderAuthType, ProviderConfig, ProviderType};
