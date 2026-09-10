@@ -1,0 +1,59 @@
+---
+title: "フィールド: サンプリングパラメータを削除"
+description: 上流呼び出しの前に temperature などの型付きリクエストフィールドを消去します。
+---
+
+## 動作
+
+一部の上流と一部のモデルは、呼び出し元が送ったパラメータを拒否します。この変換は、Monoize が上流リクエストをエンコードする前に、指定された型付きリクエストフィールドを消去します。
+
+`field_set` と `field_remove` ではこれはできません。それらは `extra_body` 配下のパスを読み書きしますが、`temperature` と以下のフィールドはエンコーダーが無条件に出力する型付きリクエストフィールドです。
+
+## 使用する場面
+
+それ自体は正当なリクエストが上流から `400` を返され、パラメータを 1 つ外すと成功する場合に使用します。
+
+実測例: `api.vectron.meta-stone.com` は `MoonshotAi/Kimi-K2.6` と `MoonshotAi/Kimi-K2.7-Code` に対し、`temperature` があると `400 invalid_request` を返します。同じリクエストから外すと `200` を返します。同じホストの他のモデルは `temperature` を受け付けるため、ルールはこの 2 モデルに限定します。
+
+## 参照情報
+
+| 属性 | 値 |
+| --- | --- |
+| 型 ID | `field_strip_sampling` |
+| フェーズ | `request` |
+| スコープ | Provider, グローバル, API キー |
+
+## 設定
+
+| オプション | 型 | 必須 | 既定値 | 説明 |
+| --- | --- | --- | --- | --- |
+| `fields` | array | はい | — | 消去する型付きフィールドです。1 つ以上指定します。 |
+
+`fields` に指定できる値: `temperature`、`top_p`、`stop`、`verbosity`、`parallel_tool_calls`、`max_output_tokens`、`response_format`、`user`。
+
+呼び出し元が送っていないフィールドの消去は何もしません。この変換は `model`、`input`、`stream`、`tools`、`tool_choice`、`reasoning`、`extra_body` を変更しません。
+
+### ルールの例
+
+必要なモデルにルールを限定してください。`models` を指定しないルールはその Provider の全モデルに適用され、そのパラメータを使えたはずの呼び出し元からも失わせます。
+
+```json
+{
+  "transform": "field_strip_sampling",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "MoonshotAi/Kimi-K2.6",
+    "MoonshotAi/Kimi-K2.7-Code"
+  ],
+  "config": {
+    "fields": ["temperature"]
+  }
+}
+```
+
+## どのパラメータを削除するか調べる
+
+1. リクエストログを開き、失敗した試行のエラーを読みます。
+2. パラメータを 1 つずつ外して、同じリクエストを上流に送ります。
+3. 応答を `400` から `200` に変えたパラメータを設定に追加します。

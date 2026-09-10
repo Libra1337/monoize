@@ -15,6 +15,7 @@ pub mod cache_user_id;
 pub mod field_override_max_tokens;
 pub mod field_remove;
 pub mod field_set;
+pub mod field_strip_sampling;
 pub mod image_compress;
 pub mod image_enable_openai_generation_tool;
 pub mod image_markdown_to_output;
@@ -574,6 +575,7 @@ mod registry_tests {
         "field_override_max_tokens",
         "field_remove",
         "field_set",
+        "field_strip_sampling",
         "image_compress_input",
         "image_compress_output",
         "image_enable_openai_generation_tool",

@@ -1,0 +1,59 @@
+---
+title: "字段：移除采样参数"
+description: 在调用上游之前清除 temperature 等类型化请求字段。
+---
+
+## 行为
+
+某些上游和某些模型会拒绝调用方发送的某个参数。此变换在 Monoize 编码上游请求之前，清除列出的类型化请求字段。
+
+`field_set` 和 `field_remove` 做不到这一点。它们读写 `extra_body` 下的路径，而 `temperature` 和下面列出的字段是编码器无条件输出的类型化请求字段。
+
+## 适用场景
+
+当一个本身合法的请求被上游返回 `400`，而去掉某一个参数后就能成功时使用。
+
+实测示例：`api.vectron.meta-stone.com` 对 `MoonshotAi/Kimi-K2.6` 和 `MoonshotAi/Kimi-K2.7-Code`，只要请求带 `temperature` 就返回 `400 invalid_request`；去掉之后同样的请求返回 `200`。同一主机上的其他模型都接受 `temperature`，所以规则只限定在这两个模型上。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `field_strip_sampling` |
+| 阶段 | `request` |
+| 范围 | Provider, 全局, API 密钥 |
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `fields` | array | 是 | — | 要清除的类型化字段，至少一项。 |
+
+`fields` 允许的取值：`temperature`、`top_p`、`stop`、`verbosity`、`parallel_tool_calls`、`max_output_tokens`、`response_format`、`user`。
+
+清除调用方本来没有发送的字段不做任何事。此变换绝不修改 `model`、`input`、`stream`、`tools`、`tool_choice`、`reasoning` 或 `extra_body`。
+
+### 示例规则
+
+请把规则限定在需要它的模型上。不填 `models` 的规则会作用于该 Provider 的全部模型，这会让本可以使用该参数的调用方也失去它。
+
+```json
+{
+  "transform": "field_strip_sampling",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "MoonshotAi/Kimi-K2.6",
+    "MoonshotAi/Kimi-K2.7-Code"
+  ],
+  "config": {
+    "fields": ["temperature"]
+  }
+}
+```
+
+## 如何确定要移除哪个参数
+
+1. 打开请求日志，读取失败尝试的错误信息。
+2. 每次去掉一个参数，把同样的请求发给上游。
+3. 把使响应从 `400` 变为 `200` 的那个参数加进配置。
