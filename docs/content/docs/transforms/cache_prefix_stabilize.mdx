@@ -1,0 +1,99 @@
+---
+title: "Auto-cache: stabilize the prompt prefix"
+description: Move per-request agent metadata behind the stable system text so an implicit prefix cache can match.
+---
+
+## What it does
+
+An upstream with implicit prefix caching matches on the exact token prefix. One changed token invalidates the cache from that token onward.
+
+Coding agents place content that changes on every request near the top of the system prompt. Claude Code emits an `<env>` block and an `x-anthropic-billing-header` line. Codex CLI emits `<environment_context>`. Cursor emits `<user_info>` and `<timestamp>`.
+
+This transform moves that content behind the stable instruction text. The default action relocates it, so the model reads the same tokens in a different order. No token is deleted.
+
+The transform reads and writes only the leading run of system and developer nodes. It never touches user or assistant content.
+
+## Measured effect
+
+One 2,900-token system prompt, model `ZhipuAi/GLM-5.3`, a five-turn growing conversation, and one line whose value changed on every request:
+
+| Position of the changing line | Turn 1 | 2 | 3 | 4 | 5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Absent | 0% | 93.7% | 91.8% | 89.9% | 96.0% |
+| After the first two lines | 0% | 0% | 0% | 0% | 0% |
+| After the stable instruction text | 0% | 92.7% | 90.9% | 89.1% | 87.2% |
+| Moved to the end of the system prompt | 0% | 92.8% | 90.9% | 89.0% | 87.2% |
+
+Turn 1 always reads 0% because it writes the cache instead of reading it.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `cache_prefix_stabilize` |
+| Phase | `request` |
+| Scopes | Provider, Global, API key |
+
+## When to use
+
+- The upstream provider type is `chat_completion` or `responses`.
+- Callers are coding agents such as Claude Code, Codex CLI, or Cursor.
+- The cache hit rate of a high-volume model is low. Check the cache hit rate panel on the Usage Analysis page.
+
+The transform is a no-op for an Anthropic (`messages`) upstream. That protocol caches at a whole-node `cache_control` breakpoint, so reordering text inside a node does not move the cached boundary. Use `cache_anthropic_system` and `cache_anthropic_tool_use` there.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | string | No | `"relocate"` | `relocate` moves the matched lines to the end of the system prompt. `strip` deletes them. |
+| `blocks` | array | No | Built-in set | Line-delimited block markers to match. Each entry needs `open` and `close`. An empty array disables block matching. |
+| `line_prefixes` | array | No | Built-in set | Line prefixes to match. An empty array disables line matching. |
+
+The built-in block set is `<env>`, `<environment_context>`, `<user_info>`, and `<timestamp>`. The built-in line set is `x-anthropic-billing-header:`.
+
+Supplying `blocks` replaces the built-in block set. Supplying `line_prefixes` replaces the built-in line set.
+
+An opening marker with no closing marker in the same node does not match. This keeps a malformed marker from moving the rest of the system prompt.
+
+### Example rule
+
+```json
+{
+  "transform": "cache_prefix_stabilize",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "action": "relocate"
+  }
+}
+```
+
+### Adding an agent that is not in the built-in set
+
+Send one request from the agent, read its system prompt in the request log, and add the marker that wraps the changing content:
+
+```json
+{
+  "transform": "cache_prefix_stabilize",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "blocks": [
+      { "open": "<env>", "close": "</env>" },
+      { "open": "<environment_context>", "close": "</environment_context>" },
+      { "open": "<agent-context>", "close": "</agent-context>" }
+    ]
+  }
+}
+```
+
+## Ordering
+
+Place `cache_prefix_stabilize` before `cache_openai_prompt`. `cache_openai_prompt` derives its key from the stable prefix, so it must read the prefix after the relocation.

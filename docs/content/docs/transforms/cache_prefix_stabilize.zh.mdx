@@ -1,0 +1,99 @@
+---
+title: "自动缓存：稳定提示词前缀"
+description: 把每次请求都会变的 agent 元数据移到稳定的 system 文本之后，使隐式前缀缓存能够命中。
+---
+
+## 行为
+
+使用隐式前缀缓存的上游按 token 前缀精确匹配。只要有一个 token 变化，从该 token 起的缓存全部失效。
+
+编程 agent 会把每次请求都变化的内容放在 system prompt 靠前的位置。Claude Code 会写入 `<env>` 块和一行 `x-anthropic-billing-header`。Codex CLI 会写入 `<environment_context>`。Cursor 会写入 `<user_info>` 和 `<timestamp>`。
+
+此变换把这些内容移到稳定的指令文本之后。默认动作是搬移，因此模型读到的 token 完全相同，只是顺序不同。不删除任何 token。
+
+此变换只读写开头连续的 system 和 developer 节点，绝不触碰 user 或 assistant 内容。
+
+## 实测效果
+
+一段 2,900 token 的 system prompt，模型 `ZhipuAi/GLM-5.3`，五轮逐轮增长的会话，其中一行的值每次请求都变化：
+
+| 变化行的位置 | 第 1 轮 | 2 | 3 | 4 | 5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 不存在 | 0% | 93.7% | 91.8% | 89.9% | 96.0% |
+| 在前两行之后 | 0% | 0% | 0% | 0% | 0% |
+| 在稳定指令文本之后 | 0% | 92.7% | 90.9% | 89.1% | 87.2% |
+| 移到 system prompt 末尾 | 0% | 92.8% | 90.9% | 89.0% | 87.2% |
+
+第 1 轮总是 0%，因为它写入缓存而不是读取缓存。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `cache_prefix_stabilize` |
+| 阶段 | `request` |
+| 范围 | Provider, 全局, API 密钥 |
+
+## 适用场景
+
+- 上游 provider 类型是 `chat_completion` 或 `responses`。
+- 调用方是 Claude Code、Codex CLI、Cursor 这类编程 agent。
+- 某个高用量模型的缓存命中率偏低。请查看用量分析页的缓存命中率面板。
+
+对 Anthropic（`messages`）上游，此变换不做任何事。该协议在整个节点的 `cache_control` 断点处缓存，因此在节点内部调整文本顺序不会移动缓存边界。那里请使用 `cache_anthropic_system` 和 `cache_anthropic_tool_use`。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `action` | string | 否 | `"relocate"` | `relocate` 把匹配到的行移到 system prompt 末尾；`strip` 直接删除。 |
+| `blocks` | array | 否 | 内置集合 | 要匹配的按行分隔的块标记。每项需要 `open` 和 `close`。空数组表示禁用块匹配。 |
+| `line_prefixes` | array | 否 | 内置集合 | 要匹配的行前缀。空数组表示禁用行匹配。 |
+
+内置块集合是 `<env>`、`<environment_context>`、`<user_info>` 和 `<timestamp>`。内置行集合是 `x-anthropic-billing-header:`。
+
+提供 `blocks` 会替换内置块集合。提供 `line_prefixes` 会替换内置行集合。
+
+同一节点内只有开始标记而没有结束标记时不匹配。这可以避免一个格式错误的标记搬走 system prompt 的其余部分。
+
+### 示例规则
+
+```json
+{
+  "transform": "cache_prefix_stabilize",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "action": "relocate"
+  }
+}
+```
+
+### 添加内置集合之外的 agent
+
+从该 agent 发一次请求，在请求日志里读它的 system prompt，然后把包裹变化内容的标记加进来：
+
+```json
+{
+  "transform": "cache_prefix_stabilize",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "blocks": [
+      { "open": "<env>", "close": "</env>" },
+      { "open": "<environment_context>", "close": "</environment_context>" },
+      { "open": "<agent-context>", "close": "</agent-context>" }
+    ]
+  }
+}
+```
+
+## 顺序
+
+把 `cache_prefix_stabilize` 排在 `cache_openai_prompt` 之前。`cache_openai_prompt` 从稳定前缀派生缓存键，因此它必须在搬移完成之后读取前缀。

@@ -1,0 +1,99 @@
+---
+title: "自動キャッシュ: プロンプト接頭辞を安定化"
+description: リクエストごとに変わる agent のメタデータを安定した system テキストの後ろへ移動し、暗黙の接頭辞キャッシュが一致するようにします。
+---
+
+## 動作
+
+暗黙の接頭辞キャッシュを使う上流は、token 接頭辞を完全一致で照合します。token が 1 つ変わると、その token 以降のキャッシュはすべて無効になります。
+
+コーディング agent は、リクエストごとに変わる内容を system prompt の先頭付近に置きます。Claude Code は `<env>` ブロックと `x-anthropic-billing-header` の行を書き込みます。Codex CLI は `<environment_context>` を書き込みます。Cursor は `<user_info>` と `<timestamp>` を書き込みます。
+
+この変換はその内容を安定した指示テキストの後ろへ移動します。既定の動作は移動なので、モデルが読む token は同じで、順序だけが変わります。token は削除しません。
+
+この変換は先頭に連続する system ノードと developer ノードだけを読み書きします。user と assistant の内容には一切触れません。
+
+## 実測結果
+
+2,900 token の system prompt、モデル `ZhipuAi/GLM-5.3`、5 ターン増加する会話、リクエストごとに値が変わる 1 行:
+
+| 変化する行の位置 | 1 ターン | 2 | 3 | 4 | 5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| なし | 0% | 93.7% | 91.8% | 89.9% | 96.0% |
+| 先頭 2 行の直後 | 0% | 0% | 0% | 0% | 0% |
+| 安定した指示テキストの後 | 0% | 92.7% | 90.9% | 89.1% | 87.2% |
+| system prompt の末尾へ移動 | 0% | 92.8% | 90.9% | 89.0% | 87.2% |
+
+1 ターン目は常に 0% です。キャッシュを読むのではなく書き込むためです。
+
+## 参照情報
+
+| 属性 | 値 |
+| --- | --- |
+| 型 ID | `cache_prefix_stabilize` |
+| フェーズ | `request` |
+| スコープ | Provider, グローバル, API キー |
+
+## 使用する場面
+
+- 上流の provider 型が `chat_completion` または `responses` です。
+- 呼び出し元が Claude Code、Codex CLI、Cursor などのコーディング agent です。
+- 使用量の多いモデルのキャッシュヒット率が低いです。使用量分析ページのキャッシュヒット率パネルを確認してください。
+
+Anthropic（`messages`）上流ではこの変換は何もしません。このプロトコルはノード全体の `cache_control` ブレークポイントでキャッシュするため、ノード内でテキストの順序を変えてもキャッシュ境界は動きません。その場合は `cache_anthropic_system` と `cache_anthropic_tool_use` を使用してください。
+
+## 設定
+
+| オプション | 型 | 必須 | 既定値 | 説明 |
+| --- | --- | --- | --- | --- |
+| `action` | string | いいえ | `"relocate"` | `relocate` は一致した行を system prompt の末尾へ移動します。`strip` は削除します。 |
+| `blocks` | array | いいえ | 組み込みの集合 | 照合する行区切りのブロック標識です。各項目に `open` と `close` が必要です。空の配列はブロック照合を無効にします。 |
+| `line_prefixes` | array | いいえ | 組み込みの集合 | 照合する行の接頭辞です。空の配列は行照合を無効にします。 |
+
+組み込みのブロック集合は `<env>`、`<environment_context>`、`<user_info>`、`<timestamp>` です。組み込みの行集合は `x-anthropic-billing-header:` です。
+
+`blocks` を指定すると組み込みのブロック集合を置き換えます。`line_prefixes` を指定すると組み込みの行集合を置き換えます。
+
+同じノード内に開始標識だけがあり終了標識がない場合は照合しません。これにより、標識が壊れていても system prompt の残りが移動することを防ぎます。
+
+### ルールの例
+
+```json
+{
+  "transform": "cache_prefix_stabilize",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "action": "relocate"
+  }
+}
+```
+
+### 組み込みの集合にない agent を追加する
+
+その agent から 1 回リクエストを送り、リクエストログで system prompt を読み、変化する内容を囲む標識を追加します:
+
+```json
+{
+  "transform": "cache_prefix_stabilize",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "blocks": [
+      { "open": "<env>", "close": "</env>" },
+      { "open": "<environment_context>", "close": "</environment_context>" },
+      { "open": "<agent-context>", "close": "</agent-context>" }
+    ]
+  }
+}
+```
+
+## 順序
+
+`cache_prefix_stabilize` を `cache_openai_prompt` の前に置いてください。`cache_openai_prompt` は安定した接頭辞からキーを導出するため、移動が完了した後に接頭辞を読む必要があります。

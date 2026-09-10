@@ -2,8 +2,8 @@
 
 ## 0. Status
 
-- Version: `1.3.0`
-- Scope: Five request-phase `cache_*` domain transforms that automatically optimize provider prompt caching by injecting Anthropic `cache_control` markers, OpenAI prompt-cache request fields and content breakpoints, and user identity fields.
+- Version: `1.4.0`
+- Scope: Six request-phase `cache_*` domain transforms that automatically optimize provider prompt caching by injecting Anthropic `cache_control` markers, OpenAI prompt-cache request fields and content breakpoints, and user identity fields, and by relocating per-request agent metadata out of the cacheable prompt prefix.
 - Dependency: URP Transform System (see `urp-transform-system.spec.md`, TF-1 through TF-7b; historical IDs map to the canonical `cache_*` IDs through TF-17).
 
 ## 1. Shared Definitions
@@ -237,6 +237,125 @@ ACOTU-17. The transform MUST NOT modify any node content, `req.model`, `req.tool
 
 ACOTU-18. The transform is idempotent.
 
+## 7A. `cache_prefix_stabilize`
+
+### 7A.1 Motivation
+
+An upstream with implicit prefix caching matches on the exact token prefix. One changed
+token invalidates the cache from that token onward, and only from that token onward.
+Measured against `api.vectron.meta-stone.com` with model `ZhipuAi/GLM-5.3`, one 2,900-token
+system prompt, and a five-turn growing conversation, a single line whose value changes per
+request produced these cache-read rates:
+
+| Position of the changing line | Turn 1 | 2 | 3 | 4 | 5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| absent | 0% | 93.7% | 91.8% | 89.9% | 96.0% |
+| after the first two lines | 0% | 0% | 0% | 0% | 0% |
+| after the stable instruction text | 0% | 92.7% | 90.9% | 89.1% | 87.2% |
+| moved to the end of the system prompt | 0% | 92.8% | 90.9% | 89.0% | 87.2% |
+
+Coding agents place such content near the top of the system prompt: Claude Code emits an
+`<env>` block and an `x-anthropic-billing-header` line, Codex CLI emits
+`<environment_context>`, and Cursor emits `<user_info>` and `<timestamp>`. This transform
+moves that content behind the stable text. Row 4 of the table is the postcondition it
+targets.
+
+### 7A.2 Registration
+
+ACPS-1. Transform type ID: `"cache_prefix_stabilize"`.
+
+ACPS-2. Phase: `Request` only.
+
+ACPS-3. Supported scopes are `Provider`, `Global`, and `ApiKey`.
+
+ACPS-4. Config schema:
+- `action`: optional string, allowed values are `"relocate"` and `"strip"`, default
+  `"relocate"`;
+- `blocks`: optional array of objects with exactly the required string keys `open` and
+  `close`. An absent `blocks` means the built-in block set of ACPS-8. An empty array
+  disables block matching;
+- `line_prefixes`: optional array of strings. An absent `line_prefixes` means the built-in
+  line set of ACPS-9. An empty array disables line matching.
+
+ACPS-5. `parse_config` MUST reject a `blocks` entry whose `open` or `close` is empty or
+whitespace-only, and MUST reject a `line_prefixes` entry that is empty or whitespace-only.
+
+### 7A.3 Preconditions
+
+ACPS-6. If the request is not an OpenAI upstream request as defined by DEF-6, the transform
+is a no-op. An Anthropic upstream caches at a whole-node `cache_control` breakpoint, so
+reordering text inside a node cannot move the cached boundary.
+
+ACPS-7. The **stable prefix** is the leading run of nodes in `req.input` whose role is
+`System` or `Developer`, using the same scan rule as ACOP-10. If that run is empty, the
+transform is a no-op.
+
+### 7A.4 Volatile segment matching
+
+ACPS-8. The built-in block set is exactly, in this order:
+
+| `open` | `close` |
+| --- | --- |
+| `<env>` | `</env>` |
+| `<environment_context>` | `</environment_context>` |
+| `<user_info>` | `</user_info>` |
+| `<timestamp>` | `</timestamp>` |
+
+ACPS-9. The built-in line set is exactly `x-anthropic-billing-header:`.
+
+ACPS-10. Matching is line-oriented. For each `Node::Text` in the stable prefix, split its
+`content` on `\n` into lines and evaluate lines in ascending order:
+
+1. A line whose whitespace-trimmed form starts with any configured line prefix is a
+   **volatile line**.
+2. Otherwise, if a line's whitespace-trimmed form starts with a configured `open`, search
+   forward from that line, inclusive, for the first line whose whitespace-trimmed form ends
+   with the matching `close`. When such a line exists, every line from the opening line
+   through that line, inclusive, is a volatile line, and evaluation resumes after it.
+3. When no such closing line exists in the same node, the opening line is NOT a volatile
+   line and evaluation continues at the following line.
+
+ACPS-11. Rule 3 of ACPS-10 is required: treating an unclosed delimiter as a match would move
+the remainder of a system prompt on a single malformed marker.
+
+ACPS-12. A node that is not `Node::Text` is skipped. A node outside the stable prefix is
+never read or written, so a `User` or `Assistant` node whose own content contains a listed
+delimiter MUST remain byte-identical.
+
+### 7A.5 Behavior
+
+ACPS-13. Let `volatile` be the concatenation, in request order and then in line order, of
+every volatile line found in the stable prefix. If `volatile` is empty, the transform is a
+no-op.
+
+ACPS-14. For every `Node::Text` in the stable prefix, its `content` MUST become the
+remaining lines joined by a single `\n`, with leading and trailing `\n` characters removed.
+
+ACPS-15. When `action = "relocate"`, let `target` be the last `Node::Text` in the stable
+prefix. After ACPS-14, `target.content` MUST equal `volatile` joined by a single `\n` when
+`target.content` is empty, and otherwise MUST equal `target.content`, one `\n`, then
+`volatile` joined by a single `\n`.
+
+ACPS-16. When `action = "relocate"`, the multiset of non-empty lines across the stable
+prefix MUST be unchanged. The transform MUST NOT delete, add, or edit a line.
+
+ACPS-17. When `action = "strip"`, no volatile line is reinserted.
+
+ACPS-18. After ACPS-15 or ACPS-17, every node in the stable prefix that is a `Node::Text`
+with empty `content` MUST be removed from `req.input`. A node outside the stable prefix MUST
+NOT be removed.
+
+ACPS-19. The transform MUST NOT modify `req.model`, `req.tools`, `req.response_format`,
+`req.user`, any `extra_body`, or any node content outside the stable prefix.
+
+ACPS-20. The transform is idempotent. Line-oriented matching and single-`\n` joining are
+what make this hold: a second application extracts the already-relocated trailing lines and
+reappends them in the same order at the same position.
+
+ACPS-21. The transform does not guarantee a cache hit. An upstream cache hit additionally
+requires upstream eligibility, a minimum prompt size, and a stable prefix in the caller's
+own content.
+
 ## 8. Transform Ordering Guidance
 
 ORD-1. `cache_anthropic_system` SHOULD be ordered before `cache_anthropic_tool_use` in the transform rule list, so that system prompt caching takes priority when approaching the 4-breakpoint limit.
@@ -252,6 +371,10 @@ ORD-5. `cache_openai_prompt` SHOULD run after transforms that modify the stable 
 ORD-6. `prompt_strip_anthropic_billing_header` SHOULD run before `cache_openai_prompt` when both transforms are enabled. This ensures the generated `prompt_cache_key` and the OpenAI upstream prompt omit Claude Code's per-request billing marker.
 
 ORD-7. `cache_openai_tool_use` SHOULD run before `cache_openai_prompt` when `cache_openai_prompt.include_full_input_in_key = true`. This ensures the generated key material includes the inserted content breakpoint.
+
+ORD-8. `cache_prefix_stabilize` SHOULD run before `cache_openai_prompt`. `cache_openai_prompt` builds its key material from the stable prefix nodes (ACOP-10), so running it first would hash the volatile content that `cache_prefix_stabilize` is about to move and would produce a different `prompt_cache_key` on every request.
+
+ORD-9. `cache_prefix_stabilize` with the built-in line set makes `prompt_strip_anthropic_billing_header` redundant for an OpenAI upstream request, because the billing line is relocated behind the stable prefix instead of deleted. Enabling both is permitted: whichever runs first removes the line from the prefix, and the other then finds nothing to act on.
 
 ## 9. Invariants
 
