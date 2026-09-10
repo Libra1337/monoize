@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   aggregateTokenTotals,
   formatCacheHitRate,
+  rankModelCacheHitRates,
   rankModelsByTokens,
   tokenMetricForBucket,
 } from "../src/lib/usage-analytics";
@@ -61,6 +62,45 @@ describe("Usage analytics helpers", () => {
       cache_read_tokens_by_model: {},
       output_tokens_by_model: {},
     }], "total")).toEqual([{ model: "unknown", value: 7n }]);
+  });
+
+  test("ranks cache hit rates by input volume, not by rate", () => {
+    expect(rankModelCacheHitRates([{
+      label: "mixed",
+      input_tokens_by_model: { busy: "200000", quiet: "60000" },
+      cache_read_tokens_by_model: { busy: "20000", quiet: "54000" },
+      output_tokens_by_model: {},
+    }])).toEqual([
+      { model: "busy", input: 200_000n, cacheRead: 20_000n, basisPoints: 1_000n, grade: "low" },
+      { model: "quiet", input: 60_000n, cacheRead: 54_000n, basisPoints: 9_000n, grade: "high" },
+    ]);
+  });
+
+  test("grades a hit rate only once the input total can support one", () => {
+    const graded = rankModelCacheHitRates([{
+      label: "grades",
+      input_tokens_by_model: { small: "49999", floor: "50000", middle: "50001" },
+      cache_read_tokens_by_model: { small: "0", floor: "14999", middle: "22501" },
+      output_tokens_by_model: {},
+    }]);
+    expect(graded.map((row) => [row.model, row.basisPoints, row.grade])).toEqual([
+      ["middle", 4_500n, "partial"],
+      ["floor", 3_000n, "partial"],
+      ["small", 0n, "insufficient"],
+    ]);
+  });
+
+  test("omits a model with no input tokens and sums across buckets", () => {
+    expect(rankModelCacheHitRates(buckets)).toEqual([
+      { model: "alpha", input: 14n, cacheRead: 5n, basisPoints: 3_571n, grade: "insufficient" },
+      { model: "beta", input: 3n, cacheRead: 1n, basisPoints: 3_333n, grade: "insufficient" },
+    ]);
+    expect(rankModelCacheHitRates([{
+      label: "output-only",
+      input_tokens_by_model: {},
+      cache_read_tokens_by_model: {},
+      output_tokens_by_model: { gamma: "9" },
+    }])).toEqual([]);
   });
 
   test("retains integers above the JavaScript safe range", () => {

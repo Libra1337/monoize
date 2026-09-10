@@ -970,6 +970,16 @@
       "input": "输入",
       "cache_read": "缓存读取",
       "output": "输出"
+    },
+    "cacheByModel": {
+      "title": "各模型缓存命中率",
+      "description": "缓存读取 Token 除以输入 Token，按输入量排序。高输入量模型命中率偏低，说明客户端每次请求发送的提示词前缀都在变化。",
+      "grades": {
+        "insufficient": "数据量不足",
+        "low": "偏低",
+        "partial": "部分命中",
+        "high": "正常"
+      }
     }
   },
   "users": {

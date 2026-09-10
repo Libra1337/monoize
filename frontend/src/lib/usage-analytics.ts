@@ -114,6 +114,71 @@ export function rankModelsByTokens(
     .map(([model, value]) => ({ model, value }));
 }
 
+export type CacheHitGrade = "insufficient" | "low" | "partial" | "high";
+
+export interface ModelCacheHitRate {
+  model: string;
+  input: bigint;
+  cacheRead: bigint;
+  basisPoints: bigint;
+  grade: CacheHitGrade;
+}
+
+/// A hit rate measured over a smaller input total is dominated by the unavoidable
+/// cache-miss cost of the first request in a conversation, so it carries no grade.
+export const CACHE_HIT_GRADE_MIN_INPUT = 50_000n;
+export const CACHE_HIT_LOW_BASIS_POINTS = 3_000n;
+export const CACHE_HIT_HIGH_BASIS_POINTS = 6_000n;
+
+function gradeCacheHitRate(input: bigint, basisPoints: bigint): CacheHitGrade {
+  if (input < CACHE_HIT_GRADE_MIN_INPUT) return "insufficient";
+  if (basisPoints < CACHE_HIT_LOW_BASIS_POINTS) return "low";
+  if (basisPoints < CACHE_HIT_HIGH_BASIS_POINTS) return "partial";
+  return "high";
+}
+
+/**
+ * Ranks logical models by input Token volume and reports the prompt-cache hit rate of
+ * each one. Input volume drives the ordering because it decides how much a low hit rate
+ * actually costs. Rows with a zero input total are omitted: their hit rate is undefined.
+ */
+export function rankModelCacheHitRates(
+  buckets: TokenAnalyticsBucket[],
+): ModelCacheHitRate[] {
+  const totals = new Map<string, { input: bigint; cacheRead: bigint }>();
+  for (const bucket of buckets) {
+    const models = new Set([
+      ...Object.keys(bucket.input_tokens_by_model),
+      ...Object.keys(bucket.cache_read_tokens_by_model),
+    ]);
+    for (const sourceModel of models) {
+      const model = sourceModel.trim() || "unknown";
+      const current = totals.get(model) ?? { input: 0n, cacheRead: 0n };
+      totals.set(model, {
+        input: current.input + modelMetricValue(bucket, sourceModel, "input"),
+        cacheRead: current.cacheRead + modelMetricValue(bucket, sourceModel, "cache_read"),
+      });
+    }
+  }
+  return [...totals.entries()]
+    .filter(([, value]) => value.input > 0n)
+    .sort(([leftModel, left], [rightModel, right]) => (
+      left.input === right.input
+        ? compareUtf8(leftModel, rightModel)
+        : left.input > right.input ? -1 : 1
+    ))
+    .map(([model, value]) => {
+      const basisPoints = (value.cacheRead * 10_000n + value.input / 2n) / value.input;
+      return {
+        model,
+        input: value.input,
+        cacheRead: value.cacheRead,
+        basisPoints,
+        grade: gradeCacheHitRate(value.input, basisPoints),
+      };
+    });
+}
+
 export function formatCacheHitRate(input: bigint, cacheRead: bigint): string {
   if (input < 0n || cacheRead < 0n) {
     throw new Error("token counts must be non-negative");
