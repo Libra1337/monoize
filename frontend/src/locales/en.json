@@ -224,6 +224,7 @@
     "admin": "Admin",
     "logs": "Logs",
     "usage": "Usage Analysis",
+    "cacheHitRate": "Cache hit rate",
     "usageRanking": "Usage ranking",
     "runtimeStatus": "Runtime status",
     "apiDocs": "API Docs",
@@ -972,14 +973,26 @@
       "output": "Output"
     },
     "cacheByModel": {
-      "title": "Cache hit rate by model",
       "description": "Cache-read Tokens divided by input Tokens, ordered by input volume. A low rate on a high-volume model means the client sends a prompt prefix that changes between requests.",
       "grades": {
+        "no_traffic": "no traffic",
         "insufficient": "too little data",
         "low": "low",
         "partial": "partial",
         "high": "healthy"
       }
+    }
+  },
+  "usageCache": {
+    "title": "Cache hit rate",
+    "description": "Compare cache-read Tokens with input Tokens for every model.",
+    "modelsTracked": "Models with traffic",
+    "searchPlaceholder": "Search model",
+    "trafficOnly": "Only models with traffic",
+    "emptyDescription": "No model matches the search in this range.",
+    "columns": {
+      "model": "Model",
+      "assessment": "Assessment"
     }
   },
   "users": {

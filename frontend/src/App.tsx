@@ -33,6 +33,7 @@ import { SalesAdminPage } from "@/pages/sales-admin";
 import { OrdersPage } from "@/pages/orders";
 import { StoreAdminPage } from "@/pages/store-admin";
 import { UsageAnalysisPage } from "@/pages/usage-analysis";
+import { UsageCachePage } from "@/pages/usage-cache";
 import { WalletPage } from "@/pages/wallet";
 import { ModelMarketplacePage } from "@/pages/model-marketplace";
 import { DashboardApiDocsPage } from "@/pages/dashboard-api-docs";
@@ -92,6 +93,7 @@ function App() {
           <Route path="/dashboard" element={<DashboardGuard><DashboardLayout /></DashboardGuard>}>
             <Route index element={<DashboardPage />} />
             <Route path="usage" element={<UsageAnalysisPage />} />
+            <Route path="usage/cache" element={<UsageCachePage />} />
             <Route path="usage-ranking" element={<AdminUsagePage />} />
             <Route path="status" element={<PublicStatusPage refreshInterval={2000} dashboard />} />
             <Route path="admin" element={<AdminRoute><AdminDashboardPage /></AdminRoute>} />
