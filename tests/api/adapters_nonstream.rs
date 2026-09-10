@@ -637,3 +637,230 @@ async fn legacy_completions_refuses_what_it_cannot_express() {
         );
     }
 }
+
+async fn install_prefix_stabilize_rule(ctx: &TestContext, config: Value) {
+    let provider = ctx
+        .state
+        .monoize_store
+        .list_providers()
+        .await
+        .expect("list providers")
+        .into_iter()
+        .find(|provider| provider.name == "up-chat")
+        .expect("chat_completion provider");
+
+    ctx.state
+        .monoize_store
+        .update_provider(
+            &provider.id,
+            monoize::monoize_routing::UpdateMonoizeProviderInput {
+                confirm_public_exposure: false,
+                name: None,
+                channel: None,
+                pricing_profile: None,
+                multiplier: None,
+                channel_max_retries: None,
+                channel_retry_interval_ms: None,
+                circuit_breaker_enabled: None,
+                per_model_circuit_break: None,
+                transforms: Some(vec![monoize::transforms::TransformRuleConfig {
+                    transform: "cache_prefix_stabilize".to_string(),
+                    enabled: true,
+                    models: None,
+                    phase: monoize::transforms::Phase::Request,
+                    config,
+                }]),
+                active_probe_enabled_override: None,
+                api_type_overrides: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
+                request_timeout_ms_override: None,
+                extra_fields_whitelist: None,
+                strip_cross_protocol_nested_extra: None,
+                group_id: None,
+                enabled: None,
+                priority: None,
+            },
+        )
+        .await
+        .expect("install cache_prefix_stabilize rule");
+}
+
+/// The agent shape that motivates ACPS-1: a stable instruction prefix interrupted early by a
+/// block that changes on every request.
+const AGENT_SYSTEM_PROMPT: &str = "You are a coding agent.\n\
+<env>\nWorking directory: /workspace\nToday's date: 2026-09-10\n</env>\n\
+## Rules\nPrefer the existing convention.";
+
+/// ACPS-15: the volatile block must reach the upstream behind the stable text, so the stable
+/// text becomes a prefix the upstream can cache. Asserting on the body the upstream received
+/// is what proves the rewrite survives decode, transform, and encode rather than only holding
+/// inside the transform's own unit test.
+#[tokio::test]
+async fn prefix_stabilize_moves_the_agent_env_block_behind_the_stable_system_text() {
+    let ctx = setup().await;
+    install_prefix_stabilize_rule(&ctx, json!({})).await;
+
+    let (status, response) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [
+                { "role": "system", "content": AGENT_SYSTEM_PROMPT },
+                { "role": "user", "content": "which rule applies?" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+
+    let upstream = last_captured_body(&ctx, "chat");
+    assert_eq!(
+        upstream["messages"][0]["content"],
+        json!(
+            "You are a coding agent.\n## Rules\nPrefer the existing convention.\n\
+<env>\nWorking directory: /workspace\nToday's date: 2026-09-10\n</env>"
+        ),
+        "the volatile block must arrive after the stable text: {upstream}"
+    );
+    assert_eq!(
+        upstream["messages"][1]["content"],
+        json!("which rule applies?"),
+        "{upstream}"
+    );
+}
+
+/// ACPS-16: relocation is a reordering. No line may be dropped, added, or edited, because the
+/// model must still read everything the caller sent.
+#[tokio::test]
+async fn prefix_stabilize_preserves_every_line_of_the_system_prompt() {
+    let ctx = setup().await;
+    install_prefix_stabilize_rule(&ctx, json!({})).await;
+
+    let (status, response) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [
+                { "role": "system", "content": AGENT_SYSTEM_PROMPT },
+                { "role": "user", "content": "go" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+
+    let upstream = last_captured_body(&ctx, "chat");
+    let delivered = upstream["messages"][0]["content"]
+        .as_str()
+        .expect("system content")
+        .to_string();
+    let mut sent_lines: Vec<&str> = AGENT_SYSTEM_PROMPT.lines().collect();
+    let mut delivered_lines: Vec<&str> = delivered.lines().collect();
+    sent_lines.sort_unstable();
+    delivered_lines.sort_unstable();
+    assert_eq!(sent_lines, delivered_lines, "{upstream}");
+}
+
+/// ACPS-12: the leading system run is the only region this transform may read or write. A user
+/// message that happens to contain the same delimiters is the caller's own content.
+#[tokio::test]
+async fn prefix_stabilize_leaves_user_content_containing_the_delimiters_alone() {
+    let ctx = setup().await;
+    install_prefix_stabilize_rule(&ctx, json!({})).await;
+
+    let user_text = "<env>\nmy own notes\n</env>";
+    let (status, response) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [
+                { "role": "system", "content": "Stable instructions." },
+                { "role": "user", "content": user_text }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+
+    let upstream = last_captured_body(&ctx, "chat");
+    assert_eq!(upstream["messages"][0]["content"], json!("Stable instructions."), "{upstream}");
+    assert_eq!(upstream["messages"][1]["content"], json!(user_text), "{upstream}");
+}
+
+/// ACPS-6: an Anthropic upstream caches at a whole-node breakpoint, so the transform must not
+/// reorder anything there. The same rule on the same request must leave the prompt untouched.
+#[tokio::test]
+async fn prefix_stabilize_does_not_rewrite_a_messages_upstream() {
+    let ctx = setup().await;
+    let provider = ctx
+        .state
+        .monoize_store
+        .list_providers()
+        .await
+        .expect("list providers")
+        .into_iter()
+        .find(|provider| provider.name == "up-msg")
+        .expect("messages provider");
+    ctx.state
+        .monoize_store
+        .update_provider(
+            &provider.id,
+            monoize::monoize_routing::UpdateMonoizeProviderInput {
+                confirm_public_exposure: false,
+                name: None,
+                channel: None,
+                pricing_profile: None,
+                multiplier: None,
+                channel_max_retries: None,
+                channel_retry_interval_ms: None,
+                circuit_breaker_enabled: None,
+                per_model_circuit_break: None,
+                transforms: Some(vec![monoize::transforms::TransformRuleConfig {
+                    transform: "cache_prefix_stabilize".to_string(),
+                    enabled: true,
+                    models: None,
+                    phase: monoize::transforms::Phase::Request,
+                    config: json!({}),
+                }]),
+                active_probe_enabled_override: None,
+                api_type_overrides: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
+                request_timeout_ms_override: None,
+                extra_fields_whitelist: None,
+                strip_cross_protocol_nested_extra: None,
+                group_id: None,
+                enabled: None,
+                priority: None,
+            },
+        )
+        .await
+        .expect("install rule on the messages provider");
+
+    let (status, response) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "messages": [
+                { "role": "system", "content": AGENT_SYSTEM_PROMPT },
+                { "role": "user", "content": "go" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    let delivered = serde_json::to_string(&upstream["system"]).expect("system json");
+    assert!(
+        delivered.contains("You are a coding agent.\\n<env>"),
+        "the Anthropic upstream must receive the original order: {upstream}"
+    );
+}
