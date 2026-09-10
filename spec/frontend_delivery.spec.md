@@ -20,7 +20,12 @@ FD-R2. `GET /<path>` MUST return embedded asset if `<path>` exists under `fronte
 
 FD-R3. Unknown UI paths MUST return embedded `index.html` (SPA fallback).
 
-FD-R4. Non-GET unknown API paths MUST return `404`.
+FD-R3a. Every path that FD-R1 through FD-R3 serve for `GET` MUST serve `HEAD` with the same
+status and the same headers, and without a body. Returning `404` for `HEAD` on a path whose
+`GET` returns `200` contradicts RFC 9110 §9.3.2 and makes any uptime monitor, link checker,
+or CDN health probe that uses `HEAD` report the site as missing.
+
+FD-R4. An unknown API path MUST return `404` for any method other than `GET` and `HEAD`.
 
 FD-R5. Dashboard SPA routes under `/dashboard/*` (for example `/dashboard/providers`, `/dashboard/users`, `/dashboard/tokens`, `/dashboard/models`) MUST resolve to embedded `index.html` on direct browser navigation and hard refresh.
 

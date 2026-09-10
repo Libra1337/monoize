@@ -63,10 +63,46 @@ mod tests {
         );
         assert!(!rendered.contains("__MONOIZE_CSP_NONCE__"));
     }
+
+    async fn probe(method: Method, path: &str) -> StatusCode {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .body(Body::empty())
+            .expect("request builds");
+        frontend_fallback(request).await.status()
+    }
+
+    /// FD-R3a: a monitor or CDN probe that uses HEAD must not be told the page is missing.
+    ///
+    /// The handler previously rejected every method but GET, so `HEAD /` answered 404 while
+    /// `GET /` answered 200. hyper strips the body from a HEAD response itself, so serving
+    /// the same response is both correct and sufficient.
+    #[tokio::test]
+    async fn head_is_answered_like_get() {
+        assert_eq!(
+            probe(Method::HEAD, "/").await,
+            probe(Method::GET, "/").await
+        );
+        assert_eq!(
+            probe(Method::HEAD, "/dashboard/wallet").await,
+            probe(Method::GET, "/dashboard/wallet").await,
+        );
+    }
+
+    /// FD-R4: everything else still gets 404, so this did not open the fallback to writes.
+    #[tokio::test]
+    async fn other_methods_are_still_refused() {
+        for method in [Method::POST, Method::PUT, Method::DELETE, Method::PATCH] {
+            assert_eq!(probe(method, "/").await, StatusCode::NOT_FOUND);
+        }
+    }
 }
 
 pub async fn frontend_fallback(req: Request<Body>) -> Response {
-    if req.method() != Method::GET {
+    // FD-R3a: HEAD must answer like GET without a body. hyper drops the body for a HEAD
+    // request on its own, so serving the identical response keeps the headers truthful.
+    if !matches!(*req.method(), Method::GET | Method::HEAD) {
         return StatusCode::NOT_FOUND.into_response();
     }
 
