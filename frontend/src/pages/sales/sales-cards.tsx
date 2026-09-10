@@ -4,7 +4,7 @@ import { Check, Copy } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { CoinAmount } from "@/components/coin-amount";
 import { formatCoinFromMinor } from "@/lib/store-money";
-import { formatBasisPoints, type SalesAgent, type SalesWindow } from "@/lib/sales-api";
+import { formatBasisPoints, type SalesAgent, type SalesWindow, type SalesSettlement } from "@/lib/sales-api";
 import { cn } from "@/lib/utils";
 
 /** Renders a Coin minor amount. Coin is pegged to CNY, so no exchange rate is applied. */
@@ -107,6 +107,54 @@ export function SalesWindowCard({
             <dt className="text-xs text-muted-foreground">{t("sales.window.orders")}</dt>
             <dd className="font-mono text-sm tabular-nums">{data.order_count}</dd>
           </div>
+        </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Where the agent's money sits (SC-6.9).
+ *
+ * Four figures rather than one balance, because a balance alone cannot distinguish a payout
+ * still awaiting approval from one that was never requested. They add up:
+ * accrued = available + pending + withdrawn.
+ */
+export function SalesSettlementCard({ settlement }: { settlement: SalesSettlement }) {
+  const { t } = useTranslation();
+  const rows: { key: string; value: string; strong?: boolean }[] = [
+    { key: "accrued", value: settlement.accrued_minor, strong: true },
+    { key: "available", value: settlement.available_minor },
+    { key: "pending", value: settlement.pending_withdrawal_minor },
+    { key: "withdrawn", value: settlement.withdrawn_minor },
+  ];
+
+  return (
+    <Card className="rounded-2xl">
+      <CardContent className="flex flex-col gap-3 p-5">
+        <h2 className="text-sm font-semibold">{t("sales.settlement.title")}</h2>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+          {rows.map((row) => {
+            const negative = row.value.startsWith("-");
+            const magnitude = negative ? row.value.slice(1) : row.value;
+            return (
+              <div key={row.key} className="flex flex-col gap-0.5">
+                <dt className="text-xs text-muted-foreground">
+                  {t(`sales.settlement.${row.key}`)}
+                </dt>
+                <dd
+                  className={cn(
+                    "font-mono tabular-nums",
+                    row.strong && "text-lg font-semibold",
+                    negative && "text-destructive",
+                  )}
+                >
+                  {negative && <span aria-hidden="true">-</span>}
+                  <CoinAmount value={coin(magnitude)} />
+                </dd>
+              </div>
+            );
+          })}
         </dl>
       </CardContent>
     </Card>

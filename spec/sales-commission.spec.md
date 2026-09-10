@@ -457,6 +457,30 @@ SC-UI-7. Every string introduced by this document MUST exist in `en`, `zh`, `zh-
 
 ## 9. Admin agent creation
 
+SC-6.9. Every surface that shows an agent's money MUST report these four amounts in Coin
+minor units, for that agent:
+
+- `accrued_minor`: the sum of `commission_fen` over the agent's entries whose `reversed_at`
+  is null. Reversed entries are excluded because a refunded order earned nothing.
+- `available_minor`: the agent's `commission_balance_fen`, which is what may be withdrawn now.
+- `pending_withdrawal_minor`: the sum of `amount_fen` over the agent's withdrawals in state
+  `requested`, which are already deducted from the balance and awaiting a decision.
+- `withdrawn_minor`: the sum of `amount_fen` over the agent's withdrawals in state `paid`.
+
+SC-6.9a. These four MUST satisfy
+`accrued_minor = available_minor + pending_withdrawal_minor + withdrawn_minor`
+for an agent with no reversed entry accrued after its reversal, because a request deducts
+from the balance at request time (SC-5.2) and a rejection or cancellation returns it
+(SC-5.6). A `rejected` or `cancelled` withdrawal contributes to none of the four: its amount
+is back in `available_minor`.
+
+The identity is what makes the four figures checkable against each other. Reporting only a
+balance leaves an agent unable to tell an unpaid withdrawal from one that was never
+requested.
+
+SC-6.10. The Admin agent roster MUST report the same four amounts per agent, computed
+identically. Admin and the agent MUST NOT see different totals for the same agent.
+
 SC-6.6. The sales page MUST expose a password change control for the calling agent, using
 `PUT /dashboard/auth/password` with the account's current password. An agent account is
 created with a generated one-time password (SC-7.2) and is redirected away from

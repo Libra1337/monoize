@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Plus } from "lucide-react";
@@ -38,6 +38,19 @@ export function SalesAdminAgents({
   const [created, setCreated] = useState<{ code: string; password: string } | null>(null);
   const [ratePercent, setRatePercent] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Summed as BigInt: these are Coin minor units held as strings precisely so no float ever
+  // touches money.
+  const totals = useMemo(() => {
+    const sum = (pick: (agent: SalesAgent) => string) =>
+      agents.reduce((total, agent) => total + BigInt(pick(agent)), 0n).toString();
+    return {
+      accrued: sum((agent) => agent.settlement.accrued_minor),
+      available: sum((agent) => agent.settlement.available_minor),
+      pending: sum((agent) => agent.settlement.pending_withdrawal_minor),
+      withdrawn: sum((agent) => agent.settlement.withdrawn_minor),
+    };
+  }, [agents]);
 
   const createAgent = async () => {
     const bp = percentToBasisPoints(newDiscount);
@@ -101,6 +114,32 @@ export function SalesAdminAgents({
               {t("store.admin.sales.rateHelp")}
             </p>
           </div>
+          {/* SC-6.10: the same four figures, summed across every agent, so Admin can see the
+              platform's total commission liability without adding up the roster by hand. */}
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
+            {(
+              [
+                ["accrued", totals.accrued],
+                ["available", totals.available],
+                ["pending", totals.pending],
+                ["withdrawn", totals.withdrawn],
+              ] as const
+            ).map(([key, value]) => (
+              <div key={key} className="flex flex-col">
+                <dt className="text-xs text-muted-foreground">
+                  {t(`sales.settlement.${key}`)}
+                </dt>
+                <dd
+                  className={cn(
+                    "font-mono text-sm font-medium tabular-nums",
+                    value.startsWith("-") && "text-destructive",
+                  )}
+                >
+                  <CoinAmount value={coin(value)} />
+                </dd>
+              </div>
+            ))}
+          </dl>
           <div className="flex items-end gap-2">
             <div className="flex flex-col gap-2">
               <Label htmlFor="sales-rate">{t("store.admin.sales.newRate")}</Label>
@@ -206,7 +245,7 @@ export function SalesAdminAgents({
             <ul className="divide-y rounded-xl border">
               {agents.map((agent) => (
                 <li key={agent.user_id} className="flex flex-wrap items-center gap-4 p-4">
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 basis-40">
                     <p className="font-mono text-sm font-semibold">{agent.code}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {t("store.admin.sales.discountReadOnly", {
@@ -214,14 +253,30 @@ export function SalesAdminAgents({
                       })}
                     </p>
                   </div>
-                  <p
-                    className={cn(
-                      "font-mono text-sm tabular-nums",
-                      agent.commission_balance_minor.startsWith("-") && "text-destructive",
-                    )}
-                  >
-                    <CoinAmount value={coin(agent.commission_balance_minor)} />
-                  </p>
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+                    {(
+                      [
+                        ["accrued", agent.settlement.accrued_minor],
+                        ["available", agent.settlement.available_minor],
+                        ["pending", agent.settlement.pending_withdrawal_minor],
+                        ["withdrawn", agent.settlement.withdrawn_minor],
+                      ] as const
+                    ).map(([key, value]) => (
+                      <div key={key} className="flex flex-col">
+                        <dt className="text-xs text-muted-foreground">
+                          {t(`sales.settlement.${key}`)}
+                        </dt>
+                        <dd
+                          className={cn(
+                            "font-mono text-sm tabular-nums",
+                            value.startsWith("-") && "text-destructive",
+                          )}
+                        >
+                          <CoinAmount value={coin(value)} />
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
                   <label className="flex items-center gap-2 text-xs">
                     <span className="text-muted-foreground">
                       {t("store.admin.sales.enabled")}

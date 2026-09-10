@@ -2181,6 +2181,13 @@
       "discountEffect": "購入者は {{discount}} 割引、あなたは額面の {{commission}} を獲得します。",
       "saveDiscount": "割引を保存",
       "discountSaved": "割引を保存しました"
+    },
+    "settlement": {
+      "title": "報酬と出金",
+      "accrued": "累計獲得額",
+      "available": "出金可能額",
+      "pending": "出金申請中",
+      "withdrawn": "出金済み"
     }
   },
   "salesAdmin": {

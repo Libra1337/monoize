@@ -2185,6 +2185,13 @@
       "discountEffect": "买家省 {{discount}}，你获得面额的 {{commission}}。",
       "saveDiscount": "保存折扣",
       "discountSaved": "折扣已保存"
+    },
+    "settlement": {
+      "title": "分成与提现",
+      "accrued": "累计已分成",
+      "available": "待提现（可提）",
+      "pending": "提现处理中",
+      "withdrawn": "已提现"
     }
   },
   "salesAdmin": {

@@ -10,7 +10,12 @@ import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { useAuth } from "@/hooks/use-auth";
 import { salesApi } from "@/lib/sales-api";
 import { SalesDiscountCard, SalesPasswordCard } from "./sales-account";
-import { SalesBalanceCard, SalesCodeCard, SalesWindowCard } from "./sales-cards";
+import {
+  SalesBalanceCard,
+  SalesCodeCard,
+  SalesSettlementCard,
+  SalesWindowCard,
+} from "./sales-cards";
 import {
   SalesClaimPanel,
   SalesEntryList,
@@ -139,6 +144,7 @@ export function SalesPage() {
               <SalesCodeCard agent={data.agent} />
               <SalesBalanceCard balanceMinor={data.agent.commission_balance_minor} />
             </div>
+            <SalesSettlementCard settlement={data.agent.settlement} />
             <section aria-labelledby="sales-windows" className="flex flex-col gap-3">
               <h2 id="sales-windows" className="text-sm font-semibold">
                 {t("sales.window.title")}

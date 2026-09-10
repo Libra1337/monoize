@@ -10,6 +10,14 @@ import { StoreApiError } from "./store-api";
 
 const BASE = "/api/dashboard";
 
+/** SC-6.9: where an agent's money sits, four figures that add up. */
+export interface SalesSettlement {
+  accrued_minor: string;
+  available_minor: string;
+  pending_withdrawal_minor: string;
+  withdrawn_minor: string;
+}
+
 export interface SalesAgent {
   user_id: string;
   username: string;
@@ -18,6 +26,7 @@ export interface SalesAgent {
   commission_balance_minor: string;
   enabled: boolean;
   created_at: string;
+  settlement: SalesSettlement;
 }
 
 export interface SalesWindow {

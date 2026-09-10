@@ -113,9 +113,27 @@ pub struct SalesAgent {
     pub username: String,
     pub code: String,
     pub discount_bp: i64,
+    /// Withdrawable now; the same value as `settlement.available_minor` (SC-6.9).
     pub commission_balance_minor: String,
     pub enabled: bool,
     pub created_at: String,
+    pub settlement: SalesSettlement,
+}
+
+/// What an agent has earned and where it currently sits (SC-6.9).
+///
+/// The four satisfy `accrued = available + pending_withdrawal + withdrawn`, which lets a
+/// reader check them against each other rather than trusting a single balance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SalesSettlement {
+    /// Sum of commission over entries that were not reversed.
+    pub accrued_minor: String,
+    /// The current balance: earned, not yet requested.
+    pub available_minor: String,
+    /// Requested and awaiting a decision; already deducted from the balance.
+    pub pending_withdrawal_minor: String,
+    /// Paid out.
+    pub withdrawn_minor: String,
 }
 
 /// One accrual (SC-D2).
@@ -290,7 +308,19 @@ impl SalesStore {
             .read()
             .query_one(self.db.stmt(
                 "SELECT a.user_id, u.username, a.code, a.discount_bp,
-                        a.commission_balance_fen, a.enabled, a.created_at
+                        a.commission_balance_fen, a.enabled, a.created_at,
+                        (SELECT COALESCE(SUM(CAST(e.commission_fen AS INTEGER)), 0)
+                         FROM sales_commission_entries e
+                         WHERE e.agent_user_id = a.user_id AND e.reversed_at IS NULL)
+                        AS accrued_fen,
+                        (SELECT COALESCE(SUM(CAST(w.amount_fen AS INTEGER)), 0)
+                         FROM sales_withdrawals w
+                         WHERE w.agent_user_id = a.user_id AND w.state = 'requested')
+                        AS pending_withdrawal_fen,
+                        (SELECT COALESCE(SUM(CAST(w.amount_fen AS INTEGER)), 0)
+                         FROM sales_withdrawals w
+                         WHERE w.agent_user_id = a.user_id AND w.state = 'paid')
+                        AS withdrawn_fen
                  FROM sales_agents a JOIN users u ON u.id = a.user_id
                  WHERE a.user_id = $1",
                 vec![user_id.into()],
@@ -309,6 +339,12 @@ impl SalesStore {
             commission_balance_minor: row_string(row, "commission_balance_fen")?,
             enabled: row_i64(row, "enabled")? == 1,
             created_at: row_string(row, "created_at")?,
+            settlement: SalesSettlement {
+                accrued_minor: row_i64(row, "accrued_fen")?.to_string(),
+                available_minor: row_string(row, "commission_balance_fen")?,
+                pending_withdrawal_minor: row_i64(row, "pending_withdrawal_fen")?.to_string(),
+                withdrawn_minor: row_i64(row, "withdrawn_fen")?.to_string(),
+            },
         })
     }
 
@@ -317,8 +353,22 @@ impl SalesStore {
             .db
             .read()
             .query_all(self.db.stmt(
+                // The three settlement figures are correlated subqueries rather than a
+                // second round of per-agent queries, so the roster stays one statement.
                 "SELECT a.user_id, u.username, a.code, a.discount_bp,
-                        a.commission_balance_fen, a.enabled, a.created_at
+                        a.commission_balance_fen, a.enabled, a.created_at,
+                        (SELECT COALESCE(SUM(CAST(e.commission_fen AS INTEGER)), 0)
+                         FROM sales_commission_entries e
+                         WHERE e.agent_user_id = a.user_id AND e.reversed_at IS NULL)
+                        AS accrued_fen,
+                        (SELECT COALESCE(SUM(CAST(w.amount_fen AS INTEGER)), 0)
+                         FROM sales_withdrawals w
+                         WHERE w.agent_user_id = a.user_id AND w.state = 'requested')
+                        AS pending_withdrawal_fen,
+                        (SELECT COALESCE(SUM(CAST(w.amount_fen AS INTEGER)), 0)
+                         FROM sales_withdrawals w
+                         WHERE w.agent_user_id = a.user_id AND w.state = 'paid')
+                        AS withdrawn_fen
                  FROM sales_agents a JOIN users u ON u.id = a.user_id
                  ORDER BY a.created_at DESC, a.user_id ASC
                  LIMIT 200",
@@ -1159,6 +1209,162 @@ pub fn face_value_minor(quote_json: &str) -> Result<i128, SalesStoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sea_orm_migration::MigratorTrait;
+
+    /// Builds a store with one agent holding `accrued` fen of commission across two entries.
+    async fn store_with_agent(entries: &[i64]) -> (SalesStore, String) {
+        let db = DbPool::connect("sqlite::memory:").await.expect("connect");
+        {
+            let write = db.write().await;
+            crate::migration::Migrator::up(&*write, None)
+                .await
+                .expect("migrate");
+            write
+                .execute_unprepared(
+                    "INSERT INTO users
+                        (id, username, password_hash, role, created_at, updated_at, enabled,
+                         balance_nano_usd, balance_unlimited, group_id)
+                     SELECT 'agent-1', 'agent-1', 'x', 'user', '2026-09-09T00:00:00Z',
+                            '2026-09-09T00:00:00Z', 1, '0', 0, id
+                     FROM monoize_groups WHERE is_default = 1 LIMIT 1",
+                )
+                .await
+                .expect("seed agent user");
+        }
+        let store = SalesStore::new(db.clone());
+        store
+            .insert_agent("agent-1", "AGENT001", 0)
+            .await
+            .expect("insert agent");
+
+        let total: i64 = entries.iter().sum();
+        for (index, amount) in entries.iter().enumerate() {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO sales_commission_entries
+                        (id, agent_user_id, order_id, order_number, buyer_user_id, base_fen,
+                         commission_fen, discount_bp, commission_rate_bp, origin, created_at)
+                     VALUES ($1, 'agent-1', $2, $3, 'buyer', '10000', $4, 0, 500, 'code',
+                             '2026-09-09T00:00:00Z')",
+                    vec![
+                        format!("entry-{index}").into(),
+                        format!("order-{index}").into(),
+                        format!("LS-{index}").into(),
+                        amount.to_string().into(),
+                    ],
+                ))
+                .await
+                .expect("insert entry");
+        }
+        db.write()
+            .await
+            .execute(db.stmt(
+                "UPDATE sales_agents SET commission_balance_fen = $1 WHERE user_id = 'agent-1'",
+                vec![total.to_string().into()],
+            ))
+            .await
+            .expect("set balance");
+        (store, "agent-1".to_string())
+    }
+
+    /// SC-6.9a: the four figures must add up, so a reader can check them against each other.
+    ///
+    /// The identity is the whole reason for reporting four numbers rather than a balance, and
+    /// it only holds if a request deducts at request time and a rejection returns the amount.
+    #[tokio::test]
+    async fn settlement_figures_account_for_every_fen() {
+        let (store, agent_id) = store_with_agent(&[300, 200]).await;
+        let now = Utc::now();
+
+        let fresh = store.agent_for_user(&agent_id).await.unwrap().unwrap();
+        assert_eq!(fresh.settlement.accrued_minor, "500");
+        assert_eq!(fresh.settlement.available_minor, "500");
+        assert_eq!(fresh.settlement.pending_withdrawal_minor, "0");
+        assert_eq!(fresh.settlement.withdrawn_minor, "0");
+
+        // Requesting moves money from available to pending without changing what was accrued.
+        let paid_request = store.request_withdrawal(&agent_id, 200, now).await.unwrap();
+        let requested = store.agent_for_user(&agent_id).await.unwrap().unwrap();
+        assert_eq!(requested.settlement.accrued_minor, "500");
+        assert_eq!(requested.settlement.available_minor, "300");
+        assert_eq!(requested.settlement.pending_withdrawal_minor, "200");
+        assert_eq!(requested.settlement.withdrawn_minor, "0");
+
+        // Paying it moves pending to withdrawn, again leaving accrued alone.
+        store
+            .decide_withdrawal(&paid_request.id, "admin", true, "", now)
+            .await
+            .unwrap();
+        let settled = store.agent_for_user(&agent_id).await.unwrap().unwrap();
+        assert_eq!(settled.settlement.accrued_minor, "500");
+        assert_eq!(settled.settlement.available_minor, "300");
+        assert_eq!(settled.settlement.pending_withdrawal_minor, "0");
+        assert_eq!(settled.settlement.withdrawn_minor, "200");
+
+        // A rejected request returns to available and counts toward none of the four.
+        let rejected = store.request_withdrawal(&agent_id, 100, now).await.unwrap();
+        store
+            .decide_withdrawal(&rejected.id, "admin", false, "no", now)
+            .await
+            .unwrap();
+        let after = store.agent_for_user(&agent_id).await.unwrap().unwrap();
+        assert_eq!(after.settlement.accrued_minor, "500");
+        assert_eq!(after.settlement.available_minor, "300");
+        assert_eq!(after.settlement.pending_withdrawal_minor, "0");
+        assert_eq!(after.settlement.withdrawn_minor, "200");
+
+        for agent in [fresh, requested, settled, after] {
+            let s = &agent.settlement;
+            let sum: i64 = s.available_minor.parse::<i64>().unwrap()
+                + s.pending_withdrawal_minor.parse::<i64>().unwrap()
+                + s.withdrawn_minor.parse::<i64>().unwrap();
+            assert_eq!(
+                s.accrued_minor.parse::<i64>().unwrap(),
+                sum,
+                "accrued must equal available + pending + withdrawn: {s:?}"
+            );
+        }
+    }
+
+    /// A reversed entry earned nothing, so it must leave the accrued total.
+    #[tokio::test]
+    async fn a_reversed_entry_leaves_the_accrued_total() {
+        let (store, agent_id) = store_with_agent(&[300, 200]).await;
+        store
+            .db
+            .write()
+            .await
+            .execute(store.db.stmt(
+                "UPDATE sales_commission_entries SET reversed_at = '2026-09-09T01:00:00Z'
+                 WHERE id = 'entry-1'",
+                vec![],
+            ))
+            .await
+            .expect("reverse an entry");
+        let agent = store.agent_for_user(&agent_id).await.unwrap().unwrap();
+        assert_eq!(
+            agent.settlement.accrued_minor, "300",
+            "a refunded order must not count as earned"
+        );
+    }
+
+    /// Admin and the agent must not disagree about the same agent (SC-6.10).
+    #[tokio::test]
+    async fn the_roster_reports_the_same_totals_as_the_agent_view() {
+        let (store, agent_id) = store_with_agent(&[300, 200]).await;
+        store
+            .request_withdrawal(&agent_id, 150, Utc::now())
+            .await
+            .unwrap();
+        let own = store.agent_for_user(&agent_id).await.unwrap().unwrap();
+        let roster = store.list_agents().await.unwrap();
+        let listed = roster
+            .iter()
+            .find(|agent| agent.user_id == agent_id)
+            .expect("the agent is listed");
+        assert_eq!(listed.settlement, own.settlement);
+    }
 
     fn balance_quote(recharge: &str, bonus: &str, received: &str) -> String {
         serde_json::json!({

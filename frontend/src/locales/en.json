@@ -2185,6 +2185,13 @@
       "discountEffect": "Buyer saves {{discount}}; you earn {{commission}} of face value.",
       "saveDiscount": "Save discount",
       "discountSaved": "Discount saved"
+    },
+    "settlement": {
+      "title": "Commission and payouts",
+      "accrued": "Total earned",
+      "available": "Available to withdraw",
+      "pending": "Withdrawal pending",
+      "withdrawn": "Already paid out"
     }
   },
   "salesAdmin": {
