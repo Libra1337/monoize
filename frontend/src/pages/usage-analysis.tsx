@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageWrapper, SharedTabIndicator } from "@/components/ui/motion";
-import { CacheHitRateByModel } from "@/components/usage/cache-hit-rate";
 import { ModelDistribution } from "@/components/usage/model-distribution";
 import { TokenSummary } from "@/components/usage/token-summary";
 import { UsageTrendChart } from "@/components/usage/usage-trend-chart";
@@ -124,11 +123,6 @@ export function UsageAnalysisPage() {
               loading={selectionLoading}
             />
           </div>
-          <CacheHitRateByModel
-            buckets={analytics.data?.buckets}
-            selectionKey={range}
-            loading={selectionLoading}
-          />
         </>
       )}
     </PageWrapper>

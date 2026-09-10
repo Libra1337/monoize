@@ -1,0 +1,59 @@
+---
+title: "欄位：移除取樣參數"
+description: 在呼叫上游之前清除 temperature 等具型別的請求欄位。
+---
+
+## 行為
+
+某些上游和某些模型會拒絕呼叫方送出的某個參數。此轉換在 Monoize 編碼上游請求之前，清除列出的具型別請求欄位。
+
+`field_set` 和 `field_remove` 做不到這一點。它們讀寫 `extra_body` 底下的路徑，而 `temperature` 和下面列出的欄位是編碼器無條件輸出的具型別請求欄位。
+
+## 適用情境
+
+當一個本身合法的請求被上游回傳 `400`，而移除某一個參數後就能成功時使用。
+
+實測範例：`api.vectron.meta-stone.com` 對 `MoonshotAi/Kimi-K2.6` 和 `MoonshotAi/Kimi-K2.7-Code`，只要請求帶 `temperature` 就回傳 `400 invalid_request`；移除之後同樣的請求回傳 `200`。同一主機上的其他模型都接受 `temperature`，所以規則只限定在這兩個模型上。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `field_strip_sampling` |
+| 階段 | `request` |
+| 範圍 | Provider, 全域, API 金鑰 |
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `fields` | array | 是 | — | 要清除的具型別欄位，至少一項。 |
+
+`fields` 允許的值：`temperature`、`top_p`、`stop`、`verbosity`、`parallel_tool_calls`、`max_output_tokens`、`response_format`、`user`。
+
+清除呼叫方原本沒有送出的欄位不做任何事。此轉換絕不修改 `model`、`input`、`stream`、`tools`、`tool_choice`、`reasoning` 或 `extra_body`。
+
+### 範例規則
+
+請把規則限定在需要它的模型上。未填 `models` 的規則會作用於該 Provider 的全部模型，這會讓本來可以使用該參數的呼叫方也失去它。
+
+```json
+{
+  "transform": "field_strip_sampling",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "MoonshotAi/Kimi-K2.6",
+    "MoonshotAi/Kimi-K2.7-Code"
+  ],
+  "config": {
+    "fields": ["temperature"]
+  }
+}
+```
+
+## 如何確定要移除哪個參數
+
+1. 開啟請求日誌，讀取失敗嘗試的錯誤訊息。
+2. 每次移除一個參數，把同樣的請求送給上游。
+3. 把使回應從 `400` 變成 `200` 的那個參數加入設定。

@@ -224,6 +224,7 @@
     "admin": "管理",
     "logs": "日誌",
     "usage": "用量分析",
+    "cacheHitRate": "快取命中率",
     "usageRanking": "用量排行",
     "runtimeStatus": "執行狀態",
     "apiDocs": "API 文件",
@@ -972,14 +973,26 @@
       "output": "輸出"
     },
     "cacheByModel": {
-      "title": "各模型快取命中率",
       "description": "快取讀取 Token 除以輸入 Token，依輸入量排序。高輸入量模型命中率偏低，表示用戶端每次請求送出的提示詞前綴都在變化。",
       "grades": {
+        "no_traffic": "無流量",
         "insufficient": "資料量不足",
         "low": "偏低",
         "partial": "部分命中",
         "high": "正常"
       }
+    }
+  },
+  "usageCache": {
+    "title": "快取命中率",
+    "description": "對每個模型比較快取讀取 Token 與輸入 Token。",
+    "modelsTracked": "有流量的模型",
+    "searchPlaceholder": "搜尋模型",
+    "trafficOnly": "只看有流量的模型",
+    "emptyDescription": "此時間範圍內沒有符合搜尋的模型。",
+    "columns": {
+      "model": "模型",
+      "assessment": "評估"
     }
   },
   "users": {

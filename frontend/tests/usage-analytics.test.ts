@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   aggregateTokenTotals,
+  cacheHitRateTable,
   formatCacheHitRate,
   rankModelCacheHitRates,
   rankModelsByTokens,
@@ -101,6 +102,36 @@ describe("Usage analytics helpers", () => {
       cache_read_tokens_by_model: {},
       output_tokens_by_model: { gamma: "9" },
     }])).toEqual([]);
+  });
+
+  test("lists every catalog model, measured rows first", () => {
+    const table = cacheHitRateTable(buckets, ["zeta", "alpha", "  gamma  ", "beta"]);
+    expect(table.map((row) => [row.model, row.grade])).toEqual([
+      ["alpha", "insufficient"],
+      ["beta", "insufficient"],
+      ["gamma", "no_traffic"],
+      ["zeta", "no_traffic"],
+    ]);
+    // UA-33: an untracked row carries no counts at all, so the page can render an em dash
+    // rather than a zero that reads like a real measurement.
+    const untracked = table.find((row) => row.model === "zeta");
+    expect(untracked).toEqual({
+      model: "zeta",
+      input: 0n,
+      cacheRead: 0n,
+      basisPoints: 0n,
+      grade: "no_traffic",
+    });
+    expect(formatCacheHitRate(untracked!.input, untracked!.cacheRead)).toBe("—");
+  });
+
+  test("does not duplicate a catalog entry or a model that already has traffic", () => {
+    const table = cacheHitRateTable(buckets, ["alpha", "alpha", "delta", "delta", ""]);
+    expect(table.map((row) => row.model)).toEqual(["alpha", "beta", "delta", "unknown"]);
+  });
+
+  test("keeps the measured order when the catalog is empty", () => {
+    expect(cacheHitRateTable(buckets, [])).toEqual(rankModelCacheHitRates(buckets));
   });
 
   test("retains integers above the JavaScript safe range", () => {

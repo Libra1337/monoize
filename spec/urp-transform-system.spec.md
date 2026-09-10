@@ -163,6 +163,7 @@ TF-7. Built-ins that MUST exist are exactly:
 - `field_override_max_tokens`
 - `field_remove`
 - `field_set`
+- `field_strip_sampling`
 - `image_compress_input`
 - `image_compress_output`
 - `image_enable_openai_generation_tool`
@@ -403,6 +404,20 @@ SF-5. On a request, a path that starts with `reasoning.` MUST target `request.re
 SF-6. On a non-stream response, `path` MUST target `response.extra_body`. On a stream event, `path` MUST target the event `extra_body`.
 
 SF-7. A Provider request transform with config `{ "path": "service_tier", "when_equals": "priority", "value": "fast" }` MUST replace only the exact JSON string `"priority"`. The transform MUST preserve an absent value and every other JSON value.
+
+### 4.5c `field_strip_sampling`
+
+SFS-1. `field_strip_sampling` is request-phase only. Supported scopes are `Provider`, `Global`, and `ApiKey`.
+
+SFS-2. Config MUST contain `fields` as an array of at least one string. Each entry MUST be one of exactly: `temperature`, `top_p`, `stop`, `verbosity`, `parallel_tool_calls`, `max_output_tokens`, `response_format`, `user`. An empty array, an unlisted value, a missing `fields`, or an unknown config key MUST be rejected by `parse_config`.
+
+SFS-3. For each entry in `fields`, the transform MUST set the identically named typed field of `request` to absent.
+
+SFS-4. The transform MUST NOT modify `request.model`, `request.input`, `request.stream`, `request.tools`, `request.tool_choice`, `request.reasoning`, `request.extra_body`, or any typed field absent from `fields`.
+
+SFS-5. Clearing a field that is already absent MUST be a no-op and MUST NOT be an error. The transform is idempotent.
+
+SFS-6. This transform exists because SF-5 pins `field_set` and `field_remove` to `request.extra_body`, while these are typed fields that the encoders emit unconditionally. An upstream that rejects one of them therefore cannot be worked around with `field_set` or `field_remove`. Measured example: `api.vectron.meta-stone.com` answers HTTP `400` `invalid_request` for models `MoonshotAi/Kimi-K2.6` and `MoonshotAi/Kimi-K2.7-Code` whenever `temperature` is present, and answers HTTP `200` for the identical request without it.
 
 ### 4.6 Image transforms on request ordinary nodes
 

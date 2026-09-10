@@ -125,35 +125,63 @@ selected chart data without Line, sector, or progress-bar interpolation.
 
 UA-23. Every visible string MUST use an i18n key present in `en`, `zh`, `zh-TW`, and `ja`.
 
-## 6. Cache Hit Rate By Model
+## 6. Cache Hit Rate Sub-Page
 
-UA-24. The page MUST render one full-width panel that reports cache hit rate per logical
-model. The panel MUST derive its rows from the same `GET /api/dashboard/analytics`
-response as the trend and distribution panels. It MUST NOT issue an additional request.
+UA-24. Cache hit rate MUST be reported on its own authenticated sub-page at
+`/dashboard/usage/cache`. It MUST render inside `DashboardLayout`. The sidebar MUST expose it
+as an entry adjacent to the Usage Analysis entry, in both the standard and the enterprise
+navigation sets. `/dashboard/usage` MUST NOT render a cache hit rate panel.
 
-UA-25. For every logical model `m` in the selected range, let `input(m)` be the sum of
-`input_tokens_by_model[m]` and `cacheRead(m)` be the sum of `cache_read_tokens_by_model[m]`
-across all selected-range buckets. The panel MUST contain exactly one row for every `m`
-with `input(m) > 0` and no row for any other `m`. Model-name normalization follows UA-14a.
+UA-25. The sub-page MUST use `GET /api/dashboard/analytics` with **no** `scope` parameter, so
+DH-18 applies: an `admin` or `super_admin` session aggregates every user and a `user` session
+aggregates only itself. A per-model cache hit rate is actionable only when it covers the
+traffic the reader is responsible for.
 
-UA-26. `hitBasisPoints(m)` equals `(cacheRead(m) * 10000 + input(m) / 2) / input(m)` under
-`BigInt` integer division. All three quantities MUST be computed as `BigInt`. Rounding to a
-displayed percentage occurs only in the final display formatter.
+UA-26. The range control MUST contain exactly `24h`, `7d`, and `30d` with the mapping of
+UA-5. The initial range is `7d`. The sub-page MUST NOT expose the metric control of UA-7,
+because cache hit rate is a ratio of input Tokens and does not vary by metric.
 
-UA-27. Rows MUST sort by `input(m)` descending, because input volume determines the cost
-impact of a low hit rate. Equal `input(m)` values MUST sort by model name in ascending byte
-order.
+### 6.1 Row set
 
-UA-28. Each row MUST show the model name, the exact `cacheRead(m)` value, the exact
-`input(m)` value, and `hitBasisPoints(m)` rendered as a percentage with at most one decimal
-digit.
+UA-27. For a logical model `m`, let `input(m)` be the sum of `input_tokens_by_model[m]` and
+`cacheRead(m)` the sum of `cache_read_tokens_by_model[m]` across all selected-range buckets.
+Model-name normalization follows UA-14a.
 
-UA-29. Each row MUST carry exactly one grade, assigned by the following total function of
+UA-28. A **measured row** is a row for a model with `input(m) > 0`.
+
+UA-29. An **untracked row** is a row for a model that appears in the reader's routable model
+catalog and has no measured row. For an `admin` or `super_admin` session the catalog is the
+union of the model maps of every Channel returned by `GET /api/dashboard/providers`. For a
+`user` session the catalog is empty, because that endpoint requires the Admin role.
+
+UA-30. The table MUST contain every measured row and every untracked row, and no other row.
+An untracked row is required because an absent row and a zero-hit row are
+indistinguishable to a reader; the sub-page MUST state which models had no traffic rather
+than omit them.
+
+UA-31. Measured rows MUST precede untracked rows. Measured rows MUST sort by `input(m)`
+descending, because input volume determines the cost impact of a low hit rate; equal values
+sort by model name in ascending byte order. Untracked rows MUST sort by model name in
+ascending byte order.
+
+### 6.2 Values and grades
+
+UA-32. `hitBasisPoints(m)` equals `(cacheRead(m) * 10000 + input(m) / 2) / input(m)` under
+`BigInt` integer division, and is `0` when `input(m) = 0`. All quantities MUST be computed as
+`BigInt`. Rounding to a displayed percentage occurs only in the final display formatter.
+
+UA-33. Each row MUST show the model name, `input(m)`, `cacheRead(m)`, the hit rate as a
+percentage with at most one decimal digit, and a localized grade label. An untracked row MUST
+render an em dash for `input(m)`, `cacheRead(m)`, and the hit rate, and MUST NOT render a
+ratio bar.
+
+UA-34. Each row MUST carry exactly one grade, assigned by this total function of
 `(input(m), hitBasisPoints(m))`:
 
 | Precondition | Grade |
 | --- | --- |
-| `input(m) < 50000` | `insufficient` |
+| `input(m) = 0` | `no_traffic` |
+| `0 < input(m) < 50000` | `insufficient` |
 | `input(m) >= 50000` and `hitBasisPoints(m) < 3000` | `low` |
 | `input(m) >= 50000` and `3000 <= hitBasisPoints(m) < 6000` | `partial` |
 | `input(m) >= 50000` and `hitBasisPoints(m) >= 6000` | `high` |
@@ -161,18 +189,28 @@ UA-29. Each row MUST carry exactly one grade, assigned by the following total fu
 The 50,000-Token floor exists because a hit rate measured over a smaller input total is
 dominated by the unavoidable cache-miss cost of the first request in a conversation.
 
-UA-30. The `low` grade MUST render with the destructive color token, `partial` with the
-warning token, `high` with the success token, and `insufficient` with the muted-foreground
-token. A grade MUST also be conveyed by a localized text label, so color is not the only
-carrier of the distinction.
+UA-35. The `low` grade MUST render with the destructive color token, `partial` with the
+warning token, `high` with the success token, and `no_traffic` and `insufficient` with the
+muted-foreground token. A grade MUST also be conveyed by a localized text label, so color is
+not the only carrier of the distinction.
 
-UA-31. A row grade MUST NOT change when the selected metric changes. Cache hit rate is a
-ratio of input Tokens and is independent of the metric control.
+### 6.3 Summary, filtering, and states
 
-UA-32. Initial loading MUST render shape-matched Skeletons for the panel. A resolved
-response with no row satisfying UA-25 MUST render the localized empty state of UA-18.
+UA-36. The sub-page MUST render one summary strip with four values in this order: total input
+Tokens, total cache-read Tokens, the overall cache hit rate computed as in UA-10, and the
+count of measured rows over the count of all rows.
 
-UA-33. When the selected range changes, each row's ratio bar MUST transition to the
-selected value over 1,000 milliseconds. Model names, exact Token values, and percentages
-MUST remain visible during the transition. Reduced-motion mode MUST render the selected
-values without interpolation.
+UA-37. The sub-page MUST provide a case-insensitive substring filter over the model name and
+a boolean control that restricts the table to measured rows. The boolean control MUST default
+to off, so every row of UA-30 is visible without interaction.
+
+UA-38. Initial loading MUST render shape-matched Skeletons for the summary strip and the
+table. A refresh MUST keep the last resolved response visible. The sub-page MUST use SWR with
+`refreshInterval = 2000` milliseconds.
+
+UA-39. A resolved response for which the filters of UA-37 select no row MUST render a
+localized empty state. A failed analytics request MUST render a localized inline error and a
+retry action that revalidates the active SWR key.
+
+UA-40. Every visible string on the sub-page MUST use an i18n key present in `en`, `zh`,
+`zh-TW`, and `ja`.

@@ -13,6 +13,7 @@
     "field_override_max_tokens",
     "field_remove",
     "field_set",
+    "field_strip_sampling",
     "---图像---",
     "image_compress_input",
     "image_compress_output",

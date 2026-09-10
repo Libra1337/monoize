@@ -224,6 +224,7 @@
     "admin": "管理",
     "logs": "ログ",
     "usage": "使用量分析",
+    "cacheHitRate": "キャッシュヒット率",
     "usageRanking": "使用量ランキング",
     "runtimeStatus": "稼働状態",
     "apiDocs": "API ドキュメント",
@@ -972,14 +973,26 @@
       "output": "出力"
     },
     "cacheByModel": {
-      "title": "モデル別キャッシュヒット率",
       "description": "キャッシュ読み取り Token を入力 Token で割った値です。入力量の多い順に並びます。入力量が多いモデルでヒット率が低い場合、クライアントが送るプロンプト接頭辞がリクエストごとに変化しています。",
       "grades": {
+        "no_traffic": "トラフィックなし",
         "insufficient": "データ不足",
         "low": "低い",
         "partial": "部分的",
         "high": "正常"
       }
+    }
+  },
+  "usageCache": {
+    "title": "キャッシュヒット率",
+    "description": "モデルごとにキャッシュ読み取り Token と入力 Token を比較します。",
+    "modelsTracked": "トラフィックのあるモデル",
+    "searchPlaceholder": "モデルを検索",
+    "trafficOnly": "トラフィックのあるモデルのみ",
+    "emptyDescription": "この期間に検索条件と一致するモデルはありません。",
+    "columns": {
+      "model": "モデル",
+      "assessment": "評価"
     }
   },
   "users": {

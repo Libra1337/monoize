@@ -22,6 +22,7 @@ import {
   ChartNoAxesCombined,
   BookOpenText,
   ChartSpline,
+  DatabaseZap,
   HeartPulse,
   Activity,
   PanelLeftClose,
@@ -137,6 +138,7 @@ function Sidebar({
   const navItems = [
     { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard"), exact: true },
     { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
+    { to: "/dashboard/usage/cache", icon: DatabaseZap, label: t("nav.cacheHitRate") },
     { to: "/dashboard/usage-ranking", icon: ChartSpline, label: t("nav.usageRanking") },
     { to: "/dashboard/status", icon: Activity, label: t("nav.runtimeStatus") },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
@@ -158,6 +160,7 @@ function Sidebar({
     { to: "/dashboard/orders", icon: ReceiptText, label: t("nav.orders") },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
+    { to: "/dashboard/usage/cache", icon: DatabaseZap, label: t("nav.cacheHitRate") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },

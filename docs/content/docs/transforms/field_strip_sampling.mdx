@@ -1,0 +1,59 @@
+---
+title: "Field: strip sampling parameters"
+description: Clear typed request fields such as temperature before the upstream call.
+---
+
+## What it does
+
+Some upstreams and some models reject a parameter that the caller sent. This transform clears the listed typed request fields before Monoize encodes the upstream request.
+
+`field_set` and `field_remove` cannot do this. They write and delete paths under `extra_body`, while `temperature` and the other fields below are typed request fields that the encoders emit unconditionally.
+
+## When to use
+
+Use it when an upstream answers `400` for a request that is otherwise valid, and the request succeeds once one parameter is removed.
+
+Measured example: `api.vectron.meta-stone.com` answers `400 invalid_request` for `MoonshotAi/Kimi-K2.6` and `MoonshotAi/Kimi-K2.7-Code` whenever `temperature` is present, and answers `200` for the identical request without it. Every other model on the same host accepts `temperature`, so the rule is scoped to those two models.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `field_strip_sampling` |
+| Phase | `request` |
+| Scopes | Provider, Global, API key |
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `fields` | array | Yes | — | The typed fields to clear. At least one entry. |
+
+Allowed `fields` entries: `temperature`, `top_p`, `stop`, `verbosity`, `parallel_tool_calls`, `max_output_tokens`, `response_format`, `user`.
+
+Clearing a field that the caller did not send is a no-op. The transform never touches `model`, `input`, `stream`, `tools`, `tool_choice`, `reasoning`, or `extra_body`.
+
+### Example rule
+
+Scope the rule to the models that need it. A rule with no `models` list applies to every model on the Provider, which removes the parameter for callers that could have used it.
+
+```json
+{
+  "transform": "field_strip_sampling",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "MoonshotAi/Kimi-K2.6",
+    "MoonshotAi/Kimi-K2.7-Code"
+  ],
+  "config": {
+    "fields": ["temperature"]
+  }
+}
+```
+
+## Finding which parameter to strip
+
+1. Open the request log and read the failing attempt error.
+2. Send the same request to the upstream without one parameter at a time.
+3. Add the parameter that changes the response from `400` to `200`.

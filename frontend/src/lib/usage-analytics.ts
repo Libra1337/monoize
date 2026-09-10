@@ -114,7 +114,7 @@ export function rankModelsByTokens(
     .map(([model, value]) => ({ model, value }));
 }
 
-export type CacheHitGrade = "insufficient" | "low" | "partial" | "high";
+export type CacheHitGrade = "no_traffic" | "insufficient" | "low" | "partial" | "high";
 
 export interface ModelCacheHitRate {
   model: string;
@@ -177,6 +177,34 @@ export function rankModelCacheHitRates(
         grade: gradeCacheHitRate(value.input, basisPoints),
       };
     });
+}
+
+/**
+ * Ranks the models that carried traffic, then appends every remaining catalog model so a
+ * model with no traffic in the range is still visible. A missing row and a zero-hit row look
+ * identical to a reader, so the table has to distinguish them explicitly.
+ *
+ * `catalog` may contain duplicates and untrimmed names; both are normalized the same way
+ * analytics model labels are.
+ */
+export function cacheHitRateTable(
+  buckets: TokenAnalyticsBucket[],
+  catalog: readonly string[],
+): ModelCacheHitRate[] {
+  const measured = rankModelCacheHitRates(buckets);
+  const seen = new Set(measured.map((row) => row.model));
+  const untracked = [...new Set(
+    catalog.map((model) => model.trim() || "unknown").filter((model) => !seen.has(model)),
+  )]
+    .sort(compareUtf8)
+    .map((model) => ({
+      model,
+      input: 0n,
+      cacheRead: 0n,
+      basisPoints: 0n,
+      grade: "no_traffic" as CacheHitGrade,
+    }));
+  return [...measured, ...untracked];
 }
 
 export function formatCacheHitRate(input: bigint, cacheRead: bigint): string {
