@@ -284,7 +284,7 @@ impl AppState {
     }
 }
 
-const ACTIVE_PROBE_CONNECTIVITY_KIND: &str = "active_probe_connectivity";
+pub(crate) const ACTIVE_PROBE_CONNECTIVITY_KIND: &str = "active_probe_connectivity";
 const ACTIVE_PROBE_SYSTEM_USER: &str = "_monoize_active_probe";
 const DEFAULT_HTTP_BODY_MAX_BYTES: usize = 50 * 1024 * 1024;
 

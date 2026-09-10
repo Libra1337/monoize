@@ -321,6 +321,17 @@ pub fn analytics_month_index(value: chrono::DateTime<chrono::Utc>) -> i64 {
     i64::from(value.year()) * 12 + i64::from(value.month()) - 1
 }
 
+/// DH-18a: a Channel health probe sends a fixed prompt on a timer under the synthetic
+/// `_monoize_active_probe` user. It can never read a prompt cache, so counting it as usage
+/// pulls the reported cache hit rate of a low-traffic model toward zero. Every analytics
+/// aggregate therefore excludes it, at every scope.
+fn analytics_probe_exclusion() -> String {
+    format!(
+        " AND (rl.request_kind IS NULL OR rl.request_kind <> '{}')",
+        crate::app::ACTIVE_PROBE_CONNECTIVITY_KIND
+    )
+}
+
 fn analytics_model_bucket_sql(
     is_sqlite: bool,
     user_scoped: bool,
@@ -356,10 +367,11 @@ fn analytics_model_bucket_sql(
          SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS cache_read_tokens_negative, \
          SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
     };
+    let probe_filter = analytics_probe_exclusion();
     format!(
         "SELECT {bucket_expr} AS bucket_idx, {model_expr} AS model, {charge_columns}, {token_columns}, COUNT(*) AS call_count \
          FROM request_logs rl \
-         WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter}{api_key_filter} \
+         WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter}{api_key_filter}{probe_filter} \
          GROUP BY bucket_idx, {model_expr} \
          ORDER BY bucket_idx, model"
     )
@@ -449,6 +461,39 @@ mod tests {
             ]))
         );
         assert!(!tried_providers_need_name_enrichment(tried.as_ref()));
+    }
+
+    #[test]
+    fn analytics_aggregates_exclude_channel_health_probe_rows() {
+        let exclusion = super::analytics_probe_exclusion();
+        assert_eq!(
+            exclusion,
+            " AND (rl.request_kind IS NULL OR rl.request_kind <> 'active_probe_connectivity')"
+        );
+        for bucketing in [
+            AnalyticsBucketing::EqualIntervals,
+            AnalyticsBucketing::CalendarMonths,
+        ] {
+            for is_sqlite in [true, false] {
+                for (user_scoped, api_key_scoped) in
+                    [(false, false), (true, false), (true, true), (false, true)]
+                {
+                    let sql = analytics_model_bucket_sql(
+                        is_sqlite,
+                        user_scoped,
+                        api_key_scoped,
+                        bucketing,
+                    );
+                    assert!(sql.contains(&exclusion), "{sql}");
+                    // The exclusion must sit in WHERE, before grouping, so it removes rows
+                    // rather than filtering already-aggregated buckets.
+                    assert!(
+                        sql.find(&exclusion) < sql.find(" GROUP BY "),
+                        "{sql}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -627,7 +672,7 @@ mod tests {
         db.write()
             .await
             .execute_unprepared(
-                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER)",
+                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER, request_kind TEXT)",
             )
             .await
             .unwrap();
@@ -714,7 +759,7 @@ mod tests {
         db.write()
             .await
             .execute_unprepared(
-                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER)",
+                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER, request_kind TEXT)",
             )
             .await
             .unwrap();
@@ -801,6 +846,18 @@ mod tests {
                 .await
                 .unwrap();
         }
+
+        // DH-18a: this row belongs to the queried user, the queried window, and an already
+        // reported model, so only the `request_kind` predicate can keep it out. Its token
+        // counts are large enough that including it would change every assertion below.
+        db.write()
+            .await
+            .execute(db.stmt(
+                "INSERT INTO request_logs (created_at_unix_ms, model, upstream_model, charge_nano_usd, user_id, input_tokens, cache_read_tokens, output_tokens, request_kind) VALUES (150, 'exact', '', '5', 'u1', 500000, 0, 500000, $1)",
+                vec![crate::app::ACTIVE_PROBE_CONNECTIVITY_KIND.into()],
+            ))
+            .await
+            .unwrap();
 
         let sql = analytics_model_bucket_sql(true, true, false, AnalyticsBucketing::EqualIntervals);
         assert!(sql.contains(
@@ -2065,6 +2122,7 @@ impl UserStore {
             time_col = "rl.created_at_unix_ms"
         );
         prov_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
+        prov_sql.push_str(&analytics_probe_exclusion());
         let mut prov_values: Vec<SeaValue> = vec![
             bucket_anchor.into(),
             bucket_count.into(),
@@ -2142,8 +2200,9 @@ impl UserStore {
             .ok_or_else(|| "analytics total token aggregate overflow".to_string())?;
 
         let mut today_sql = format!(
-            "{}, COUNT(*) AS call_count FROM request_logs rl WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms IS NOT NULL",
-            charge_aggregate_select(!is_sqlite)
+            "{}, COUNT(*) AS call_count FROM request_logs rl WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms IS NOT NULL{}",
+            charge_aggregate_select(!is_sqlite),
+            analytics_probe_exclusion()
         );
         let today_start_unix_ms = chrono::DateTime::parse_from_rfc3339(today_start)
             .map_err(|e| e.to_string())?

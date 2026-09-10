@@ -80,6 +80,22 @@ including when the authenticated role is `admin` or `super_admin`.
 DH-18. An omitted `scope` keeps the existing role behavior: Admin roles aggregate all users,
 and role `user` aggregates only the authenticated user.
 
+DH-18a. Every analytics aggregate MUST exclude each `request_logs` row whose `request_kind`
+equals `active_probe_connectivity`. The exclusion applies to the model buckets, the provider
+buckets, the response-wide totals, and the today aggregate. It applies at every scope,
+including an omitted `scope` from an Admin role. It MUST be applied as a row predicate
+before grouping.
+
+A row of that kind records a Channel health probe that the gateway itself issues on a timer
+under the synthetic user `_monoize_active_probe`. The probe sends a fixed prompt to one
+Channel and is never preceded by a matching request, so it can never read a prompt cache.
+Counting it as usage therefore pulls the reported cache hit rate of a low-traffic model
+toward zero and reports Tokens no caller spent.
+
+DH-18b. A row excluded by DH-18a MUST remain retrievable through
+`GET /api/dashboard/logs`. Excluding a probe from aggregation MUST NOT hide it from
+request-log inspection.
+
 DH-19. Each analytics bucket MUST include these maps in addition to existing cost and call
 maps:
 
