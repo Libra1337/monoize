@@ -1197,6 +1197,42 @@ pub(super) fn build_exhausted_error_detail(model: &str, tried: &[TriedProvider])
     )
 }
 
+/// RTA-8b: the error for a request that produced no upstream attempt at all.
+///
+/// `build_exhausted_upstream_error` answers `502` because a gateway hop failed. When no
+/// attempt was ever constructed, nothing upstream was contacted, so `502` both misreports
+/// the cause and, behind a CDN that substitutes its own page for any origin `5xx`, hides the
+/// message from the caller entirely. The two reasons need different statuses, and only the
+/// store can tell them apart: a model no Channel serves for this account class is `404`,
+/// while a model whose every eligible Channel is currently filtered out is `503`.
+pub(super) async fn no_attempt_error(
+    state: &AppState,
+    model: &str,
+    auth: &crate::auth::AuthResult,
+) -> AppError {
+    let served = state
+        .monoize_store
+        .list_providers_for_model_and_account_class(model, auth.account_class)
+        .await
+        .map(|providers| !providers.is_empty())
+        // A store failure must not be reported as a missing model. Fall back to the
+        // conservative reading: the model may exist and the gateway simply cannot say.
+        .unwrap_or(true);
+    if served {
+        AppError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no_healthy_upstream",
+            format!("No available upstream provider for model: {model}"),
+        )
+    } else {
+        AppError::new(
+            StatusCode::NOT_FOUND,
+            "model_not_found",
+            format!("Model not found: {model}"),
+        )
+    }
+}
+
 pub(super) fn build_exhausted_upstream_error(model: &str, tried: &[TriedProvider]) -> AppError {
     let last = tried.last();
     let code = last

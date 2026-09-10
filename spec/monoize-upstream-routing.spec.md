@@ -254,6 +254,31 @@ RTA-7. If all attempts in Provider fail before the first downstream byte, router
 
 RTA-8. If all providers are exhausted for a non-streaming downstream request, return `502` with the sanitized message defined by `spec/upstream-error-sanitization.spec.md` SAN-6, which identifies the exhausted model and MUST NOT expose upstream URLs, attempt counts, or provider/channel identifiers. If the final failed attempt has a non-empty upstream error code, the downstream error `code` and request-log `error_code` MUST equal that upstream code. Otherwise they MUST equal `upstream_error`. The diagnostic `upstream_code` field MUST remain present when an upstream code exists. If all providers are exhausted before the first downstream byte for a streaming downstream request, return the protocol-specific stream error defined by `spec/unified_responses_proxy.spec.md` FP4e with `error.code = "upstream_error"` unless a final upstream error code is available. This rule preserves fail-forward behavior and does not authorize a same-Channel retry for HTTP `400`, `401`, `403`, or `422`.
 
+RTA-8b. RTA-8 applies only when at least one upstream attempt was recorded. A request that
+produced zero attempts contacted no upstream, so `502 Bad Gateway` misreports the cause. A
+zero-attempt request MUST instead return:
+
+| Precondition | Status | `code` | Message |
+| --- | --- | --- | --- |
+| No Provider serves the model for the caller's account class | `404` | `model_not_found` | `Model not found: {model}` |
+| Otherwise | `503` | `no_healthy_upstream` | `No available upstream provider for model: {model}` |
+
+The discriminator is deliberately the coarse account-class lookup rather than full attempt
+eligibility. Group membership, the API key's multiplier ceiling, a disabled Provider or
+Channel, and an open circuit breaker all resolve to the `503` row. Reproducing the full
+eligibility rule here would duplicate `collect_provider_attempts` and drift from it, and the
+first row already covers the case that dominates in practice: a model string that names
+nothing the deployment serves.
+
+A failure to read the Provider store MUST resolve to the `503` row. Reporting a model as
+missing because the store could not be read would send the caller to change a request that
+is correct.
+
+RTA-8c. The `404` row of RTA-8b is the only zero-attempt outcome a caller can act on, and it
+is the only one that survives an edge that replaces the body of an origin `5xx` with its own
+error page. Deployments behind such an edge therefore see the actionable case in full and the
+operational case as an edge error page.
+
 RTA-8a. RTA-8 has one structured-error exception. If the final failed attempt has `upstream_code = "thinking_signature_invalid"`, Monoize MUST return `error.code = "thinking_signature_invalid"` and MUST use the final attempt's client-facing error text (`spec/upstream-error-sanitization.spec.md` SAN-8) as the downstream message without an `All upstream attempts failed` wrapper. If the final `upstream_status` is a valid HTTP `4xx` status, Monoize MUST return that status. Otherwise Monoize MUST return HTTP `400`. The request log `error_code` and `error_http_status` MUST equal the downstream values; the request log `error_message` MUST equal the persisted internal detail per `spec/upstream-error-sanitization.spec.md` SAN-9 (read-time disclosure per its section 8). Monoize MUST apply this rule only after all eligible Channels and Providers are exhausted; it MUST NOT disable fail-forward.
 
 ## 5. Streaming-specific Rule
