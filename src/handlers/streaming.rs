@@ -1558,7 +1558,11 @@ pub(super) async fn forward_stream_typed(
             }
         }
     }
-        let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
+        let final_err = if tried_providers.is_empty() {
+            no_attempt_error(&state, &logical_model, &auth).await
+        } else {
+            build_exhausted_upstream_error(&logical_model, &tried_providers)
+        };
         if let Some(attempt) = last_failed_attempt {
             let terminal_error = stream_terminal_error_from_app(&final_err);
             spawn_request_log_stream_terminal_error(

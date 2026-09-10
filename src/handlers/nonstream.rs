@@ -971,7 +971,11 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                 }
             }
         }
-        let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
+        let final_err = if tried_providers.is_empty() {
+            no_attempt_error(state, &logical_model, auth).await
+        } else {
+            build_exhausted_upstream_error(&logical_model, &tried_providers)
+        };
         release_plan_reservation(state, request_id.as_deref()).await?;
         if let Some(attempt) = last_failed_attempt {
             spawn_request_log_error(

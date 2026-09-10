@@ -1014,8 +1014,11 @@ async fn streaming_http_client_error_fails_forward_before_first_downstream_byte(
     assert_eq!(second_bodies.lock().unwrap().len(), 1);
 }
 
+/// RTA-8b: a model string the deployment does not serve produced no upstream attempt, so it
+/// is the caller's error and must be a `4xx`. It was a `502`, which misreported the cause
+/// and, behind an edge that replaces the body of an origin `5xx`, hid the reason entirely.
 #[tokio::test]
-async fn unknown_model_returns_error() {
+async fn unknown_model_returns_not_found() {
     let ctx = setup().await;
     let (status, body) = json_post(
         &ctx,
@@ -1023,9 +1026,14 @@ async fn unknown_model_returns_error() {
         json!({"model":"nonexistent-model-xyz","input":"hi"}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let v: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["error"]["code"].as_str(), Some("upstream_error"));
+    assert_eq!(v["error"]["code"].as_str(), Some("model_not_found"), "{body}");
+    assert_eq!(
+        v["error"]["message"].as_str(),
+        Some("Model not found: nonexistent-model-xyz"),
+        "{body}"
+    );
 }
 
 #[tokio::test]

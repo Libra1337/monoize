@@ -64,8 +64,15 @@ SAN-5. Each recorded failed attempt (`TriedProvider`) MUST carry two error strin
 
 SAN-6. The downstream `message` of the exhausted-routing error (`monoize-upstream-routing.spec.md` RTA-8) MUST be exactly:
 
-- zero recorded attempts: `No available upstream provider for model: {model}`.
+- zero recorded attempts and no Provider serves the model for the caller's account class:
+  `Model not found: {model}`.
+- zero recorded attempts and at least one Provider serves the model for the caller's account
+  class: `No available upstream provider for model: {model}`.
 - one or more recorded attempts: `All upstream attempts failed for model: {model}. Last error: {client_error of the last recorded attempt}`.
+
+Neither zero-attempt message may name a Provider, a Channel, or a Group. `Model not found`
+discloses only that the model string the caller sent is not routable for that caller, which
+the caller already knows.
 
 The downstream message MUST NOT contain the attempt count, provider identifiers, channel identifiers, or upstream URLs.
 

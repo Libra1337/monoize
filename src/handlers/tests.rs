@@ -2855,12 +2855,60 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
     .await
     .expect_err("non-overlapping group restriction should leave no attempts");
 
-    assert_eq!(err.status, StatusCode::BAD_GATEWAY);
-    assert_eq!(err.code, "upstream_error");
+    // RTA-8b: no attempt was built, so nothing upstream was contacted. The model is served
+    // for this account class and only the Group restriction blocked it, which is the second
+    // row of the table.
+    assert_eq!(err.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(err.code, "no_healthy_upstream");
     assert_eq!(
         err.message,
         format!("No available upstream provider for model: {GROUP_ROUTING_MODEL}")
     );
+}
+
+/// RTA-8b first row: a model string that names nothing the deployment serves is the caller's
+/// error, not a gateway failure. It has to be a `4xx`, both because that is accurate and
+/// because an edge that replaces the body of an origin `5xx` would otherwise hide the reason.
+#[tokio::test]
+async fn unknown_model_is_not_found_rather_than_a_bad_gateway() {
+    let state = load_state_with_runtime(RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+        node: crate::node_config::NodeSettings::primary_default(),
+    })
+    .await
+    .expect("state loads");
+
+    let err = execute_nonstream_typed(
+        &state,
+        &build_test_auth(None),
+        build_test_urp_request("no-such-model@think"),
+        None,
+        DownstreamProtocol::ChatCompletions,
+        None,
+        None,
+        None,
+        RequestCaptureContext {
+            raw_input: std::sync::Arc::new(json!({})),
+            session: None,
+        },
+    )
+    .await
+    .expect_err("an unrouted model must not reach an upstream");
+
+    assert_eq!(err.status, StatusCode::NOT_FOUND);
+    assert_eq!(err.code, "model_not_found");
+    assert_eq!(err.message, "Model not found: no-such-model@think");
+    // SAN-6: the message may name the model the caller sent and nothing else.
+    for leaked in ["provider", "channel", "group", "http"] {
+        assert!(
+            !err.message.to_ascii_lowercase().contains(leaked),
+            "{leaked} leaked into {}",
+            err.message
+        );
+    }
 }
 
 #[test]
