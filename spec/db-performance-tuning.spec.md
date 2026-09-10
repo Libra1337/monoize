@@ -270,6 +270,23 @@ DPT-US9. `cleanup_expired_sessions()` MUST execute one set-based `DELETE FROM se
 
 DPT-US10. `UserStore` construction MUST complete one DPT-US9 cleanup before returning. `spawn_background_tasks()` MUST repeat DPT-US9 after each configured interval. `MONOIZE_SESSION_CLEANUP_INTERVAL_SECONDS` MUST select a positive whole-second interval. Its default MUST be `3600`; a missing, empty, zero, negative, invalid, or overflowing value MUST select the default.
 
+## 6.1 Query indexing
+
+DPT-IDX1. Every list endpoint that reads one page of a user-scoped table ordered by time
+MUST be served by an index whose leading column is the scoping column and whose remaining
+columns match the `ORDER BY` in both sequence and direction. An index on the scoping column
+alone is not sufficient: SQLite locates the rows but then materialises all of them into a
+temporary B-tree to sort, so the cost grows with the user's total row count rather than with
+the page size.
+
+DPT-IDX2. `billing_ledger` MUST carry `(user_id, created_at DESC, id DESC)`, matching the
+wallet ledger query. Measured on production data before this index, the busiest account held
+74,523 rows and one page cost 137 ms serially, degrading to 9 requests per second at 100
+concurrent callers while endpoints not reading this table served 2,400 per second on the
+same process.
+
+DPT-IDX3. `request_logs` MUST carry `(user_id, created_at)` for the same reason.
+
 ## 7. Concurrency Properties
 
 DPT-C1. `LastUsedBatcher` and `ApiKeyCache` use `DashMap` for lock-free concurrent reads and sharded writes. No contention between readers and writers except on the same shard.

@@ -74,6 +74,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260909_000069_sales_withdrawal_cancelled::Migration),
             Box::new(m20260909_000070_attempt_buyer_query_at::Migration),
             Box::new(m20260909_000071_private_account_class::Migration),
+            Box::new(m20260910_000072_billing_ledger_user_created_index::Migration),
         ]
     }
 }
@@ -277,6 +278,7 @@ mod m20260909_000068_sales_commission;
 mod m20260909_000069_sales_withdrawal_cancelled;
 mod m20260909_000070_attempt_buyer_query_at;
 mod m20260909_000071_private_account_class;
+mod m20260910_000072_billing_ledger_user_created_index;
 
 #[cfg(test)]
 mod tests {

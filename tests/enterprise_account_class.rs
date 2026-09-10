@@ -663,3 +663,44 @@ async fn migration_071_admits_private_without_losing_rows_or_indexes() {
     .expect_err("the foreign key must still be enforced after the rebuild");
 }
 
+/// DPT-IDX2: the wallet page must be served from the index, not from a sort.
+///
+/// Asserting the query plan rather than a duration is what makes this test meaningful: a
+/// timing threshold passes on an empty test database no matter how the query is planned,
+/// while `USE TEMP B-TREE FOR ORDER BY` is exactly the regression that cost production 137 ms
+/// per request and collapsed throughput to 9 requests per second under load.
+#[tokio::test]
+async fn the_wallet_ledger_page_is_served_from_an_index() {
+    let pool = monoize::db::DbPool::connect("sqlite::memory:")
+        .await
+        .expect("connect SQLite");
+    {
+        let write = pool.write().await;
+        Migrator::up(&*write, None).await.expect("run migrations");
+    }
+    let db = pool.read();
+
+    let plan = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "EXPLAIN QUERY PLAN
+             SELECT id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at
+             FROM billing_ledger WHERE user_id = 'u' ORDER BY created_at DESC, id DESC LIMIT 10"
+                .to_string(),
+        ))
+        .await
+        .expect("explain the wallet query")
+        .into_iter()
+        .map(|row| row.try_get::<String>("", "detail").unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(" | ");
+
+    assert!(
+        plan.contains("idx_billing_ledger_user_created"),
+        "the composite index must be chosen: {plan}"
+    );
+    assert!(
+        !plan.to_uppercase().contains("TEMP B-TREE"),
+        "the page must not be sorted at query time: {plan}"
+    );
+}
