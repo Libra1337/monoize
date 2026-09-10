@@ -10,6 +10,7 @@ pub mod cache_anthropic_system;
 pub mod cache_anthropic_tool_use;
 pub mod cache_openai_prompt;
 pub mod cache_openai_tool_use;
+pub mod cache_prefix_stabilize;
 pub mod cache_user_id;
 pub mod field_override_max_tokens;
 pub mod field_remove;
@@ -568,6 +569,7 @@ mod registry_tests {
         "cache_anthropic_tool_use",
         "cache_openai_prompt",
         "cache_openai_tool_use",
+        "cache_prefix_stabilize",
         "cache_user_id",
         "field_override_max_tokens",
         "field_remove",

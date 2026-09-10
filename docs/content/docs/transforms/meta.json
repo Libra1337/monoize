@@ -7,6 +7,7 @@
     "cache_anthropic_tool_use",
     "cache_openai_prompt",
     "cache_openai_tool_use",
+    "cache_prefix_stabilize",
     "cache_user_id",
     "---Field---",
     "field_override_max_tokens",

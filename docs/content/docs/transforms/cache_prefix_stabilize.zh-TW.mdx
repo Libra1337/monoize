@@ -1,0 +1,99 @@
+---
+title: "自動快取：穩定提示詞前綴"
+description: 把每次請求都會變的 agent 中介資料移到穩定的 system 文字之後，使隱式前綴快取能夠命中。
+---
+
+## 行為
+
+使用隱式前綴快取的上游按 token 前綴精確比對。只要有一個 token 變化，從該 token 起的快取全部失效。
+
+程式設計 agent 會把每次請求都變化的內容放在 system prompt 靠前的位置。Claude Code 會寫入 `<env>` 區塊和一行 `x-anthropic-billing-header`。Codex CLI 會寫入 `<environment_context>`。Cursor 會寫入 `<user_info>` 和 `<timestamp>`。
+
+此轉換把這些內容移到穩定的指令文字之後。預設動作是搬移，因此模型讀到的 token 完全相同，只是順序不同。不刪除任何 token。
+
+此轉換只讀寫開頭連續的 system 和 developer 節點，絕不觸碰 user 或 assistant 內容。
+
+## 實測效果
+
+一段 2,900 token 的 system prompt，模型 `ZhipuAi/GLM-5.3`，五輪逐輪增長的對話，其中一行的值每次請求都變化：
+
+| 變化行的位置 | 第 1 輪 | 2 | 3 | 4 | 5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 不存在 | 0% | 93.7% | 91.8% | 89.9% | 96.0% |
+| 在前兩行之後 | 0% | 0% | 0% | 0% | 0% |
+| 在穩定指令文字之後 | 0% | 92.7% | 90.9% | 89.1% | 87.2% |
+| 移到 system prompt 結尾 | 0% | 92.8% | 90.9% | 89.0% | 87.2% |
+
+第 1 輪總是 0%，因為它寫入快取而不是讀取快取。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `cache_prefix_stabilize` |
+| 階段 | `request` |
+| 範圍 | Provider, 全域, API 金鑰 |
+
+## 適用情境
+
+- 上游 provider 類型是 `chat_completion` 或 `responses`。
+- 呼叫方是 Claude Code、Codex CLI、Cursor 這類程式設計 agent。
+- 某個高用量模型的快取命中率偏低。請查看用量分析頁的快取命中率面板。
+
+對 Anthropic（`messages`）上游，此轉換不做任何事。該協定在整個節點的 `cache_control` 斷點處快取，因此在節點內部調整文字順序不會移動快取邊界。那裡請使用 `cache_anthropic_system` 和 `cache_anthropic_tool_use`。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `action` | string | 否 | `"relocate"` | `relocate` 把比對到的行移到 system prompt 結尾；`strip` 直接刪除。 |
+| `blocks` | array | 否 | 內建集合 | 要比對的按行分隔的區塊標記。每項需要 `open` 和 `close`。空陣列表示停用區塊比對。 |
+| `line_prefixes` | array | 否 | 內建集合 | 要比對的行前綴。空陣列表示停用行比對。 |
+
+內建區塊集合是 `<env>`、`<environment_context>`、`<user_info>` 和 `<timestamp>`。內建行集合是 `x-anthropic-billing-header:`。
+
+提供 `blocks` 會取代內建區塊集合。提供 `line_prefixes` 會取代內建行集合。
+
+同一節點內只有開始標記而沒有結束標記時不比對。這可以避免一個格式錯誤的標記搬走 system prompt 的其餘部分。
+
+### 範例規則
+
+```json
+{
+  "transform": "cache_prefix_stabilize",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "action": "relocate"
+  }
+}
+```
+
+### 加入內建集合之外的 agent
+
+從該 agent 發一次請求，在請求日誌裡讀它的 system prompt，然後把包裹變化內容的標記加進來：
+
+```json
+{
+  "transform": "cache_prefix_stabilize",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "blocks": [
+      { "open": "<env>", "close": "</env>" },
+      { "open": "<environment_context>", "close": "</environment_context>" },
+      { "open": "<agent-context>", "close": "</agent-context>" }
+    ]
+  }
+}
+```
+
+## 順序
+
+把 `cache_prefix_stabilize` 排在 `cache_openai_prompt` 之前。`cache_openai_prompt` 從穩定前綴衍生快取鍵，因此它必須在搬移完成之後讀取前綴。

@@ -158,6 +158,7 @@ TF-7. Built-ins that MUST exist are exactly:
 - `cache_anthropic_tool_use`
 - `cache_openai_prompt`
 - `cache_openai_tool_use`
+- `cache_prefix_stabilize`
 - `cache_user_id`
 - `field_override_max_tokens`
 - `field_remove`
