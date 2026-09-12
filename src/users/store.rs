@@ -943,7 +943,7 @@ impl UserStore {
     pub async fn list_users(&self) -> Result<Vec<User>, String> {
         let rows = self.db.read()
             .query_all(self.db.stmt(
-                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, parent_user_id, billing_plan_id, next_grant_at FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
+                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, parent_user_id, billing_plan_id, next_grant_at FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' AND is_org = 0 ORDER BY created_at DESC",
                 vec![],
             ))
             .await

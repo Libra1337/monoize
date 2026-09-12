@@ -14,6 +14,69 @@ export interface SubAccount {
   today_cost_nano_usd: string;
 }
 
+export interface OrgSummary {
+  id: string;
+  display_name: string;
+  avatar_emoji: string;
+  avatar_color: string;
+  role: string;
+  member_count: number;
+  balance_nano_usd: string;
+  invite_token?: string;
+  invite_expires_at?: string | null;
+}
+
+export interface OrgMember {
+  user_id: string;
+  username: string;
+  role: string;
+  joined_at: string;
+}
+
+export interface OrgDetail {
+  id: string;
+  display_name: string;
+  avatar_emoji: string;
+  avatar_color: string;
+  my_role: string;
+  balance_nano_usd: string;
+  members: OrgMember[];
+  invite: { token: string; expires_at: string } | null;
+}
+
+export interface OrgInvitePreview {
+  org_id: string;
+  display_name: string;
+  avatar_emoji: string;
+  avatar_color: string;
+  owner_username: string;
+  member_count: number;
+}
+
+export interface OrgKeyEntry {
+  id: string;
+  name: string;
+  key_prefix: string;
+  share_mode?: string | null;
+  created_at?: string;
+  key?: string;
+  owner_username?: string;
+}
+
+export interface OrgKeysResponse {
+  mine: OrgKeyEntry[];
+  shared: OrgKeyEntry[];
+}
+
+export interface CreateOrgInput {
+  display_name: string;
+  avatar_emoji?: string;
+  avatar_color?: string;
+  invite_expiry: "24h" | "3d" | "7d" | "30d" | "never";
+}
+
+export type OrgInviteExpiry = "24h" | "3d" | "7d" | "30d" | "never";
+
 export interface CreateSubAccountInput {
   username: string;
   password: string;
@@ -1344,6 +1407,86 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify({ group_id: groupId, provider_ids: providerIds }),
     });
+  }
+
+  async listMyOrgs(): Promise<OrgSummary[]> {
+    return this.request("/orgs");
+  }
+
+  async createOrg(input: CreateOrgInput): Promise<OrgSummary> {
+    return this.request("/orgs", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async getOrgDetail(orgId: string): Promise<OrgDetail> {
+    return this.request(`/orgs/${orgId}`);
+  }
+
+  async previewOrgInvite(token: string): Promise<OrgInvitePreview> {
+    return this.request(`/orgs/invite/${encodeURIComponent(token)}`);
+  }
+
+  async joinOrg(token: string): Promise<{ org_id: string }> {
+    return this.request("/orgs/join", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  async regenerateOrgInvite(orgId: string, inviteExpiry: OrgInviteExpiry) {
+    return this.request<{ token: string; expires_at: string | null }>(
+      `/orgs/${orgId}/invite`,
+      { method: "POST", body: JSON.stringify({ invite_expiry: inviteExpiry }) },
+    );
+  }
+
+  async depositToOrg(orgId: string, amountNanoUsd: string) {
+    return this.request<{ personal_balance_nano_usd: string; org_balance_nano_usd: string }>(
+      `/orgs/${orgId}/deposit`,
+      { method: "POST", body: JSON.stringify({ amount_nano_usd: amountNanoUsd }) },
+    );
+  }
+
+  async distributeFromOrg(orgId: string, memberUserId: string, amountNanoUsd: string) {
+    return this.request<{ org_balance_nano_usd: string; member_balance_nano_usd: string }>(
+      `/orgs/${orgId}/distribute`,
+      {
+        method: "POST",
+        body: JSON.stringify({ member_user_id: memberUserId, amount_nano_usd: amountNanoUsd }),
+      },
+    );
+  }
+
+  async listOrgKeys(orgId: string): Promise<OrgKeysResponse> {
+    return this.request(`/orgs/${orgId}/keys`);
+  }
+
+  async createOrgKey(orgId: string, name: string, shareMode?: "default" | "all" | "private") {
+    return this.request<{ id: string; name: string; key: string; share_mode: string | null }>(
+      `/orgs/${orgId}/keys`,
+      {
+        method: "POST",
+        body: JSON.stringify({ name, share_mode: shareMode ?? "default" }),
+      },
+    );
+  }
+
+  async updateOrgKeySharing(
+    orgId: string,
+    keyId: string,
+    mode: "private" | "all" | "selected",
+    memberIds: string[] = [],
+  ) {
+    return this.request(`/orgs/${orgId}/keys/${keyId}/sharing`, {
+      method: "PUT",
+      body: JSON.stringify({ mode, member_ids: memberIds }),
+    });
+  }
+
+  async removeOrgMember(orgId: string, memberUserId: string) {
+    return this.request(`/orgs/${orgId}/members/${memberUserId}`, { method: "DELETE" });
   }
 
   async listSubAccounts(): Promise<SubAccount[]> {

@@ -77,6 +77,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260910_000072_billing_ledger_user_created_index::Migration),
             Box::new(m20260912_000073_agent_account_class::Migration),
             Box::new(m20260913_000074_user_sub_accounts::Migration),
+            Box::new(m20260913_000075_org_spaces::Migration),
         ]
     }
 }
@@ -283,6 +284,7 @@ mod m20260909_000071_private_account_class;
 mod m20260910_000072_billing_ledger_user_created_index;
 mod m20260912_000073_agent_account_class;
 mod m20260913_000074_user_sub_accounts;
+mod m20260913_000075_org_spaces;
 
 #[cfg(test)]
 mod tests {

@@ -13,6 +13,8 @@ import { AdminRuntimePage } from "@/pages/admin-runtime";
 import { ProvidersPage } from "@/pages/providers";
 import { SubAccountsPage } from "./pages/subaccounts";
 import { OrdersAdminPage } from "./pages/orders-admin";
+import { OrgPage } from "./pages/org";
+import { JoinOrgPage } from "./pages/join-org";
 import { ApiKeysPage } from "@/pages/api-keys";
 import { UsersPage } from "@/pages/users";
 import { GroupsPage } from "@/pages/groups";
@@ -104,6 +106,7 @@ function App() {
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="tokens" element={<ApiKeysPage />} />
             <Route path="subaccounts" element={<SubAccountsPage />} />
+            <Route path="org" element={<OrgPage />} />
             <Route path="logs" element={<RequestLogsPage />} />
             <Route path="playground" element={<PlaygroundPage />} />
             <Route path="marketplace" element={<ModelMarketplacePage />} />
@@ -120,6 +123,7 @@ function App() {
             <Route path="sales-admin" element={<AdminRoute><SalesAdminPage /></AdminRoute>} />
             <Route path="admin-settings" element={<SettingsPage />} />
           </Route>
+          <Route path="/join/:token" element={<JoinOrgPage />} />
           {/* User settings routes */}
           <Route path="/settings" element={<DashboardLayout />}>
             <Route index element={<UserSettingsPage />} />

@@ -2634,6 +2634,54 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::create_user),
         )
         .route(
+            "/dashboard/orgs",
+            get(crate::dashboard_handlers::list_my_orgs),
+        )
+        .route(
+            "/dashboard/orgs",
+            post(crate::dashboard_handlers::create_org),
+        )
+        .route(
+            "/dashboard/orgs/invite/{token}",
+            get(crate::dashboard_handlers::invite_preview),
+        )
+        .route(
+            "/dashboard/orgs/join",
+            post(crate::dashboard_handlers::join_org),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}",
+            get(crate::dashboard_handlers::org_detail),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/invite",
+            post(crate::dashboard_handlers::regenerate_invite),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/deposit",
+            post(crate::dashboard_handlers::deposit_to_org),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/distribute",
+            post(crate::dashboard_handlers::distribute_from_org),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/keys",
+            get(crate::dashboard_handlers::list_org_keys),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/keys",
+            post(crate::dashboard_handlers::create_org_key),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/keys/{key_id}/sharing",
+            axum::routing::put(crate::dashboard_handlers::update_key_sharing),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/members/{member_id}",
+            axum::routing::delete(crate::dashboard_handlers::remove_org_member),
+        )
+        .route(
             "/dashboard/subaccounts",
             get(crate::dashboard_handlers::list_sub_accounts),
         )

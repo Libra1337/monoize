@@ -28,6 +28,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   UsersRound,
+  Building2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -151,6 +152,7 @@ function Sidebar({
     ...(!isSubAccount && !isSalesAccount && !isAgentClass
       ? [{ to: "/dashboard/subaccounts", icon: UsersRound, label: t("nav.subAccounts") }]
       : []),
+    { to: "/dashboard/org", icon: Building2, label: t("nav.orgSpace") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },

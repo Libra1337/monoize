@@ -1,0 +1,118 @@
+# Organization Spaces Specification
+
+## 0. Status
+
+- Purpose: organization spaces ("组织空间") — a shared workspace with its own wallet, an
+  invite link, and member-visible API keys.
+- Scope: `users.is_org`, `orgs`, `org_members`, `org_key_shares`, `api_keys.org_id` /
+  `api_keys.org_share_mode`, `/api/dashboard/orgs*`, `/dashboard/org`, `/join/{token}`.
+- Related: `user-sub-accounts.spec.md` (sub-accounts are unaffected and coexist),
+  `groups-registry.spec.md` (account classes), `api-token-management.spec.md` (keys),
+  `store-billing.spec.md` (wallet, exchange rates).
+
+## 1. Data model
+
+ORG-1. An organization is represented by one `users` row with `is_org = 1` (the **org
+wallet row**) plus one `orgs` metadata row whose `id` equals that user row's id. The org
+wallet row never holds a session, never logs in, and its `balance_nano_usd` is the org
+wallet. `is_org = 0` is an ordinary user.
+
+ORG-2. `orgs`: `id` (PK, equals the org wallet user id), `owner_user_id`, `display_name`
+(1..64 chars), `avatar_emoji` (1..8 bytes), `avatar_color` (7-char `#rrggbb`), `invite_token`
+(unique, 32-char Crockford-style random), `invite_expires_at` (NULL = never), `invite_created_at`,
+`created_at`, `updated_at`.
+
+ORG-3. `org_members`: `(org_id, user_id)` PK, `role` ∈ `owner` | `member`, `joined_at`.
+Exactly one member row with `role = owner` per org.
+
+ORG-4. `api_keys.org_id` (NULL = ordinary key) names the space a key is shared into.
+`api_keys.org_share_mode` is NULL (private), `'all'`, or `'selected'`. For `'selected'`,
+`org_key_shares (api_key_id, member_user_id)` lists the members who may see the key.
+Keys always belong to and bill their `user_id` owner; sharing changes only visibility of
+the key material inside the space.
+
+## 2. Creation
+
+ORG-5. `POST /api/dashboard/orgs` with `{display_name, avatar_emoji?, avatar_color?,
+invite_expiry: "24h"|"3d"|"7d"|"30d"|"never"}` creates one org. The caller MUST have
+`account_class = enterprise`, `parent_user_id IS NULL`, no `sales_agents` row, and
+`is_org = 0`; otherwise HTTP `403 org_forbidden`. A caller MAY own at most 2 orgs
+(`MAX_ORGS_PER_USER`); further creations return `409 org_limit_reached`.
+
+ORG-6. Creation charges a deposit of 1000 CNY converted to nano-USD at the current
+exchange snapshot from the caller's personal wallet into the org wallet, in the same
+transaction that creates the rows. An absent rate snapshot or an insufficient personal
+balance fails with no row created.
+
+ORG-7. The creator becomes the `owner` member row. The org wallet user row is created with
+`is_org = 1`, `role = user`, `account_class = enterprise`, and the default enterprise
+group (first public enterprise group, else the system default group).
+
+## 3. Invite link
+
+ORG-8. Each org has exactly one invite link, generated at creation with the chosen expiry
+(`24h`, `3d`, `7d`, `30d`, or never). The link path is `/join/{invite_token}`. The owner
+can copy it from the space at any time; only the owner receives the token through the API.
+
+ORG-9. `GET /api/dashboard/orgs/invite/{token}` (session required) returns
+`{org_id, display_name, avatar_emoji, avatar_color, owner_username, member_count}` without
+marking anything; a missing, expired, or full org link returns `404 invite_invalid` with
+the same body (no distinction).
+
+ORG-10. `POST /api/dashboard/orgs/join {token}` adds the caller as a `member`. It MUST
+reject with `404 invite_invalid` when the token is unknown or expired, `409
+org_member_limit_reached` when the org already has 15 members (`MAX_ORG_MEMBERS`), and
+`409 org_already_member` when the caller is already a member. Org wallet rows cannot join.
+
+ORG-11. `POST /api/dashboard/orgs/{org_id}/invite` with `{invite_expiry}` regenerates the
+single link (old token becomes invalid immediately) and is owner-only.
+
+## 4. Wallet
+
+ORG-12. `POST /api/dashboard/orgs/{org_id}/deposit {amount_nano_usd}` (owner only) moves a
+positive amount from the owner's personal wallet into the org wallet.
+
+ORG-13. `POST /api/dashboard/orgs/{org_id}/distribute {member_user_id, amount_nano_usd}`
+(owner only) moves a positive amount from the org wallet into one member's personal
+wallet. Both directions write two `billing_ledger` rows in one transaction
+(`org_deposit`/`org_deposit_receive` and `org_grant`/`org_receive`) with the org id and
+counterparty in `meta_json` and row locks taken org-wallet-first.
+
+## 5. Keys and sharing
+
+ORG-14. `POST /api/dashboard/orgs/{org_id}/keys {name, share_mode?}` creates an ordinary
+API key owned by the caller, billed to the caller's personal wallet, tagged with the org
+id. The owner's default `share_mode` is `'all'`; a member's default is private. The full
+key material is returned once, as with ordinary key creation.
+
+ORG-15. `GET /api/dashboard/orgs/{org_id}/keys` returns (a) the caller's keys in the space
+with their sharing state and (b) keys shared to the caller (mode `'all'`, or `'selected'`
+with a share row for the caller) including full key material for copying.
+
+ORG-16. `PUT /api/dashboard/orgs/{org_id}/keys/{key_id}/sharing {mode:
+"private"|"all"|"selected", member_ids?}` is restricted to the key's owner. `selected`
+MUST list only current members; otherwise `400 invalid_request`.
+
+ORG-17. Removing a member (`DELETE /api/dashboard/orgs/{org_id}/members/{user_id}`,
+owner only, cannot remove the owner) deletes their membership and share rows and makes
+their keys in that space private again.
+
+## 6. Surfaces
+
+ORG-18. `/dashboard/org` is the org space page: org switcher (member's orgs), tabs for
+overview (wallet balance, deposit/distribute, invite link card), members (list, remove),
+keys (mine + shared to me, create, sharing editor), and the org ledger. Creation and
+joining are reachable from the same page.
+
+ORG-19. `/join/{token}` is a centered landing: org avatar, display name, owner username,
+member count, and Accept/Decline buttons. Accept enters the space; Decline returns to the
+dashboard.
+
+ORG-20. `GET /api/dashboard/orgs` lists the caller's orgs with role, member count, wallet
+balance, and (owner only) the invite token and expiry. Admin surfaces exclude `is_org`
+rows from the ordinary user groupings.
+
+## 7. Limits
+
+ORG-21. `MAX_ORGS_PER_USER = 2` and `MAX_ORG_MEMBERS = 15` are compile-time constants in
+this release; admin adjustment is a later change.

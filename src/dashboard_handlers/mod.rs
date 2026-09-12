@@ -8,6 +8,7 @@ mod captcha;
 mod groups;
 mod model_registry;
 mod providers;
+mod orgs;
 mod sales;
 mod subaccounts;
 mod request_captures;
@@ -66,6 +67,12 @@ pub use providers::{
     get_provider_presets, get_transform_registry, list_providers, reorder_providers,
     test_channel, update_provider,
 };
+pub use orgs::{
+    create_org, create_org_key, deposit_to_org, distribute_from_org, invite_preview,
+    join_org, list_my_orgs, list_org_keys, org_detail, regenerate_invite, remove_org_member,
+    update_key_sharing,
+};
+
 pub use subaccounts::{
     CreateSubAccountRequest, SubAccountResponse, TransferToSubRequest, create_sub_account,
     distribute_to_sub_account, list_sub_accounts, sub_account_creation_allowed,
