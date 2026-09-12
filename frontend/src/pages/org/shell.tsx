@@ -1,17 +1,18 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import useSWR from "swr";
-import { Building2, Coins, KeyRound, LayoutDashboard, UsersRound } from "lucide-react";
+import useSWR, { mutate } from "swr";
+import { Building2, Coins, KeyRound, LayoutDashboard, Plus, UsersRound } from "lucide-react";
 import { api, type OrgSummary } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
-import { DashboardGuard } from "@/pages/sales/sales-route";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { UserCenterMenu } from "@/components/user-center-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { motion, springs } from "@/components/ui/motion";
+import { CreateOrgDialog } from "./entry";
 
 export const ORGS_KEY = "/api/dashboard/orgs";
 
@@ -45,20 +46,21 @@ export function OrgAvatar({
   );
 }
 
-/** The org-space shell: its own sidebar (identity, switcher, nav) plus the mode toggle. */
+/** The org-space shell: the workspace sidebar design with org identity and org navigation. */
 export function OrgShell() {
-  const { t } = useTranslation();
   const { orgId } = useParams();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { user, loading } = useAuth();
   const { data: orgs, isLoading } = useMyOrgs();
+  const [createOpen, setCreateOpen] = useState(false);
   const active = useMemo(
     () => orgs?.find((org) => org.id === orgId) ?? orgs?.[0],
     [orgs, orgId],
   );
 
   const navItems = [
-    { to: "home", icon: LayoutDashboard, label: t("org.navHome"), end: true },
+    { to: "home", icon: LayoutDashboard, label: t("org.navHome"), exact: true },
     { to: "members", icon: UsersRound, label: t("org.navMembers") },
     { to: "keys", icon: KeyRound, label: t("org.navKeys") },
     { to: "wallet", icon: Coins, label: t("org.navWallet") },
@@ -70,6 +72,7 @@ export function OrgShell() {
   if (!user) {
     return <Navigate to="/login" replace />;
   }
+  const canCreate = user.account_class === "enterprise" && !user.parent_user_id && !user.is_sales_agent;
 
   if (!active) {
     return (
@@ -92,62 +95,45 @@ export function OrgShell() {
   return (
     <TooltipProvider delayDuration={0}>
       <div className="flex h-dvh overflow-hidden">
-        <aside className="flex w-60 shrink-0 flex-col border-r bg-background">
-          <div className="flex items-center gap-2 p-3">
-            <Link to="/org" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-1 transition-colors hover:bg-accent/50">
-              <OrgAvatar emoji={active.avatar_emoji} color={active.avatar_color} image={active.avatar_image} />
+        <aside className="w-60 shrink-0 border-r">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.2 }}
+            className="flex h-full flex-col p-3"
+          >
+            {/* Brand slot: the org identity, the same row layout as the workspace logo. */}
+            <Link
+              to="/org"
+              className="group flex items-center gap-3 rounded-lg px-2.5 py-2.5 transition-colors hover:bg-accent/50"
+            >
+              <OrgAvatar
+                emoji={active.avatar_emoji}
+                color={active.avatar_color}
+                image={active.avatar_image}
+                size="size-8"
+                text="text-base"
+              />
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">{active.display_name}</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="truncate text-sm font-semibold tracking-tight">{active.display_name}</p>
+                <p className="truncate text-xs text-muted-foreground">
                   {active.role === "owner" ? t("org.owner") : t("org.member")}
                   {" · "}
                   {t("org.members", { count: active.member_count })}
                 </p>
               </div>
             </Link>
-          </div>
 
-          {(orgs?.length ?? 0) > 1 && (
-            <div className="flex flex-wrap gap-1 px-3 pb-2">
-              {orgs
-                ?.filter((org) => org.id !== active.id)
-                .map((org) => (
-                  <button
-                    key={org.id}
-                    type="button"
-                    onClick={() => navigate(`/org/${org.id}/home`)}
-                    className="flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50"
-                  >
-                    <OrgAvatar emoji={org.avatar_emoji} color={org.avatar_color} image={org.avatar_image} size="size-5" text="text-xs" />
-                    <span className="max-w-24 truncate">{org.display_name}</span>
-                  </button>
-                ))}
-            </div>
-          )}
-
-          <nav className="flex flex-1 flex-col gap-0.5 px-3">
-            {navItems.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) =>
-                  cn(
-                    "relative flex items-center gap-3 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
-                    isActive ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                  )
-                }
-              >
-                <item.icon className="h-4 w-4 shrink-0" />
-                {item.label}
-              </NavLink>
-            ))}
-          </nav>
-
-          <div className="space-y-2 p-3">
-            <div className="flex items-center gap-1 rounded-lg bg-muted p-1" role="group" aria-label={t("nav.modeSwitch")}>
+            {/* Mode toggle: the same control as the workspace sidebar, org side active. */}
+            <div
+              className="mt-2 flex items-center gap-1 rounded-lg bg-muted p-1"
+              role="group"
+              aria-label={t("nav.modeSwitch")}
+            >
               <Link
                 to="/dashboard"
                 className="relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                title={t("nav.workspace")}
               >
                 <LayoutDashboard className="size-3.5" />
                 {t("nav.workspace")}
@@ -155,6 +141,7 @@ export function OrgShell() {
               <Link
                 to="/org"
                 className="relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-foreground"
+                title={t("nav.orgSpace")}
               >
                 <motion.span
                   layoutId="org-mode-toggle-indicator"
@@ -165,21 +152,96 @@ export function OrgShell() {
                 <span className="relative z-10">{t("nav.orgSpace")}</span>
               </Link>
             </div>
-            {user && (
-              <div className="flex items-center justify-between rounded-lg px-1">
-                <span className="truncate text-xs text-muted-foreground">{user.username}</span>
-                <UserCenterMenu />
-              </div>
-            )}
-          </div>
+
+            <Separator className="my-3" />
+
+            {/* Multi-org switcher chips; the plus opens creation for eligible owners. */}
+            <div className="mb-2 flex flex-wrap gap-1">
+              {orgs
+                ?.filter((org) => org.id !== active.id)
+                .map((org) => (
+                  <button
+                    key={org.id}
+                    type="button"
+                    onClick={() => navigate(`/org/${org.id}/home`)}
+                    className="flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50"
+                  >
+                    <OrgAvatar
+                      emoji={org.avatar_emoji}
+                      color={org.avatar_color}
+                      image={org.avatar_image}
+                      size="size-4"
+                      text="text-[10px]"
+                    />
+                    <span className="max-w-24 truncate">{org.display_name}</span>
+                  </button>
+                ))}
+              {canCreate && (
+                <button
+                  type="button"
+                  onClick={() => setCreateOpen(true)}
+                  className="flex items-center gap-1 rounded-full border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50"
+                  title={t("org.create")}
+                >
+                  <Plus className="size-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Org navigation: the same NavLink treatment as the workspace sidebar. */}
+            <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+              {navItems.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.exact}
+                  className={({ isActive }) =>
+                    cn(
+                      "relative flex items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors",
+                      isActive
+                        ? "text-foreground"
+                        : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                    )
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      {isActive && (
+                        <motion.span
+                          layoutId="org-nav-active"
+                          className="absolute inset-0 rounded-md bg-accent"
+                          transition={springs.snappy}
+                        />
+                      )}
+                      <item.icon className="relative z-10 h-4 w-4 shrink-0" />
+                      <span className="relative z-10">{item.label}</span>
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </nav>
+
+            {/* Account menu: identical to the workspace bottom slot. */}
+            <div className="mt-auto pt-3">
+              <Separator className="mb-3" />
+              <UserCenterMenu />
+            </div>
+          </motion.div>
         </aside>
 
         <main className="min-w-0 flex-1 overflow-y-auto">
           <Outlet key={active.id} />
         </main>
+
+        <CreateOrgDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          onCreated={async (createdId) => {
+            await mutate(ORGS_KEY);
+            navigate(`/org/${createdId}/home`);
+          }}
+        />
       </div>
     </TooltipProvider>
   );
 }
-
-export { DashboardGuard, springs };

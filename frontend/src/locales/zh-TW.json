@@ -2269,7 +2269,7 @@
     "sharingDescription": "選擇空間內哪些成員可以看到並複製這個 key。",
     "sharingUpdated": "共享設定已更新",
     "createTitle": "建立組織",
-    "createDescription": "將從個人錢包預存 1000 CNY 開通組織錢包。選擇邀請連結有效期；連結隨時可回來複製。",
+    "createDescription": "企業分組帳戶可建立組織。選擇邀請連結有效期；連結隨時可回來複製。",
     "nameLabel": "組織名稱",
     "namePlaceholder": "Acme 實驗室",
     "avatarLabel": "頭像",

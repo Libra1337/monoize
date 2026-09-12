@@ -2272,7 +2272,7 @@
     "sharingDescription": "选择空间内哪些成员可以看到并复制这个 key。",
     "sharingUpdated": "共享设置已更新",
     "createTitle": "创建组织",
-    "createDescription": "将从个人钱包预存 1000 CNY 开通组织钱包。选择邀请链接有效期；链接随时可回来复制。",
+    "createDescription": "企业分组账户可创建组织。选择邀请链接有效期；链接随时可回来复制。",
     "nameLabel": "组织名称",
     "namePlaceholder": "Acme 实验室",
     "avatarLabel": "头像",

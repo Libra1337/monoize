@@ -2268,7 +2268,7 @@
     "sharingDescription": "スペース内でこの key を表示・コピーできるメンバーを選択します。",
     "sharingUpdated": "共有設定を更新しました",
     "createTitle": "組織を作成",
-    "createDescription": "個人ウォレットから 1000 CNY を預け入れて組織ウォレットを開設します。招待リンクの有効期限を選択してください。リンクはいつでもコピーできます。",
+    "createDescription": "エンタープライズアカウントは組織を作成できます。招待リンクの有効期限を選択してください。リンクはいつでもコピーできます。",
     "nameLabel": "組織名",
     "namePlaceholder": "Acme Labs",
     "avatarLabel": "アバター",

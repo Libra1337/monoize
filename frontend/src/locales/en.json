@@ -2272,7 +2272,7 @@
     "sharingDescription": "Choose who may see and copy this key inside the space.",
     "sharingUpdated": "Sharing updated",
     "createTitle": "Create an organization",
-    "createDescription": "A 1000 CNY deposit from your personal wallet opens the org wallet. Pick the invite link expiry; you can copy the link anytime.",
+    "createDescription": "Enterprise accounts can create organizations. Pick the invite link expiry; you can copy the link anytime.",
     "nameLabel": "Organization name",
     "namePlaceholder": "Acme Labs",
     "avatarLabel": "Avatar",
