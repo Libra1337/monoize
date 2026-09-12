@@ -23,6 +23,10 @@ pub enum AccountClass {
     Enterprise,
     /// Isolated like Enterprise, but with the full standard feature surface (GR-E1a).
     Private,
+    /// Wholesale reseller class (GR-E1b). Isolated like Enterprise; Providers in an agent
+    /// Group are created through the wholesale flow and share Profiles with their source
+    /// class (PP-W8).
+    Agent,
 }
 
 impl AccountClass {
@@ -31,6 +35,7 @@ impl AccountClass {
             "standard" => Some(Self::Standard),
             "enterprise" => Some(Self::Enterprise),
             "private" => Some(Self::Private),
+            "agent" => Some(Self::Agent),
             _ => None,
         }
     }
@@ -40,6 +45,7 @@ impl AccountClass {
             Self::Standard => "standard",
             Self::Enterprise => "enterprise",
             Self::Private => "private",
+            Self::Agent => "agent",
         }
     }
 }

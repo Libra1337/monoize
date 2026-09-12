@@ -106,8 +106,8 @@ describe("Enterprise navigation", () => {
   // DL-UM1 and DL-UM2: sales agents are ordinary standard-class accounts, so a grouping that
   // filtered on account_class alone would leave them mixed in with regular users. The
   // precedence in scopeOf is what keeps each user in exactly one grouping.
-  test("groups the user list four ways and keeps agents out of the other three", () => {
-    expect(usersSource).toContain('const USER_SCOPES = ["standard", "enterprise", "private", "sales"]');
+  test("groups the user list and keeps agents out of the other groupings", () => {
+    expect(usersSource).toContain('const USER_SCOPES = ["standard", "enterprise", "private", "agent", "sales"]');
 
     const start = usersSource.indexOf("function scopeOf");
     expect(start).toBeGreaterThan(-1);
@@ -115,8 +115,8 @@ describe("Enterprise navigation", () => {
     // The agent check must come first, or an enterprise-class agent lands in enterprise.
     expect(body.indexOf("is_sales_agent")).toBeLessThan(body.indexOf("account_class"));
 
-    // DL-UM3: the account-class switch keeps offering three classes, not four.
-    expect(usersSource).toContain('["standard", "enterprise", "private"]');
+    // DL-UM3: the account-class switch keeps offering the real classes, never sales.
+    expect(usersSource).toContain('["standard", "enterprise", "private", "agent"]');
     const switchStart = usersSource.indexOf("setAccountClassTarget");
     expect(usersSource.slice(0, switchStart)).not.toContain('next: "sales"');
 
@@ -127,7 +127,7 @@ describe("Enterprise navigation", () => {
 
   test("labels every user grouping in all locales", () => {
     for (const locale of locales) {
-      for (const scope of ["standard", "enterprise", "private", "sales"]) {
+      for (const scope of ["standard", "enterprise", "private", "agent", "sales"]) {
         expect(locale.users.scopes[scope]).toBeString();
       }
     }
@@ -142,7 +142,7 @@ describe("Enterprise navigation", () => {
     for (const source of [groupsSource, providersSource]) {
       expect(source).toContain("private");
     }
-    expect(usersSource).toContain('["standard", "enterprise", "private"]');
+    expect(usersSource).toContain('["standard", "enterprise", "private", "agent"]');
   });
 
   // DL5c: assert against the Enterprise array itself. A whole-file `toContain` cannot tell
@@ -163,6 +163,7 @@ describe("Enterprise navigation", () => {
       "/dashboard/orders",
       "/dashboard/tokens",
       "/dashboard/usage",
+      "/dashboard/usage/cache",
       "/dashboard/logs",
       "/dashboard/marketplace",
       "/dashboard/api-docs",

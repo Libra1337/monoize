@@ -60,9 +60,10 @@ pub(crate) use providers::provider_dashboard_rate_matrix_is_complete;
 pub use request_captures::{RequestCaptureQuery, get_request_capture};
 
 pub use providers::{
-    FetchChannelModelsRequest, TestChannelRequest, create_provider, delete_provider,
-    fetch_channel_models, fetch_provider_models, get_provider, get_provider_presets,
-    get_transform_registry, list_providers, reorder_providers, test_channel, update_provider,
+    FetchChannelModelsRequest, TestChannelRequest, create_provider, create_wholesale_provider,
+    delete_provider, fetch_channel_models, fetch_provider_models, get_provider,
+    get_provider_presets, get_transform_registry, list_providers, reorder_providers,
+    test_channel, update_provider,
 };
 pub use sales::{
     create_sales_agent_admin, create_sales_claim, create_sales_claim_admin,

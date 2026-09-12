@@ -4,9 +4,11 @@ use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
 use crate::handlers::routing::health_key;
 use crate::monoize_routing::{
-    ChannelHealthState, CreateMonoizeProviderInput, MonoizeChannel, MonoizeProvider,
-    ReorderProvidersInput, UpdateMonoizeProviderInput,
+    ChannelHealthState, CreateMonoizeChannelInput, CreateMonoizeProviderInput,
+    CreateWholesaleProviderInput, MonoizeChannel, MonoizeModelEntry, MonoizeProvider,
+    ReorderProvidersInput, UpdateMonoizeProviderInput, effective_model_multiplier,
 };
+use crate::users::AccountClass;
 use crate::settings::normalize_pricing_model_key;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -809,27 +811,32 @@ async fn validate_pricing_profiles(
 
     // PP-ENT6: billing-rate records carry no account class, so a Profile shared with the other
     // class would resolve that class's rates for this Provider and defeat PP-ENT2 and PP-ENT3.
-    let mut requested = requested.into_iter().collect::<Vec<_>>();
-    requested.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-    let mut conflicting = state
-        .monoize_store
-        .pricing_profile_account_classes(&requested, exclude_provider_id)
-        .await
-        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
-        .into_iter()
-        .filter(|(_, other)| *other != account_class)
-        .map(|(profile, _)| profile)
-        .collect::<Vec<_>>();
-    conflicting.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-    conflicting.dedup();
-    if let Some(profile) = conflicting.first() {
-        return Err(AppError::new(
-            StatusCode::CONFLICT,
-            "pricing_profile_account_class_conflict",
-            format!(
-                "pricing_profile '{profile}' is already used by a Provider of the other account class"
-            ),
-        ));
+    // PP-W8 exempts the agent class both ways: a wholesale Provider shares the base rates of
+    // its source class and discounts through its own multipliers, so sharing never leaks a
+    // retail price between the classes that PP-ENT2 protects.
+    if account_class != AccountClass::Agent {
+        let mut requested = requested.into_iter().collect::<Vec<_>>();
+        requested.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+        let mut conflicting = state
+            .monoize_store
+            .pricing_profile_account_classes(&requested, exclude_provider_id)
+            .await
+            .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
+            .into_iter()
+            .filter(|(_, other)| *other != account_class && *other != AccountClass::Agent)
+            .map(|(profile, _)| profile)
+            .collect::<Vec<_>>();
+        conflicting.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+        conflicting.dedup();
+        if let Some(profile) = conflicting.first() {
+            return Err(AppError::new(
+                StatusCode::CONFLICT,
+                "pricing_profile_account_class_conflict",
+                format!(
+                    "pricing_profile '{profile}' is already used by a Provider of the other account class"
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -859,6 +866,15 @@ pub async fn create_provider(
     require_admin(&headers, &state).await?;
     validate_channel_proxy_url(&body.channel)?;
     let account_class = provider_account_class(&state, &body.group_id).await?;
+    // PP-W1: an agent-class Provider is born only through the wholesale flow, so its
+    // multipliers are always the materialized wholesale prices.
+    if account_class == AccountClass::Agent {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "agent groups only accept wholesale provider creation",
+        ));
+    }
     validate_pricing_profiles(
         &state,
         reached_pricing_profiles(body.pricing_profile.as_deref(), Some(&body.channel.models)),
@@ -870,6 +886,182 @@ pub async fn create_provider(
     let provider = state
         .monoize_store
         .create_provider(body)
+        .await
+        .map_err(map_provider_write_error)?;
+
+    advance_routing_config_revision(&state);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(provider_write_response(&state, provider).await?),
+    ))
+}
+
+/// PP-W4/PP-W5: materializes the wholesale copy of a source Provider. The Channel
+/// configuration and model mappings are copied field for field; every model mapping stores
+/// an explicit wholesale multiplier so later source edits never change agent pricing.
+fn wholesale_input_from_source(
+    source: &MonoizeProvider,
+    body: CreateWholesaleProviderInput,
+) -> CreateMonoizeProviderInput {
+    let model_multipliers = body.model_multipliers.unwrap_or_default();
+    let models = source
+        .channel
+        .models
+        .iter()
+        .map(|(model, entry)| {
+            let wholesale_multiplier = model_multipliers
+                .get(model)
+                .copied()
+                .unwrap_or_else(|| effective_model_multiplier(source, entry));
+            (
+                model.clone(),
+                MonoizeModelEntry {
+                    redirect: entry.redirect.clone(),
+                    pricing_profile_mode: entry.pricing_profile_mode,
+                    pricing_profile_override: entry.pricing_profile_override.clone(),
+                    multiplier_override: Some(wholesale_multiplier),
+                },
+            )
+        })
+        .collect();
+
+    CreateMonoizeProviderInput {
+        name: body.name.unwrap_or_else(|| source.name.clone()),
+        channel: CreateMonoizeChannelInput {
+            name: body
+                .channel_name
+                .unwrap_or_else(|| source.channel.name.clone()),
+            provider_type: source.channel.provider_type,
+            base_url: source.channel.base_url.clone(),
+            api_key: Some(source.channel.api_key.clone()),
+            enabled: source.channel.enabled,
+            allow_missing_usage: source.channel.allow_missing_usage,
+            passive_failure_count_threshold_override: source
+                .channel
+                .passive_failure_count_threshold_override,
+            passive_cooldown_seconds_override: source.channel.passive_cooldown_seconds_override,
+            passive_window_seconds_override: source.channel.passive_window_seconds_override,
+            passive_rate_limit_cooldown_seconds_override: source
+                .channel
+                .passive_rate_limit_cooldown_seconds_override,
+            models,
+            active_probe_enabled_override: source.channel.active_probe_enabled_override,
+            active_probe_interval_seconds_override: source
+                .channel
+                .active_probe_interval_seconds_override,
+            active_probe_success_threshold_override: source
+                .channel
+                .active_probe_success_threshold_override,
+            active_probe_model_override: source.channel.active_probe_model_override.clone(),
+            affinity_enabled_override: source.channel.affinity_enabled_override,
+            affinity_idle_ttl_seconds_override: source.channel.affinity_idle_ttl_seconds_override,
+            affinity_failback_mode_override: source.channel.affinity_failback_mode_override,
+            affinity_failback_delay_seconds_override: source
+                .channel
+                .affinity_failback_delay_seconds_override,
+            proxy_url: source.channel.proxy_url.clone(),
+            extra_headers: source.channel.extra_headers.clone(),
+            session_affinity_auto: source.channel.session_affinity_auto,
+        },
+        confirm_public_exposure: body.confirm_public_exposure,
+        pricing_profile: source.pricing_profile.clone(),
+        multiplier: body.multiplier.unwrap_or(source.multiplier),
+        channel_max_retries: source.channel_max_retries,
+        channel_retry_interval_ms: source.channel_retry_interval_ms,
+        circuit_breaker_enabled: source.circuit_breaker_enabled,
+        per_model_circuit_break: source.per_model_circuit_break,
+        transforms: source.transforms.clone(),
+        active_probe_enabled_override: source.active_probe_enabled_override,
+        api_type_overrides: source.api_type_overrides.clone(),
+        active_probe_interval_seconds_override: source.active_probe_interval_seconds_override,
+        active_probe_success_threshold_override: source.active_probe_success_threshold_override,
+        active_probe_model_override: source.active_probe_model_override.clone(),
+        request_timeout_ms_override: source.request_timeout_ms_override,
+        extra_fields_whitelist: source.extra_fields_whitelist.clone(),
+        strip_cross_protocol_nested_extra: source.strip_cross_protocol_nested_extra,
+        group_id: body.group_id,
+        enabled: body.enabled.unwrap_or(true),
+        priority: body.priority,
+    }
+}
+
+/// PP-W3: a wholesale Provider sources from a non-agent Provider and lands in an agent Group.
+fn validate_wholesale_source_class(account_class: AccountClass) -> AppResult<()> {
+    if matches!(
+        account_class,
+        AccountClass::Standard | AccountClass::Enterprise | AccountClass::Private
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "source provider must belong to a standard, enterprise, or private group",
+        ))
+    }
+}
+
+pub async fn create_wholesale_provider(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateWholesaleProviderInput>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+
+    let target_class = provider_account_class(&state, &body.group_id).await?;
+    if target_class != AccountClass::Agent {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "wholesale providers can only be created in an agent group",
+        ));
+    }
+
+    let source = state
+        .monoize_store
+        .get_provider(&body.source_provider_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .ok_or_else(|| {
+            AppError::new(StatusCode::NOT_FOUND, "not_found", "provider not found")
+        })?;
+    let source_class = provider_account_class(&state, &source.group_id).await?;
+    validate_wholesale_source_class(source_class)?;
+
+    // PP-W6: an override for an unknown model would silently price nothing.
+    if let Some(model_multipliers) = body.model_multipliers.as_ref() {
+        let mut unknown = model_multipliers
+            .keys()
+            .filter(|model| !source.channel.models.contains_key(*model))
+            .cloned()
+            .collect::<Vec<_>>();
+        unknown.sort();
+        if let Some(model) = unknown.first() {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!("model_multipliers names a model the source provider does not offer: {model}"),
+            ));
+        }
+    }
+
+    let input = wholesale_input_from_source(&source, body);
+    validate_channel_proxy_url(&input.channel)?;
+    validate_pricing_profiles(
+        &state,
+        reached_pricing_profiles(
+            input.pricing_profile.as_deref(),
+            Some(&input.channel.models),
+        ),
+        AccountClass::Agent,
+        None,
+    )
+    .await?;
+
+    let provider = state
+        .monoize_store
+        .create_provider(input)
         .await
         .map_err(map_provider_write_error)?;
 
@@ -906,6 +1098,19 @@ pub async fn update_provider(
         .as_deref()
         .unwrap_or(prev_provider.group_id.as_str());
     let account_class = provider_account_class(&state, target_group_id).await?;
+    // PP-W1a: wholesale membership is decided at wholesale creation. Moving a retail Provider
+    // into the agent class would bypass the multiplier materialization, and moving a
+    // wholesale Provider out would expose wholesale prices to retail users.
+    let prev_class = provider_account_class(&state, &prev_provider.group_id).await?;
+    if account_class != prev_class
+        && (account_class == AccountClass::Agent || prev_class == AccountClass::Agent)
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "a provider cannot move between the agent class and another account class",
+        ));
+    }
     // An absent field keeps its stored value, so the check must run against the state the
     // Provider will have after the write. A request that carries only `group_id` still moves
     // the stored Profile into the target account class.
@@ -1446,6 +1651,7 @@ mod tests {
         CreateMonoizeChannelInput, CreateMonoizeProviderInput, MonoizeModelEntry,
         MonoizeProviderType,
     };
+    use crate::exact_decimal::Multiplier;
     use crate::users::UserRole;
     use axum::Json;
     use axum::extract::State;
@@ -2100,5 +2306,226 @@ mod tests {
             .await
             .expect("a move inside the same class is allowed");
         }
+    }
+
+    #[tokio::test]
+    async fn wholesale_create_materializes_source_multipliers() {
+        use crate::users::{AccountClass, CreateGroupInput};
+
+        let state = load_state_with_runtime(RuntimeConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_path: "/metrics".to_string(),
+            database_dsn: "sqlite::memory:".to_string(),
+            request_log_spool_dir: None,
+            node: crate::node_config::NodeSettings::primary_default(),
+        })
+        .await
+        .expect("state loads");
+
+        let standard_group = state
+            .user_store
+            .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "standard-group".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 0,
+                account_class: AccountClass::Standard,
+            })
+            .await
+            .expect("standard Group creates");
+        let agent_group = state
+            .user_store
+            .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "agent-group".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 0,
+                account_class: AccountClass::Agent,
+            })
+            .await
+            .expect("agent Group creates");
+
+        let source = state
+            .monoize_store
+            .create_provider(serde_json::from_value::<CreateMonoizeProviderInput>(json!({
+                "name": "source-provider",
+                "confirm_public_exposure": true,
+                "group_id": standard_group.id,
+                "pricing_profile": "openai",
+                "multiplier": "2",
+                "channel": {
+                    "name": "source-channel",
+                    "provider_type": "responses",
+                    "base_url": "https://example.com",
+                    "api_key": "secret",
+                    "models": {
+                        "gpt-shared": { "redirect": null },
+                        "gpt-override": { "redirect": null, "multiplier_override": "3" }
+                    }
+                }
+            }))
+            .expect("source input decodes"))
+            .await
+            .expect("source Provider creates");
+
+        let body = serde_json::from_value::<CreateWholesaleProviderInput>(json!({
+            "group_id": agent_group.id,
+            "source_provider_id": source.id,
+            "model_multipliers": { "gpt-shared": "1.5" },
+            "confirm_public_exposure": true
+        }))
+        .expect("wholesale input decodes");
+        let input = wholesale_input_from_source(&source, body);
+
+        // PP-W5: the Provider default comes from the source, the untouched model keeps its
+        // effective multiplier, and the requested override wins where supplied.
+        assert_eq!(input.multiplier.to_string(), "2");
+        assert_eq!(
+            input.channel.models["gpt-shared"].multiplier_override,
+            Some(Multiplier::parse("1.5").expect("decimal parses"))
+        );
+        assert_eq!(
+            input.channel.models["gpt-override"].multiplier_override,
+            Some(Multiplier::parse("3").expect("decimal parses"))
+        );
+        assert_eq!(input.channel.api_key.as_deref(), Some("secret"));
+        assert_eq!(input.channel.base_url, "https://example.com");
+        assert_eq!(input.pricing_profile.as_deref(), Some("openai"));
+        assert_eq!(input.group_id, agent_group.id);
+
+        let wholesale = state
+            .monoize_store
+            .create_provider(input)
+            .await
+            .expect("wholesale Provider creates");
+        assert_eq!(wholesale.group_id, agent_group.id);
+        assert_eq!(wholesale.channel.models.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn wholesale_source_class_rules_and_profile_sharing() {
+        use crate::users::{AccountClass, CreateGroupInput};
+
+        let state = load_state_with_runtime(RuntimeConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_path: "/metrics".to_string(),
+            database_dsn: "sqlite::memory:".to_string(),
+            request_log_spool_dir: None,
+            node: crate::node_config::NodeSettings::primary_default(),
+        })
+        .await
+        .expect("state loads");
+
+        // PP-W3: only the three retail classes may source a wholesale Provider.
+        for (class, ok) in [
+            (AccountClass::Standard, true),
+            (AccountClass::Enterprise, true),
+            (AccountClass::Private, true),
+            (AccountClass::Agent, false),
+        ] {
+            let error = validate_wholesale_source_class(class);
+            assert_eq!(error.is_ok(), ok, "class {class:?} resolved {error:?}");
+        }
+
+        // PP-W8: a Profile already reachable from the standard class is fine for the agent
+        // class, and agent reachability does not poison a later standard write.
+        state
+            .billing_rate_store
+            .upsert_billing_rate(
+                "openai-input",
+                crate::billing_rate_store::UpsertBillingRateInput {
+                    source: Some("test".to_string()),
+                    pricing_profile: Some("openai".to_string()),
+                    model_pattern: Some(Some("gpt-shared".to_string())),
+                    provider_type: Some(Some("responses".to_string())),
+                    rate_kind: Some("token".to_string()),
+                    usage_class: Some("input_uncached".to_string()),
+                    unit: Some("token".to_string()),
+                    unit_price_nano: Some("1".to_string()),
+                    unit_price_currency: None,
+                    context_tier: Some(None),
+                    service_tier: Some(None),
+                    modality: Some(None),
+                    cache_ttl: Some(None),
+                    match_json: Some(json!({})),
+                    priority: Some(0),
+                    enabled: Some(true),
+                    raw_json: Some(json!({ "fixture": true })),
+                },
+            )
+            .await
+            .expect("rate creates");
+
+        let standard_group = state
+            .user_store
+            .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "standard-group".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 0,
+                account_class: AccountClass::Standard,
+            })
+            .await
+            .expect("standard Group creates");
+        let agent_group = state
+            .user_store
+            .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "agent-group".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 0,
+                account_class: AccountClass::Agent,
+            })
+            .await
+            .expect("agent Group creates");
+
+        let provider_input = |name: &str, group_id: String| {
+            serde_json::from_value::<CreateMonoizeProviderInput>(json!({
+                "name": name,
+                "confirm_public_exposure": true,
+                "group_id": group_id,
+                "pricing_profile": "openai",
+                "channel": {
+                    "name": format!("{name}-channel"),
+                    "provider_type": "responses",
+                    "base_url": "https://example.com",
+                    "api_key": "secret",
+                    "models": { "gpt-shared": { "redirect": null } }
+                }
+            }))
+            .expect("Provider input decodes")
+        };
+        let standard_provider = state
+            .monoize_store
+            .create_provider(provider_input("standard-provider", standard_group.id.clone()))
+            .await
+            .expect("standard Provider creates");
+
+        validate_pricing_profiles(
+            &state,
+            reached_pricing_profiles(Some("openai"), None),
+            AccountClass::Agent,
+            None,
+        )
+        .await
+        .expect("agent class shares the source class Profile (PP-W8)");
+
+        let _agent_provider = state
+            .monoize_store
+            .create_provider(provider_input("agent-provider", agent_group.id.clone()))
+            .await
+            .expect("agent Provider creates");
+        validate_pricing_profiles(
+            &state,
+            reached_pricing_profiles(Some("openai"), None),
+            AccountClass::Standard,
+            Some(&standard_provider.id),
+        )
+        .await
+        .expect("agent reachability must not conflict a standard write (PP-W8)");
     }
 }

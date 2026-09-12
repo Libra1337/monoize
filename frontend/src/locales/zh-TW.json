@@ -1040,6 +1040,7 @@
       "standard": "一般使用者 / 管理員",
       "enterprise": "企業分組",
       "private": "私有",
+      "agent": "代理",
       "sales": "銷售"
     }
   },
@@ -1268,6 +1269,7 @@
     "members": "{{count}} 個成員",
     "external": "外部",
     "addProvider": "新增供應商",
+    "addWholesaleProvider": "新增批發 Provider",
     "createProvider": "建立供應商",
     "createProviderDesc": "新增上游供應商用於請求路由",
     "id": "供應商 ID",
@@ -2113,7 +2115,8 @@
   "accountClass": {
     "standard": "一般使用者",
     "enterprise": "企業使用者",
-    "private": "私有"
+    "private": "私有",
+    "agent": "代理"
   },
   "sales": {
     "title": "銷售",

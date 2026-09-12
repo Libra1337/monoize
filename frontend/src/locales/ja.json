@@ -1040,6 +1040,7 @@
       "standard": "一般ユーザー / 管理者",
       "enterprise": "エンタープライズ",
       "private": "プライベート",
+      "agent": "エージェント",
       "sales": "販売"
     }
   },
@@ -1268,6 +1269,7 @@
     "members": "{{count}} メンバー",
     "external": "外部",
     "addProvider": "プロバイダーを追加",
+    "addWholesaleProvider": "卸売プロバイダーを追加",
     "createProvider": "プロバイダーを作成",
     "createProviderDesc": "リクエストルーティング用の新しい上流プロバイダーを追加",
     "id": "プロバイダー ID",
@@ -2112,7 +2114,8 @@
   "accountClass": {
     "standard": "標準ユーザー",
     "enterprise": "企業ユーザー",
-    "private": "プライベート"
+    "private": "プライベート",
+    "agent": "エージェント"
   },
   "sales": {
     "title": "セールス",

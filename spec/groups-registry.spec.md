@@ -315,12 +315,31 @@ non-empty billing-plan Group ceiling still restricts an API key whose own list i
 ## 6. Account-Class Isolation
 
 GR-E1. Every `users` row and every `monoize_groups` row MUST contain `account_class` equal to
-`standard`, `enterprise`, or `private`.
+`standard`, `enterprise`, `private`, or `agent`.
 
 GR-E1a. The `private` class MUST be isolated from the other two by exactly the rules that
 isolate `enterprise`: GR-E3 through GR-E6, R-ENT-1 through R-ENT-5, PP-ENT1 through PP-ENT8,
 and MM-ENT1 through MM-ENT5 apply to it unchanged. It differs from `enterprise` only in the
 dashboard surface it receives (DL5d).
+
+GR-E1b. The `agent` class is the wholesale reseller class. It MUST be isolated from the other
+three by exactly the rules that isolate `enterprise`: GR-E3 through GR-E6, R-ENT-1 through
+R-ENT-5, and MM-ENT1 through MM-ENT5 apply to it unchanged. It differs from the other classes
+in exactly three ways:
+
+1. A Provider in an `agent` Group MUST be created through the wholesale flow defined by
+   `provider-pricing.spec.md` section 14, not through the ordinary Provider create request.
+2. Pricing-Profile exclusivity (PP-ENT6) does not apply between `agent` and another class;
+   a wholesale Provider shares the base billing rates of its source class and discounts
+   through its own multipliers (PP-W8).
+3. An `agent` viewer receives the full standard dashboard sidebar (DL5d).
+
+Only a user whose `account_class` is `agent` can see an `agent` Group, attach an `agent`
+Group to an API key, route through an `agent` Group, or receive the `agent` Marketplace
+catalogue; this follows from GR-E3, GR-I3, and MM-ENT2 without class-specific code. The
+account-class transition into and out of `agent` uses the destructive endpoint of
+`api-token-management.spec.md` TM-ENT1 through TM-ENT5 unchanged, including deletion of every
+API Key owned by the user.
 
 GR-E2. Migration `m20260908_000063_enterprise_account_class` MUST set `account_class = standard` for every existing user and Group.
 

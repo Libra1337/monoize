@@ -1040,6 +1040,7 @@
       "standard": "Users & Admins",
       "enterprise": "Enterprise",
       "private": "Private",
+      "agent": "Agent",
       "sales": "Sales"
     }
   },
@@ -1271,6 +1272,7 @@
     "members": "{{count}} members",
     "external": "External",
     "addProvider": "Add Provider",
+    "addWholesaleProvider": "Add Wholesale Provider",
     "createProvider": "Create Provider",
     "createProviderDesc": "Add a new upstream provider for routing requests",
     "id": "Provider ID",
@@ -2116,7 +2118,8 @@
   "accountClass": {
     "standard": "Standard",
     "enterprise": "Enterprise",
-    "private": "Private"
+    "private": "Private",
+    "agent": "Agent"
   },
   "sales": {
     "title": "Sales",

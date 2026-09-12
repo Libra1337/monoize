@@ -1040,6 +1040,7 @@
       "standard": "普通用户 / 管理员",
       "enterprise": "企业分组",
       "private": "私有",
+      "agent": "代理",
       "sales": "销售"
     }
   },
@@ -1271,6 +1272,7 @@
     "members": "{{count}} 个成员",
     "external": "外部",
     "addProvider": "添加提供者",
+    "addWholesaleProvider": "添加批发 Provider",
     "createProvider": "创建提供者",
     "createProviderDesc": "添加新的上游提供者用于请求路由",
     "id": "提供者 ID",
@@ -2116,7 +2118,8 @@
   "accountClass": {
     "standard": "普通用户",
     "enterprise": "企业用户",
-    "private": "私有"
+    "private": "私有",
+    "agent": "代理"
   },
   "sales": {
     "title": "销售",

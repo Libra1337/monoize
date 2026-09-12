@@ -31,9 +31,10 @@ import { PageHeader } from '@/components/ui/page-header'
 import { CardsPageSkeleton } from '@/components/ui/page-skeleton'
 import { ProviderCard } from './providers/ProviderCard'
 import { ProviderDialog } from './providers/ProviderDialog'
+import { WholesaleProviderDialog } from './providers/WholesaleProviderDialog'
 import { DEFAULT_REASONING_SUFFIX_MAP } from './providers/shared'
 
-const ACCOUNT_CLASSES = ['standard', 'enterprise', 'private'] as const
+const ACCOUNT_CLASSES = ['standard', 'enterprise', 'private', 'agent'] as const
 
 export function ProvidersPage() {
 	const { t } = useTranslation()
@@ -53,9 +54,20 @@ export function ProvidersPage() {
 	const reasoningSuffixMap =
 		settings?.reasoning_suffix_map ?? DEFAULT_REASONING_SUFFIX_MAP
 	const [createOpen, setCreateOpen] = useState(false)
+	const [wholesaleOpen, setWholesaleOpen] = useState(false)
 	const [editProvider, setEditProvider] = useState<Provider | null>(null)
 	const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null)
 	const [draggingProviderId, setDraggingProviderId] = useState<string | null>(null)
+
+	// PP-WF1: the agent scope creates Providers through the wholesale flow, so its create
+	// action must not open the ordinary editor.
+	const openCreate = () => {
+		if (accountClass === 'agent') {
+			setWholesaleOpen(true)
+		} else {
+			setCreateOpen(true)
+		}
+	}
 
 	const applyReorder = async (groupId: string, orderedIds: string[]) => {
 		try {
@@ -169,9 +181,9 @@ export function ProvidersPage() {
 			>
 				<PageHeader title={t('providers.title')} description={t('providers.description')} actions={(
 					<AnimatedButton>
-						<Button onClick={() => setCreateOpen(true)}>
+						<Button onClick={openCreate}>
 							<Plus className='h-4 w-4 mr-2' />
-							{t('providers.addProvider')}
+							{accountClass === 'agent' ? t('providers.addWholesaleProvider') : t('providers.addProvider')}
 						</Button>
 					</AnimatedButton>
 				)} />
@@ -180,10 +192,10 @@ export function ProvidersPage() {
 			<div className='flex flex-col gap-2 rounded-xl border bg-card p-3 sm:flex-row sm:items-center sm:justify-between'>
 				<div><p className='text-sm font-medium'>{t('providers.accountClass')}</p><p className='text-xs text-muted-foreground'>{t('providers.accountClassDescription')}</p></div>
 				<Tabs value={accountClass} onValueChange={value => setAccountClass(value as AccountClass)}>
-					<TabsList className='grid w-full grid-cols-3 rounded-lg sm:w-96'>
-						{ACCOUNT_CLASSES.map(value => <TabsTrigger key={value} value={value}>{t(`accountClass.${value}`)}</TabsTrigger>)}
-					</TabsList>
-				</Tabs>
+						<TabsList className='grid w-full grid-cols-4 rounded-lg sm:w-[32rem]'>
+							{ACCOUNT_CLASSES.map(value => <TabsTrigger key={value} value={value}>{t(`accountClass.${value}`)}</TabsTrigger>)}
+						</TabsList>
+					</Tabs>
 			</div>
 
 			<div className='space-y-4'>
@@ -198,7 +210,7 @@ export function ProvidersPage() {
 							icon={<Server className='h-12 w-12' />}
 							title={t('providers.noProviders')}
 							description={t('providers.emptyStateDesc')}
-							action={<Button variant='outline' onClick={() => setCreateOpen(true)}><Plus className='h-4 w-4 mr-2' />{t('providers.addProvider')}</Button>}
+							action={<Button variant='outline' onClick={openCreate}><Plus className='h-4 w-4 mr-2' />{accountClass === 'agent' ? t('providers.addWholesaleProvider') : t('providers.addProvider')}</Button>}
 						/>
 					</motion.div>
 				)}
@@ -250,6 +262,11 @@ export function ProvidersPage() {
 				reasoningSuffixMap={reasoningSuffixMap}
 				settings={settings}
 				accountClass={accountClass}
+			/>
+
+			<WholesaleProviderDialog
+				open={wholesaleOpen}
+				onOpenChange={setWholesaleOpen}
 			/>
 
 			<AlertDialog open={!!deleteTarget} onOpenChange={open => { if (!open) setDeleteTarget(null) }}>

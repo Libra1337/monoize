@@ -18,6 +18,7 @@ import type {
   PublicSiteSettings,
   Provider,
   CreateProviderInput,
+  CreateWholesaleProviderInput,
   UpdateProviderInput,
   CreateApiKeyInput,
   UpdateApiKeyInput,
@@ -947,6 +948,25 @@ export async function createProviderOptimistic(
   try {
     const result = await api.createProvider(input);
     // Revalidate to get the new provider
+    mutate(SWR_KEYS.PROVIDERS);
+    mutate(SWR_KEYS.STATS);
+    mutate(SWR_KEYS.CONFIG);
+    mutate(SWR_KEYS.MARKETPLACE_MODELS);
+    return result;
+  } catch (error) {
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function createWholesaleProviderOptimistic(
+  input: CreateWholesaleProviderInput,
+  onError?: (error: Error) => void
+) {
+  try {
+    const result = await api.createWholesaleProvider(input);
     mutate(SWR_KEYS.PROVIDERS);
     mutate(SWR_KEYS.STATS);
     mutate(SWR_KEYS.CONFIG);

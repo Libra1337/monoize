@@ -2757,6 +2757,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::reorder_providers),
         )
         .route(
+            "/dashboard/providers/wholesale",
+            post(crate::dashboard_handlers::create_wholesale_provider),
+        )
+        .route(
             "/dashboard/providers/{provider_id}",
             get(crate::dashboard_handlers::get_provider),
         )

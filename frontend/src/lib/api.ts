@@ -1,6 +1,6 @@
 const API_BASE = "/api/dashboard";
 
-export type AccountClass = "standard" | "enterprise" | "private";
+export type AccountClass = "standard" | "enterprise" | "private" | "agent";
 
 type UnauthorizedHandler = () => void;
 
@@ -495,6 +495,18 @@ export interface CreateProviderInput {
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
   group_id?: string;
+  enabled?: boolean;
+  priority?: number;
+}
+
+export interface CreateWholesaleProviderInput {
+  group_id: string;
+  source_provider_id: string;
+  multiplier?: string;
+  name?: string;
+  channel_name?: string;
+  model_multipliers?: Record<string, string>;
+  confirm_public_exposure?: boolean;
   enabled?: boolean;
   priority?: number;
 }
@@ -1281,6 +1293,15 @@ class ApiClient {
 
   async createProvider(input: CreateProviderInput): Promise<Provider> {
     return this.request("/providers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async createWholesaleProvider(
+    input: CreateWholesaleProviderInput
+  ): Promise<Provider> {
+    return this.request("/providers/wholesale", {
       method: "POST",
       body: JSON.stringify(input),
     });

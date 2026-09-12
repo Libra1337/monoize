@@ -159,6 +159,7 @@ navigation MUST instead include exactly:
 - `/dashboard/orders`
 - `/dashboard/tokens`
 - `/dashboard/usage`
+- `/dashboard/usage/cache`
 - `/dashboard/logs`
 - `/dashboard/marketplace`
 - `/dashboard/api-docs`
@@ -170,16 +171,16 @@ class, no clause of `store-billing.spec.md` excludes an enterprise caller, and
 and redemption history. Omitting them leaves an enterprise user with no self-service way to
 add balance.
 
-DL5d. A viewer whose `account_class` is `private` MUST receive the same sidebar as a
-`standard` viewer, not the reduced `enterprise` sidebar of DL5c. The private class exists to
-isolate an account's catalogue, not to withhold dashboard features from it.
+DL5d. A viewer whose `account_class` is `private` or `agent` MUST receive the same sidebar as
+a `standard` viewer, not the reduced `enterprise` sidebar of DL5c. The private and agent
+classes exist to isolate an account's catalogue, not to withhold dashboard features from it.
 
 DL5b. The expanded, collapsed, and mobile sidebar brand link MUST target `/`. The mobile
 brand link MUST invoke the existing navigation-close callback.
 
-DL-UM1. The Admin user list MUST offer exactly four groupings, in this order: standard users
-and administrators, enterprise, private, and sales. Exactly one grouping MUST be visible at a
-time, and each MUST display the number of users it contains.
+DL-UM1. The Admin user list MUST offer exactly five groupings, in this order: standard users
+and administrators, enterprise, private, agent, and sales. Exactly one grouping MUST be
+visible at a time, and each MUST display the number of users it contains.
 
 DL-UM2. A user MUST belong to exactly one grouping. A user whose `is_sales_agent` is true
 MUST belong to the sales grouping regardless of `account_class`, and MUST NOT appear in any
@@ -190,8 +191,8 @@ is indistinguishable from a regular user in the list.
 
 DL-UM3. The grouping MUST be presentational only. Selecting a grouping MUST NOT change any
 user's `account_class`, role, permissions, or routing, and the sales grouping MUST NOT be
-offered as a target of the account-class switch, which continues to offer exactly the three
-account classes.
+offered as a target of the account-class switch, which continues to offer exactly the four
+account classes `standard`, `enterprise`, `private`, and `agent`.
 
 DL-UM4. The per-day usage summary shown above the list MUST aggregate only the users of the
 visible grouping, so the figure matches the rows displayed beneath it.

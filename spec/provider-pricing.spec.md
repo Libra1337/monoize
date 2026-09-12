@@ -184,6 +184,7 @@ PP-A1. Provider management MUST expose exactly these paths:
 ```text
 GET    /api/dashboard/providers
 POST   /api/dashboard/providers
+POST   /api/dashboard/providers/wholesale
 GET    /api/dashboard/providers/{provider_id}
 PUT    /api/dashboard/providers/{provider_id}
 DELETE /api/dashboard/providers/{provider_id}
@@ -465,9 +466,10 @@ therefore reaches only Enterprise Providers and resolves only their Profiles.
 
 PP-ENT6. Required invariant that PP-ENT5 depends on: one Profile name MUST NOT be reachable
 from Providers of both account classes. A shared Profile name would make one set of
-billing-rate records resolve for both classes and would defeat PP-ENT2 and PP-ENT3, even
+billing-rate records resolve for both classes and defeat PP-ENT2 and PP-ENT3, even
 though every routing query filters by account class. Enterprise and standard Providers
-therefore MUST use disjoint Profile names.
+therefore MUST use disjoint Profile names. The exclusivity applies among the classes
+`standard`, `enterprise`, and `private` only; the `agent` class is exempt by PP-W8.
 
 PP-ENT7. Provider create and Provider update MUST enforce PP-ENT6 before the write commits.
 The account class is the class of the Group the write targets, which is the requested Group
@@ -485,3 +487,93 @@ state: the requested Provider Profile when the request supplies one and the stor
 otherwise, and the requested Channel model entries when the request supplies them and the
 stored model entries otherwise. A request that names only `group_id` MUST still be checked,
 because moving a Provider carries its stored Profile into the target account class.
+
+## 14. Wholesale Providers (agent account class)
+
+PP-W1. A Provider whose Group account class is `agent` is a **wholesale Provider**. It MUST
+be created only through `POST /api/dashboard/providers/wholesale` with Admin authorization.
+The ordinary Provider create request (PP-A1 `POST /api/dashboard/providers`) MUST reject a
+target Group of the `agent` class with HTTP `400` code `invalid_request`.
+
+PP-W1a. A Provider update MUST NOT change whether the Provider belongs to the `agent`
+class: moving a Provider from a non-agent Group into an agent Group and moving a wholesale
+Provider out of the `agent` class MUST both fail with HTTP `400` code `invalid_request`.
+Moving a wholesale Provider between two agent Groups is allowed.
+
+PP-W2. The wholesale create request MUST use `deny_unknown_fields` and contain exactly these
+fields:
+
+```text
+group_id              TEXT       target Group id (agent class)
+source_provider_id    TEXT       source Provider id
+multiplier            decimal?   Provider default multiplier
+name                  string?    internal Provider name override
+channel_name          string?    internal Channel name override
+model_multipliers     {model_name: decimal}?  per-model wholesale multipliers
+confirm_public_exposure boolean
+enabled               boolean?   default true
+priority              integer?
+```
+
+PP-W3. The target Group MUST exist and its account class MUST be `agent`; otherwise the
+request MUST fail with HTTP `400` code `invalid_request` and change no row. The source
+Provider MUST exist and its Group account class MUST be one of `standard`, `enterprise`,
+`private`; otherwise the request MUST fail with HTTP `400` code `invalid_request` and change
+no row. A wholesale Provider MUST NOT source from another wholesale Provider.
+
+PP-W4. The created Provider copies from the source Provider, field for field: the embedded
+Channel configuration (`provider_type`, `base_url`, `api_key`, `enabled`,
+`allow_missing_usage`, every passive/active-probe/affinity override, `proxy_url`,
+`extra_headers`, `session_affinity_auto`), `transforms`, `api_type_overrides`, provider-level
+probe and timeout overrides, `extra_fields_whitelist`, `strip_cross_protocol_nested_extra`,
+`circuit_breaker_enabled`, `per_model_circuit_break`, `channel_max_retries`,
+`channel_retry_interval_ms`, `pricing_profile`, and every model mapping (`model_name`,
+`redirect`, `pricing_profile_mode`, `pricing_profile_override`).
+
+PP-W5. Wholesale multiplier defaults: the created Provider `multiplier` MUST equal the
+request `multiplier` when present, else the source Provider `multiplier`. Every created model
+mapping MUST store an explicit `multiplier_override` equal to
+`model_multipliers[model_name]` when the request supplies that model, else the source
+mapping's effective multiplier under PP-E1 (`source multiplier_override ?? source Provider
+multiplier`). The copy is a one-time materialization: later edits of the source Provider do
+not propagate.
+
+PP-W6. A `model_multipliers` key that names no model mapping of the source Provider MUST be
+rejected with HTTP `400` code `invalid_request`.
+
+PP-W7. `name` defaults to the source Provider's name and `channel_name` to the source
+Channel's name. Public names are derived from those names under PP-N1 through PP-N4, and
+`confirm_public_exposure: true` is required under PP-N7 and PP-N8.
+
+PP-W8. Pricing-Profile validation for a wholesale Provider: the PP-P4 known-Profile check
+applies unchanged, but the PP-ENT6/PP-ENT7 cross-class exclusivity does not. A wholesale
+Provider MAY reference a Profile reachable from any other account class, and a Profile
+reachable from an `agent` Provider MUST NOT make a write in another class conflict. The
+exclusivity between two distinct non-agent classes is unchanged.
+
+PP-W9. The response MUST equal the ordinary create response (PP-A6 including
+`pricing_warnings`) with HTTP `201`.
+
+PP-W10. After creation, a wholesale Provider is an ordinary Provider. Updates, reordering,
+deletion, Channel tests, routing, health, and Marketplace visibility use the existing
+Provider rules unchanged, including per-model `multiplier_override` edits through
+`PUT /api/dashboard/providers/{provider_id}`.
+
+PP-W11. The wholesale create mutation MUST be one database transaction (PP-A5) and MUST
+increment `configuration_generation` exactly once (PP-P6).
+
+## 15. Wholesale management UI
+
+PP-WF1. The Provider page MUST offer the `agent` account-class scope alongside the other
+classes. On the `agent` scope, the create action MUST open a wholesale Provider dialog
+instead of the ordinary Provider editor.
+
+PP-WF2. The wholesale dialog MUST contain, in order: target agent Group select, source
+Provider select limited to Providers whose Group class is `standard`, `enterprise`, or
+`private` and labelled with the source Group, default wholesale multiplier input, per-model
+multiplier table prefilled with the source mapping's effective multipliers and individually
+editable, name overrides, and the public-exposure confirmation of PP-F3.
+
+PP-WF3. Data fetching in the wholesale dialog MUST use SWR with a Skeleton fallback; the
+submit MUST optimistically insert the Provider row, roll back on failure, and revalidate the
+Provider and Marketplace keys (PP-F6).

@@ -83,7 +83,7 @@ function useFinePointer() {
   return isFinePointer;
 }
 
-const ACCOUNT_CLASSES = ["standard", "enterprise", "private"] as const;
+const ACCOUNT_CLASSES = ["standard", "enterprise", "private", "agent"] as const;
 
 export function GroupsPage() {
   const { t } = useTranslation();
@@ -326,7 +326,7 @@ export function GroupsPage() {
             <p className="text-xs text-muted-foreground">{t("groups.accountClassDescription")}</p>
           </div>
           <Tabs value={accountClass} onValueChange={(value) => setAccountClass(value as AccountClass)}>
-            <TabsList className="grid w-full grid-cols-3 rounded-lg sm:w-96">
+            <TabsList className="grid w-full grid-cols-4 rounded-lg sm:w-[32rem]">
               {ACCOUNT_CLASSES.map((value) => (
                 <TabsTrigger key={value} value={value}>{t(`accountClass.${value}`)}</TabsTrigger>
               ))}

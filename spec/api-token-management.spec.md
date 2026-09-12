@@ -316,7 +316,7 @@ TM-AN9. The Key list MUST remain a compact overview. Selecting one Key MUST open
 
 TM-ENT1. `PUT /api/dashboard/users/{user_id}/account-class` MUST require Admin authorization and exact JSON fields `account_class` and `confirm_delete_api_keys`.
 
-TM-ENT2. `account_class` MUST equal `standard`, `enterprise`, or `private`. `confirm_delete_api_keys` MUST equal `true`. Invalid input MUST change no row.
+TM-ENT2. `account_class` MUST equal `standard`, `enterprise`, `private`, or `agent`. `confirm_delete_api_keys` MUST equal `true`. Invalid input MUST change no row.
 
 TM-ENT3. One transaction MUST lock the user, settle every signed independent Key balance under SA-DEL2 through SA-DEL4, delete every API Key owned by the user, update the user account class, and append an audit row.
 

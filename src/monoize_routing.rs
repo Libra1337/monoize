@@ -307,6 +307,29 @@ pub struct CreateMonoizeProviderInput {
     pub priority: Option<i32>,
 }
 
+/// PP-W2: wholesale create request. Copies a source Provider of a non-agent class into an
+/// agent-class Group with wholesale multipliers.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateWholesaleProviderInput {
+    pub group_id: String,
+    pub source_provider_id: String,
+    #[serde(default)]
+    pub multiplier: Option<Multiplier>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub channel_name: Option<String>,
+    #[serde(default)]
+    pub model_multipliers: Option<HashMap<String, Multiplier>>,
+    #[serde(default)]
+    pub confirm_public_exposure: bool,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub priority: Option<i32>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateMonoizeProviderInput {

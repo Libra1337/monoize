@@ -46,6 +46,19 @@ Save the Provider even when a pricing warning appears. Read each warning for the
 
 A Provider can hold an ordered list of transform rules. They run on every request that the Provider serves, after Provider selection and before upstream encoding. See [Transforms](/en/docs/transforms).
 
+## Wholesale Providers
+
+An `agent` Group serves reseller accounts. It does not hold ordinary Providers.
+
+1. Switch the **Catalog scope** to `agent` and create a Group of the agent class first.
+2. Click **Add Wholesale Provider**.
+3. Select one existing Provider from the `standard`, `enterprise`, or `private` classes as the source.
+4. The source Channel configuration and model mappings are copied once. Later source changes do not propagate.
+5. Every model starts at the source multiplier. Change any multiplier before you save. Edit multipliers later with the ordinary Provider editor.
+6. The wholesale Provider reuses the billing Profile of its source. Its own multipliers set the wholesale price.
+
+Only agent accounts see agent Groups, create keys in them, and use their multipliers. The Model Marketplace of an agent account follows the same rules as the other classes.
+
 ## Groups
 
 Every Provider belongs to exactly one Group. API keys route only to Providers in their allowed Groups. Use Groups to separate user tiers or environments.

@@ -46,6 +46,19 @@ description: 用 Group 内有序的 Provider 和内嵌 Channel 定义上游路�
 
 Provider 可以持有一组有序的变换规则。它们在 Provider 选定之后、上游编码之前，作用于该 Provider 服务的每个请求。参见[变换](/zh/docs/transforms)。
 
+## 批发 Provider
+
+`agent`（代理）分组服务代理账户，不持有普通 Provider。
+
+1. 先把**目录范围**切换到 `agent`，创建一个 `agent` 类别的 Group。
+2. 点击**添加批发 Provider**。
+3. 选择一个属于 `standard`、`enterprise` 或 `private` 类别的现有 Provider 作为源。
+4. 系统一次性复制源 Channel 配置和模型映射。复制后彼此独立，源的变化不会同步。
+5. 每个模型的倍率默认等于源倍率。保存前可修改任意倍率，之后也可用普通 Provider 编辑器修改。
+6. 批发 Provider 复用源的 Billing Profile，用自己的倍率决定批发价格。
+
+只有代理账户能看到代理分组、在其中创建 API key 并使用其倍率。代理账户的模型市场与其他类别遵循同一套规则。
+
 ## 分组
 
 每个 Provider 只属于一个 Group。API 密钥只会路由到其允许 Group 中的 Provider。使用 Group 区分用户等级或环境。

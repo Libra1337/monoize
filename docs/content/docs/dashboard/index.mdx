@@ -18,13 +18,15 @@ Open the Monoize listen address in a browser. The default is `http://localhost:8
 
 ## Account classes
 
-Each account has one account class: standard or enterprise. The account class is independent of the `user`, `admin`, and `super_admin` roles.
+Each account has one account class: `standard`, `enterprise`, `private`, or `agent`. The account class is independent of the `user`, `admin`, and `super_admin` roles.
 
 A Group also has one account class. Providers, Channels, model offers, and prices inherit the account class of their Group. The Model Marketplace, model resolution, Channel selection, routing, price estimation, and final billing use only the resources of the authenticated account class. They never fall back to the other class.
 
 A `super_admin` changes a user account class from **Users**. The change asks for a second confirmation because it permanently deletes every existing API key of that user in the same transaction. It keeps the wallet balance, the plan entitlement, orders, redemption history, request logs, and historical usage.
 
-The Groups, Providers, and pricing pages carry a **Catalog scope** control. A list never mixes the two classes.
+The `agent` class is the wholesale class. An agent Group holds wholesale Providers copied from the other classes. See [Providers and Channels](/en/docs/dashboard/providers-and-channels).
+
+The Groups, Providers, and pricing pages carry a **Catalog scope** control. A list never mixes classes.
 
 ## Management areas
 

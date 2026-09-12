@@ -117,7 +117,7 @@ const roleVariants = {
  * accounts, so without a grouping of their own they sit indistinguishable among the standard
  * users. This grouping is presentational only: it changes no permission, class, or route.
  */
-const USER_SCOPES = ["standard", "enterprise", "private", "sales"] as const;
+const USER_SCOPES = ["standard", "enterprise", "private", "agent", "sales"] as const;
 
 type UserScope = (typeof USER_SCOPES)[number];
 
@@ -148,6 +148,7 @@ export function UsersPage() {
       standard: 0,
       enterprise: 0,
       private: 0,
+      agent: 0,
       sales: 0,
     };
     for (const user of users) counts[scopeOf(user)] += 1;
@@ -614,8 +615,8 @@ export function UsersPage() {
                       </p>
                     </div>
                     <Tabs value={editUser.account_class}>
-                      <TabsList className="grid h-10 w-full grid-cols-3 rounded-lg">
-                        {(["standard", "enterprise", "private"] as const).map((accountClass) => (
+                      <TabsList className="grid h-10 w-full grid-cols-4 rounded-lg">
+                        {(["standard", "enterprise", "private", "agent"] as const).map((accountClass) => (
                           <TabsTrigger
                             key={accountClass}
                             value={accountClass}
@@ -767,7 +768,7 @@ export function UsersPage() {
           toolbar={(
             <div className="flex flex-col gap-3">
               <Tabs value={scope} onValueChange={(value) => setScope(value as UserScope)}>
-                <TabsList className="grid h-10 w-full grid-cols-4 rounded-lg sm:w-[32rem]">
+                <TabsList className="grid h-10 w-full grid-cols-5 rounded-lg sm:w-[40rem]">
                   {USER_SCOPES.map((value) => (
                     <TabsTrigger key={value} value={value} className="gap-1.5">
                       {t(`users.scopes.${value}`)}
