@@ -245,7 +245,8 @@
     "ordersAdmin": "訂單統計",
     "salesManagement": "銷售管理",
     "workspace": "工作台",
-    "modeSwitch": "切換空間"
+    "modeSwitch": "切換空間",
+    "orgsAdmin": "組織空間管理"
   },
   "wallet": {
     "title": "錢包",
@@ -1046,7 +1047,10 @@
       "private": "私有",
       "agent": "代理",
       "sales": "銷售"
-    }
+    },
+    "todayUsage": "今日用量",
+    "createdLogin": "建立 / 登入",
+    "callsUnit": "次"
   },
   "apiKeys": {
     "title": "Token 管理",
@@ -2337,6 +2341,38 @@
       "public": "組織內所有成員都能查看並複製這個 key",
       "allow": "只有名單內勾選的成員可以查看",
       "deny": "除名單內勾選的成員外都可以查看"
-    }
+    },
+    "inviteCodeLabel": "邀請口令",
+    "copyCode": "複製口令",
+    "codeCopied": "口令已複製",
+    "inviteFullHint": "成員數已達上限 {{count}}，新成員暫時無法透過邀請加入；管理員可提高上限。",
+    "fullBadge": "已滿",
+    "fullTitle": "組織已滿",
+    "fullDescription": "該組織成員已達上限（{{count}} 人），暫時無法接受邀請。",
+    "deleteZoneTitle": "刪除組織",
+    "deleteOrg": "刪除組織",
+    "deleteZoneHint": "刪除後錢包餘額退回建立者，組織內的 key 轉為其個人私鑰，所有成員將被移除。不可復原。",
+    "deleteConfirmTitle": "刪除「{{name}}」？",
+    "deleteConfirmDescription": "組織錢包餘額將退回建立者，組織內的 key 轉為建立者的個人私鑰，所有成員將被移除。此操作不可復原。",
+    "deleted": "組織已刪除",
+    "kindDeleteRefund": "刪除退回（支出）",
+    "kindDeleteReceive": "組織刪除退回"
+  },
+  "adminOrgs": {
+    "title": "組織空間管理",
+    "description": "查看和管理所有組織空間的成員上限、建立配額與邀請口令。",
+    "owner": "建立者",
+    "members": "成員",
+    "createdAt": "建立時間",
+    "limits": "限額",
+    "limitsTitle": "「{{name}}」的限額",
+    "limitsDescription": "調整該組織的成員上限或建立者的組織建立上限。",
+    "maxMembers": "成員上限（目前 {{current}}）",
+    "ownerLimit": "{{owner}} 的組織建立上限",
+    "ownerLimitPlaceholder": "留空使用預設值 2",
+    "ownerLimitHelp": "控制該建立者最多能建立多少個組織；0 表示禁止建立。",
+    "limitsSaved": "限額已儲存",
+    "empty": "暫無組織",
+    "emptyDescription": "還沒有任何組織空間。"
   }
 }

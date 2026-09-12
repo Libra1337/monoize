@@ -2,6 +2,31 @@ const API_BASE = "/api/dashboard";
 
 export type AccountClass = "standard" | "enterprise" | "private" | "agent";
 
+export interface OrgsOverview {
+  orgs: OrgSummary[];
+  creation_limit: number;
+  creation_used: number;
+  can_create: boolean;
+}
+
+export interface AdminOrgEntry {
+  id: string;
+  display_name: string;
+  avatar_emoji: string;
+  avatar_color: string;
+  avatar_image?: string | null;
+  owner_user_id: string;
+  owner_username: string;
+  owner_org_creation_limit?: number | null;
+  member_count: number;
+  max_members: number;
+  balance_nano_usd: string;
+  invite_token: string;
+  invite_code: string;
+  invite_expires_at?: string;
+  created_at: string;
+}
+
 export interface OrgSummary {
   id: string;
   display_name: string;
@@ -12,6 +37,8 @@ export interface OrgSummary {
   member_count: number;
   balance_nano_usd: string;
   invite_token?: string;
+  invite_code?: string;
+  max_members?: number;
   invite_expires_at?: string | null;
 }
 
@@ -30,13 +57,16 @@ export interface OrgDetail {
   avatar_image?: string | null;
   my_role: string;
   balance_nano_usd: string;
+  max_members: number;
   members: OrgMember[];
-  invite: { token: string; expires_at: string } | null;
+  invite: { token: string; code: string; expires_at: string } | null;
 }
 
 export interface OrgInvitePreview {
   org_id: string;
   display_name: string;
+  max_members: number;
+  is_full: boolean;
   avatar_emoji: string;
   avatar_color: string;
   avatar_image?: string | null;
@@ -1409,7 +1439,7 @@ class ApiClient {
     });
   }
 
-  async listMyOrgs(): Promise<OrgSummary[]> {
+  async listMyOrgs(): Promise<OrgsOverview> {
     return this.request("/orgs");
   }
 
@@ -1465,15 +1495,20 @@ class ApiClient {
 
   async createOrgKey(
     orgId: string,
-    name: string,
-    shareMode?: OrgShareMode,
-    modelLimits: string[] = [],
+    input: {
+      name: string;
+      share_mode?: OrgShareMode;
+      model_limits_enabled?: boolean;
+      model_limits?: string[];
+      expires_in_days?: number;
+      ip_whitelist?: string[];
+    },
   ) {
     return this.request<{ id: string; name: string; key: string; share_mode: string | null }>(
       `/orgs/${orgId}/keys`,
       {
         method: "POST",
-        body: JSON.stringify({ name, share_mode: shareMode, model_limits: modelLimits }),
+        body: JSON.stringify(input),
       },
     );
   }
@@ -1525,6 +1560,24 @@ class ApiClient {
 
   async removeOrgMember(orgId: string, memberUserId: string) {
     return this.request(`/orgs/${orgId}/members/${memberUserId}`, { method: "DELETE" });
+  }
+
+  async deleteOrg(orgId: string) {
+    return this.request(`/orgs/${orgId}`, { method: "DELETE" });
+  }
+
+  async adminListOrgs(): Promise<AdminOrgEntry[]> {
+    return this.request("/admin/orgs");
+  }
+
+  async adminUpdateOrg(
+    orgId: string,
+    body: { max_members?: number; owner_org_creation_limit?: number },
+  ) {
+    return this.request(`/admin/orgs/${orgId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
   }
 
   async getTransformRegistry(): Promise<TransformRegistryItem[]> {

@@ -67,9 +67,10 @@ pub use providers::{
     test_channel, update_provider,
 };
 pub use orgs::{
-    create_org, create_org_key, deposit_to_org, distribute_from_org, invite_preview,
-    join_org, list_my_orgs, list_org_keys, org_analytics, org_detail, org_ledger,
-    org_request_logs, regenerate_invite, remove_org_member, update_key_sharing,
+    admin_list_orgs, admin_update_org, create_org, create_org_key, delete_org,
+    deposit_to_org, distribute_from_org, invite_preview, join_org, list_my_orgs,
+    list_org_keys, org_analytics, org_detail, org_ledger, org_request_logs,
+    regenerate_invite, remove_org_member, update_key_sharing,
 };
 
 pub use sales::{

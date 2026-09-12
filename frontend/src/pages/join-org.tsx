@@ -3,7 +3,7 @@ import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Loader2, ShieldQuestion, UsersRound } from "lucide-react";
+import { Loader2, ShieldQuestion, UserRoundX, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
@@ -105,6 +105,17 @@ export function JoinOrgPage() {
               <span className="text-muted-foreground/60">·</span>
               {t("org.inviteJoinHint")}
             </div>
+            {preview.data.is_full && (
+              <div className="mx-auto mt-4 flex max-w-sm items-start gap-2.5 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-left">
+                <UserRoundX className="mt-0.5 size-4 shrink-0 text-warning" />
+                <div>
+                  <p className="text-sm font-medium text-warning">{t("org.fullTitle")}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {t("org.fullDescription", { count: preview.data.max_members })}
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="mt-8 grid grid-cols-2 gap-3">
               <Button
                 variant="outline"
@@ -113,7 +124,11 @@ export function JoinOrgPage() {
               >
                 {t("org.decline")}
               </Button>
-              <Button size="lg" onClick={() => void handleAccept()} disabled={busy}>
+              <Button
+                size="lg"
+                onClick={() => void handleAccept()}
+                disabled={busy || preview.data.is_full}
+              >
                 {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {t("org.accept")}
               </Button>

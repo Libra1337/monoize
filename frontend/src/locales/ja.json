@@ -245,7 +245,8 @@
     "ordersAdmin": "注文統計",
     "salesManagement": "セールス管理",
     "workspace": "ワークスペース",
-    "modeSwitch": "スペース切替"
+    "modeSwitch": "スペース切替",
+    "orgsAdmin": "組織スペース"
   },
   "wallet": {
     "title": "ウォレット",
@@ -1046,7 +1047,10 @@
       "private": "プライベート",
       "agent": "エージェント",
       "sales": "販売"
-    }
+    },
+    "todayUsage": "本日の使用",
+    "createdLogin": "作成 / 最終ログイン",
+    "callsUnit": "回"
   },
   "apiKeys": {
     "title": "トークン管理",
@@ -2336,6 +2340,38 @@
       "public": "スペースの全メンバーがこのキーを表示・コピーできます",
       "allow": "チェックしたメンバーだけがこのキーを表示できます",
       "deny": "チェックしたメンバー以外の全員が表示できます"
-    }
+    },
+    "inviteCodeLabel": "招待コード",
+    "copyCode": "コードをコピー",
+    "codeCopied": "コードをコピーしました",
+    "inviteFullHint": "メンバー数が上限 {{count}} に達しました。管理者が上限を引き上げるまで新しいメンバーは参加できません。",
+    "fullBadge": "満員",
+    "fullTitle": "組織が満員です",
+    "fullDescription": "メンバー数が上限（{{count}} 名）に達したため、現在は招待を受けられません。",
+    "deleteZoneTitle": "組織を削除",
+    "deleteOrg": "組織を削除",
+    "deleteZoneHint": "削除すると残高は所有者に返還され、組織のキーは個人のプライベートキーになり、全メンバーが除外されます。取り消せません。",
+    "deleteConfirmTitle": "「{{name}}」を削除しますか？",
+    "deleteConfirmDescription": "組織の残高は所有者に返還され、組織のキーは所有者のプライベートキーになり、全メンバーが除外されます。この操作は取り消せません。",
+    "deleted": "組織を削除しました",
+    "kindDeleteRefund": "削除返還（支出）",
+    "kindDeleteReceive": "組織削除返還"
+  },
+  "adminOrgs": {
+    "title": "組織スペース管理",
+    "description": "すべてのスペースのメンバー上限・作成枠・招待コードを管理します。",
+    "owner": "所有者",
+    "members": "メンバー",
+    "createdAt": "作成日",
+    "limits": "上限",
+    "limitsTitle": "「{{name}}」の上限",
+    "limitsDescription": "このスペースのメンバー上限または所有者の作成枠を調整します。",
+    "maxMembers": "メンバー上限（現在 {{current}}）",
+    "ownerLimit": "{{owner}} の組織作成上限",
+    "ownerLimitPlaceholder": "空欄でデフォルトの 2",
+    "ownerLimitHelp": "この所有者が作成できる組織の数。0 は作成禁止です。",
+    "limitsSaved": "上限を保存しました",
+    "empty": "組織なし",
+    "emptyDescription": "組織スペースはまだありません。"
   }
 }

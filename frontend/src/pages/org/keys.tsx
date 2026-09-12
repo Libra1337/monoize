@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import useSWR from "swr";
 import {
+  BarChart3,
   Copy,
   Globe,
   Loader2,
@@ -29,6 +30,8 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { PageWrapper } from "@/components/ui/motion";
+import { ApiKeyAnalyticsDialog } from "@/components/api-key-analytics-dialog";
+import type { ApiKey } from "@/lib/api";
 import { api, type OrgDetail, type OrgKeyEntry, type OrgShareMode } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -178,7 +181,10 @@ export function OrgKeys() {
   const [mode, setMode] = useState<OrgShareMode>("private");
   const [modelsEnabled, setModelsEnabled] = useState(false);
   const [modelsInput, setModelsInput] = useState("");
+  const [expiresInput, setExpiresInput] = useState("");
+  const [ipInput, setIpInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [analyticsKey, setAnalyticsKey] = useState<OrgKeyEntry | null>(null);
 
   const [shareTarget, setShareTarget] = useState<OrgKeyEntry | null>(null);
   const [shareMode, setShareMode] = useState<OrgShareMode>("private");
@@ -197,6 +203,8 @@ export function OrgKeys() {
     setMode(defaultMode);
     setModelsEnabled(false);
     setModelsInput("");
+    setExpiresInput("");
+    setIpInput("");
     setCreateOpen(true);
   };
 
@@ -251,6 +259,17 @@ export function OrgKeys() {
                   <Button
                     variant="ghost"
                     size="sm"
+                    aria-label={t("apiKeys.analyticsTitle")}
+                    title={t("apiKeys.analyticsTitle")}
+                    onClick={() => setAnalyticsKey(key)}
+                  >
+                    <BarChart3 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t("common.copy")}
+                    title={t("common.copy")}
                     onClick={() => {
                       void navigator.clipboard.writeText(key.key ?? "");
                       toast.success(t("org.keyCopied"));
@@ -320,70 +339,108 @@ export function OrgKeys() {
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{t("org.createKeyTitle")}</DialogTitle>
-            <DialogDescription>{t("org.createKeyDescription")}</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="org-key-name">{t("org.keyName")}</Label>
-              <Input id="org-key-name" value={name} onChange={(event) => setName(event.target.value)} />
-            </div>
-            <div className="grid gap-2">
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="org-key-models"
-                  checked={modelsEnabled}
-                  onCheckedChange={setModelsEnabled}
-                />
-                <Label htmlFor="org-key-models">{t("apiKeys.enableModelLimits")}</Label>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-w-lg">
+          <div className="flex min-h-0 flex-col p-6">
+            <DialogHeader className="shrink-0">
+              <DialogTitle>{t("org.createKeyTitle")}</DialogTitle>
+              <DialogDescription>{t("org.createKeyDescription")}</DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="org-key-name">{t("org.keyName")}</Label>
+                <Input id="org-key-name" value={name} onChange={(event) => setName(event.target.value)} />
               </div>
-              {modelsEnabled && (
-                <div className="space-y-2">
-                  <Label htmlFor="org-key-model-list">{t("apiKeys.allowedModels")}</Label>
-                  <Input
-                    id="org-key-model-list"
-                    value={modelsInput}
-                    onChange={(event) => setModelsInput(event.target.value)}
-                    placeholder="gpt-4, gpt-3.5-turbo"
+              <div className="grid gap-2">
+                <Label htmlFor="org-key-expires">{t("apiKeys.expiresInDays")}</Label>
+                <Input
+                  id="org-key-expires"
+                  type="number"
+                  min="1"
+                  value={expiresInput}
+                  onChange={(event) => setExpiresInput(event.target.value)}
+                  placeholder="30"
+                />
+              </div>
+              <div className="grid gap-2">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="org-key-models"
+                    checked={modelsEnabled}
+                    onCheckedChange={setModelsEnabled}
                   />
-                  <p className="text-sm text-muted-foreground">{t("apiKeys.modelsHelp")}</p>
+                  <Label htmlFor="org-key-models">{t("apiKeys.enableModelLimits")}</Label>
                 </div>
-              )}
+                {modelsEnabled && (
+                  <div className="space-y-2">
+                    <Label htmlFor="org-key-model-list">{t("apiKeys.allowedModels")}</Label>
+                    <Input
+                      id="org-key-model-list"
+                      value={modelsInput}
+                      onChange={(event) => setModelsInput(event.target.value)}
+                      placeholder="gpt-4, gpt-3.5-turbo"
+                    />
+                    <p className="text-sm text-muted-foreground">{t("apiKeys.modelsHelp")}</p>
+                  </div>
+                )}
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="org-key-ip">{t("apiKeys.ipWhitelist")}</Label>
+                <Input
+                  id="org-key-ip"
+                  value={ipInput}
+                  onChange={(event) => setIpInput(event.target.value)}
+                  placeholder="192.168.1.1, 10.0.0.0/8"
+                />
+                <p className="text-sm text-muted-foreground">{t("apiKeys.ipHelp")}</p>
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("org.permTitle")}</Label>
+                <ModeSelector value={mode} onChange={setMode} />
+              </div>
             </div>
-            <div className="grid gap-2">
-              <Label>{t("org.permTitle")}</Label>
-              <ModeSelector value={mode} onChange={setMode} />
-            </div>
+            <DialogFooter className="shrink-0 pt-2">
+              <Button variant="outline" onClick={() => setCreateOpen(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                disabled={busy || !name.trim()}
+                onClick={async () => {
+                  if (!orgId) return;
+                  setBusy(true);
+                  try {
+                    await api.createOrgKey(orgId, {
+                      name: name.trim(),
+                      share_mode: mode,
+                      model_limits_enabled: modelsEnabled,
+                      model_limits: modelsEnabled ? modelsList : [],
+                      expires_in_days: expiresInput ? parseInt(expiresInput, 10) : undefined,
+                      ip_whitelist: ipInput
+                        .split(",")
+                        .map((entry) => entry.trim())
+                        .filter(Boolean),
+                    });
+                    toast.success(t("org.keyCreated"));
+                    setCreateOpen(false);
+                    await keys.mutate();
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : t("common.error"));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {t("org.createKey")}
+              </Button>
+            </DialogFooter>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>
-              {t("common.cancel")}
-            </Button>
-            <Button
-              disabled={busy || !name.trim()}
-              onClick={async () => {
-                if (!orgId) return;
-                setBusy(true);
-                try {
-                  await api.createOrgKey(orgId, name.trim(), mode, modelsEnabled ? modelsList : []);
-                  toast.success(t("org.keyCreated"));
-                  setCreateOpen(false);
-                  await keys.mutate();
-                } catch (error) {
-                  toast.error(error instanceof Error ? error.message : t("common.error"));
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {t("org.createKey")}
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ApiKeyAnalyticsDialog
+        apiKey={analyticsKey ? ({ id: analyticsKey.id, name: analyticsKey.name } as ApiKey) : null}
+        onOpenChange={(open) => !open && setAnalyticsKey(null)}
+      />
 
       <Dialog open={!!shareTarget} onOpenChange={(open) => !open && setShareTarget(null)}>
         <DialogContent className="sm:max-w-md">

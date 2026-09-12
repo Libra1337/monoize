@@ -14,6 +14,8 @@ const KIND_LABELS: Record<string, string> = {
   org_deposit_receive: "org.kindDeposit",
   org_grant: "org.kindGrant",
   org_deposit: "org.kindOut",
+  org_delete_refund: "org.kindDeleteRefund",
+  org_delete_receive: "org.kindDeleteReceive",
   store_recharge: "org.kindRecharge",
 };
 

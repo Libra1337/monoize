@@ -20,6 +20,7 @@ import { OrgKeys } from "./pages/org/keys";
 import { OrgWallet } from "./pages/org/wallet";
 import { OrgUsagePage, OrgCachePage } from "./pages/org/usage";
 import { OrgLogsPage } from "./pages/org/logs";
+import { AdminOrgsPage } from "./pages/admin-orgs";
 import { JoinOrgPage } from "./pages/join-org";
 import { ApiKeysPage } from "@/pages/api-keys";
 import { UsersPage } from "@/pages/users";
@@ -123,6 +124,7 @@ function App() {
             <Route path="store" element={<StorePage />} />
             <Route path="wallet" element={<WalletPage />} />
             <Route path="orders" element={<OrdersPage />} />
+            <Route path="orgs-admin" element={<AdminRoute><AdminOrgsPage /></AdminRoute>} />
             <Route path="orders-admin" element={<AdminRoute><OrdersAdminPage /></AdminRoute>} />
             <Route path="store-admin" element={<StoreAdminRoute />} />
             <Route path="sales-admin" element={<AdminRoute><SalesAdminPage /></AdminRoute>} />

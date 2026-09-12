@@ -119,8 +119,17 @@ rows from the ordinary user groupings.
 
 ## 7. Limits
 
-ORG-21. `MAX_ORGS_PER_USER = 2` and `MAX_ORG_MEMBERS = 15` are compile-time constants in
-this release; admin adjustment is a later change.
+ORG-21. The compile-time defaults are `MAX_ORGS_PER_USER = 2` and
+`MAX_ORG_MEMBERS = 15`. Migration 076 adds `users.org_creation_limit` and
+`orgs.max_members`; NULL means "use the default" (ORG-21a). An admin may set
+them per owner / per org through ORG-28. `GET /api/dashboard/orgs` additionally
+returns `creation_limit`, `creation_used`, and `can_create` (eligible AND below
+the quota), which drives the create affordances.
+
+ORG-8a. Admin-role accounts (`role.can_manage_users()`), sales agents, and
+agent-class accounts can neither create nor join organizations; creation also
+requires the enterprise account class as before. The workspace sidebar hides
+every org entry for these roles.
 
 ## 8. Ledger
 
@@ -150,3 +159,30 @@ ORG-23/24 endpoints instead of the personal ones.
 ORG-26. `/join/{token}` without a session redirects to `/login` carrying the invite path
 as return state; a successful login returns to the invite. The return path is accepted
 only when it starts with a single `/`.
+
+ORG-26a. Every invite has a 6-character `invite_code` (unique, unambiguous
+alphabet). `invite_preview` and `join_org` accept the invite token OR the code;
+the owner's invite card shows the link and the code side by side, both
+copyable, and regeneration rotates both.
+
+ORG-26b. When `member_count >= max_members`, `invite_preview` still returns the
+org with `is_full: true`; the landing page shows a full-state banner and disables
+Accept, and `join_org` rejects with `409 org_member_limit_reached`. The owner's
+invite card shows the same warning.
+
+## 10. Deletion
+
+ORG-27. `DELETE /api/dashboard/orgs/{org_id}` (owner or admin) removes the space
+atomically: the remaining wallet balance refunds to the owner (ledger kinds
+`org_delete_refund` / `org_delete_receive`), `org_key_shares` rows are deleted,
+the org's keys revert to personal keys (`org_id`/`org_share_mode` cleared),
+`org_members`, the `orgs` row, and the `is_org = 1` wallet user row are deleted.
+`billing_ledger` history is preserved.
+
+## 11. Admin console
+
+ORG-28. `GET /api/dashboard/admin/orgs` (admin) lists every space with owner,
+member count, cap, balance, invite token/code, and expiry.
+`PUT /api/dashboard/admin/orgs/{org_id}` sets `max_members` (1..1000) and/or the
+owner's `org_creation_limit` (0..100). The admin page can delete a space through
+ORG-27.

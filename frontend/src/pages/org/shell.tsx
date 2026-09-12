@@ -30,7 +30,8 @@ export function OrgShell() {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { user, loading } = useAuth();
-  const { data: orgs, isLoading } = useMyOrgs();
+  const { data: overview, isLoading } = useMyOrgs();
+  const orgs = overview?.orgs;
   const [createOpen, setCreateOpen] = useState(false);
   const active = useMemo(
     () => orgs?.find((org) => org.id === orgId) ?? orgs?.[0],
@@ -53,7 +54,7 @@ export function OrgShell() {
   if (!user) {
     return <Navigate to="/login" replace />;
   }
-  const canCreate = user.account_class === "enterprise" && !user.parent_user_id && !user.is_sales_agent;
+  const canCreate = overview?.can_create ?? false;
 
   if (!active) {
     return (

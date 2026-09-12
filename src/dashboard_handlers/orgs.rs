@@ -24,6 +24,45 @@ pub const MAX_ORG_MEMBERS: i64 = 15;
 /// ORG-2b: inline avatar image cap, a data:image/ URL of at most 300k characters.
 const MAX_AVATAR_IMAGE_CHARS: usize = 300_000;
 
+const INVITE_CODE_ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
+
+/// A 6-character display code; uniqueness is enforced by uq_orgs_invite_code.
+fn generate_invite_code() -> String {
+    let uuid = uuid::Uuid::new_v4();
+    (0..6)
+        .map(|i| INVITE_CODE_ALPHABET[(uuid.as_bytes()[i] as usize) % INVITE_CODE_ALPHABET.len()] as char)
+        .collect()
+}
+
+/// NULL keeps the compile-time default (ORG-21a); admins override per user/org.
+fn limit_or_default(value: Option<i64>, default: i64) -> i64 {
+    value.filter(|v| *v >= 0).unwrap_or(default)
+}
+
+/// ORG-8a: admins manage spaces but never inhabit them, and sales/agent
+/// accounts are commercial identities outside the org model.
+async fn membership_allowed(state: &AppState, user: &crate::users::User) -> AppResult<()> {
+    if user.role.can_manage_users() {
+        return Err(forbidden("admin accounts cannot join organizations"));
+    }
+    if user.parent_user_id.is_some() {
+        return Err(forbidden("sub-accounts cannot join organizations"));
+    }
+    if user.account_class == crate::users::AccountClass::Agent {
+        return Err(forbidden("agent accounts cannot join organizations"));
+    }
+    let sales = crate::store_billing::sales_store::SalesStore::new(state.db_pool.clone())
+        .list_agents()
+        .await
+        .map_err(storage)?
+        .iter()
+        .any(|agent| agent.user_id == user.id);
+    if sales {
+        return Err(forbidden("sales agent accounts cannot join organizations"));
+    }
+    Ok(())
+}
+
 fn storage(error: impl std::fmt::Display) -> AppError {
     AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string())
 }
@@ -76,6 +115,9 @@ fn validate_avatar_image(value: &Option<String>) -> Result<Option<String>, AppEr
 
 /// ORG-5: only an enterprise-class main account may create an org.
 async fn creation_eligible(state: &AppState, user: &crate::users::User) -> AppResult<()> {
+    if user.role.can_manage_users() {
+        return Err(forbidden("admin accounts cannot create organizations"));
+    }
     if user.parent_user_id.is_some() {
         return Err(forbidden("sub-accounts cannot create organizations"));
     }
@@ -290,6 +332,9 @@ pub struct OrgSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invite_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub invite_code: Option<String>,
+    pub max_members: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub invite_expires_at: Option<String>,
 }
 
@@ -320,18 +365,24 @@ pub async fn create_org(
 
     let backend = state.db_pool.read().get_database_backend();
     let read = state.db_pool.read();
-    let owned = read
+    let owned_row = read
         .query_one(Statement::from_sql_and_values(
             backend,
-            "SELECT COUNT(*) AS value FROM orgs WHERE owner_user_id = $1",
+            "SELECT (SELECT COUNT(*) FROM orgs WHERE owner_user_id = $1) AS value,
+                org_creation_limit FROM users WHERE id = $1",
             [user.id.clone().into()],
         ))
         .await
         .map_err(storage)?
-        .ok_or_else(|| storage("count returned no row"))?
-        .try_get::<i64>("", "value")
-        .map_err(storage)?;
-    if owned >= MAX_ORGS_PER_USER {
+        .ok_or_else(|| storage("creator row missing"))?;
+    let owned: i64 = owned_row.try_get("", "value").map_err(storage)?;
+    let creation_limit = limit_or_default(
+        owned_row
+            .try_get::<Option<i64>>("", "org_creation_limit")
+            .map_err(storage)?,
+        MAX_ORGS_PER_USER,
+    );
+    if owned >= creation_limit {
         return Err(AppError::new(
             StatusCode::CONFLICT,
             "org_limit_reached",
@@ -346,6 +397,7 @@ pub async fn create_org(
         crate::store_billing::sales::generate_code()
     )
     .to_lowercase();
+    let invite_code = generate_invite_code();
     let invite_expires_at = parse_expiry(&body.invite_expiry, Utc::now());
     let now = Utc::now().to_rfc3339();
 
@@ -393,8 +445,8 @@ pub async fn create_org(
     tx.execute(Statement::from_sql_and_values(
         backend,
         "INSERT INTO orgs (id, owner_user_id, display_name, avatar_emoji, avatar_color, avatar_image,
-                           invite_token, invite_expires_at, invite_created_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $9)",
+                           invite_token, invite_code, invite_expires_at, invite_created_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $9, $9)",
         [
             org_id.clone().into(),
             user.id.clone().into(),
@@ -403,6 +455,7 @@ pub async fn create_org(
             avatar_color.clone().into(),
             avatar_image.clone().into(),
             invite_token.clone().into(),
+            invite_code.clone().into(),
             invite_expires_at.map(|t| t.to_rfc3339()).into(),
             now.clone().into(),
         ],
@@ -428,8 +481,10 @@ pub async fn create_org(
             avatar_image,
             role: "owner".to_string(),
             member_count: 1,
+            max_members: MAX_ORG_MEMBERS,
             balance_nano_usd: "0".to_string(),
             invite_token: Some(invite_token.clone()),
+            invite_code: Some(invite_code),
             invite_expires_at: invite_expires_at.map(|t| t.to_rfc3339()),
         }),
     ))
@@ -447,7 +502,7 @@ pub async fn list_my_orgs(
         .query_all(Statement::from_sql_and_values(
             backend,
             "SELECT o.id, o.display_name, o.avatar_emoji, o.avatar_color, o.avatar_image,
-                    o.invite_token, o.invite_expires_at, m.role AS my_role,
+                    o.invite_token, o.invite_code, o.invite_expires_at, o.max_members, m.role AS my_role,
                     (SELECT COUNT(*) FROM org_members mm WHERE mm.org_id = o.id) AS member_count,
                     u.balance_nano_usd
              FROM orgs o
@@ -477,6 +532,12 @@ pub async fn list_my_orgs(
                 member_count: row.try_get("", "member_count").map_err(storage)?,
                 balance_nano_usd: row.try_get("", "balance_nano_usd").map_err(storage)?,
                 invite_token: owner.then(|| row.try_get("", "invite_token").map_err(storage)).transpose()?,
+                invite_code: owner.then(|| row.try_get::<Option<String>>("", "invite_code").map_err(storage)).transpose()?
+                    .flatten(),
+                max_members: limit_or_default(
+                    row.try_get::<Option<i64>>("", "max_members").map_err(storage)?,
+                    MAX_ORG_MEMBERS,
+                ),
                 invite_expires_at: owner
                     .then(|| row.try_get::<Option<String>>("", "invite_expires_at").map_err(storage))
                     .transpose()?
@@ -484,7 +545,31 @@ pub async fn list_my_orgs(
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
-    Ok(Json(orgs))
+    let owned: i64 = orgs.iter().filter(|org| org.role == "owner").count() as i64;
+    let creation_limit = limit_or_default(
+        state
+            .db_pool
+            .read()
+            .query_one(Statement::from_sql_and_values(
+                backend,
+                "SELECT org_creation_limit FROM users WHERE id = $1",
+                [user.id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .and_then(|row| row.try_get::<Option<i64>>("", "org_creation_limit").ok())
+            .flatten(),
+        MAX_ORGS_PER_USER,
+    );
+    // ORG-21a: the quota hint drives the "+" affordance; eligibility still gates
+    // the actual create call.
+    let can_create = creation_eligible(&state, &user).await.is_ok() && owned < creation_limit;
+    Ok(Json(json!({
+        "orgs": orgs,
+        "creation_limit": creation_limit,
+        "creation_used": owned,
+        "can_create": can_create,
+    })))
 }
 
 #[derive(Debug, Serialize)]
@@ -510,7 +595,7 @@ pub async fn org_detail(
         .query_one(Statement::from_sql_and_values(
             backend,
             "SELECT display_name, avatar_emoji, avatar_color, avatar_image, invite_token,
-                    invite_expires_at, owner_user_id FROM orgs WHERE id = $1",
+                    invite_code, invite_expires_at, max_members, owner_user_id FROM orgs WHERE id = $1",
             [org_id.clone().into()],
         ))
         .await
@@ -557,9 +642,17 @@ pub async fn org_detail(
                 joined_at: row.try_get("", "joined_at").unwrap_or_default(),
             })
             .collect::<Vec<_>>(),
+        "max_members": limit_or_default(
+            org.try_get::<Option<i64>>("", "max_members").map_err(storage)?,
+            MAX_ORG_MEMBERS,
+        ),
         "invite": if is_owner {
             json!({
                 "token": org.try_get::<String>("", "invite_token").map_err(storage)?,
+                "code": org
+                    .try_get::<Option<String>>("", "invite_code")
+                    .map_err(storage)?
+                    .unwrap_or_default(),
                 "expires_at": org
                     .try_get::<Option<String>>("", "invite_expires_at")
                     .map_err(storage)?
@@ -584,9 +677,10 @@ pub async fn invite_preview(
         .query_one(Statement::from_sql_and_values(
             backend,
             "SELECT o.id, o.display_name, o.avatar_emoji, o.avatar_color, o.avatar_image,
-                    o.invite_expires_at, u.username AS owner_username,
+                    o.invite_expires_at, o.max_members, u.username AS owner_username,
                     (SELECT COUNT(*) FROM org_members m WHERE m.org_id = o.id) AS member_count
-             FROM orgs o JOIN users u ON u.id = o.owner_user_id WHERE o.invite_token = $1",
+             FROM orgs o JOIN users u ON u.id = o.owner_user_id
+             WHERE o.invite_token = $1 OR o.invite_code = $1",
             [token.into()],
         ))
         .await
@@ -602,10 +696,13 @@ pub async fn invite_preview(
     {
         return Err(invite_invalid());
     }
+    // A full org still previews (with is_full) so the landing page can explain
+    // itself; only accepting is blocked.
     let member_count: i64 = row.try_get("", "member_count").map_err(storage)?;
-    if member_count >= MAX_ORG_MEMBERS {
-        return Err(invite_invalid());
-    }
+    let max_members = limit_or_default(
+        row.try_get::<Option<i64>>("", "max_members").map_err(storage)?,
+        MAX_ORG_MEMBERS,
+    );
     Ok(Json(json!({
         "org_id": row.try_get::<String>("", "id").map_err(storage)?,
         "display_name": row.try_get::<String>("", "display_name").map_err(storage)?,
@@ -614,6 +711,8 @@ pub async fn invite_preview(
         "avatar_image": row.try_get::<Option<String>>("", "avatar_image").map_err(storage)?,
         "owner_username": row.try_get::<String>("", "owner_username").map_err(storage)?,
         "member_count": member_count,
+        "max_members": max_members,
+        "is_full": member_count >= max_members,
     })))
 }
 
@@ -624,12 +723,14 @@ pub async fn join_org(
     Json(body): Json<JoinOrgRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
+    membership_allowed(&state, &user).await?;
     let backend = state.db_pool.read().get_database_backend();
     let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
     let org = tx
         .query_one(Statement::from_sql_and_values(
             backend,
-            "SELECT id, invite_expires_at FROM orgs WHERE invite_token = $1",
+            "SELECT id, invite_expires_at, max_members FROM orgs
+             WHERE invite_token = $1 OR invite_code = $1",
             [body.token.into()],
         ))
         .await
@@ -651,7 +752,11 @@ pub async fn join_org(
             "already a member of this organization",
         ));
     }
-    if org_member_count(&tx, backend, &org_id).await? >= MAX_ORG_MEMBERS {
+    let max_members = limit_or_default(
+        org.try_get::<Option<i64>>("", "max_members").map_err(storage)?,
+        MAX_ORG_MEMBERS,
+    );
+    if org_member_count(&tx, backend, &org_id).await? >= max_members {
         return Err(AppError::new(
             StatusCode::CONFLICT,
             "org_member_limit_reached",
@@ -699,14 +804,16 @@ pub async fn regenerate_invite(
         crate::store_billing::sales::generate_code()
     )
     .to_lowercase();
+    let code = generate_invite_code();
     let expires_at = parse_expiry(&body.invite_expiry, Utc::now());
     tx.execute(Statement::from_sql_and_values(
         backend,
-        "UPDATE orgs SET invite_token = $2, invite_expires_at = $3,
-                invite_created_at = $4, updated_at = $4 WHERE id = $1",
+        "UPDATE orgs SET invite_token = $2, invite_code = $3, invite_expires_at = $4,
+                invite_created_at = $5, updated_at = $5 WHERE id = $1",
         [
             org_id.into(),
             token.clone().into(),
+            code.clone().into(),
             expires_at.map(|t| t.to_rfc3339()).into(),
             Utc::now().to_rfc3339().into(),
         ],
@@ -714,7 +821,11 @@ pub async fn regenerate_invite(
     .await
     .map_err(storage)?;
     tx.commit().await.map_err(storage)?;
-    Ok(Json(json!({ "token": token, "expires_at": expires_at.map(|t| t.to_rfc3339()) })))
+    Ok(Json(json!({
+        "token": token,
+        "code": code,
+        "expires_at": expires_at.map(|t| t.to_rfc3339()),
+    })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -842,12 +953,14 @@ pub async fn create_org_key(
 
     let input = crate::users::CreateApiKeyInput {
         name: name.to_string(),
-        expires_in_days: None,
+        expires_in_days: body.expires_in_days,
         sub_account_enabled: false,
         sub_account_balance_nano_usd: None,
-        model_limits_enabled: !body.model_limits.is_empty(),
+        model_limits_enabled: body
+            .model_limits_enabled
+            .unwrap_or(!body.model_limits.is_empty()),
         model_limits: body.model_limits.clone(),
-        ip_whitelist: Vec::new(),
+        ip_whitelist: body.ip_whitelist.clone(),
         group_ids: Vec::new(),
         channel_bindings: Vec::new(),
         max_multiplier: None,
@@ -890,7 +1003,13 @@ pub struct CreateOrgKeyRequest {
     #[serde(default)]
     pub share_mode: Option<String>,
     #[serde(default)]
+    pub model_limits_enabled: Option<bool>,
+    #[serde(default)]
     pub model_limits: Vec<String>,
+    #[serde(default)]
+    pub expires_in_days: Option<i64>,
+    #[serde(default)]
+    pub ip_whitelist: Vec<String>,
 }
 
 /// ORG-15: my keys plus keys shared to me (with material for copying).
@@ -1256,4 +1375,270 @@ pub async fn org_request_logs(
         "limit": limit,
         "offset": offset,
     })))
+}
+
+/// ORG-27: delete a space. Owner or admin. The remaining wallet balance refunds
+/// to the owner, keys revert to plain personal keys, and every org row is
+/// removed in one transaction. Ledger history stays.
+pub async fn delete_org(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(org_id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let backend = state.db_pool.read().get_database_backend();
+    let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
+    let org = tx
+        .query_one(Statement::from_sql_and_values(
+            backend,
+            "SELECT owner_user_id FROM orgs WHERE id = $1",
+            [org_id.clone().into()],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
+    let owner_user_id: String = org.try_get("", "owner_user_id").map_err(storage)?;
+    let is_owner = owner_user_id == user.id;
+    if !is_owner && !user.role.can_manage_users() {
+        return Err(forbidden("only the owner or an admin can delete an organization"));
+    }
+
+    let wallet = tx
+        .query_one(Statement::from_sql_and_values(
+            backend,
+            "SELECT balance_nano_usd FROM users WHERE id = $1",
+            [org_id.clone().into()],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| storage("org wallet row missing"))?;
+    let org_balance: i128 = wallet
+        .try_get::<String>("", "balance_nano_usd")
+        .map_err(storage)?
+        .parse()
+        .map_err(|_| bad_request("invalid persisted balance"))?;
+    let now = Utc::now().to_rfc3339();
+
+    if org_balance > 0 {
+        let owner_row = tx
+            .query_one(Statement::from_sql_and_values(
+                backend,
+                "SELECT balance_nano_usd FROM users WHERE id = $1",
+                [owner_user_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or_else(|| storage("owner row missing"))?;
+        let owner_balance: i128 = owner_row
+            .try_get::<String>("", "balance_nano_usd")
+            .map_err(storage)?
+            .parse()
+            .map_err(|_| bad_request("invalid persisted balance"))?;
+        let owner_after = owner_balance
+            .checked_add(org_balance)
+            .ok_or_else(|| bad_request("balance overflow"))?;
+        tx.execute(Statement::from_sql_and_values(
+            backend,
+            "UPDATE users SET balance_nano_usd = $2, updated_at = $3 WHERE id = $1",
+            [owner_user_id.clone().into(), owner_after.to_string().into(), now.clone().into()],
+        ))
+        .await
+        .map_err(storage)?;
+        tx.execute(Statement::from_sql_and_values(
+            backend,
+            "UPDATE users SET balance_nano_usd = '0', updated_at = $2 WHERE id = $1",
+            [org_id.clone().into(), now.clone().into()],
+        ))
+        .await
+        .map_err(storage)?;
+        write_ledger_row(
+            &tx,
+            backend,
+            &uuid::Uuid::new_v4().to_string(),
+            &org_id,
+            "org_delete_refund",
+            -org_balance,
+            0,
+            json!({"to_user_id": owner_user_id}),
+            &now,
+        )
+        .await?;
+        write_ledger_row(
+            &tx,
+            backend,
+            &uuid::Uuid::new_v4().to_string(),
+            &owner_user_id,
+            "org_delete_receive",
+            org_balance,
+            owner_after,
+            json!({"from_org_id": org_id}),
+            &now,
+        )
+        .await?;
+    }
+
+    // Shares must go before the keys lose their org_id.
+    tx.execute(Statement::from_sql_and_values(
+        backend,
+        "DELETE FROM org_key_shares WHERE api_key_id IN
+            (SELECT id FROM api_keys WHERE org_id = $1)",
+        [org_id.clone().into()],
+    ))
+    .await
+    .map_err(storage)?;
+    tx.execute(Statement::from_sql_and_values(
+        backend,
+        "UPDATE api_keys SET org_id = NULL, org_share_mode = NULL WHERE org_id = $1",
+        [org_id.clone().into()],
+    ))
+    .await
+    .map_err(storage)?;
+    tx.execute(Statement::from_sql_and_values(
+        backend,
+        "DELETE FROM org_members WHERE org_id = $1",
+        [org_id.clone().into()],
+    ))
+    .await
+    .map_err(storage)?;
+    tx.execute(Statement::from_sql_and_values(
+        backend,
+        "DELETE FROM orgs WHERE id = $1",
+        [org_id.clone().into()],
+    ))
+    .await
+    .map_err(storage)?;
+    tx.execute(Statement::from_sql_and_values(
+        backend,
+        "DELETE FROM users WHERE id = $1 AND is_org = 1",
+        [org_id.into()],
+    ))
+    .await
+    .map_err(storage)?;
+    tx.commit().await.map_err(storage)?;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// ORG-28a: the admin overview of every space.
+pub async fn admin_list_orgs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    if !user.role.can_manage_users() {
+        return Err(forbidden("admin only"));
+    }
+    let backend = state.db_pool.read().get_database_backend();
+    let rows = state
+        .db_pool
+        .read()
+        .query_all(Statement::from_sql_and_values(
+            backend,
+            "SELECT o.id, o.display_name, o.avatar_emoji, o.avatar_color, o.avatar_image,
+                    o.invite_token, o.invite_code, o.invite_expires_at, o.max_members,
+                    o.created_at, ou.username AS owner_username, ou.id AS owner_user_id,
+                    ou.org_creation_limit,
+                    (SELECT COUNT(*) FROM org_members m WHERE m.org_id = o.id) AS member_count,
+                    w.balance_nano_usd
+             FROM orgs o
+             JOIN users ou ON ou.id = o.owner_user_id
+             JOIN users w ON w.id = o.id
+             ORDER BY o.created_at DESC",
+            [],
+        ))
+        .await
+        .map_err(storage)?;
+    let orgs = rows
+        .iter()
+        .map(|row| {
+            Ok(json!({
+                "id": row.try_get::<String>("", "id").map_err(storage)?,
+                "display_name": row.try_get::<String>("", "display_name").map_err(storage)?,
+                "avatar_emoji": row.try_get::<String>("", "avatar_emoji").map_err(storage)?,
+                "avatar_color": row.try_get::<String>("", "avatar_color").map_err(storage)?,
+                "avatar_image": row.try_get::<Option<String>>("", "avatar_image").map_err(storage)?,
+                "owner_user_id": row.try_get::<String>("", "owner_user_id").map_err(storage)?,
+                "owner_username": row.try_get::<String>("", "owner_username").map_err(storage)?,
+                "owner_org_creation_limit": row
+                    .try_get::<Option<i64>>("", "org_creation_limit")
+                    .map_err(storage)?,
+                "member_count": row.try_get::<i64>("", "member_count").map_err(storage)?,
+                "max_members": limit_or_default(
+                    row.try_get::<Option<i64>>("", "max_members").map_err(storage)?,
+                    MAX_ORG_MEMBERS,
+                ),
+                "balance_nano_usd": row.try_get::<String>("", "balance_nano_usd").map_err(storage)?,
+                "invite_token": row.try_get::<String>("", "invite_token").map_err(storage)?,
+                "invite_code": row.try_get::<Option<String>>("", "invite_code").map_err(storage)?
+                    .unwrap_or_default(),
+                "invite_expires_at": row
+                    .try_get::<Option<String>>("", "invite_expires_at")
+                    .map_err(storage)?
+                    .unwrap_or_default(),
+                "created_at": row.try_get::<String>("", "created_at").map_err(storage)?,
+            }))
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+    Ok(Json(orgs))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminUpdateOrgRequest {
+    pub max_members: Option<i64>,
+    pub owner_org_creation_limit: Option<i64>,
+}
+
+/// ORG-28b: adjust the per-org member cap and the owner's creation quota.
+pub async fn admin_update_org(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(org_id): Path<String>,
+    Json(body): Json<AdminUpdateOrgRequest>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    if !user.role.can_manage_users() {
+        return Err(forbidden("admin only"));
+    }
+    if let Some(max_members) = body.max_members {
+        if !(1..=1000).contains(&max_members) {
+            return Err(bad_request("max_members must be 1..1000"));
+        }
+    }
+    if let Some(limit) = body.owner_org_creation_limit {
+        if !(0..=100).contains(&limit) {
+            return Err(bad_request("owner_org_creation_limit must be 0..100"));
+        }
+    }
+    let backend = state.db_pool.read().get_database_backend();
+    let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
+    let org = tx
+        .query_one(Statement::from_sql_and_values(
+            backend,
+            "SELECT owner_user_id FROM orgs WHERE id = $1",
+            [org_id.clone().into()],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
+    let owner_user_id: String = org.try_get("", "owner_user_id").map_err(storage)?;
+    let now = Utc::now().to_rfc3339();
+    if let Some(max_members) = body.max_members {
+        tx.execute(Statement::from_sql_and_values(
+            backend,
+            "UPDATE orgs SET max_members = $2, updated_at = $3 WHERE id = $1",
+            [org_id.clone().into(), max_members.into(), now.clone().into()],
+        ))
+        .await
+        .map_err(storage)?;
+    }
+    if let Some(limit) = body.owner_org_creation_limit {
+        tx.execute(Statement::from_sql_and_values(
+            backend,
+            "UPDATE users SET org_creation_limit = $2, updated_at = $3 WHERE id = $1",
+            [owner_user_id.into(), limit.into(), now.into()],
+        ))
+        .await
+        .map_err(storage)?;
+    }
+    tx.commit().await.map_err(storage)?;
+    Ok(Json(json!({ "success": true })))
 }

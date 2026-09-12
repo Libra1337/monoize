@@ -843,17 +843,11 @@ export function UsersPage() {
                   <VirtualTableHeaderCell>
                     {t("users.balance")}
                   </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell>
-                    {t("users.todaySpend")}
+                  <VirtualTableHeaderCell className="min-w-[6.5rem]">
+                    {t("users.todayUsage")}
                   </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell>
-                    {t("users.todayCalls")}
-                  </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell>
-                    {t("common.created")}
-                  </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell>
-                    {t("users.lastLogin")}
+                  <VirtualTableHeaderCell className="min-w-[7rem]">
+                    {t("users.createdLogin")}
                   </VirtualTableHeaderCell>
                   <VirtualTableHeaderCell>
                     {t("common.status")}
@@ -917,14 +911,22 @@ export function UsersPage() {
                           : formatUsdDecimal(user.balance_usd, 2)}
                     </VirtualTableCell>
                     <VirtualTableCell className="tabular-nums">
-                      {formatNanoUsd(user.today_cost_nano_usd, 2)}
+                      <div className="whitespace-nowrap">
+                        <div>{formatNanoUsd(user.today_cost_nano_usd, 2)}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {(user.today_calls ?? 0).toLocaleString()} {t("users.callsUnit")}
+                        </div>
+                      </div>
                     </VirtualTableCell>
                     <VirtualTableCell className="tabular-nums">
-                      {(user.today_calls ?? 0).toLocaleString()}
-                    </VirtualTableCell>
-                    <VirtualTableCell>{formatDate(user.created_at)}</VirtualTableCell>
-                    <VirtualTableCell>
-                      {user.last_login_at ? formatDate(user.last_login_at) : t("common.never")}
+                      <div className="whitespace-nowrap">
+                        <div>{formatDate(user.created_at)}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {user.last_login_at
+                            ? formatDate(user.last_login_at)
+                            : t("common.never")}
+                        </div>
+                      </div>
                     </VirtualTableCell>
                     <VirtualTableCell>
                       <div className="flex items-center gap-2">

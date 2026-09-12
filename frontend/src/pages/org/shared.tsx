@@ -1,11 +1,13 @@
 /* eslint-disable react-refresh/only-export-components */
 import useSWR from "swr";
-import { api, type OrgSummary } from "@/lib/api";
+import { api } from "@/lib/api";
 
 export const ORGS_KEY = "/api/dashboard/orgs";
 
 export function useMyOrgs() {
-  return useSWR<OrgSummary[]>(ORGS_KEY, () => api.listMyOrgs(), { fallbackData: [] });
+  return useSWR<import("@/lib/api").OrgsOverview>(ORGS_KEY, () => api.listMyOrgs(), {
+    fallbackData: { orgs: [], creation_limit: 2, creation_used: 0, can_create: false },
+  });
 }
 
 export function OrgAvatar({

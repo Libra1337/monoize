@@ -2651,7 +2651,8 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         )
         .route(
             "/dashboard/orgs/{org_id}",
-            get(crate::dashboard_handlers::org_detail),
+            get(crate::dashboard_handlers::org_detail)
+                .delete(crate::dashboard_handlers::delete_org),
         )
         .route(
             "/dashboard/orgs/{org_id}/ledger",
@@ -2692,6 +2693,14 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/orgs/{org_id}/members/{member_id}",
             axum::routing::delete(crate::dashboard_handlers::remove_org_member),
+        )
+        .route(
+            "/dashboard/admin/orgs",
+            get(crate::dashboard_handlers::admin_list_orgs),
+        )
+        .route(
+            "/dashboard/admin/orgs/{org_id}",
+            axum::routing::put(crate::dashboard_handlers::admin_update_org),
         )
         .route(
             "/dashboard/users/{user_id}",

@@ -245,7 +245,8 @@
     "ordersAdmin": "Order Statistics",
     "salesManagement": "Sales",
     "workspace": "Workspace",
-    "modeSwitch": "Switch workspace"
+    "modeSwitch": "Switch workspace",
+    "orgsAdmin": "Org spaces"
   },
   "wallet": {
     "title": "Wallet",
@@ -1046,7 +1047,10 @@
       "private": "Private",
       "agent": "Agent",
       "sales": "Sales"
-    }
+    },
+    "todayUsage": "Today",
+    "createdLogin": "Created / Login",
+    "callsUnit": "calls"
   },
   "apiKeys": {
     "title": "Token Management",
@@ -2340,6 +2344,38 @@
       "public": "Every member of the space can view and copy this key",
       "allow": "Only the checked members can view this key",
       "deny": "Everyone except the checked members can view this key"
-    }
+    },
+    "inviteCodeLabel": "Invite code",
+    "copyCode": "Copy code",
+    "codeCopied": "Code copied",
+    "inviteFullHint": "The member cap ({{count}}) is reached; new members cannot join until an admin raises it.",
+    "fullBadge": "Full",
+    "fullTitle": "This organization is full",
+    "fullDescription": "The member cap ({{count}}) is reached; the invite cannot be accepted right now.",
+    "deleteZoneTitle": "Delete organization",
+    "deleteOrg": "Delete organization",
+    "deleteZoneHint": "The wallet balance refunds to the owner, org keys become their private keys, and every member is removed. Irreversible.",
+    "deleteConfirmTitle": "Delete \"{{name}}\"?",
+    "deleteConfirmDescription": "The wallet balance refunds to the owner, org keys become the owner's private keys, and every member is removed. This cannot be undone.",
+    "deleted": "Organization deleted",
+    "kindDeleteRefund": "Deletion refund (out)",
+    "kindDeleteReceive": "Org deletion refund"
+  },
+  "adminOrgs": {
+    "title": "Organization spaces",
+    "description": "Manage every space's member cap, creation quota, and invite code.",
+    "owner": "Owner",
+    "members": "Members",
+    "createdAt": "Created",
+    "limits": "Limits",
+    "limitsTitle": "Limits for \"{{name}}\"",
+    "limitsDescription": "Adjust this space's member cap or the owner's creation quota.",
+    "maxMembers": "Member cap (now {{current}})",
+    "ownerLimit": "Creation quota for {{owner}}",
+    "ownerLimitPlaceholder": "Leave empty for the default of 2",
+    "ownerLimitHelp": "How many spaces this owner may create; 0 blocks creation.",
+    "limitsSaved": "Limits saved",
+    "empty": "No organizations",
+    "emptyDescription": "No organization spaces exist yet."
   }
 }

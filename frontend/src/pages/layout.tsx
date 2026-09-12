@@ -1,6 +1,5 @@
 import { Navigate, Outlet, Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import useSWR from "swr";
 import {
   LayoutDashboard,
   Users,
@@ -45,7 +44,7 @@ import { MonoizeLogo } from "@/components/MonoizeLogo";
 import { UserCenterMenu } from "@/components/user-center-menu";
 import { springs } from "@/components/ui/motion";
 import { usePublicSiteSettings } from "@/lib/swr";
-import { api } from "@/lib/api";
+import { useMyOrgs } from "@/pages/org/shared";
 
 const navTransition = springs.snappy;
 
@@ -133,10 +132,12 @@ function Sidebar({
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
   // SAU-2/SAU-4: only an eligible main account sees the sub-account page, and a
   // sub-account cannot recharge so it loses the Store entry.
-  const { data: myOrgs } = useSWR(user ? "/api/dashboard/orgs/sidebar" : null, () =>
-    api.listMyOrgs(),
-  );
-  const hasOrgs = (myOrgs?.length ?? 0) > 0;
+  const { data: orgOverview } = useMyOrgs();
+  // ORG-8a: admins, sales, and agent accounts neither create nor join spaces,
+  // so they see no org entry at all; everyone else sees it as soon as they
+  // belong to one or may create one.
+  const hasOrgs = (orgOverview?.orgs?.length ?? 0) > 0;
+  const showOrgEntries = hasOrgs || (orgOverview?.can_create ?? false);
   const inOrgMode = window.location.pathname.startsWith("/org");
   const { data: publicSite } = usePublicSiteSettings();
   const siteName = publicSite?.site_name || "LynShen Console";
@@ -176,9 +177,10 @@ function Sidebar({
   // DL5c and DL5d: only the enterprise class gets the reduced sidebar. The private class is
   // isolated the same way enterprise is, but is a full-featured account, so it uses the
   // standard set.
-  const visibleNavItems = user?.account_class === "enterprise"
+  const visibleNavItems = (user?.account_class === "enterprise"
     ? enterpriseNavItems
-    : navItems;
+    : navItems
+  ).filter((item) => item.to !== "/org" || showOrgEntries);
 
   const adminNavItems = [
     { to: "/dashboard/admin", icon: Gauge, label: t("nav.adminDashboard"), exact: true },
@@ -189,6 +191,7 @@ function Sidebar({
     { to: "/dashboard/users", icon: Users, label: t("nav.users") },
     { to: "/dashboard/groups", icon: Boxes, label: t("nav.groups") },
     { to: "/dashboard/store-admin", icon: BadgeDollarSign, label: t("nav.storeManagement") },
+    { to: "/dashboard/orgs-admin", icon: Building2, label: t("nav.orgsAdmin") },
     { to: "/dashboard/orders-admin", icon: ReceiptText, label: t("nav.ordersAdmin") },
     { to: "/dashboard/sales-admin", icon: HandCoins, label: t("nav.salesManagement") },
     { to: "/dashboard/admin-settings", icon: Settings, label: t("nav.settings") },
@@ -223,7 +226,7 @@ function Sidebar({
           )}
         </Link>
 
-        {hasOrgs && (
+        {showOrgEntries && (
           <div
             className={cn(
               "mt-2 flex items-center gap-1 rounded-lg bg-muted p-1",

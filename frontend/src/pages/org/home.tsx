@@ -1,9 +1,19 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import useSWR from "swr";
-import { ArrowRight, Coins, Copy, KeyRound, Link2, Loader2, RefreshCw, UsersRound } from "lucide-react";
+import {
+  ArrowRight,
+  Coins,
+  Copy,
+  KeyRound,
+  Link2,
+  Loader2,
+  RefreshCw,
+  Trash2,
+  UsersRound,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -67,6 +77,8 @@ export function OrgHome() {
   const [depositOpen, setDepositOpen] = useState(false);
   const [depositAmount, setDepositAmount] = useState("");
   const [busy, setBusy] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const navigate = useNavigate();
 
   if (!orgId) return null;
   if (detail.isLoading || !detail.data) {
@@ -132,7 +144,9 @@ export function OrgHome() {
             </p>
             <p className="mt-2 text-2xl font-semibold tabular-nums">
               {detail.data.members.length}
-              <span className="ml-1 text-sm text-muted-foreground">/ 15</span>
+              <span className="ml-1 text-sm text-muted-foreground">
+                / {detail.data.max_members}
+              </span>
             </p>
             <Button variant="outline" size="sm" className="mt-3" asChild>
               <Link to={`/org/${orgId}/members`}>
@@ -161,48 +175,91 @@ export function OrgHome() {
 
       {isOwner && detail.data.invite && (
         <Card className="rounded-2xl">
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
-            <div className="flex min-w-0 items-center gap-3">
-              <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0">
-                <p className="truncate font-mono text-sm">{inviteLink}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {detail.data.invite.expires_at
-                    ? t("org.inviteExpires", {
-                        time: new Date(detail.data.invite.expires_at).toLocaleString(),
-                      })
-                    : t("org.inviteNeverExpires")}
-                </p>
+          <CardContent className="space-y-3 p-5">
+            {detail.data.members.length >= detail.data.max_members && (
+              <p className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+                {t("org.inviteFullHint", { count: detail.data.max_members })}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-sm">{inviteLink}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {detail.data.invite.expires_at
+                      ? t("org.inviteExpires", {
+                          time: new Date(detail.data.invite.expires_at).toLocaleString(),
+                        })
+                      : t("org.inviteNeverExpires")}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(inviteLink);
+                    toast.success(t("org.linkCopied"));
+                  }}
+                >
+                  <Copy className="mr-1 h-3.5 w-3.5" />
+                  {t("org.copyLink")}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await api.regenerateOrgInvite(orgId, "7d");
+                      toast.success(t("org.linkRegenerated"));
+                      await detail.mutate();
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : t("common.error"));
+                    }
+                  }}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
               </div>
             </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  void navigator.clipboard.writeText(inviteLink);
-                  toast.success(t("org.linkCopied"));
-                }}
-              >
-                <Copy className="mr-1 h-3.5 w-3.5" />
-                {t("org.copyLink")}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={async () => {
-                  try {
-                    await api.regenerateOrgInvite(orgId, "7d");
-                    toast.success(t("org.linkRegenerated"));
-                    await detail.mutate();
-                  } catch (error) {
-                    toast.error(error instanceof Error ? error.message : t("common.error"));
-                  }
-                }}
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-              </Button>
+            {detail.data.invite.code && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+                <div className="min-w-0">
+                  <p className="text-xs text-muted-foreground">{t("org.inviteCodeLabel")}</p>
+                  <p className="mt-0.5 font-mono text-lg font-semibold tracking-[0.3em]">
+                    {detail.data.invite.code}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(detail.data.invite!.code);
+                    toast.success(t("org.codeCopied"));
+                  }}
+                >
+                  <Copy className="mr-1 h-3.5 w-3.5" />
+                  {t("org.copyCode")}
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {isOwner && (
+        <Card className="rounded-2xl border-destructive/40">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
+            <div>
+              <p className="text-sm font-medium">{t("org.deleteZoneTitle")}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{t("org.deleteZoneHint")}</p>
             </div>
+            <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
+              <Trash2 className="mr-1 h-3.5 w-3.5" />
+              {t("org.deleteOrg")}
+            </Button>
           </CardContent>
         </Card>
       )}
@@ -257,6 +314,42 @@ export function OrgHome() {
         </DialogContent>
       </Dialog>
 
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("org.deleteConfirmTitle", { name: detail.data.display_name })}</DialogTitle>
+            <DialogDescription>{t("org.deleteConfirmDescription")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await api.deleteOrg(orgId);
+                  toast.success(t("org.deleted"));
+                  setDeleteOpen(false);
+                  await reloadOrgs();
+                  await refreshUser();
+                  navigate("/dashboard", { replace: true });
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : t("common.error"));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t("org.deleteOrg")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </PageWrapper>
   );
 }
