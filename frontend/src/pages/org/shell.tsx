@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { UserCenterMenu } from "@/components/user-center-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { springs } from "@/components/ui/motion";
+import { motion, springs } from "@/components/ui/motion";
 
 export const ORGS_KEY = "/api/dashboard/orgs";
 
@@ -144,17 +144,22 @@ export function OrgShell() {
             <div className="flex items-center gap-1 rounded-lg bg-muted p-1" role="group" aria-label={t("nav.modeSwitch")}>
               <Link
                 to="/dashboard"
-                className="flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                className="relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
                 <LayoutDashboard className="size-3.5" />
                 {t("nav.workspace")}
               </Link>
               <Link
                 to="/org"
-                className="flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md bg-background text-xs font-medium text-foreground shadow-sm"
+                className="relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-foreground"
               >
-                <Building2 className="size-3.5" />
-                {t("nav.orgSpace")}
+                <motion.span
+                  layoutId="org-mode-toggle-indicator"
+                  className="absolute inset-0 rounded-md bg-background shadow-sm"
+                  transition={springs.snappy}
+                />
+                <Building2 className="relative z-10 size-3.5" />
+                <span className="relative z-10">{t("nav.orgSpace")}</span>
               </Link>
             </div>
             {user && (

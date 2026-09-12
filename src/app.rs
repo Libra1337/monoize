@@ -2686,18 +2686,6 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             axum::routing::delete(crate::dashboard_handlers::remove_org_member),
         )
         .route(
-            "/dashboard/subaccounts",
-            get(crate::dashboard_handlers::list_sub_accounts),
-        )
-        .route(
-            "/dashboard/subaccounts",
-            post(crate::dashboard_handlers::create_sub_account),
-        )
-        .route(
-            "/dashboard/subaccounts/{sub_user_id}/transfer",
-            post(crate::dashboard_handlers::transfer_to_sub_account),
-        )
-        .route(
             "/dashboard/users/{user_id}",
             get(crate::dashboard_handlers::get_user),
         )

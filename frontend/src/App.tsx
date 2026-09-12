@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { SWRConfig } from "swr";
 import { MotionConfig } from "framer-motion";
 import { AuthProvider } from "@/hooks/use-auth";
@@ -11,7 +11,6 @@ import { AdminDashboardPage } from "@/pages/admin-dashboard";
 import { AdminUsagePage } from "@/pages/admin-usage";
 import { AdminRuntimePage } from "@/pages/admin-runtime";
 import { ProvidersPage } from "@/pages/providers";
-import { SubAccountsPage } from "./pages/subaccounts";
 import { OrdersAdminPage } from "./pages/orders-admin";
 import { OrgEntry, } from "./pages/org/entry";
 import { OrgShell } from "./pages/org/shell";
@@ -110,7 +109,7 @@ function App() {
             <Route path="admin/runtime" element={<AdminRoute><AdminRuntimePage /></AdminRoute>} />
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="tokens" element={<ApiKeysPage />} />
-            <Route path="subaccounts" element={<SubAccountsPage />} />
+            <Route path="org" element={<Navigate to="/org" replace />} />
             <Route path="logs" element={<RequestLogsPage />} />
             <Route path="playground" element={<PlaygroundPage />} />
             <Route path="marketplace" element={<ModelMarketplacePage />} />
@@ -128,7 +127,7 @@ function App() {
             <Route path="admin-settings" element={<SettingsPage />} />
           </Route>
           <Route path="/join/:token" element={<JoinOrgPage />} />
-          <Route path="/org" element={<DashboardGuard><OrgEntry /></DashboardGuard>}>
+          <Route path="/org" element={<DashboardGuard><Outlet /></DashboardGuard>}>
             <Route index element={<OrgEntry />} />
             <Route path=":orgId" element={<OrgShell />}>
               <Route index element={<Navigate to="home" replace />} />

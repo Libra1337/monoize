@@ -403,14 +403,6 @@ pub async fn update_me(
     Json(body): Json<UpdateMeRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
-    // SAU-4: a sub-account has usage-only access; the main account owns its profile.
-    if user.parent_user_id.is_some() {
-        return Err(AppError::new(
-            StatusCode::FORBIDDEN,
-            "sub_account_restricted",
-            "sub-accounts cannot change the account profile",
-        ));
-    }
 
     let user_store = &state.user_store;
 
@@ -454,14 +446,6 @@ pub async fn change_password(
     Json(body): Json<ChangePasswordRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
-    // SAU-4: password changes belong to the main account that owns the sub-account.
-    if user.parent_user_id.is_some() {
-        return Err(AppError::new(
-            StatusCode::FORBIDDEN,
-            "sub_account_restricted",
-            "sub-accounts cannot change the account password",
-        ));
-    }
 
     if body.new_password.len() < 8 {
         return Err(AppError::new(

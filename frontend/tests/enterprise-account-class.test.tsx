@@ -107,7 +107,7 @@ describe("Enterprise navigation", () => {
   // filtered on account_class alone would leave them mixed in with regular users. The
   // precedence in scopeOf is what keeps each user in exactly one grouping.
   test("groups the user list and keeps agents out of the other groupings", () => {
-    expect(usersSource).toContain('const USER_SCOPES = ["standard", "enterprise", "private", "agent", "subaccounts", "sales"]');
+    expect(usersSource).toContain('const USER_SCOPES = ["standard", "enterprise", "private", "agent", "sales"]');
 
     const start = usersSource.indexOf("function scopeOf");
     expect(start).toBeGreaterThan(-1);
@@ -127,7 +127,7 @@ describe("Enterprise navigation", () => {
 
   test("labels every user grouping in all locales", () => {
     for (const locale of locales) {
-      for (const scope of ["standard", "enterprise", "private", "agent", "subaccounts", "sales"]) {
+      for (const scope of ["standard", "enterprise", "private", "agent", "sales"]) {
         expect(locale.users.scopes[scope]).toBeString();
       }
     }
@@ -164,7 +164,7 @@ describe("Enterprise navigation", () => {
       "/dashboard/tokens",
       "/dashboard/usage",
       "/dashboard/usage/cache",
-      "/dashboard/org",
+      "/org",
       "/dashboard/logs",
       "/dashboard/marketplace",
       "/dashboard/api-docs",

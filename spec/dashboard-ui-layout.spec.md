@@ -160,7 +160,7 @@ navigation MUST instead include exactly:
 - `/dashboard/tokens`
 - `/dashboard/usage`
 - `/dashboard/usage/cache`
-- `/dashboard/org`
+- `/org`
 - `/dashboard/logs`
 - `/dashboard/marketplace`
 - `/dashboard/api-docs`

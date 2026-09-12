@@ -6,7 +6,6 @@
   invite link, and member-visible API keys.
 - Scope: `users.is_org`, `orgs`, `org_members`, `org_key_shares`, `api_keys.org_id` /
   `api_keys.org_share_mode`, `/api/dashboard/orgs*`, `/dashboard/org`, `/join/{token}`.
-- Related: `user-sub-accounts.spec.md` (sub-accounts are unaffected and coexist),
   `groups-registry.spec.md` (account classes), `api-token-management.spec.md` (keys),
   `store-billing.spec.md` (wallet, exchange rates).
 

@@ -2,18 +2,6 @@ const API_BASE = "/api/dashboard";
 
 export type AccountClass = "standard" | "enterprise" | "private" | "agent";
 
-export interface SubAccount {
-  id: string;
-  username: string;
-  enabled: boolean;
-  balance_nano_usd: string;
-  created_at: string;
-  last_login_at?: string | null;
-  api_key_count: number;
-  today_calls: number;
-  today_cost_nano_usd: string;
-}
-
 export interface OrgSummary {
   id: string;
   display_name: string;
@@ -92,11 +80,6 @@ export interface CreateOrgInput {
 }
 
 export type OrgInviteExpiry = "24h" | "3d" | "7d" | "30d" | "never";
-
-export interface CreateSubAccountInput {
-  username: string;
-  password: string;
-}
 
 type UnauthorizedHandler = () => void;
 
@@ -1512,27 +1495,6 @@ class ApiClient {
 
   async removeOrgMember(orgId: string, memberUserId: string) {
     return this.request(`/orgs/${orgId}/members/${memberUserId}`, { method: "DELETE" });
-  }
-
-  async listSubAccounts(): Promise<SubAccount[]> {
-    return this.request("/subaccounts");
-  }
-
-  async createSubAccount(input: CreateSubAccountInput): Promise<SubAccount> {
-    return this.request("/subaccounts", {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
-  }
-
-  async distributeToSubAccount(
-    subUserId: string,
-    amountNanoUsd: string,
-  ): Promise<{ parent_balance_nano_usd: string; sub_balance_nano_usd: string }> {
-    return this.request(`/subaccounts/${subUserId}/transfer`, {
-      method: "POST",
-      body: JSON.stringify({ amount_nano_usd: amountNanoUsd }),
-    });
   }
 
   async getTransformRegistry(): Promise<TransformRegistryItem[]> {

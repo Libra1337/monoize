@@ -218,7 +218,6 @@
     "dashboard": "ダッシュボード",
     "providers": "プロバイダー",
     "apiKeys": "トークン管理",
-    "subAccounts": "サブアカウント",
     "orgSpace": "組織スペース",
     "playground": "Playground",
     "users": "ユーザー管理",
@@ -1046,10 +1045,8 @@
       "enterprise": "エンタープライズ",
       "private": "プライベート",
       "agent": "エージェント",
-      "subaccounts": "サブアカウント",
       "sales": "販売"
-    },
-    "parentAccount": "所属メインアカウント"
+    }
   },
   "apiKeys": {
     "title": "トークン管理",
@@ -1624,9 +1621,7 @@
     "grantAmount": "付与額",
     "nextGrant": "次回リセット",
     "noPlan": "プランは割り当てられていません",
-    "unrestrictedGroups": "このプランにグループ制限はありません",
-    "subAccountTitle": "サブアカウント",
-    "subAccountDescription": "現在ログインしているのはサブアカウントです。ユーザー名・パスワード・残高はメインアカウントが管理します。"
+    "unrestrictedGroups": "このプランにグループ制限はありません"
   },
   "modelMetadata": {
     "title": "モデルデータベース",
@@ -2228,32 +2223,6 @@
   "salesAdmin": {
     "title": "セールス管理",
     "description": "エージェント、報酬記録、出金。"
-  },
-  "subaccounts": {
-    "title": "サブアカウント",
-    "description": "このアカウント配下にサブアカウントを作成し、残高を配分して利用状況を確認できます。",
-    "create": "サブアカウントを作成",
-    "createTitle": "サブアカウントを作成",
-    "createDescription": "サブアカウントはこのアカウントのクラスとグループを引き継ぎます。独自の API key を作成できますが、チャージやプロフィール変更はできません。",
-    "createSuccess": "サブアカウント {{name}} を作成しました",
-    "username": "ユーザー名",
-    "password": "パスワード",
-    "passwordHint": "8 文字以上。サブアカウントの利用者には別の経路で伝えてください。",
-    "mainBalance": "メインアカウント残高",
-    "distributeHint": "サブアカウントはチャージできません。残高はメインアカウントから配分され、双方の台帳に記録されます。",
-    "empty": "サブアカウントはまだありません",
-    "emptyDescription": "サブアカウントを作成すると、現在のグループをチームと共有しつつ利用量を分離できます。",
-    "balance": "残高",
-    "apiKeys": "API key",
-    "todayCalls": "本日の呼び出し",
-    "todaySpend": "本日の消費",
-    "distribute": "残高を配分",
-    "transferTitle": "{{name}} に配分",
-    "transferDescription": "金額はメインアカウントの残高から移動します。{{currency}} で入力してください。",
-    "transferAmount": "金額（{{currency}}）",
-    "transferCurrent": "サブアカウントの現在の残高：{{balance}}",
-    "transferSuccess": "{{name}} に配分しました",
-    "transferInvalidAmount": "小数点以下 2 桁までの正の金額を入力してください"
   },
   "org": {
     "title": "組織スペース",

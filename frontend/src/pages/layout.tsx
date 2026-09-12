@@ -26,7 +26,6 @@ import {
   DatabaseZap,
   HeartPulse,
   Activity,
-  UsersRound,
   Building2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
@@ -134,9 +133,6 @@ function Sidebar({
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
   // SAU-2/SAU-4: only an eligible main account sees the sub-account page, and a
   // sub-account cannot recharge so it loses the Store entry.
-  const isSubAccount = !!user?.parent_user_id;
-  const isSalesAccount = !!user?.is_sales_agent;
-  const isAgentClass = user?.account_class === "agent";
   const { data: myOrgs } = useSWR(user ? "/api/dashboard/orgs/sidebar" : null, () =>
     api.listMyOrgs(),
   );
@@ -152,15 +148,12 @@ function Sidebar({
     { to: "/dashboard/usage-ranking", icon: ChartSpline, label: t("nav.usageRanking") },
     { to: "/dashboard/status", icon: Activity, label: t("nav.runtimeStatus") },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
-    ...(!isSubAccount && !isSalesAccount && !isAgentClass
-      ? [{ to: "/dashboard/subaccounts", icon: UsersRound, label: t("nav.subAccounts") }]
-      : []),
-    { to: "/dashboard/org", icon: Building2, label: t("nav.orgSpace") },
+    { to: "/org", icon: Building2, label: t("nav.orgSpace") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
-    ...(!isSubAccount ? [{ to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") }] : []),
+    { to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") },
     { to: "/dashboard/wallet", icon: WalletCards, label: t("nav.wallet") },
     { to: "/dashboard/orders", icon: ReceiptText, label: t("nav.orders") },
   ];
@@ -175,7 +168,7 @@ function Sidebar({
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
     { to: "/dashboard/usage/cache", icon: DatabaseZap, label: t("nav.cacheHitRate") },
-    { to: "/dashboard/org", icon: Building2, label: t("nav.orgSpace") },
+    { to: "/org", icon: Building2, label: t("nav.orgSpace") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
@@ -241,25 +234,40 @@ function Sidebar({
           >
             <Link
               to="/dashboard"
+              relative="path"
               className={cn(
-                "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors",
-                !inOrgMode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                "relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors",
+                !inOrgMode ? "text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
               title={t("nav.workspace")}
             >
-              <LayoutDashboard className="size-3.5" />
-              {!collapsed && t("nav.workspace")}
+              {!inOrgMode && (
+                <motion.span
+                  layoutId="mode-toggle-indicator"
+                  className="absolute inset-0 rounded-md bg-background shadow-sm"
+                  transition={springs.snappy}
+                />
+              )}
+              <LayoutDashboard className="relative z-10 size-3.5" />
+              {!collapsed && <span className="relative z-10">{t("nav.workspace")}</span>}
             </Link>
             <Link
               to="/org"
               className={cn(
-                "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors",
-                inOrgMode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                "relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors",
+                inOrgMode ? "text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
               title={t("nav.orgSpace")}
             >
-              <Building2 className="size-3.5" />
-              {!collapsed && t("nav.orgSpace")}
+              {inOrgMode && (
+                <motion.span
+                  layoutId="mode-toggle-indicator"
+                  className="absolute inset-0 rounded-md bg-background shadow-sm"
+                  transition={springs.snappy}
+                />
+              )}
+              <Building2 className="relative z-10 size-3.5" />
+              {!collapsed && <span className="relative z-10">{t("nav.orgSpace")}</span>}
             </Link>
           </div>
         )}

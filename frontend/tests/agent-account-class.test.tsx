@@ -68,7 +68,7 @@ describe("Agent administration", () => {
     expect(providersSource).toContain(
       "const ACCOUNT_CLASSES = ['standard', 'enterprise', 'private', 'agent'] as const",
     );
-    expect(usersSource).toContain('const USER_SCOPES = ["standard", "enterprise", "private", "agent", "subaccounts", "sales"]');
+    expect(usersSource).toContain('const USER_SCOPES = ["standard", "enterprise", "private", "agent", "sales"]');
   });
 
   // PP-WF1: the agent scope must not open the ordinary editor, whose upstream fields would
