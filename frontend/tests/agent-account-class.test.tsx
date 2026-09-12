@@ -92,6 +92,16 @@ describe("Agent administration", () => {
     expect(swrSource).toContain("SWR_KEYS.MARKETPLACE_MODELS");
   });
 
+  // PP-WF2a: with no agent Group the select would be a dead end, so the dialog must offer
+  // inline Group creation with the same public-exposure confirmation.
+  test("creates an agent Group inline when the registry has none", () => {
+    expect(wholesaleDialogSource).toContain("createGroupOptimistic");
+    expect(wholesaleDialogSource).toContain("account_class: 'agent'");
+    expect(wholesaleDialogSource).toContain("is_public: true");
+    expect(wholesaleDialogSource).toContain("groups.publicExposureConfirm");
+    expect(wholesaleDialogSource).toContain("setGroupId(created.id)");
+  });
+
   // DL5d: the agent class is a full-featured account and must keep the standard sidebar; the
   // reduced set stays gated on enterprise alone.
   test("gives the agent class the full sidebar", () => {

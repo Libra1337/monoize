@@ -574,6 +574,12 @@ Provider select limited to Providers whose Group class is `standard`, `enterpris
 multiplier table prefilled with the source mapping's effective multipliers and individually
 editable, name overrides, and the public-exposure confirmation of PP-F3.
 
+PP-WF2a. When the registry contains no `agent` Group, the wholesale dialog MUST NOT render
+an empty Group select as the only path. It MUST offer inline creation through the Group
+create API with `account_class = agent`, `is_public = true`, and the PP-N7 public-exposure
+confirmation, and MUST select the created Group for the pending wholesale Provider after
+the Group is created.
+
 PP-WF3. Data fetching in the wholesale dialog MUST use SWR with a Skeleton fallback; the
 submit MUST optimistically insert the Provider row, roll back on failure, and revalidate the
 Provider and Marketplace keys (PP-F6).

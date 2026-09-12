@@ -27,7 +27,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { GroupSingleSelect } from '@/components/groups/GroupPicker'
 import { api } from '@/lib/api'
 import { normalizeMultiplier } from '@/lib/exact-decimal'
-import { createWholesaleProviderOptimistic, useDashboardGroups, useProviders } from '@/lib/swr'
+import {
+	createGroupOptimistic,
+	createWholesaleProviderOptimistic,
+	useDashboardGroups,
+	useProviders
+} from '@/lib/swr'
 
 interface WholesaleProviderDialogProps {
 	open: boolean
@@ -57,6 +62,9 @@ export function WholesaleProviderDialog({ open, onOpenChange }: WholesaleProvide
 	)
 
 	const [groupId, setGroupId] = useState('')
+	const [newGroupName, setNewGroupName] = useState('')
+	const [newGroupExposureConfirmed, setNewGroupExposureConfirmed] = useState(false)
+	const [creatingGroup, setCreatingGroup] = useState(false)
 	const [sourceProviderId, setSourceProviderId] = useState('')
 	const [name, setName] = useState('')
 	const [channelName, setChannelName] = useState('')
@@ -122,6 +130,34 @@ export function WholesaleProviderDialog({ open, onOpenChange }: WholesaleProvide
 		}
 	}
 
+	const handleCreateAgentGroup = async () => {
+		const name = newGroupName.trim()
+		if (!name || !newGroupExposureConfirmed || creatingGroup) return
+		setCreatingGroup(true)
+		try {
+			const created = await createGroupOptimistic(
+				{
+					name,
+					description: '',
+					is_public: true,
+					account_class: 'agent',
+					sort_order: agentGroups.length,
+					confirm_public_exposure: true
+				},
+				groups,
+				error => toast.error(error.message)
+			)
+			setGroupId(created.id)
+			setNewGroupName('')
+			setNewGroupExposureConfirmed(false)
+			toast.success(c('代理分组已创建', 'Agent group created'))
+		} catch {
+			// the optimistic helper already rolled back and toasted
+		} finally {
+			setCreatingGroup(false)
+		}
+	}
+
 	const reset = (nextOpen: boolean) => {
 		if (!nextOpen) {
 			setSourceProviderId('')
@@ -148,15 +184,53 @@ export function WholesaleProviderDialog({ open, onOpenChange }: WholesaleProvide
 				<div className='grid gap-4'>
 					<div className='grid gap-2'>
 						<Label>{c('代理分组', 'Agent group')}</Label>
-						<GroupSingleSelect
-							value={groupId}
-							groups={agentGroups}
-							loading={groupsLoading}
-							onChange={setGroupId}
-						/>
-						<p className='text-xs text-muted-foreground'>
-							{c('批发 Provider 只能创建在代理分组内。', 'Wholesale providers can only be created inside an agent group.')}
-						</p>
+						{agentGroups.length > 0 || groupsLoading ? (
+							<>
+								<GroupSingleSelect
+									value={groupId}
+									groups={agentGroups}
+									loading={groupsLoading}
+									onChange={setGroupId}
+								/>
+								<p className='text-xs text-muted-foreground'>
+									{c('批发 Provider 只能创建在代理分组内。', 'Wholesale providers can only be created inside an agent group.')}
+								</p>
+							</>
+						) : (
+							// PP-WF2a: with no agent Group in the registry the select would be an
+							// empty dead end, so the dialog offers the same Group create contract
+							// inline instead of sending the admin to another page.
+							<div className='space-y-3 rounded-md border border-dashed p-3'>
+								<p className='text-xs text-muted-foreground'>
+									{c('尚无代理分组。输入名称创建一个，或先到「分组」页的代理页签创建。', 'No agent group exists yet. Create one here, or first create it on the Groups page under the agent tab.')}
+								</p>
+								<Input
+									aria-label='new-agent-group-name'
+									value={newGroupName}
+									onChange={event => setNewGroupName(event.target.value)}
+									placeholder={c('代理分组名称', 'Agent group name')}
+								/>
+								<div className='flex items-start gap-3'>
+									<Checkbox
+										id='wholesale-agent-group-exposure'
+										checked={newGroupExposureConfirmed}
+										onCheckedChange={checked => setNewGroupExposureConfirmed(checked === true)}
+									/>
+									<Label htmlFor='wholesale-agent-group-exposure' className='text-sm font-normal leading-5'>
+										{t('groups.publicExposureConfirm')}
+									</Label>
+								</div>
+								<Button
+									variant='outline'
+									size='sm'
+									onClick={handleCreateAgentGroup}
+									disabled={!newGroupName.trim() || !newGroupExposureConfirmed || creatingGroup}
+								>
+									{creatingGroup && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+									{c('创建代理分组', 'Create agent group')}
+								</Button>
+							</div>
+						)}
 					</div>
 
 					<div className='grid gap-2'>
