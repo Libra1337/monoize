@@ -673,16 +673,26 @@ UP7. The plan cell MUST render `billing_plan.name` when `billing_plan` is non-nu
 localized none label when `billing_plan` is null. A disabled plan MUST remain visible with a
 disabled marker.
 
-UP8. The today-spend cell MUST display `today_cost_nano_usd` as USD with 2 fractional digits
-using exact integer formatting (`BigInt`). A missing value MUST display as `$0.00`.
+UP8. The today-spend cell MUST display `today_cost_nano_usd` in the selected display currency
+(DL3h). When the display currency is USD, it MUST format as USD with 2 fractional digits using
+exact integer formatting (`BigInt`). When the display currency is CNY and the exchange-rate
+resource has loaded, it MUST format `today_cost_nano_usd` as CNY through the shared nano-USD
+conversion helper with the loaded `cny_per_usd` rate. While the CNY rate is unavailable, the
+cell MUST fall back to the USD formatting. A missing value MUST display as `$0.00` (USD) or
+the equivalent zero in the selected currency.
 
 UP9. The today-calls cell MUST display `today_calls` as a locale integer. A missing value MUST
 display as `0`.
 
 UP10. The users-page toolbar MUST display the UTC-calendar-day totals across the listed users:
-the sum of `today_cost_nano_usd` formatted as USD with 2 fractional digits, and the sum of
-`today_calls`. Both sums MUST be computed from the list payload with `BigInt` / integer
-arithmetic. The page MUST NOT fetch a second usage endpoint for those totals.
+the sum of `today_cost_nano_usd` formatted in the selected display currency under the same
+rule as UP8, and the sum of `today_calls`. Both sums MUST be computed from the list payload
+with `BigInt` / integer arithmetic. The page MUST NOT fetch a second usage endpoint for those
+totals.
+
+UP13. The balance column header in the users table MUST NOT embed a currency suffix. The
+rendered balance cell follows the selected display currency and the exchange-rate fallback
+described in UP8; the header stays currency-neutral in every locale.
 
 UP11. Each user row MUST include an action that navigates to
 `/dashboard/logs?username={username}` with the row's exact username. That destination MUST

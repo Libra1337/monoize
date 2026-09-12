@@ -1026,7 +1026,7 @@
     "failedCreate": "Failed to create user",
     "failedUpdate": "Failed to update user",
     "failedDelete": "Failed to delete user",
-    "balance": "Balance (USD)",
+    "balance": "Balance",
     "balanceSet": "Set",
     "balanceAdd": "Add",
     "balanceAddPlaceholder": "Amount to add (e.g. 10.50)",

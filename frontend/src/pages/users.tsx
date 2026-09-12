@@ -790,7 +790,14 @@ export function UsersPage() {
                 {t("users.usersTotal", { count: scopedUsers.length })}
                 {" · "}
                 {t("users.todaySummary", {
-                  spend: formatNanoUsd(todayTotals.cost, 2),
+                  spend:
+                    currency === "CNY" && exchangeRate?.cny_per_usd
+                      ? formatCoinFromNanoUsdForCurrency(
+                          todayTotals.cost.toString(),
+                          "CNY",
+                          exchangeRate.cny_per_usd,
+                        )
+                      : formatNanoUsd(todayTotals.cost, 2),
                   calls: todayTotals.calls.toLocaleString(),
                 })}
               </p>
@@ -912,7 +919,15 @@ export function UsersPage() {
                     </VirtualTableCell>
                     <VirtualTableCell className="tabular-nums">
                       <div className="whitespace-nowrap">
-                        <div>{formatNanoUsd(user.today_cost_nano_usd, 2)}</div>
+                        <div>
+                          {currency === "CNY" && exchangeRate?.cny_per_usd
+                            ? formatCoinFromNanoUsdForCurrency(
+                                user.today_cost_nano_usd ?? "0",
+                                "CNY",
+                                exchangeRate.cny_per_usd,
+                              )
+                            : formatNanoUsd(user.today_cost_nano_usd, 2)}
+                        </div>
                         <div className="text-xs text-muted-foreground">
                           {(user.today_calls ?? 0).toLocaleString()} {t("users.callsUnit")}
                         </div>

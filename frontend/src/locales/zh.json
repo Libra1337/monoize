@@ -1026,7 +1026,7 @@
     "failedCreate": "创建用户失败",
     "failedUpdate": "更新用户失败",
     "failedDelete": "删除用户失败",
-    "balance": "余额 (USD)",
+    "balance": "余额",
     "balanceSet": "设置",
     "balanceAdd": "增加",
     "balanceAddPlaceholder": "增加金额（如 10.50）",

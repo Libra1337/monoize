@@ -322,8 +322,8 @@ export function OrdersPanel({
           <table className="w-full table-fixed text-sm">
             <thead className="bg-muted/50 text-left text-muted-foreground">
               <tr>
-                <th className="px-4 py-3 font-medium">{t("store.admin.orders.number")}</th>
-                <th className="px-4 py-3 font-medium">{t("store.admin.orders.user")}</th>
+                <th className="w-[26%] px-4 py-3 font-medium">{t("store.admin.orders.number")}</th>
+                <th className="w-[17%] px-4 py-3 font-medium">{t("store.admin.orders.user")}</th>
                 <th className="px-4 py-3 font-medium">{t("store.admin.orders.amount")}</th>
                 <th className="px-4 py-3 font-medium">{t("store.orders.paymentStatus")}</th>
                 <th className="px-4 py-3 font-medium">{t("store.orders.fulfillmentStatus")}</th>
