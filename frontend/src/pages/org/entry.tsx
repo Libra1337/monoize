@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Building2, Loader2, Plus } from "lucide-react";
@@ -22,9 +22,7 @@ import { motion, springs } from "@/components/ui/motion";
 import { ORGS_KEY, useMyOrgs, OrgAvatar } from "./shell";
 import { mutate } from "swr";
 
-async function useMyOrgsRefresh() {
-  await mutate(ORGS_KEY);
-}
+const refreshOrgs = () => mutate(ORGS_KEY);
 
 const INVITE_EXPIRIES: OrgInviteExpiry[] = ["24h", "3d", "7d", "30d", "never"];
 const EMOJI_CHOICES = ["🏢", "🚀", "⚡", "🧠", "🛠️", "📊", "🎯", "🔮", "🌿", "🐙", "🦾", "💼"];
@@ -56,11 +54,16 @@ async function fileToAvatarDataUrl(file: File): Promise<string> {
 /** `/org` without an org id: pick the first org, or create/join. */
 export function OrgEntry() {
   const { t } = useTranslation();
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const navigate = useNavigate();
   const { data: orgs, isLoading } = useMyOrgs();
   const [createOpen, setCreateOpen] = useState(false);
   const [joinInput, setJoinInput] = useState("");
+
+  // ORG-19b: an unauthenticated visitor is sent to sign in, not to the empty state.
+  if (!loading && !user) {
+    return <Navigate to="/login" replace />;
+  }
 
   const canCreate =
     user?.account_class === "enterprise" && !user?.parent_user_id && !user?.is_sales_agent;
@@ -99,8 +102,8 @@ export function OrgEntry() {
             <CreateOrgDialog
               open={createOpen}
               onOpenChange={setCreateOpen}
-              onCreated={(orgId) => {
-                void useMyOrgsRefresh();
+              onCreated={async (orgId) => {
+                await refreshOrgs();
                 navigate(`/org/${orgId}/home`);
               }}
             />

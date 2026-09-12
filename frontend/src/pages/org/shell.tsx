@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Link, NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import useSWR from "swr";
 import { Building2, Coins, KeyRound, LayoutDashboard, UsersRound } from "lucide-react";
@@ -50,7 +50,7 @@ export function OrgShell() {
   const { t } = useTranslation();
   const { orgId } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const { data: orgs, isLoading } = useMyOrgs();
   const active = useMemo(
     () => orgs?.find((org) => org.id === orgId) ?? orgs?.[0],
@@ -64,8 +64,11 @@ export function OrgShell() {
     { to: "wallet", icon: Coins, label: t("org.navWallet") },
   ];
 
-  if (isLoading) {
+  if (loading || isLoading) {
     return <div className="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">…</div>;
+  }
+  if (!user) {
+    return <Navigate to="/login" replace />;
   }
 
   if (!active) {

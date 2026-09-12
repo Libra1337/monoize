@@ -350,9 +350,10 @@ pub async fn create_org(
 
     // The wallet row is born with the deposit; the creator side is deducted in the same
     // transaction, so a failure leaves neither row.
-    let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
-    // First public enterprise group, else the system default group.
-    let group = tx
+    // Resolve the group before begin_write: the registry lookup uses the read pool, which
+    // on single-connection SQLite would deadlock behind our own write transaction.
+    let read = state.db_pool.read();
+    let group = read
         .query_one(Statement::from_string(
             backend,
             "SELECT id, account_class FROM monoize_groups WHERE account_class = 'enterprise' AND is_public = 1
@@ -361,6 +362,8 @@ pub async fn create_org(
         ))
         .await
         .map_err(storage)?;
+    drop(read);
+    let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
     let (group_id, org_class) = match group {
         Some(row) => (
             row.try_get::<String>("", "id").map_err(storage)?,

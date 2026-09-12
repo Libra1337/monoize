@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { api, type OrgDetail, type OrgMember } from "@/lib/api";
+import { api, type OrgDetail } from "@/lib/api";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
@@ -63,8 +63,6 @@ export function OrgHome() {
 
   const [depositOpen, setDepositOpen] = useState(false);
   const [depositAmount, setDepositAmount] = useState("");
-  const [distributeTarget, setDistributeTarget] = useState<OrgMember | null>(null);
-  const [distributeAmount, setDistributeAmount] = useState("");
   const [busy, setBusy] = useState(false);
 
   if (!orgId) return null;
@@ -136,7 +134,7 @@ export function OrgHome() {
               <span className="ml-1 text-sm text-muted-foreground">/ 15</span>
             </p>
             <Button variant="outline" size="sm" className="mt-3" asChild>
-              <Link to="members">
+              <Link to={`/org/${orgId}/members`}>
                 {t("org.navMembers")}
                 <ArrowRight className="ml-1 size-3.5" />
               </Link>
@@ -151,7 +149,7 @@ export function OrgHome() {
             </p>
             <p className="mt-2 text-2xl font-semibold tabular-nums">{keyCount}</p>
             <Button variant="outline" size="sm" className="mt-3" asChild>
-              <Link to="keys">
+              <Link to={`/org/${orgId}/keys`}>
                 {t("org.navKeys")}
                 <ArrowRight className="ml-1 size-3.5" />
               </Link>
@@ -256,65 +254,6 @@ export function OrgHome() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!distributeTarget} onOpenChange={(open) => !open && setDistributeTarget(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t("org.distributeTitle", { name: distributeTarget?.username ?? "" })}</DialogTitle>
-            <DialogDescription>{t("org.transferDescription", { currency })}</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-2">
-            <Label htmlFor="org-distribute">{t("org.amountLabel", { currency })}</Label>
-            <Input
-              id="org-distribute"
-              inputMode="decimal"
-              value={distributeAmount}
-              onChange={(event) => setDistributeAmount(event.target.value)}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDistributeTarget(null)}>
-              {t("common.cancel")}
-            </Button>
-            <Button
-              disabled={busy || !distributeAmount.trim()}
-              onClick={async () => {
-                const nano = amountToNanoUsd(distributeAmount, currency, rate?.cny_per_usd);
-                if (!nano || !distributeTarget) {
-                  toast.error(t("org.transferInvalidAmount"));
-                  return;
-                }
-                setBusy(true);
-                try {
-                  await api.distributeFromOrg(orgId, distributeTarget.user_id, nano);
-                  toast.success(t("org.distributeDone"));
-                  setDistributeTarget(null);
-                  setDistributeAmount("");
-                  await Promise.all([detail.mutate(), reloadOrgs()]);
-                } catch (error) {
-                  toast.error(error instanceof Error ? error.message : t("common.error"));
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {t("org.distribute")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* expose distribute entry for the owner from the members context */}
-      {isOwner && (
-        <button
-          type="button"
-          className="hidden"
-          onClick={() => {
-            const member = detail.data?.members.find((m) => m.role !== "owner");
-            if (member) setDistributeTarget(member);
-          }}
-        />
-      )}
     </div>
   );
 }
