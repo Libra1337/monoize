@@ -51,6 +51,7 @@ export interface OrgKeyEntry {
   name: string;
   key_prefix: string;
   share_mode?: string | null;
+  shared_with?: string[];
   created_at?: string;
   key?: string;
   owner_username?: string;

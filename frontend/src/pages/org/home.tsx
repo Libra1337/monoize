@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { PageWrapper } from "@/components/ui/motion";
 import { api, type OrgDetail } from "@/lib/api";
+import { useAuth } from "@/hooks/use-auth";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
@@ -51,6 +52,7 @@ function amountToNanoUsd(raw: string, currency: "CNY" | "USD", cnyPerUsd?: strin
 export function OrgHome() {
   const { orgId } = useParams();
   const { t } = useTranslation();
+  const { refreshUser } = useAuth();
   const { mutate: reloadOrgs } = useMyOrgs();
   const money = useMoney();
   const { currency } = useStoreCurrency();
@@ -117,11 +119,9 @@ export function OrgHome() {
             <p className="mt-2 text-2xl font-semibold tabular-nums">
               {money(detail.data.balance_nano_usd)}
             </p>
-            {isOwner && (
-              <Button variant="outline" size="sm" className="mt-3" onClick={() => setDepositOpen(true)}>
-                {t("org.deposit")}
-              </Button>
-            )}
+            <Button variant="outline" size="sm" className="mt-3" onClick={() => setDepositOpen(true)}>
+              {t("org.deposit")}
+            </Button>
           </CardContent>
         </Card>
         <Card className="rounded-2xl">
@@ -240,7 +240,9 @@ export function OrgHome() {
                   toast.success(t("org.depositDone"));
                   setDepositOpen(false);
                   setDepositAmount("");
-                  await Promise.all([detail.mutate(), reloadOrgs()]);
+                  // The personal balance in the account menu reads auth state,
+                  // not SWR, so it must be refreshed alongside the org data.
+                  await Promise.all([detail.mutate(), reloadOrgs(), refreshUser()]);
                 } catch (error) {
                   toast.error(error instanceof Error ? error.message : t("common.error"));
                 } finally {

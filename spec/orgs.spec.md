@@ -70,8 +70,8 @@ single link (old token becomes invalid immediately) and is owner-only.
 
 ## 4. Wallet
 
-ORG-12. `POST /api/dashboard/orgs/{org_id}/deposit {amount_nano_usd}` (owner only) moves a
-positive amount from the owner's personal wallet into the org wallet.
+ORG-12. `POST /api/dashboard/orgs/{org_id}/deposit {amount_nano_usd}` (any member) moves a
+positive amount from that member's personal wallet into the org wallet.
 
 ORG-13. `POST /api/dashboard/orgs/{org_id}/distribute {member_user_id, amount_nano_usd}`
 (owner only) moves a positive amount from the org wallet into one member's personal
@@ -90,7 +90,9 @@ ORG-15. `GET /api/dashboard/orgs/{org_id}/keys` returns (a) the caller's keys in
 with their sharing state and FULL key material and (b) keys usable by the caller (mode
 `public`; or `allow` with a share row for the caller; or `deny` without one) including
 full key material for copying. Key material in the space is always visible, never
-once-only.
+once-only. Each of the caller's own key entries with mode `allow` or `deny` also carries
+`shared_with`: the `user_id` list of its current `org_key_shares` rows, so the sharing
+editor can present the saved selection.
 
 ORG-16. `PUT /api/dashboard/orgs/{org_id}/keys/{key_id}/sharing {mode:
 "private"|"public"|"allow"|"deny", member_ids?}` is restricted to the key's owner.

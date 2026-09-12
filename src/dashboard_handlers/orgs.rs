@@ -14,7 +14,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use chrono::{DateTime, Duration, Utc};
-use sea_orm::{ConnectionTrait, Statement, TransactionTrait};
+use sea_orm::{ConnectionTrait, Statement, TransactionTrait, sea_query::Value as SeaValue};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -749,12 +749,10 @@ pub async fn deposit_to_org(
     let amount = parse_amount(&body.amount_nano_usd)?;
     let backend = state.db_pool.read().get_database_backend();
     let read = state.db_pool.read();
-    let role = member_role(&*read, backend, &org_id, &user.id)
+    // ORG-12: any member may fund the wallet from their personal balance.
+    member_role(&*read, backend, &org_id, &user.id)
         .await?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
-    if role != "owner" {
-        return Err(forbidden("only the owner can deposit into the organization wallet"));
-    }
     let (personal_after, org_after) = move_wallet_balance(
         &state,
         &user.id,
@@ -938,6 +936,34 @@ pub async fn list_org_keys(
         .await
         .map_err(storage)?;
 
+    // ORG-15: the caller's own allow/deny keys carry their current share rows so the
+    // sharing editor can present the saved selection.
+    let mut shared_by_key: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    if !mine.is_empty() {
+        let key_ids: Vec<SeaValue> = mine
+            .iter()
+            .map(|row| row.try_get::<String>("", "id").unwrap_or_default().into())
+            .collect();
+        let placeholders = (1..=key_ids.len())
+            .map(|i| format!("${i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let share_rows = read
+            .query_all(Statement::from_sql_and_values(
+                backend,
+                format!("SELECT api_key_id, member_user_id FROM org_key_shares WHERE api_key_id IN ({placeholders})"),
+                key_ids,
+            ))
+            .await
+            .map_err(storage)?;
+        for row in share_rows {
+            let key_id = row.try_get::<String>("", "api_key_id").map_err(storage)?;
+            let member_id = row.try_get::<String>("", "member_user_id").map_err(storage)?;
+            shared_by_key.entry(key_id).or_default().push(member_id);
+        }
+    }
+
     Ok(Json(json!({
         "mine": mine
             .iter()
@@ -948,6 +974,10 @@ pub async fn list_org_keys(
                 "key": row.try_get::<String>("", "key").unwrap_or_default(),
                 "key_prefix": row.try_get::<String>("", "key_prefix").unwrap_or_default(),
                 "share_mode": row.try_get::<Option<String>>("", "org_share_mode").unwrap_or_default(),
+                "shared_with": shared_by_key
+                    .get(&row.try_get::<String>("", "id").unwrap_or_default())
+                    .cloned()
+                    .unwrap_or_default(),
                 "model_limits_enabled": row.try_get::<i32>("", "model_limits_enabled").unwrap_or(0) == 1,
                 "model_limits": serde_json::from_str::<Vec<String>>(
                     &row.try_get::<String>("", "model_limits").unwrap_or_else(|_| "[]".to_string()),

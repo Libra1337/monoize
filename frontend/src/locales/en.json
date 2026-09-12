@@ -1101,6 +1101,8 @@
     "restrictions": "Restrictions",
     "unlimited": "Unlimited",
     "enableModelLimits": "Enable Model Limits",
+    "allowedModels": "Allowed models",
+    "modelsHelp": "Separate models with commas; leave empty to allow all models.",
     "modelRedirects": "Model Redirects",
     "modelRedirectsEmpty": "No model redirects configured",
     "modelRedirectsHelp": "Regex patterns matched against model names. First match wins. Example: .*opus.* → gpt-5.4",
@@ -2301,9 +2303,9 @@
     "sharedToMe": "Shared with me",
     "permTitle": "Permission",
     "permPrivate": "Only me",
-    "permPublic": "Everyone",
-    "permAllow": "Only these members",
-    "permDeny": "Everyone except",
+    "permPublic": "Shared with space",
+    "permAllow": "Only selected members",
+    "permDeny": "Everyone except selected",
     "modelLimitLabel": "Model limits",
     "modelLimitSearch": "Search models…",
     "modelLimitSelected": "{{count}} models allowed",
@@ -2327,6 +2329,17 @@
     "kindOut": "Wallet out",
     "kindRecharge": "Recharge",
     "kindOther": "Other",
-    "inviteBanner": "You are invited to join"
+    "inviteBanner": "You are invited to join",
+    "permAllowCount": "Only {{count}} members allowed",
+    "permDenyCount": "All except {{count}} members",
+    "shareListLabel": "Member list",
+    "noOtherMembers": "No other members in this space",
+    "permNoneSelected": "No member checked: nobody but you can see this key",
+    "permDesc": {
+      "private": "Only you can view, copy, and use this key",
+      "public": "Every member of the space can view and copy this key",
+      "allow": "Only the checked members can view this key",
+      "deny": "Everyone except the checked members can view this key"
+    }
   }
 }

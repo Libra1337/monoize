@@ -1101,6 +1101,8 @@
     "restrictions": "限制",
     "unlimited": "无限制",
     "enableModelLimits": "启用模型限制",
+    "allowedModels": "允许的模型",
+    "modelsHelp": "多个模型用英文逗号分隔，留空则允许全部模型。",
     "modelRedirects": "模型重定向",
     "modelRedirectsEmpty": "未配置模型重定向",
     "modelRedirectsHelp": "正则表达式匹配模型名称，首次匹配生效。例如：.*opus.* → gpt-5.4",
@@ -2301,9 +2303,9 @@
     "sharedToMe": "共享给我的",
     "permTitle": "权限",
     "permPrivate": "仅自己可用",
-    "permPublic": "公用",
-    "permAllow": "仅这些成员可用",
-    "permDeny": "仅这些成员不可用",
+    "permPublic": "空间内公用",
+    "permAllow": "仅指定成员可用",
+    "permDeny": "除指定成员外可用",
     "modelLimitLabel": "可用模型",
     "modelLimitSearch": "搜索模型…",
     "modelLimitSelected": "已允许 {{count}} 个模型",
@@ -2327,6 +2329,17 @@
     "kindOut": "钱包支出",
     "kindRecharge": "充值",
     "kindOther": "其他",
-    "inviteBanner": "你被邀请加入"
+    "inviteBanner": "你被邀请加入",
+    "permAllowCount": "仅 {{count}} 名成员可用",
+    "permDenyCount": "除 {{count}} 名成员外可用",
+    "shareListLabel": "成员名单",
+    "noOtherMembers": "空间内没有其他成员",
+    "permNoneSelected": "未勾选任何成员：除你之外没有人能看到这个 key",
+    "permDesc": {
+      "private": "只有你能查看、复制和使用这个 key",
+      "public": "组织内所有成员都能查看并复制这个 key",
+      "allow": "只有名单内勾选的成员可以查看",
+      "deny": "除名单内勾选的成员外都可以查看"
+    }
   }
 }

@@ -1101,6 +1101,8 @@
     "restrictions": "制限",
     "unlimited": "無制限",
     "enableModelLimits": "モデル制限を有効化",
+    "allowedModels": "許可するモデル",
+    "modelsHelp": "モデルはカンマで区切ります。空欄ならすべてのモデルを許可します。",
     "ipHelp": "カンマ区切りの IP アドレスまたは CIDR 範囲のリスト",
     "maxMultiplier": "最大課金倍率",
     "maxMultiplierHelp": "このキーを使用するリクエストの最大課金倍率を制限します。ヘッダーで指定された倍率はこの値を超えることができません。空欄で制限なし。",
@@ -2297,9 +2299,9 @@
     "sharedToMe": "共有されている key",
     "permTitle": "権限",
     "permPrivate": "自分のみ",
-    "permPublic": "全員で共用",
-    "permAllow": "これらのメンバーのみ",
-    "permDeny": "これらのメンバーを除外",
+    "permPublic": "スペースで共有",
+    "permAllow": "選択したメンバーのみ",
+    "permDeny": "選択したメンバー以外全員",
     "modelLimitLabel": "利用可能モデル",
     "modelLimitSearch": "モデルを検索…",
     "modelLimitSelected": "{{count}} 件のモデルを許可",
@@ -2323,6 +2325,17 @@
     "kindOut": "ウォレット支出",
     "kindRecharge": "チャージ",
     "kindOther": "その他",
-    "inviteBanner": "招待されています"
+    "inviteBanner": "招待されています",
+    "permAllowCount": "許可するメンバー {{count}} 名",
+    "permDenyCount": "除外するメンバー {{count}} 名",
+    "shareListLabel": "メンバーリスト",
+    "noOtherMembers": "スペースに他のメンバーがいません",
+    "permNoneSelected": "メンバー未選択：あなた以外は誰もこのキーを見られません",
+    "permDesc": {
+      "private": "このキーを表示・コピー・利用できるのはあなただけです",
+      "public": "スペースの全メンバーがこのキーを表示・コピーできます",
+      "allow": "チェックしたメンバーだけがこのキーを表示できます",
+      "deny": "チェックしたメンバー以外の全員が表示できます"
+    }
   }
 }

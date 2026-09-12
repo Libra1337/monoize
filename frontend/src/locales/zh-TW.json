@@ -1101,6 +1101,8 @@
     "restrictions": "限制",
     "unlimited": "無限制",
     "enableModelLimits": "啟用模型限制",
+    "allowedModels": "允許的模型",
+    "modelsHelp": "多個模型用英文逗號分隔，留空則允許全部模型。",
     "ipHelp": "以逗號分隔的 IP 位址或 CIDR 範圍清單",
     "maxMultiplier": "最大計費倍率",
     "maxMultiplierHelp": "限制使用此金鑰的請求之最大計費倍率。透過 header 指定的倍率不得超過此值。留空表示不限制。",
@@ -2298,9 +2300,9 @@
     "sharedToMe": "共享給我的",
     "permTitle": "權限",
     "permPrivate": "僅自己可用",
-    "permPublic": "公用",
-    "permAllow": "僅這些成員可用",
-    "permDeny": "僅這些成員不可用",
+    "permPublic": "空間內公用",
+    "permAllow": "僅指定成員可用",
+    "permDeny": "除指定成員外可用",
     "modelLimitLabel": "可用模型",
     "modelLimitSearch": "搜尋模型…",
     "modelLimitSelected": "已允許 {{count}} 個模型",
@@ -2324,6 +2326,17 @@
     "kindOut": "錢包支出",
     "kindRecharge": "儲值",
     "kindOther": "其他",
-    "inviteBanner": "你被邀請加入"
+    "inviteBanner": "你被邀請加入",
+    "permAllowCount": "僅 {{count}} 名成員可用",
+    "permDenyCount": "除 {{count}} 名成員外可用",
+    "shareListLabel": "成員名單",
+    "noOtherMembers": "空間內沒有其他成員",
+    "permNoneSelected": "未勾選任何成員：除你之外沒有人能看到這個 key",
+    "permDesc": {
+      "private": "只有你能查看、複製和使用這個 key",
+      "public": "組織內所有成員都能查看並複製這個 key",
+      "allow": "只有名單內勾選的成員可以查看",
+      "deny": "除名單內勾選的成員外都可以查看"
+    }
   }
 }
