@@ -273,7 +273,12 @@
         "admin_sub_account_adjustment": "管理员调整",
         "sub_account_refund": "子账户退回",
         "sub_account_debt_transfer": "子账户转移",
-        "plan_grant": "套餐赠送"
+        "plan_grant": "套餐赠送",
+        "org_deposit": "转入组织钱包",
+        "org_deposit_receive": "成员充值到账",
+        "org_grant": "分发给成员",
+        "org_delete_refund": "组织删除退回（转出）",
+        "org_delete_receive": "组织删除退回"
       }
     }
   },
@@ -1747,7 +1752,9 @@
     "commonErrors": "常见错误",
     "requestSample": "请求示例",
     "copy": "复制",
-    "copied": "已复制"
+    "copied": "已复制",
+    "loadFailed": "站点设置暂时无法加载。",
+    "retry": "重试"
   },
   "modelMarketplace": {
     "title": "模型广场",

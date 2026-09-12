@@ -273,7 +273,12 @@
         "admin_sub_account_adjustment": "管理者調整",
         "sub_account_refund": "サブアカウント返却",
         "sub_account_debt_transfer": "サブアカウント移動",
-        "plan_grant": "プラン付与"
+        "plan_grant": "プラン付与",
+        "org_deposit": "組織ウォレットへ送金",
+        "org_deposit_receive": "メンバー入金",
+        "org_grant": "メンバーへ配分",
+        "org_delete_refund": "組織削除返還（支出）",
+        "org_delete_receive": "組織削除返還"
       }
     }
   },
@@ -1743,7 +1748,9 @@
     "commonErrors": "一般的なエラー",
     "requestSample": "リクエスト例",
     "copy": "コピー",
-    "copied": "コピーしました"
+    "copied": "コピーしました",
+    "loadFailed": "サイト設定を読み込めませんでした。",
+    "retry": "再試行"
   },
   "modelMarketplace": {
     "title": "モデルマーケット",

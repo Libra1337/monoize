@@ -266,7 +266,7 @@ pub async fn create_user(
         )
         .await
         .map_err(|e| {
-            if e.starts_with("unknown group id") {
+            if e.starts_with("unknown group id") || e.starts_with("group account class mismatch") {
                 AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e)
             } else {
                 AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)

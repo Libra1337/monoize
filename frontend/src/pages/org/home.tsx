@@ -236,8 +236,11 @@ export function OrgHome() {
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    void navigator.clipboard.writeText(detail.data.invite!.code);
-                    toast.success(t("org.codeCopied"));
+                    const code = detail.data?.invite?.code;
+                    if (code) {
+                      void navigator.clipboard.writeText(code);
+                      toast.success(t("org.codeCopied"));
+                    }
                   }}
                 >
                   <Copy className="mr-1 h-3.5 w-3.5" />

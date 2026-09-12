@@ -273,7 +273,12 @@
         "admin_sub_account_adjustment": "Admin adjustment",
         "sub_account_refund": "Sub-account refund",
         "sub_account_debt_transfer": "Sub-account transfer",
-        "plan_grant": "Plan grant"
+        "plan_grant": "Plan grant",
+        "org_deposit": "Transferred to an org wallet",
+        "org_deposit_receive": "Member deposit received",
+        "org_grant": "Distributed to a member",
+        "org_delete_refund": "Org deletion refund (out)",
+        "org_delete_receive": "Org deletion refund"
       }
     }
   },
@@ -1747,7 +1752,9 @@
     "commonErrors": "Common errors",
     "requestSample": "Request sample",
     "copy": "Copy",
-    "copied": "Copied"
+    "copied": "Copied",
+    "loadFailed": "Site settings could not be loaded.",
+    "retry": "Retry"
   },
   "modelMarketplace": {
     "title": "Model Marketplace",

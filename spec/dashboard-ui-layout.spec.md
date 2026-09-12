@@ -37,6 +37,12 @@ the authentication header, one request sample, streaming support, one success sh
 common error shape inside one bordered content panel. Copy success feedback MUST be visible and
 MUST reset without changing panel dimensions.
 
+DL-MIG-9. When the public settings SWR resource for `/dashboard/api-docs` resolves with an error
+and no cached data, the page MUST show a load-failure notice with a retry action that revalidates
+the resource. In that state the page MUST NOT show the DL-MIG-6 configuration error, because the
+configured value is unknown rather than empty. The DL-MIG-6 configuration error applies only
+after the resource resolves successfully with an `api_base_url` that is empty after trimming.
+
 ## 0. Status
 
 - Product name: Monoize.

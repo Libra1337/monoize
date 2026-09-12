@@ -273,7 +273,12 @@
         "admin_sub_account_adjustment": "管理員調整",
         "sub_account_refund": "子帳戶退回",
         "sub_account_debt_transfer": "子帳戶轉移",
-        "plan_grant": "方案贈送"
+        "plan_grant": "方案贈送",
+        "org_deposit": "轉入組織錢包",
+        "org_deposit_receive": "成員儲值到帳",
+        "org_grant": "分發給成員",
+        "org_delete_refund": "組織刪除退回（轉出）",
+        "org_delete_receive": "組織刪除退回"
       }
     }
   },
@@ -1744,7 +1749,9 @@
     "commonErrors": "常見錯誤",
     "requestSample": "請求範例",
     "copy": "複製",
-    "copied": "已複製"
+    "copied": "已複製",
+    "loadFailed": "站台設定暫時無法載入。",
+    "retry": "重試"
   },
   "modelMarketplace": {
     "title": "模型廣場",

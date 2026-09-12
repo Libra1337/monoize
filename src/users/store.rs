@@ -618,27 +618,31 @@ impl UserStore {
         let id = uuid::Uuid::new_v4().to_string();
         let password_hash = Self::hash_password_async(password).await?;
         let now = Utc::now();
-        let group_id = match group_id.map(str::trim).filter(|value| !value.is_empty()) {
+        let (group_id, account_class) = match group_id.map(str::trim).filter(|value| !value.is_empty()) {
             Some(value) => {
-                // A new user is always Standard, so an Enterprise Group here would
-                // store a cross-class binding that every later Group-access and
-                // API-key check rejects. Refuse it at creation instead.
+                // The account class follows the chosen Group, so the row never
+                // carries the cross-class binding the old guard refused.
                 let group = self
                     .get_group_by_id(value)
                     .await?
                     .ok_or_else(|| format!("unknown group id: {value}"))?;
-                if group.account_class != AccountClass::Standard {
-                    return Err(format!("group account class mismatch: {value}"));
-                }
-                value.to_string()
+                (value.to_string(), group.account_class)
             }
-            None => self.default_group_id().await?,
+            None => {
+                let default = self.default_group_id().await?;
+                let class = self
+                    .get_group_by_id(&default)
+                    .await?
+                    .map(|group| group.account_class)
+                    .unwrap_or(AccountClass::Standard);
+                (default, class)
+            }
         };
 
         self.db.write().await
             .execute(self.db.stmt(
-                r#"INSERT INTO users (id, username, password_hash, role, created_at, updated_at, enabled, balance_nano_usd, balance_unlimited, group_id)
-                   VALUES ($1, $2, $3, $4, $5, $6, 1, '0', 0, $7)"#,
+                r#"INSERT INTO users (id, username, password_hash, role, created_at, updated_at, enabled, balance_nano_usd, balance_unlimited, group_id, account_class)
+                   VALUES ($1, $2, $3, $4, $5, $6, 1, '0', 0, $7, $8)"#,
                 vec![
                     id.clone().into(),
                     username.into(),
@@ -647,6 +651,7 @@ impl UserStore {
                     now.to_rfc3339().into(),
                     now.to_rfc3339().into(),
                     group_id.clone().into(),
+                    account_class.as_str().into(),
                 ],
             ))
             .await
@@ -658,7 +663,7 @@ impl UserStore {
             username: username.to_string(),
             password_hash,
             role,
-            account_class: AccountClass::Standard,
+            account_class,
             created_at: now,
             updated_at: now,
             last_login_at: None,

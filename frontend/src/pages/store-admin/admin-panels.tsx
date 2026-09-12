@@ -313,13 +313,8 @@ export function OrdersPanel({
 }) {
   const { t, i18n } = useTranslation();
   return (
-    <section className="grid gap-4" aria-labelledby="store-admin-orders-title">
-      <div>
-        <h2 id="store-admin-orders-title" className="text-lg font-semibold">
-          {t("store.admin.orders.title")}
-        </h2>
-        <p className="text-sm text-muted-foreground">{t("store.admin.orders.descriptionText")}</p>
-      </div>
+    // The standalone orders page carries the page header; this panel is its body.
+    <section className="grid gap-4">
       {orders.length === 0 ? (
         <EmptyPanel icon={<ReceiptText className="size-8" />} title={t("store.admin.orders.empty")} />
       ) : (
@@ -340,7 +335,9 @@ export function OrdersPanel({
                 <tr key={order.id} className="border-t transition-colors hover:bg-muted/30">
                   <td className="px-4 py-2 font-medium">
                     <div className="flex items-center justify-between gap-2">
-                      <span>{order.order_number}</span>
+                      <span className="min-w-0 truncate" title={order.order_number}>
+                        {order.order_number}
+                      </span>
                       <Button
                         type="button"
                         variant="ghost"
@@ -354,7 +351,9 @@ export function OrdersPanel({
                     </div>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {order.username || order.user_id}
+                    <span className="block truncate" title={order.username || order.user_id}>
+                      {order.username || order.user_id}
+                    </span>
                   </td>
                   <td className="px-4 py-3 tabular-nums">{formatMinor(order.payment_minor, order.payment_currency)}</td>
                   <td className="px-4 py-3">

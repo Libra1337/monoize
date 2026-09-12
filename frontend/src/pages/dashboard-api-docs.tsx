@@ -20,11 +20,14 @@ import { cn } from "@/lib/utils";
 
 export function DashboardApiDocsPage() {
   const { t } = useTranslation();
-  const { data: site, isLoading } = usePublicSiteSettings();
+  const { data: site, isLoading, error, mutate } = usePublicSiteSettings();
   const [family, setFamily] = useState<ApiFamily>("responses");
   const [language, setLanguage] = useState<ApiSampleLanguage>("curl");
   const [copied, setCopied] = useState(false);
+  // Distinguish a failed settings fetch (unknown value, retryable) from a loaded-but-empty
+  // configured value (a genuine configuration error per DL-MIG-6).
   const configuredBaseUrl = site?.api_base_url.trim() ?? "";
+  const fetchFailed = !!error && !site;
   const resolution = configuredBaseUrl
     ? resolvePublicApiBaseUrl(configuredBaseUrl, window.location.origin)
     : { baseUrl: null, error: "public_api_base_url_required" as const };
@@ -97,7 +100,23 @@ export function DashboardApiDocsPage() {
               <Terminal className="size-4 text-primary" />
               <h2 id="console-base-url" className="text-sm font-semibold">{t("apiDocsConsole.baseUrl")}</h2>
             </div>
-            {isLoading ? <Skeleton className="mt-3 h-11 w-full" /> : resolution.error ? (
+            {isLoading ? <Skeleton className="mt-3 h-11 w-full" /> : fetchFailed ? (
+              <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                <span className="flex min-w-0 items-center gap-2">
+                  <AlertTriangle className="size-4 shrink-0" />
+                  {t("apiDocsConsole.loadFailed")}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="min-h-11 shrink-0"
+                  onClick={() => void mutate()}
+                >
+                  {t("apiDocsConsole.retry")}
+                </Button>
+              </div>
+            ) : resolution.error ? (
               <div className="mt-3 flex gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                 <span>{t("apiDocsConsole.baseUrlMissing")}</span>

@@ -100,7 +100,7 @@ A2. `PUT /api/dashboard/users/{user_id}` MUST accept optional fields:
 - `email: string | null`
 - `group_id: string`
 
-A2a. `POST /api/dashboard/users` MUST accept optional field `group_id: string`. If the field is omitted, the stored value MUST be the default group id.
+A2a. `POST /api/dashboard/users` MUST accept optional field `group_id: string`. If the field is omitted, the stored value MUST be the default group id. The new user's `account_class` MUST equal the account class of the chosen group (any group is accepted); an unknown group id MUST be rejected with HTTP `400` and code `invalid_request`.
 
 A2b. `PUT /api/dashboard/users/{user_id}` MUST treat `group_id` as a partial-update field:
 
