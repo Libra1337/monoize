@@ -60,7 +60,7 @@ export function OrgLogsPage() {
   const emptyAffinityNames = useMemo(() => new Map<string, string>(), []);
 
   return (
-    <PageWrapper className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-6">
+    <PageWrapper className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}

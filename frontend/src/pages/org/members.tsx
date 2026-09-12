@@ -55,7 +55,7 @@ export function OrgMembers() {
   const isOwner = detail.data.my_role === "owner";
 
   return (
-    <PageWrapper className="mx-auto max-w-4xl space-y-4 p-6">
+    <PageWrapper className="space-y-4">
       <h1 className="text-xl font-semibold">{t("org.navMembers")}</h1>
       <Card className="rounded-2xl">
         <CardContent className="p-0">

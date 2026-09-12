@@ -149,7 +149,6 @@ function Sidebar({
     { to: "/dashboard/usage-ranking", icon: ChartSpline, label: t("nav.usageRanking") },
     { to: "/dashboard/status", icon: Activity, label: t("nav.runtimeStatus") },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
-    { to: "/org", icon: Building2, label: t("nav.orgSpace") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
@@ -169,7 +168,6 @@ function Sidebar({
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
     { to: "/dashboard/usage/cache", icon: DatabaseZap, label: t("nav.cacheHitRate") },
-    { to: "/org", icon: Building2, label: t("nav.orgSpace") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
@@ -229,8 +227,8 @@ function Sidebar({
         {showOrgEntries && (
           <div
             className={cn(
-              "mt-2 flex items-center gap-1 rounded-lg bg-muted p-1",
-              collapsed ? "flex-col px-0" : "px-1",
+              "mt-2 flex items-center rounded-md bg-muted p-0.5",
+              collapsed ? "w-full flex-col" : "mx-auto w-fit",
             )}
             role="group"
             aria-label={t("nav.modeSwitch")}
@@ -239,7 +237,8 @@ function Sidebar({
               to="/dashboard"
               relative="path"
               className={cn(
-                "relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors",
+                "relative flex h-6 items-center justify-center gap-1 rounded-[5px] text-[11px] font-medium transition-colors",
+                collapsed ? "w-full px-0" : "px-2",
                 !inOrgMode ? "text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
               title={t("nav.workspace")}
@@ -247,17 +246,18 @@ function Sidebar({
               {!inOrgMode && (
                 <motion.span
                   layoutId="mode-toggle-indicator"
-                  className="absolute inset-0 rounded-md bg-background shadow-sm"
+                  className="absolute inset-0 rounded-[5px] bg-background shadow-sm"
                   transition={springs.snappy}
                 />
               )}
-              <LayoutDashboard className="relative z-10 size-3.5" />
+              <LayoutDashboard className="relative z-10 size-3" />
               {!collapsed && <span className="relative z-10">{t("nav.workspace")}</span>}
             </Link>
             <Link
               to="/org"
               className={cn(
-                "relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors",
+                "relative flex h-6 items-center justify-center gap-1 rounded-[5px] text-[11px] font-medium transition-colors",
+                collapsed ? "w-full px-0" : "px-2",
                 inOrgMode ? "text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
               title={t("nav.orgSpace")}
@@ -265,11 +265,11 @@ function Sidebar({
               {inOrgMode && (
                 <motion.span
                   layoutId="mode-toggle-indicator"
-                  className="absolute inset-0 rounded-md bg-background shadow-sm"
+                  className="absolute inset-0 rounded-[5px] bg-background shadow-sm"
                   transition={springs.snappy}
                 />
               )}
-              <Building2 className="relative z-10 size-3.5" />
+              <Building2 className="relative z-10 size-3" />
               {!collapsed && <span className="relative z-10">{t("nav.orgSpace")}</span>}
             </Link>
           </div>

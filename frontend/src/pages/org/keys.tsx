@@ -217,7 +217,7 @@ export function OrgKeys() {
   };
 
   return (
-    <PageWrapper className="mx-auto max-w-5xl space-y-6 p-6">
+    <PageWrapper className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">{t("org.navKeys")}</h1>
         <Button onClick={openCreate}>

@@ -106,33 +106,33 @@ export function OrgShell() {
               </div>
             </Link>
 
-            {/* Mode toggle: the same control as the workspace sidebar, org side active. */}
+            {/* Mode toggle: the same compact pill as the workspace sidebar, org side active. */}
             <div
-              className="mt-2 flex items-center gap-1 rounded-lg bg-muted p-1"
+              className="mx-auto mt-2 flex w-fit items-center rounded-md bg-muted p-0.5"
               role="group"
               aria-label={t("nav.modeSwitch")}
             >
               <Link
                 to="/dashboard"
-                className="relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                className="relative flex h-6 items-center justify-center gap-1 rounded-[5px] px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
                 title={t("nav.workspace")}
               >
-                <LayoutDashboard className="size-3.5" />
+                <LayoutDashboard className="size-3" />
                 {t("nav.workspace")}
               </Link>
               <Link
                 to={`/org/${active.id}/home`}
-                className="relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-foreground"
+                className="relative flex h-6 items-center justify-center gap-1 rounded-[5px] px-2 text-[11px] font-medium text-foreground"
                 title={t("nav.orgSpace")}
               >
                 {/* The same layoutId as the workspace toggle, so the pill slides
                     across the workspace ⇄ org transition. */}
                 <motion.span
                   layoutId="mode-toggle-indicator"
-                  className="absolute inset-0 rounded-md bg-background shadow-sm"
+                  className="absolute inset-0 rounded-[5px] bg-background shadow-sm"
                   transition={springs.snappy}
                 />
-                <Building2 className="relative z-10 size-3.5" />
+                <Building2 className="relative z-10 size-3" />
                 <span className="relative z-10">{t("nav.orgSpace")}</span>
               </Link>
             </div>
@@ -214,7 +214,9 @@ export function OrgShell() {
         </aside>
 
         <main className="min-w-0 flex-1 overflow-y-auto">
-          <Outlet key={active.id} />
+          <div className="mx-auto min-w-0 w-full max-w-6xl px-6 py-6">
+            <Outlet key={active.id} />
+          </div>
         </main>
 
         <CreateOrgDialog

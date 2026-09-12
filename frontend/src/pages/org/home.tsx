@@ -97,7 +97,7 @@ export function OrgHome() {
   const keyCount = (keys.data?.mine.length ?? 0) + (keys.data?.shared.length ?? 0);
 
   return (
-    <PageWrapper className="mx-auto max-w-5xl space-y-6 p-6">
+    <PageWrapper className="space-y-6">
       <header className="flex items-center gap-4">
         <OrgAvatar
           emoji={detail.data.avatar_emoji}
