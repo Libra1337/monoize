@@ -18,6 +18,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { PageWrapper } from "@/components/ui/motion";
 import { api, type OrgDetail, type OrgKeyEntry, type OrgShareMode } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { useMarketplaceModels } from "@/lib/swr";
@@ -83,7 +84,7 @@ export function OrgKeys() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
+    <PageWrapper className="mx-auto max-w-5xl space-y-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">{t("org.navKeys")}</h1>
         <Button onClick={openCreate}>
@@ -375,7 +376,7 @@ export function OrgKeys() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageWrapper>
   );
 }
 

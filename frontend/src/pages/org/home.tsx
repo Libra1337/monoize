@@ -18,11 +18,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { PageWrapper } from "@/components/ui/motion";
 import { api, type OrgDetail } from "@/lib/api";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
-import { useMyOrgs, OrgAvatar } from "./shell";
+import { useMyOrgs, OrgAvatar } from "./shared";
 
 function useMoney() {
   const { currency } = useStoreCurrency();
@@ -82,7 +83,7 @@ export function OrgHome() {
   const keyCount = (keys.data?.mine.length ?? 0) + (keys.data?.shared.length ?? 0);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
+    <PageWrapper className="mx-auto max-w-5xl space-y-6 p-6">
       <header className="flex items-center gap-4">
         <OrgAvatar
           emoji={detail.data.avatar_emoji}
@@ -254,6 +255,6 @@ export function OrgHome() {
         </DialogContent>
       </Dialog>
 
-    </div>
+    </PageWrapper>
   );
 }

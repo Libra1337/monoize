@@ -336,6 +336,7 @@ fn analytics_model_bucket_sql(
     is_sqlite: bool,
     user_scoped: bool,
     api_key_scoped: bool,
+    org_scoped: bool,
     bucketing: AnalyticsBucketing,
 ) -> String {
     let bucket_expr = analytics_bucket_expr(is_sqlite, bucketing);
@@ -351,6 +352,15 @@ fn analytics_model_bucket_sql(
         (true, true) => " AND rl.api_key_id = $7",
         (false, true) => " AND rl.api_key_id = $6",
         (_, false) => "",
+    };
+    // The org scope binds after the optional user and key scopes.
+    let org_filter = if org_scoped {
+        format!(
+            " AND rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = ${})",
+            6 + user_scoped as usize + api_key_scoped as usize
+        )
+    } else {
+        String::new()
     };
     let token_columns = if is_sqlite {
         "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
@@ -371,7 +381,7 @@ fn analytics_model_bucket_sql(
     format!(
         "SELECT {bucket_expr} AS bucket_idx, {model_expr} AS model, {charge_columns}, {token_columns}, COUNT(*) AS call_count \
          FROM request_logs rl \
-         WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter}{api_key_filter}{probe_filter} \
+         WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter}{api_key_filter}{org_filter}{probe_filter} \
          GROUP BY bucket_idx, {model_expr} \
          ORDER BY bucket_idx, model"
     )
@@ -482,6 +492,7 @@ mod tests {
                         is_sqlite,
                         user_scoped,
                         api_key_scoped,
+                        false,
                         bucketing,
                     );
                     assert!(sql.contains(&exclusion), "{sql}");
@@ -717,7 +728,7 @@ mod tests {
         assert_eq!(last_month - first_month, 3);
 
         let sql =
-            analytics_model_bucket_sql(true, true, false, AnalyticsBucketing::CalendarMonths);
+            analytics_model_bucket_sql(true, true, false, false, AnalyticsBucketing::CalendarMonths);
         let rows = db
             .read()
             .query_all(db.stmt(
@@ -859,7 +870,7 @@ mod tests {
             .await
             .unwrap();
 
-        let sql = analytics_model_bucket_sql(true, true, false, AnalyticsBucketing::EqualIntervals);
+        let sql = analytics_model_bucket_sql(true, true, false, false, AnalyticsBucketing::EqualIntervals);
         assert!(sql.contains(
             "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')"
         ));
@@ -1269,7 +1280,7 @@ mod tests {
         }
         let analytics_rows = txn
             .query_all(db.stmt(
-                &analytics_model_bucket_sql(false, true, false, AnalyticsBucketing::EqualIntervals),
+                &analytics_model_bucket_sql(false, true, false, false, AnalyticsBucketing::EqualIntervals),
                 vec![
                     1_704_067_199_000_i64.into(),
                     2_i64.into(),
@@ -1978,6 +1989,158 @@ impl UserStore {
         Ok((logs, total, total_charge_nano_usd))
     }
 
+    /// Org-space log listing (orgs.spec.md ORG-24): every request-log row whose
+    /// api key belongs to the org, regardless of which member owns the key.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_request_logs_by_org(
+        &self,
+        org_id: &str,
+        limit: i64,
+        offset: i64,
+        model: Option<&str>,
+        status: Option<&str>,
+        api_key_id: Option<&str>,
+        search: Option<&str>,
+        time_from: Option<&str>,
+        time_to: Option<&str>,
+    ) -> Result<(Vec<RequestLogRow>, i64, String), String> {
+        Self::validate_request_log_model_filter(model)?;
+        let is_postgres = self.db.is_postgres();
+        let model = normalize_request_log_filter(model);
+        let status = normalize_request_log_filter(status);
+        let api_key_id = normalize_request_log_filter(api_key_id);
+        let search = normalize_request_log_filter(search);
+        let txn = self
+            .db
+            .read()
+            .begin_with_config(
+                is_postgres.then_some(IsolationLevel::RepeatableRead),
+                is_postgres.then_some(AccessMode::ReadOnly),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut count_sql =
+            "SELECT COUNT(*) as cnt FROM request_logs rl WHERE rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = $1)"
+                .to_string();
+        let mut count_values: Vec<SeaValue> = vec![org_id.into()];
+        let mut count_idx = 2usize;
+        append_request_log_filters(
+            &mut count_sql,
+            &mut count_values,
+            &mut count_idx,
+            is_postgres,
+            model.as_deref(),
+            status.as_deref(),
+            api_key_id.as_deref(),
+            None,
+            search.as_deref(),
+            time_from,
+            time_to,
+        )?;
+        let count_row = txn
+            .query_one(self.db.stmt(&count_sql, count_values))
+            .await
+            .map_err(|e| e.to_string())?;
+        let total: i64 = count_row
+            .ok_or_else(|| "no count row".to_string())?
+            .try_get("", "cnt")
+            .map_err(|e| e.to_string())?;
+
+        let mut sum_sql = format!(
+            "{} FROM request_logs rl WHERE rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = $1)",
+            charge_aggregate_select(is_postgres)
+        );
+        let mut sum_values: Vec<SeaValue> = vec![org_id.into()];
+        let mut sum_idx = 2usize;
+        append_request_log_filters(
+            &mut sum_sql,
+            &mut sum_values,
+            &mut sum_idx,
+            is_postgres,
+            model.as_deref(),
+            status.as_deref(),
+            api_key_id.as_deref(),
+            None,
+            search.as_deref(),
+            time_from,
+            time_to,
+        )?;
+        let sum_row = txn
+            .query_one(self.db.stmt(&sum_sql, sum_values))
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "no request log charge aggregate row".to_string())?;
+        let total_charge_nano_usd = decode_charge_aggregate(&sum_row, is_postgres)?;
+
+        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+                      rl.channel_id, rl.is_stream,
+                      rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
+                      rl.tool_prompt_tokens, rl.reasoning_tokens,
+                      rl.accepted_prediction_tokens, rl.rejected_prediction_tokens,
+                      rl.provider_multiplier, rl.charge_nano_usd, rl.status,
+                      rl.usage_breakdown_json, rl.billing_breakdown_json,
+                      rl.error_code, rl.error_message, rl.error_http_status,
+                      rl.duration_ms, rl.ttfb_ms,
+                      rl.request_ip, rl.reasoning_effort, rl.tried_providers_json, rl.request_kind,
+                      rl.effective_provider_type, rl.affinity_hit, rl.affinity_key_hash, rl.affinity_target,
+                      rl.session_affinity_value,
+                      rl.created_at,
+                      EXISTS (SELECT 1 FROM request_capture_records rcr WHERE rcr.request_id = rl.request_id AND rcr.user_id = rl.user_id) AS has_capture,
+                      u.username AS username, ak.name AS api_key_name, p.channel_name AS channel_name, p.name AS provider_name
+               FROM request_logs rl
+               LEFT JOIN users u ON u.id = rl.user_id
+               LEFT JOIN api_keys ak ON ak.id = rl.api_key_id
+               LEFT JOIN monoize_providers p ON p.id = rl.provider_id
+               WHERE rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = $1)"#
+            .to_string();
+        let mut rows_values: Vec<SeaValue> = vec![org_id.into()];
+        let mut rows_idx = 2usize;
+        append_request_log_filters(
+            &mut rows_sql,
+            &mut rows_values,
+            &mut rows_idx,
+            is_postgres,
+            model.as_deref(),
+            status.as_deref(),
+            api_key_id.as_deref(),
+            None,
+            search.as_deref(),
+            time_from,
+            time_to,
+        )?;
+        if is_postgres {
+            rows_sql.push_str(&format!(
+                " ORDER BY rl.created_at_unix_ms DESC NULLS LAST, rl.created_at DESC, rl.id DESC LIMIT ${} OFFSET ${}",
+                rows_idx,
+                rows_idx + 1
+            ));
+        } else {
+            rows_sql.push_str(&format!(
+                " ORDER BY rl.created_at_unix_ms DESC, rl.created_at DESC, rl.id DESC LIMIT ${} OFFSET ${}",
+                rows_idx,
+                rows_idx + 1
+            ));
+        }
+        rows_values.push(SeaValue::BigInt(Some(limit)));
+        rows_values.push(SeaValue::BigInt(Some(offset)));
+
+        let rows = txn
+            .query_all(self.db.stmt(&rows_sql, rows_values))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        txn.commit().await.map_err(|e| e.to_string())?;
+        let mut logs = rows
+            .into_iter()
+            .map(|row| row_to_request_log(&row))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.enrich_request_log_tried_provider_names(&mut logs)
+            .await?;
+
+        Ok((logs, total, total_charge_nano_usd))
+    }
+
     pub async fn get_api_key_analytics_start(
         &self,
         user_id: &str,
@@ -2001,6 +2164,7 @@ impl UserStore {
         &self,
         user_id: Option<&str>,
         api_key_id: Option<&str>,
+        org_id: Option<&str>,
         time_from: &str,
         time_to: &str,
         today_start: &str,
@@ -2009,6 +2173,7 @@ impl UserStore {
         self.get_dashboard_analytics_bucketed(
             user_id,
             api_key_id,
+            org_id,
             time_from,
             time_to,
             today_start,
@@ -2018,10 +2183,12 @@ impl UserStore {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn get_dashboard_analytics_bucketed(
         &self,
         user_id: Option<&str>,
         api_key_id: Option<&str>,
+        org_id: Option<&str>,
         time_from: &str,
         time_to: &str,
         today_start: &str,
@@ -2046,6 +2213,7 @@ impl UserStore {
             is_sqlite,
             user_id.is_some(),
             api_key_id.is_some(),
+            org_id.is_some(),
             bucketing,
         );
         // The three bucket parameters carry a different meaning per mode; see
@@ -2075,6 +2243,9 @@ impl UserStore {
         }
         if let Some(key_id) = api_key_id {
             model_values.push(key_id.into());
+        }
+        if let Some(oid) = org_id {
+            model_values.push(oid.into());
         }
 
         let model_rows = self
@@ -2140,6 +2311,13 @@ impl UserStore {
         if let Some(key_id) = api_key_id {
             prov_sql.push_str(&format!(" AND rl.api_key_id = ${prov_idx}"));
             prov_values.push(key_id.into());
+        }
+        if let Some(oid) = org_id {
+            let org_idx = prov_idx + api_key_id.is_some() as usize;
+            prov_sql.push_str(&format!(
+                " AND rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = ${org_idx})"
+            ));
+            prov_values.push(oid.into());
         }
         prov_sql.push_str(" GROUP BY bucket_idx, provider_label");
 
@@ -2218,6 +2396,13 @@ impl UserStore {
         if let Some(key_id) = api_key_id {
             today_sql.push_str(&format!(" AND rl.api_key_id = ${today_idx}"));
             today_values.push(key_id.into());
+            today_idx += 1;
+        }
+        if let Some(oid) = org_id {
+            today_sql.push_str(&format!(
+                " AND rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = ${today_idx})"
+            ));
+            today_values.push(oid.into());
         }
         let today_row = self
             .db

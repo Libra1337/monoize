@@ -1,9 +1,18 @@
 import { useMemo, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import useSWR, { mutate } from "swr";
-import { Building2, Coins, KeyRound, LayoutDashboard, Plus, UsersRound } from "lucide-react";
-import { api, type OrgSummary } from "@/lib/api";
+import { mutate } from "swr";
+import {
+  Building2,
+  ChartNoAxesCombined,
+  Coins,
+  DatabaseZap,
+  KeyRound,
+  LayoutDashboard,
+  Plus,
+  ScrollText,
+  UsersRound,
+} from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
@@ -13,38 +22,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { motion, springs } from "@/components/ui/motion";
 import { CreateOrgDialog } from "./entry";
-
-export const ORGS_KEY = "/api/dashboard/orgs";
-
-export function useMyOrgs() {
-  return useSWR<OrgSummary[]>(ORGS_KEY, () => api.listMyOrgs(), { fallbackData: [] });
-}
-
-export function OrgAvatar({
-  emoji,
-  color,
-  image,
-  size = "size-10",
-  text = "text-xl",
-}: {
-  emoji: string;
-  color: string;
-  image?: string | null;
-  size?: string;
-  text?: string;
-}) {
-  if (image) {
-    return <img src={image} alt="" className={`${size} shrink-0 rounded-xl object-cover`} />;
-  }
-  return (
-    <div
-      className={`${size} ${text} flex shrink-0 items-center justify-center rounded-xl`}
-      style={{ backgroundColor: `${color}22`, color }}
-    >
-      {emoji}
-    </div>
-  );
-}
+import { ORGS_KEY, useMyOrgs, OrgAvatar } from "./shared";
 
 /** The org-space shell: the workspace sidebar design with org identity and org navigation. */
 export function OrgShell() {
@@ -61,6 +39,9 @@ export function OrgShell() {
 
   const navItems = [
     { to: "home", icon: LayoutDashboard, label: t("org.navHome"), exact: true },
+    { to: "usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
+    { to: "usage/cache", icon: DatabaseZap, label: t("nav.cacheHitRate") },
+    { to: "logs", icon: ScrollText, label: t("nav.logs") },
     { to: "members", icon: UsersRound, label: t("org.navMembers") },
     { to: "keys", icon: KeyRound, label: t("org.navKeys") },
     { to: "wallet", icon: Coins, label: t("org.navWallet") },
@@ -104,7 +85,7 @@ export function OrgShell() {
           >
             {/* Brand slot: the org identity, the same row layout as the workspace logo. */}
             <Link
-              to="/org"
+              to={`/org/${active.id}/home`}
               className="group flex items-center gap-3 rounded-lg px-2.5 py-2.5 transition-colors hover:bg-accent/50"
             >
               <OrgAvatar
@@ -139,12 +120,14 @@ export function OrgShell() {
                 {t("nav.workspace")}
               </Link>
               <Link
-                to="/org"
+                to={`/org/${active.id}/home`}
                 className="relative flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-foreground"
                 title={t("nav.orgSpace")}
               >
+                {/* The same layoutId as the workspace toggle, so the pill slides
+                    across the workspace ⇄ org transition. */}
                 <motion.span
-                  layoutId="org-mode-toggle-indicator"
+                  layoutId="mode-toggle-indicator"
                   className="absolute inset-0 rounded-md bg-background shadow-sm"
                   transition={springs.snappy}
                 />

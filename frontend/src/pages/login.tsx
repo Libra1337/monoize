@@ -1,5 +1,5 @@
 import { useCallback, useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Languages, Sun, Moon } from "lucide-react";
 import { MonoizeLogo } from "@/components/MonoizeLogo";
@@ -53,6 +53,16 @@ export function LoginPage() {
 
   const { login, register, user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // A same-app path pushed by a login guard (e.g. an org invite link); never an
+  // absolute URL, so a crafted state cannot redirect off-site.
+  const returnTo = (() => {
+    const from = (location.state as { from?: unknown } | null)?.from;
+    return typeof from === "string" && from.startsWith("/") && !from.startsWith("//")
+      ? from
+      : null;
+  })();
 
   const handleCaptchaError = useCallback(() => {
     setError(t("auth.captchaError"));
@@ -65,9 +75,9 @@ export function LoginPage() {
 
   useEffect(() => {
     if (user) {
-      navigate("/dashboard");
+      navigate(returnTo ?? "/dashboard");
     }
-  }, [user, navigate]);
+  }, [user, navigate, returnTo]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,7 +90,7 @@ export function LoginPage() {
       } else {
         await register(username, password, captchaToken);
       }
-      navigate("/dashboard");
+      navigate(returnTo ?? "/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
       resetCaptcha();

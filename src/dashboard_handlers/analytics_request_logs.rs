@@ -45,7 +45,7 @@ fn default_logs_limit() -> i64 {
     50
 }
 
-fn validate_request_log_model_filter(query: &RequestLogsQuery) -> AppResult<()> {
+pub(crate) fn validate_request_log_model_filter(query: &RequestLogsQuery) -> AppResult<()> {
     crate::users::UserStore::validate_request_log_model_filter(query.model.as_deref()).map_err(
         |message| {
             AppError::new(
@@ -58,7 +58,7 @@ fn validate_request_log_model_filter(query: &RequestLogsQuery) -> AppResult<()> 
     )
 }
 
-fn validate_request_log_time_filters(query: &RequestLogsQuery) -> AppResult<()> {
+pub(crate) fn validate_request_log_time_filters(query: &RequestLogsQuery) -> AppResult<()> {
     let parse = |name: &'static str, value: Option<&str>| {
         value
             .map(|value| {
@@ -355,6 +355,7 @@ pub async fn get_dashboard_analytics(
         .get_dashboard_analytics(
             user_id_filter.as_deref(),
             None,
+            None,
             &time_from,
             &time_to,
             &today_start,
@@ -363,6 +364,21 @@ pub async fn get_dashboard_analytics(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
+    Ok(Json(render_analytics_json(
+        &raw, buckets, range_hours, now, &time_from, &time_to,
+    )?))
+}
+
+/// Shared response shape for every analytics consumer (self, admin, org space).
+/// Token and cost totals are exact integers serialized as strings.
+pub(crate) fn render_analytics_json(
+    raw: &crate::users::DashboardAnalyticsRaw,
+    buckets: i64,
+    range_hours: i64,
+    now: chrono::DateTime<Utc>,
+    time_from: &str,
+    time_to: &str,
+) -> Result<Value, AppError> {
     let range_ms = (range_hours as f64) * 3600.0 * 1000.0;
     let time_from_ms = now.timestamp_millis() as f64 - range_ms;
     let bucket_width_ms = range_ms / (buckets as f64);
@@ -479,7 +495,7 @@ pub async fn get_dashboard_analytics(
         })
         .collect();
 
-    Ok(Json(json!({
+    Ok(json!({
         "buckets": response_buckets,
         "time_from": time_from,
         "time_to": time_to,
@@ -491,7 +507,7 @@ pub async fn get_dashboard_analytics(
         "total_cache_read_tokens": exact_integer_json(raw.total_cache_read_tokens),
         "total_output_tokens": exact_integer_json(raw.total_output_tokens),
         "total_tokens": exact_integer_json(raw.total_tokens),
-    })))
+    }))
 }
 
 /// Guard that decrements the per-user SSE connection counter on drop,

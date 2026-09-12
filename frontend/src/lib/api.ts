@@ -1493,6 +1493,35 @@ class ApiClient {
     return this.request(`/orgs/${orgId}/ledger`);
   }
 
+  async getOrgAnalytics(
+    orgId: string,
+    buckets: number,
+    rangeHours: number,
+  ): Promise<DashboardAnalytics> {
+    const params = new URLSearchParams();
+    params.set("buckets", String(buckets));
+    params.set("range_hours", String(rangeHours));
+    return this.request(`/orgs/${orgId}/analytics?${params.toString()}`);
+  }
+
+  async listOrgRequestLogs(
+    orgId: string,
+    limit = 50,
+    offset = 0,
+    filters?: RequestLogsFilter,
+  ): Promise<RequestLogsResponse> {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+    if (filters?.model) params.set("model", filters.model);
+    if (filters?.status) params.set("status", filters.status);
+    if (filters?.api_key_id) params.set("api_key_id", filters.api_key_id);
+    if (filters?.search) params.set("search", filters.search);
+    if (filters?.time_from) params.set("time_from", filters.time_from);
+    if (filters?.time_to) params.set("time_to", filters.time_to);
+    return this.request(`/orgs/${orgId}/request-logs?${params.toString()}`);
+  }
+
   async removeOrgMember(orgId: string, memberUserId: string) {
     return this.request(`/orgs/${orgId}/members/${memberUserId}`, { method: "DELETE" });
   }

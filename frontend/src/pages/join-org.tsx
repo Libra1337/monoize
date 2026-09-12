@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import useSWR from "swr";
 import { toast } from "sonner";
@@ -8,17 +8,26 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { motion, springs } from "@/components/ui/motion";
+import { useAuth } from "@/hooks/use-auth";
 
 /** ORG-19: the invite landing — a bold centered card with accept/decline. */
 export function JoinOrgPage() {
   const { token = "" } = useParams();
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { user, loading } = useAuth();
   const [busy, setBusy] = useState(false);
   const preview = useSWR(
     token ? `/api/dashboard/orgs/invite/${token}` : null,
     () => api.previewOrgInvite(token),
   );
+
+  // ORG-19c: the preview needs a session. An unauthenticated visitor is sent to
+  // sign in and comes back to this link afterwards; otherwise the 401 would be
+  // reported as an invalid invite.
+  if (!loading && !user) {
+    return <Navigate to="/login" state={{ from: `/join/${token}` }} replace />;
+  }
 
   const handleAccept = async () => {
     if (busy) return;

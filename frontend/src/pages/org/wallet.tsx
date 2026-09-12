@@ -4,6 +4,7 @@ import useSWR from "swr";
 import { Coins } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageWrapper } from "@/components/ui/motion";
 import { api, type OrgDetail, type OrgLedgerEntry } from "@/lib/api";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
@@ -35,7 +36,7 @@ export function OrgWallet() {
   if (!orgId) return null;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-6">
+    <PageWrapper className="mx-auto max-w-4xl space-y-6 p-6">
       <h1 className="text-xl font-semibold">{t("org.navWallet")}</h1>
 
       <Card className="rounded-2xl">
@@ -96,6 +97,6 @@ export function OrgWallet() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </PageWrapper>
   );
 }

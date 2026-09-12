@@ -124,3 +124,27 @@ this release; admin adjustment is a later change.
 
 ORG-22. `GET /api/dashboard/orgs/{org_id}/ledger` (any member) returns the org wallet's
 `billing_ledger` rows, newest first, at most 200.
+
+## 9. Space analytics and logs
+
+ORG-23. `GET /api/dashboard/orgs/{org_id}/analytics?buckets={1..48}&range_hours={1..720}`
+(any member) returns exactly the response shape of `GET /api/dashboard/analytics`, where
+every aggregate (bucketed model cost/calls/tokens, provider calls, today and range totals)
+is computed over request-log rows whose `api_key_id` belongs to a key with
+`api_keys.org_id = {org_id}`. Rows of members' private keys (org_id NULL) are excluded.
+
+ORG-24. `GET /api/dashboard/orgs/{org_id}/request-logs` (any member) accepts the same
+query parameters as `GET /api/dashboard/request-logs` (`limit` 1..200, `offset`, `model`,
+`status`, `api_key_id`, `search`, `time_from`, `time_to`; `username` is ignored) and
+returns the same response shape (`data`, `total`, `total_charge_nano_usd`, `limit`,
+`offset`) over the same org-key row set. Non-admin callers get masked error detail under
+the same `mask_sensitive_info` setting as the personal log list. A non-member caller
+receives `404 not_found` for both endpoints.
+
+ORG-25. `/org/{org_id}` navigation offers Overview, Usage Analysis, Cache Hit Rate, Logs,
+Members, Keys, Wallet; the three analytics/logs pages are the workspace pages bound to the
+ORG-23/24 endpoints instead of the personal ones.
+
+ORG-26. `/join/{token}` without a session redirects to `/login` carrying the invite path
+as return state; a successful login returns to the invite. The return path is accepted
+only when it starts with a single `/`.

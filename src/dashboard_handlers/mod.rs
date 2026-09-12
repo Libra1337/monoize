@@ -68,8 +68,8 @@ pub use providers::{
 };
 pub use orgs::{
     create_org, create_org_key, deposit_to_org, distribute_from_org, invite_preview,
-    join_org, list_my_orgs, list_org_keys, org_detail, org_ledger, regenerate_invite,
-    remove_org_member, update_key_sharing,
+    join_org, list_my_orgs, list_org_keys, org_analytics, org_detail, org_ledger,
+    org_request_logs, regenerate_invite, remove_org_member, update_key_sharing,
 };
 
 pub use sales::{

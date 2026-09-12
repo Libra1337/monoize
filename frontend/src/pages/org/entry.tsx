@@ -19,7 +19,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { api, type OrgInviteExpiry } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { motion, springs } from "@/components/ui/motion";
-import { ORGS_KEY, useMyOrgs, OrgAvatar } from "./shell";
+import { ORGS_KEY, useMyOrgs, OrgAvatar } from "./shared";
 import { mutate } from "swr";
 
 const refreshOrgs = () => mutate(ORGS_KEY);
@@ -72,9 +72,10 @@ export function OrgEntry() {
     return <div className="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">…</div>;
   }
 
+  // A declarative redirect; calling navigate() during render throws in React
+  // Router and is what blanked the page when toggling workspace ⇄ org space.
   if (orgs && orgs.length > 0) {
-    navigate(`/org/${orgs[0].id}/home`, { replace: true });
-    return null;
+    return <Navigate to={`/org/${orgs[0].id}/home`} replace />;
   }
 
   return (

@@ -7,8 +7,8 @@ import { PageWrapper, SharedTabIndicator } from "@/components/ui/motion";
 import { ModelDistribution } from "@/components/usage/model-distribution";
 import { TokenSummary } from "@/components/usage/token-summary";
 import { UsageTrendChart } from "@/components/usage/usage-trend-chart";
-import { useDashboardAnalytics } from "@/lib/swr";
 import { aggregateTokenTotals, type TokenMetric } from "@/lib/usage-analytics";
+import { useUsageAnalytics } from "@/lib/org-analytics";
 import { cn } from "@/lib/utils";
 
 type UsageRange = "24h" | "7d" | "30d";
@@ -21,7 +21,7 @@ const USAGE_RANGES: Record<UsageRange, { hours: number; buckets: number }> = {
 
 const METRICS: TokenMetric[] = ["total", "input", "cache_read", "output"];
 
-function SegmentedControl<T extends string>({
+export function SegmentedControl<T extends string>({
   values,
   value,
   label,
@@ -57,15 +57,12 @@ function SegmentedControl<T extends string>({
   );
 }
 
-export function UsageAnalysisPage() {
+export function UsageAnalysisPage({ orgId }: { orgId?: string } = {}) {
   const { t } = useTranslation();
   const [range, setRange] = useState<UsageRange>("7d");
   const [metric, setMetric] = useState<TokenMetric>("total");
   const config = USAGE_RANGES[range];
-  const analytics = useDashboardAnalytics(config.buckets, config.hours, "self", {
-    keepPreviousData: true,
-    refreshInterval: 2000,
-  });
+  const analytics = useUsageAnalytics(orgId, config.buckets, config.hours);
   const selectionLoading = analytics.isLoading
     || analytics.data?.buckets.length !== config.buckets;
   const totals = useMemo(

@@ -7,6 +7,7 @@
 
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::get_current_user;
+use crate::dashboard_handlers::{AnalyticsQuery, RequestLogsQuery};
 use crate::error::{AppError, AppResult};
 use axum::Json;
 use axum::extract::{Path, State};
@@ -1126,4 +1127,103 @@ pub async fn remove_org_member(
     .map_err(storage)?;
     tx.commit().await.map_err(storage)?;
     Ok(Json(json!({ "success": true })))
+}
+
+async fn require_org_member(
+    org_id: &str,
+    user_id: &str,
+    state: &AppState,
+) -> Result<String, AppError> {
+    let backend = state.db_pool.read().get_database_backend();
+    let read = state.db_pool.read();
+    member_role(&*read, backend, org_id, user_id)
+        .await?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))
+}
+
+/// ORG-23: usage analytics over every request made with a key of this org.
+/// The response shape equals `GET /api/dashboard/analytics`.
+pub async fn org_analytics(
+    State(state): State<AppState>,
+    Path(org_id): Path<String>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<AnalyticsQuery>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    require_org_member(&org_id, &user.id, &state).await?;
+    let buckets = query.buckets.clamp(1, 48);
+    let range_hours = query.range_hours.clamp(1, 720);
+    let now = Utc::now();
+    let time_to = now.to_rfc3339();
+    let time_from = (now - Duration::hours(range_hours)).to_rfc3339();
+    let today_start = now
+        .date_naive()
+        .and_time(chrono::NaiveTime::MIN)
+        .and_utc()
+        .to_rfc3339();
+    let raw = state
+        .user_store
+        .get_dashboard_analytics(
+            None,
+            None,
+            Some(&org_id),
+            &time_from,
+            &time_to,
+            &today_start,
+            buckets,
+        )
+        .await
+        .map_err(storage)?;
+    Ok(Json(super::analytics_request_logs::render_analytics_json(
+        &raw,
+        buckets,
+        range_hours,
+        now,
+        &time_from,
+        &time_to,
+    )?))
+}
+
+/// ORG-24: request logs across every key of this org. The response shape equals
+/// `GET /api/dashboard/request-logs`; error detail masking follows the same rule.
+pub async fn org_request_logs(
+    State(state): State<AppState>,
+    Path(org_id): Path<String>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<RequestLogsQuery>,
+) -> AppResult<impl IntoResponse> {
+    super::analytics_request_logs::validate_request_log_model_filter(&query)?;
+    let user = get_current_user(&headers, &state).await?;
+    super::analytics_request_logs::validate_request_log_time_filters(&query)?;
+    require_org_member(&org_id, &user.id, &state).await?;
+    let is_admin = user.role.can_manage_users();
+    let limit = query.limit.clamp(1, 200);
+    let offset = query.offset.max(0);
+    let (mut logs, total, total_charge_nano_usd) = state
+        .user_store
+        .list_request_logs_by_org(
+            &org_id,
+            limit,
+            offset,
+            query.model.as_deref(),
+            query.status.as_deref(),
+            query.api_key_id.as_deref(),
+            query.search.as_deref(),
+            query.time_from.as_deref(),
+            query.time_to.as_deref(),
+        )
+        .await
+        .map_err(storage)?;
+    if !is_admin && state.monoize_runtime.read().await.mask_sensitive_info {
+        for log in &mut logs {
+            log.mask_error_detail_for_non_admin();
+        }
+    }
+    Ok(Json(json!({
+        "data": logs,
+        "total": total,
+        "total_charge_nano_usd": total_charge_nano_usd,
+        "limit": limit,
+        "offset": offset,
+    })))
 }

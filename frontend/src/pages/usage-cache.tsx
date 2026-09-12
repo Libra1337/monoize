@@ -17,7 +17,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/hooks/use-auth";
-import { useDashboardAnalytics, useProviders } from "@/lib/swr";
+import { useProviders } from "@/lib/swr";
+import { useUsageAnalytics } from "@/lib/org-analytics";
 import {
   aggregateTokenTotals,
   cacheHitRateTable,
@@ -51,7 +52,7 @@ const GRADE_BAR: Record<CacheHitGrade, string> = {
   high: "bg-success",
 };
 
-export function UsageCachePage() {
+export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
@@ -63,13 +64,11 @@ export function UsageCachePage() {
 
   // UA-35: no explicit scope, so an Admin role aggregates every user and a member aggregates
   // itself. A per-model cache rate is only actionable when it covers the traffic the operator
-  // is responsible for.
-  const analytics = useDashboardAnalytics(config.buckets, config.hours, undefined, {
-    keepPreviousData: true,
-    refreshInterval: 2000,
-  });
+  // is responsible for. In org mode the source is the org's shared keys instead.
+  const analytics = useUsageAnalytics(orgId, config.buckets, config.hours);
   // UA-36: the routable catalog is admin-only, so a member sees the models it used.
-  const providers = useProviders({ keepPreviousData: true }, isAdmin);
+  // Org space is always member-level: the table lists the models the org actually used.
+  const providers = useProviders({ keepPreviousData: true }, !orgId && isAdmin);
 
   const catalog = useMemo(
     () => (providers.data ?? []).flatMap((provider) => Object.keys(provider.channel.models)),

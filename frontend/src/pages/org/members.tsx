@@ -17,10 +17,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { PageWrapper } from "@/components/ui/motion";
 import { api, type OrgDetail, type OrgMember } from "@/lib/api";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
-import { useMyOrgs } from "./shell";
+import { useMyOrgs } from "./shared";
 
 function amountToNanoUsd(raw: string, currency: "CNY" | "USD", cnyPerUsd?: string): string | null {
   const trimmed = raw.trim();
@@ -54,7 +55,7 @@ export function OrgMembers() {
   const isOwner = detail.data.my_role === "owner";
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4 p-6">
+    <PageWrapper className="mx-auto max-w-4xl space-y-4 p-6">
       <h1 className="text-xl font-semibold">{t("org.navMembers")}</h1>
       <Card className="rounded-2xl">
         <CardContent className="p-0">
@@ -164,6 +165,6 @@ export function OrgMembers() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageWrapper>
   );
 }

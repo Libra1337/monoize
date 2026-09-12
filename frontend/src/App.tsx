@@ -18,6 +18,8 @@ import { OrgHome } from "./pages/org/home";
 import { OrgMembers } from "./pages/org/members";
 import { OrgKeys } from "./pages/org/keys";
 import { OrgWallet } from "./pages/org/wallet";
+import { OrgUsagePage, OrgCachePage } from "./pages/org/usage";
+import { OrgLogsPage } from "./pages/org/logs";
 import { JoinOrgPage } from "./pages/join-org";
 import { ApiKeysPage } from "@/pages/api-keys";
 import { UsersPage } from "@/pages/users";
@@ -132,6 +134,9 @@ function App() {
             <Route path=":orgId" element={<OrgShell />}>
               <Route index element={<Navigate to="home" replace />} />
               <Route path="home" element={<OrgHome />} />
+              <Route path="usage" element={<OrgUsagePage />} />
+              <Route path="usage/cache" element={<OrgCachePage />} />
+              <Route path="logs" element={<OrgLogsPage />} />
               <Route path="members" element={<OrgMembers />} />
               <Route path="keys" element={<OrgKeys />} />
               <Route path="wallet" element={<OrgWallet />} />

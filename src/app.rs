@@ -2670,6 +2670,14 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::distribute_from_org),
         )
         .route(
+            "/dashboard/orgs/{org_id}/analytics",
+            get(crate::dashboard_handlers::org_analytics),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/request-logs",
+            get(crate::dashboard_handlers::org_request_logs),
+        )
+        .route(
             "/dashboard/orgs/{org_id}/keys",
             get(crate::dashboard_handlers::list_org_keys),
         )
