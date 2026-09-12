@@ -164,6 +164,7 @@ describe("Enterprise navigation", () => {
       "/dashboard/tokens",
       "/dashboard/usage",
       "/dashboard/usage/cache",
+      "/dashboard/org",
       "/dashboard/logs",
       "/dashboard/marketplace",
       "/dashboard/api-docs",

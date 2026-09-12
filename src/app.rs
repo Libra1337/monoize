@@ -2654,6 +2654,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             get(crate::dashboard_handlers::org_detail),
         )
         .route(
+            "/dashboard/orgs/{org_id}/ledger",
+            get(crate::dashboard_handlers::org_ledger),
+        )
+        .route(
             "/dashboard/orgs/{org_id}/invite",
             post(crate::dashboard_handlers::regenerate_invite),
         )

@@ -3,14 +3,13 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Loader2, ShieldQuestion } from "lucide-react";
+import { Loader2, ShieldQuestion, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { motion, springs } from "@/components/ui/motion";
 
-/** ORG-19: the invite landing — org identity in the middle, accept or decline. */
+/** ORG-19: the invite landing — a bold centered card with accept/decline. */
 export function JoinOrgPage() {
   const { token = "" } = useParams();
   const { t } = useTranslation();
@@ -27,7 +26,7 @@ export function JoinOrgPage() {
     try {
       const joined = await api.joinOrg(token);
       toast.success(t("org.joined"));
-      navigate(`/dashboard/org?org=${joined.org_id}`, { replace: true });
+      navigate(`/org/${joined.org_id}/home`, { replace: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("common.error"));
     } finally {
@@ -36,56 +35,82 @@ export function JoinOrgPage() {
   };
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-muted/40 p-4">
-      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={springs.snappy}>
-        <Card className="w-full max-w-md rounded-3xl">
-          <CardContent className="flex flex-col items-center gap-5 p-8 text-center">
-            {preview.isLoading ? (
-              <>
-                <Skeleton className="size-20 rounded-3xl" />
-                <Skeleton className="h-7 w-40" />
-                <Skeleton className="h-4 w-56" />
-                <Skeleton className="h-10 w-full" />
-              </>
-            ) : preview.error ? (
-              <>
-                <ShieldQuestion className="size-16 text-muted-foreground" />
-                <p className="text-lg font-semibold">{t("org.inviteInvalid")}</p>
-                <p className="text-sm text-muted-foreground">{t("org.inviteInvalidDescription")}</p>
-                <Button asChild variant="outline" className="w-full">
-                  <Link to="/dashboard">{t("org.backToDashboard")}</Link>
-                </Button>
-              </>
-            ) : preview.data ? (
-              <>
-                <div
-                  className="flex size-20 items-center justify-center rounded-3xl text-4xl"
-                  style={{ backgroundColor: `${preview.data.avatar_color}22`, color: preview.data.avatar_color }}
-                >
-                  {preview.data.avatar_emoji}
-                </div>
-                <div>
-                  <h1 className="text-xl font-semibold">{preview.data.display_name}</h1>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {t("org.inviteOwner", { owner: preview.data.owner_username })}
-                    {" · "}
-                    {t("org.members", { count: preview.data.member_count })}
-                  </p>
-                </div>
-                <p className="text-sm text-muted-foreground">{t("org.inviteJoinHint")}</p>
-                <div className="grid w-full grid-cols-2 gap-3">
-                  <Button variant="outline" onClick={() => navigate("/dashboard", { replace: true })}>
-                    {t("org.decline")}
-                  </Button>
-                  <Button onClick={() => void handleAccept()} disabled={busy}>
-                    {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    {t("org.accept")}
-                  </Button>
-                </div>
-              </>
-            ) : null}
-          </CardContent>
-        </Card>
+    <div className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-background p-6">
+      <div
+        className="pointer-events-none absolute -top-32 left-1/2 h-[28rem] w-[42rem] -translate-x-1/2 rounded-full opacity-20 blur-3xl"
+        style={{ backgroundColor: preview.data?.avatar_color ?? "#6366f1" }}
+      />
+      <motion.div
+        initial={{ opacity: 0, y: 24, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={springs.snappy}
+        className="relative w-full max-w-lg rounded-3xl border bg-card p-10 text-center shadow-xl"
+      >
+        {preview.isLoading ? (
+          <div className="flex flex-col items-center gap-5">
+            <Skeleton className="size-24 rounded-3xl" />
+            <Skeleton className="h-8 w-52" />
+            <Skeleton className="h-4 w-64" />
+            <Skeleton className="h-12 w-full" />
+          </div>
+        ) : preview.error ? (
+          <div className="flex flex-col items-center gap-4">
+            <ShieldQuestion className="size-16 text-muted-foreground" />
+            <h1 className="text-xl font-semibold">{t("org.inviteInvalid")}</h1>
+            <p className="text-sm text-muted-foreground">{t("org.inviteInvalidDescription")}</p>
+            <Button asChild variant="outline" className="mt-2 w-full">
+              <Link to="/dashboard">{t("org.backToDashboard")}</Link>
+            </Button>
+          </div>
+        ) : preview.data ? (
+          <>
+            <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+              {t("org.inviteBanner")}
+            </p>
+            {preview.data.avatar_image ? (
+              <img
+                src={preview.data.avatar_image}
+                alt=""
+                className="mx-auto mt-5 size-24 rounded-3xl object-cover shadow-md"
+              />
+            ) : (
+              <div
+                className="mx-auto mt-5 flex size-24 items-center justify-center rounded-3xl text-5xl shadow-md"
+                style={{
+                  backgroundColor: `${preview.data.avatar_color}22`,
+                  color: preview.data.avatar_color,
+                }}
+              >
+                {preview.data.avatar_emoji}
+              </div>
+            )}
+            <h1 className="mt-5 text-3xl font-semibold tracking-tight">
+              {preview.data.display_name}
+            </h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {t("org.inviteOwner", { owner: preview.data.owner_username })}
+            </p>
+            <div className="mx-auto mt-4 flex w-fit items-center gap-2 rounded-full border px-4 py-1.5 text-sm text-muted-foreground">
+              <UsersRound className="size-4" />
+              {t("org.members", { count: preview.data.member_count })}
+              <span className="text-muted-foreground/60">·</span>
+              {t("org.inviteJoinHint")}
+            </div>
+            <div className="mt-8 grid grid-cols-2 gap-3">
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => navigate("/dashboard", { replace: true })}
+              >
+                {t("org.decline")}
+              </Button>
+              <Button size="lg" onClick={() => void handleAccept()} disabled={busy}>
+                {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {t("org.accept")}
+              </Button>
+            </div>
+          </>
+        ) : null}
       </motion.div>
     </div>
   );

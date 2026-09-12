@@ -1,5 +1,6 @@
 import { Navigate, Outlet, Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import useSWR from "swr";
 import {
   LayoutDashboard,
   Users,
@@ -25,8 +26,6 @@ import {
   DatabaseZap,
   HeartPulse,
   Activity,
-  PanelLeftClose,
-  PanelLeftOpen,
   UsersRound,
   Building2,
 } from "lucide-react";
@@ -47,6 +46,7 @@ import { MonoizeLogo } from "@/components/MonoizeLogo";
 import { UserCenterMenu } from "@/components/user-center-menu";
 import { springs } from "@/components/ui/motion";
 import { usePublicSiteSettings } from "@/lib/swr";
+import { api } from "@/lib/api";
 
 const navTransition = springs.snappy;
 
@@ -123,13 +123,11 @@ function Sidebar({
   layoutId = "nav-active",
   disableLayoutAnimation = false,
   collapsed = false,
-  onToggle,
 }: {
   onNavigate?: () => void;
   layoutId?: string;
   disableLayoutAnimation?: boolean;
   collapsed?: boolean;
-  onToggle?: () => void;
 }) {
   const { user } = useAuth();
   const { t } = useTranslation();
@@ -139,6 +137,11 @@ function Sidebar({
   const isSubAccount = !!user?.parent_user_id;
   const isSalesAccount = !!user?.is_sales_agent;
   const isAgentClass = user?.account_class === "agent";
+  const { data: myOrgs } = useSWR(user ? "/api/dashboard/orgs/sidebar" : null, () =>
+    api.listMyOrgs(),
+  );
+  const hasOrgs = (myOrgs?.length ?? 0) > 0;
+  const inOrgMode = window.location.pathname.startsWith("/org");
   const { data: publicSite } = usePublicSiteSettings();
   const siteName = publicSite?.site_name || "LynShen Console";
 
@@ -172,6 +175,7 @@ function Sidebar({
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
     { to: "/dashboard/usage/cache", icon: DatabaseZap, label: t("nav.cacheHitRate") },
+    { to: "/dashboard/org", icon: Building2, label: t("nav.orgSpace") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
@@ -226,11 +230,38 @@ function Sidebar({
           )}
         </Link>
 
-        {onToggle && (
-          <button type="button" onClick={onToggle} className={cn("mt-2 flex min-h-9 items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground", collapsed ? "mx-auto justify-center px-2" : "w-full gap-2 px-2.5")} aria-label={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}>
-            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
-            {!collapsed && <span className="text-xs">{t("nav.collapseSidebar")}</span>}
-          </button>
+        {hasOrgs && (
+          <div
+            className={cn(
+              "mt-2 flex items-center gap-1 rounded-lg bg-muted p-1",
+              collapsed ? "flex-col px-0" : "px-1",
+            )}
+            role="group"
+            aria-label={t("nav.modeSwitch")}
+          >
+            <Link
+              to="/dashboard"
+              className={cn(
+                "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors",
+                !inOrgMode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+              title={t("nav.workspace")}
+            >
+              <LayoutDashboard className="size-3.5" />
+              {!collapsed && t("nav.workspace")}
+            </Link>
+            <Link
+              to="/org"
+              className={cn(
+                "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors",
+                inOrgMode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+              title={t("nav.orgSpace")}
+            >
+              <Building2 className="size-3.5" />
+              {!collapsed && t("nav.orgSpace")}
+            </Link>
+          </div>
         )}
 
         <Separator className="my-3" />
@@ -283,15 +314,11 @@ export function DashboardLayout() {
   const { user, loading } = useAuth();
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(() => {
+  const [collapsed] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("lynshen-sidebar-collapsed") === "1";
   });
-  const toggleCollapsed = () => setCollapsed((value) => {
-    const next = !value;
-    window.localStorage.setItem("lynshen-sidebar-collapsed", next ? "1" : "0");
-    return next;
-  });
+
 
   if (loading) {
     return (
@@ -332,7 +359,7 @@ export function DashboardLayout() {
 
       {/* Desktop sidebar: full-bleed, responsive collapse */}
       <motion.aside animate={{ width: collapsed ? 64 : 256 }} transition={{ duration: 0.35, ease: "easeInOut" }} className="hidden h-dvh shrink-0 border-r lg:block">
-        <Sidebar collapsed={collapsed} onToggle={toggleCollapsed} />
+        <Sidebar collapsed={collapsed} />
         </motion.aside>
 
       {/* Main content area */}

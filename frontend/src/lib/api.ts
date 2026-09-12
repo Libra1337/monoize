@@ -19,6 +19,7 @@ export interface OrgSummary {
   display_name: string;
   avatar_emoji: string;
   avatar_color: string;
+  avatar_image?: string | null;
   role: string;
   member_count: number;
   balance_nano_usd: string;
@@ -38,6 +39,7 @@ export interface OrgDetail {
   display_name: string;
   avatar_emoji: string;
   avatar_color: string;
+  avatar_image?: string | null;
   my_role: string;
   balance_nano_usd: string;
   members: OrgMember[];
@@ -49,9 +51,12 @@ export interface OrgInvitePreview {
   display_name: string;
   avatar_emoji: string;
   avatar_color: string;
+  avatar_image?: string | null;
   owner_username: string;
   member_count: number;
 }
+
+export type OrgShareMode = "private" | "public" | "allow" | "deny";
 
 export interface OrgKeyEntry {
   id: string;
@@ -61,6 +66,16 @@ export interface OrgKeyEntry {
   created_at?: string;
   key?: string;
   owner_username?: string;
+  model_limits_enabled?: boolean;
+  model_limits?: string[];
+}
+
+export interface OrgLedgerEntry {
+  id: string;
+  kind: string;
+  delta_nano_usd: string;
+  balance_after_nano_usd: string;
+  created_at: string;
 }
 
 export interface OrgKeysResponse {
@@ -72,6 +87,7 @@ export interface CreateOrgInput {
   display_name: string;
   avatar_emoji?: string;
   avatar_color?: string;
+  avatar_image?: string;
   invite_expiry: "24h" | "3d" | "7d" | "30d" | "never";
 }
 
@@ -1463,12 +1479,17 @@ class ApiClient {
     return this.request(`/orgs/${orgId}/keys`);
   }
 
-  async createOrgKey(orgId: string, name: string, shareMode?: "default" | "all" | "private") {
+  async createOrgKey(
+    orgId: string,
+    name: string,
+    shareMode?: OrgShareMode,
+    modelLimits: string[] = [],
+  ) {
     return this.request<{ id: string; name: string; key: string; share_mode: string | null }>(
       `/orgs/${orgId}/keys`,
       {
         method: "POST",
-        body: JSON.stringify({ name, share_mode: shareMode ?? "default" }),
+        body: JSON.stringify({ name, share_mode: shareMode, model_limits: modelLimits }),
       },
     );
   }
@@ -1476,13 +1497,17 @@ class ApiClient {
   async updateOrgKeySharing(
     orgId: string,
     keyId: string,
-    mode: "private" | "all" | "selected",
+    mode: OrgShareMode,
     memberIds: string[] = [],
   ) {
     return this.request(`/orgs/${orgId}/keys/${keyId}/sharing`, {
       method: "PUT",
       body: JSON.stringify({ mode, member_ids: memberIds }),
     });
+  }
+
+  async getOrgLedger(orgId: string): Promise<OrgLedgerEntry[]> {
+    return this.request(`/orgs/${orgId}/ledger`);
   }
 
   async removeOrgMember(orgId: string, memberUserId: string) {

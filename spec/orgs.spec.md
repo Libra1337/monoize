@@ -18,18 +18,21 @@ wallet row never holds a session, never logs in, and its `balance_nano_usd` is t
 wallet. `is_org = 0` is an ordinary user.
 
 ORG-2. `orgs`: `id` (PK, equals the org wallet user id), `owner_user_id`, `display_name`
-(1..64 chars), `avatar_emoji` (1..8 bytes), `avatar_color` (7-char `#rrggbb`), `invite_token`
-(unique, 32-char Crockford-style random), `invite_expires_at` (NULL = never), `invite_created_at`,
-`created_at`, `updated_at`.
+(1..64 chars), `avatar_emoji` (1..8 bytes), `avatar_color` (7-char `#rrggbb`), `avatar_image`
+(NULL or a `data:image/` URL of at most 300000 characters — the custom uploaded avatar shown
+in preference to the emoji), `invite_token` (unique, 32-char random), `invite_expires_at`
+(NULL = never), `invite_created_at`, `created_at`, `updated_at`.
 
 ORG-3. `org_members`: `(org_id, user_id)` PK, `role` ∈ `owner` | `member`, `joined_at`.
 Exactly one member row with `role = owner` per org.
 
 ORG-4. `api_keys.org_id` (NULL = ordinary key) names the space a key is shared into.
-`api_keys.org_share_mode` is NULL (private), `'all'`, or `'selected'`. For `'selected'`,
-`org_key_shares (api_key_id, member_user_id)` lists the members who may see the key.
-Keys always belong to and bill their `user_id` owner; sharing changes only visibility of
-the key material inside the space.
+`api_keys.org_share_mode` is `private`, `public`, `allow`, or `deny`. `org_key_shares
+(api_key_id, member_user_id)` holds the member list whose meaning follows the mode: for
+`allow` the listed members may use the key and nobody else; for `deny` every member except
+the listed ones may use it. Keys always belong to and bill their `user_id` owner, carry the
+ordinary API-key `model_limits` restriction, and sharing changes only visibility of the key
+material inside the space.
 
 ## 2. Creation
 
@@ -39,10 +42,9 @@ invite_expiry: "24h"|"3d"|"7d"|"30d"|"never"}` creates one org. The caller MUST 
 `is_org = 0`; otherwise HTTP `403 org_forbidden`. A caller MAY own at most 2 orgs
 (`MAX_ORGS_PER_USER`); further creations return `409 org_limit_reached`.
 
-ORG-6. Creation charges a deposit of 1000 CNY converted to nano-USD at the current
-exchange snapshot from the caller's personal wallet into the org wallet, in the same
-transaction that creates the rows. An absent rate snapshot or an insufficient personal
-balance fails with no row created.
+ORG-6. Creation carries no fee: the enterprise account class is the sole qualification
+(admin-granted), and the org wallet starts at zero. The wallet is later funded only by
+owner deposits under ORG-12.
 
 ORG-7. The creator becomes the `owner` member row. The org wallet user row is created with
 `is_org = 1`, `role = user`, `account_class = enterprise`, and the default enterprise
@@ -80,18 +82,20 @@ counterparty in `meta_json` and row locks taken org-wallet-first.
 
 ## 5. Keys and sharing
 
-ORG-14. `POST /api/dashboard/orgs/{org_id}/keys {name, share_mode?}` creates an ordinary
-API key owned by the caller, billed to the caller's personal wallet, tagged with the org
-id. The owner's default `share_mode` is `'all'`; a member's default is private. The full
-key material is returned once, as with ordinary key creation.
+ORG-14. `POST /api/dashboard/orgs/{org_id}/keys {name, share_mode?, model_limits?}` creates
+an ordinary API key owned by the caller, billed to the caller's personal wallet, tagged
+with the org id. The owner's default `share_mode` is `public`; a member's default is
+`private`. `model_limits` maps to the ordinary API-key model restriction.
 
 ORG-15. `GET /api/dashboard/orgs/{org_id}/keys` returns (a) the caller's keys in the space
-with their sharing state and (b) keys shared to the caller (mode `'all'`, or `'selected'`
-with a share row for the caller) including full key material for copying.
+with their sharing state and FULL key material and (b) keys usable by the caller (mode
+`public`; or `allow` with a share row for the caller; or `deny` without one) including
+full key material for copying. Key material in the space is always visible, never
+once-only.
 
 ORG-16. `PUT /api/dashboard/orgs/{org_id}/keys/{key_id}/sharing {mode:
-"private"|"all"|"selected", member_ids?}` is restricted to the key's owner. `selected`
-MUST list only current members; otherwise `400 invalid_request`.
+"private"|"public"|"allow"|"deny", member_ids?}` is restricted to the key's owner.
+`allow`/`deny` MUST list only current members; otherwise `400 invalid_request`.
 
 ORG-17. Removing a member (`DELETE /api/dashboard/orgs/{org_id}/members/{user_id}`,
 owner only, cannot remove the owner) deletes their membership and share rows and makes
@@ -116,3 +120,8 @@ rows from the ordinary user groupings.
 
 ORG-21. `MAX_ORGS_PER_USER = 2` and `MAX_ORG_MEMBERS = 15` are compile-time constants in
 this release; admin adjustment is a later change.
+
+## 8. Ledger
+
+ORG-22. `GET /api/dashboard/orgs/{org_id}/ledger` (any member) returns the org wallet's
+`billing_ledger` rows, newest first, at most 200.

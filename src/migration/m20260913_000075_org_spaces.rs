@@ -19,6 +19,7 @@ impl MigrationTrait for Migration {
                 display_name TEXT NOT NULL,
                 avatar_emoji TEXT NOT NULL DEFAULT '🏢',
                 avatar_color TEXT NOT NULL DEFAULT '#6366f1',
+                avatar_image TEXT,
                 invite_token TEXT NOT NULL UNIQUE,
                 invite_expires_at TEXT,
                 invite_created_at TEXT NOT NULL,

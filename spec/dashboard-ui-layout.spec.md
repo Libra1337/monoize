@@ -160,9 +160,19 @@ navigation MUST instead include exactly:
 - `/dashboard/tokens`
 - `/dashboard/usage`
 - `/dashboard/usage/cache`
+- `/dashboard/org`
 - `/dashboard/logs`
 - `/dashboard/marketplace`
 - `/dashboard/api-docs`
+
+The collapse-sidebar control is replaced by the workspace toggle of DL5e: a two-way
+switch between `工作台` (Workspace, the ordinary dashboard) and `组织空间` (Org Spaces,
+`/org`), rendered for every user who belongs to at least one organization under
+`orgs.spec.md`, in both the workspace sidebar and the org-space shell.
+
+DL5e. `/org` is a separate shell with its own sidebar (org identity, switcher, space
+navigation: overview, members, API keys, wallet) and the same bottom workspace toggle with
+the org side active. Users without any organization see the ordinary dashboard only.
 
 This set omits the standard-user overview and playground entries. It MUST retain
 `/dashboard/store` and `/dashboard/orders`: Store checkout is not restricted by account

@@ -1,14 +1,13 @@
 //! Organization spaces (`orgs.spec.md`).
 //!
 //! An org is a `users` row with `is_org = 1` (the wallet) plus metadata and membership
-//! rows. Keys always belong to and bill their human owner; the org wallet exists for the
-//! creation deposit and owner distributions. Sharing a key exposes its material inside the
-//! space without changing billing.
+//! rows. Creating one needs only the enterprise account class (admin-granted); the wallet
+//! starts at zero and is funded by owner deposits. Keys always belong to and bill their
+//! human owner; sharing only controls who may see the key material inside the space.
 
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::get_current_user;
 use crate::error::{AppError, AppResult};
-use crate::store_billing::money::{Currency, ExchangeRateRational, cny_fen_to_nano_usd};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -21,8 +20,8 @@ use serde_json::json;
 /// ORG-21: compile-time limits for this release.
 pub const MAX_ORGS_PER_USER: i64 = 2;
 pub const MAX_ORG_MEMBERS: i64 = 15;
-/// ORG-6: creation deposit, 1000 CNY in fen.
-const CREATION_DEPOSIT_MINOR: i128 = 100_000;
+/// ORG-2b: inline avatar image cap, a data:image/ URL of at most 300k characters.
+const MAX_AVATAR_IMAGE_CHARS: usize = 300_000;
 
 fn storage(error: impl std::fmt::Display) -> AppError {
     AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string())
@@ -53,6 +52,25 @@ fn parse_expiry(raw: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
 
 fn expiry_is_valid(raw: &str) -> bool {
     matches!(raw, "24h" | "3d" | "7d" | "30d" | "never")
+}
+
+fn valid_share_mode(mode: &str) -> bool {
+    matches!(mode, "private" | "public" | "allow" | "deny")
+}
+
+fn validate_avatar_image(value: &Option<String>) -> Result<Option<String>, AppError> {
+    match value {
+        None => Ok(None),
+        Some(image) => {
+            if !image.starts_with("data:image/") {
+                return Err(bad_request("avatar_image must be a data:image/ URL"));
+            }
+            if image.len() > MAX_AVATAR_IMAGE_CHARS {
+                return Err(bad_request("avatar_image is too large"));
+            }
+            Ok(Some(image.clone()))
+        }
+    }
 }
 
 /// ORG-5: only an enterprise-class main account may create an org.
@@ -252,6 +270,8 @@ pub struct CreateOrgRequest {
     pub avatar_emoji: Option<String>,
     #[serde(default)]
     pub avatar_color: Option<String>,
+    #[serde(default)]
+    pub avatar_image: Option<String>,
     pub invite_expiry: String,
 }
 
@@ -261,6 +281,8 @@ pub struct OrgSummary {
     pub display_name: String,
     pub avatar_emoji: String,
     pub avatar_color: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_image: Option<String>,
     pub role: String,
     pub member_count: i64,
     pub balance_nano_usd: String,
@@ -293,6 +315,7 @@ pub async fn create_org(
     if !avatar_color.starts_with('#') || avatar_color.len() != 7 {
         return Err(bad_request("avatar_color must be #rrggbb"));
     }
+    let avatar_image = validate_avatar_image(&body.avatar_image)?;
 
     let backend = state.db_pool.read().get_database_backend();
     let read = state.db_pool.read();
@@ -315,17 +338,6 @@ pub async fn create_org(
         ));
     }
 
-    // ORG-6: deposit 1000 CNY converted at the current snapshot.
-    let snapshot = state
-        .exchange_rate_service
-        .current()
-        .await
-        .map_err(|_| bad_request("exchange rate unavailable; try again later"))?;
-    let rate = ExchangeRateRational::parse(&snapshot.cny_per_usd)
-        .map_err(|_| bad_request("invalid exchange rate snapshot"))?;
-    let deposit_nano = cny_fen_to_nano_usd(CREATION_DEPOSIT_MINOR, &rate)
-        .map_err(|_| bad_request("deposit conversion overflow"))?;
-
     let org_id = uuid::Uuid::new_v4().to_string();
     let invite_token = format!(
         "{}{}",
@@ -339,31 +351,6 @@ pub async fn create_org(
     // The wallet row is born with the deposit; the creator side is deducted in the same
     // transaction, so a failure leaves neither row.
     let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
-    let lock_suffix = if state.db_pool.is_postgres() { " FOR UPDATE" } else { "" };
-    let creator_row = tx
-        .query_one(Statement::from_string(
-            backend,
-            format!("SELECT balance_nano_usd FROM users WHERE id = '{}'{}", user.id, lock_suffix),
-        ))
-        .await
-        .map_err(storage)?
-        .ok_or_else(|| bad_request("creator wallet not found"))?;
-    let creator_balance: i128 = creator_row
-        .try_get::<String>("", "balance_nano_usd")
-        .map_err(storage)?
-        .parse()
-        .map_err(|_| bad_request("invalid persisted balance"))?;
-    let creator_after = creator_balance
-        .checked_sub(deposit_nano)
-        .filter(|value| *value >= 0)
-        .ok_or_else(|| {
-            AppError::new(
-                StatusCode::BAD_REQUEST,
-                "insufficient_balance",
-                "personal balance is below the 1000 CNY creation deposit",
-            )
-        })?;
-
     // First public enterprise group, else the system default group.
     let group = tx
         .query_one(Statement::from_string(
@@ -389,11 +376,10 @@ pub async fn create_org(
         backend,
         "INSERT INTO users (id, username, password_hash, role, created_at, updated_at, enabled,
                             balance_nano_usd, balance_unlimited, group_id, account_class, is_org)
-         VALUES ($1, $1, '', 'user', $2, $2, 1, $3, 0, $4, $5, 1)",
+         VALUES ($1, $1, '', 'user', $2, $2, 1, '0', 0, $3, $4, 1)",
         [
             org_id.clone().into(),
             now.clone().into(),
-            deposit_nano.to_string().into(),
             group_id.into(),
             org_class.as_str().into(),
         ],
@@ -402,22 +388,16 @@ pub async fn create_org(
     .map_err(storage)?;
     tx.execute(Statement::from_sql_and_values(
         backend,
-        "UPDATE users SET balance_nano_usd = $2, updated_at = $3 WHERE id = $1",
-        [user.id.clone().into(), creator_after.to_string().into(), now.clone().into()],
-    ))
-    .await
-    .map_err(storage)?;
-    tx.execute(Statement::from_sql_and_values(
-        backend,
-        "INSERT INTO orgs (id, owner_user_id, display_name, avatar_emoji, avatar_color,
+        "INSERT INTO orgs (id, owner_user_id, display_name, avatar_emoji, avatar_color, avatar_image,
                            invite_token, invite_expires_at, invite_created_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $8)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $9)",
         [
             org_id.clone().into(),
             user.id.clone().into(),
             name.into(),
             avatar_emoji.clone().into(),
             avatar_color.clone().into(),
+            avatar_image.clone().into(),
             invite_token.clone().into(),
             invite_expires_at.map(|t| t.to_rfc3339()).into(),
             now.clone().into(),
@@ -432,30 +412,6 @@ pub async fn create_org(
     ))
     .await
     .map_err(storage)?;
-    write_ledger_row(
-        &tx,
-        backend,
-        &uuid::Uuid::new_v4().to_string(),
-        &user.id,
-        "org_deposit",
-        -deposit_nano,
-        creator_after,
-        json!({"org_id": org_id, "reason": "creation"}),
-        &now,
-    )
-    .await?;
-    write_ledger_row(
-        &tx,
-        backend,
-        &uuid::Uuid::new_v4().to_string(),
-        &org_id,
-        "org_deposit_receive",
-        deposit_nano,
-        deposit_nano,
-        json!({"org_id": org_id, "reason": "creation"}),
-        &now,
-    )
-    .await?;
     tx.commit().await.map_err(storage)?;
 
     Ok((
@@ -465,9 +421,10 @@ pub async fn create_org(
             display_name: name.to_string(),
             avatar_emoji,
             avatar_color,
+            avatar_image,
             role: "owner".to_string(),
             member_count: 1,
-            balance_nano_usd: deposit_nano.to_string(),
+            balance_nano_usd: "0".to_string(),
             invite_token: Some(invite_token.clone()),
             invite_expires_at: invite_expires_at.map(|t| t.to_rfc3339()),
         }),
@@ -485,8 +442,8 @@ pub async fn list_my_orgs(
         .read()
         .query_all(Statement::from_sql_and_values(
             backend,
-            "SELECT o.id, o.display_name, o.avatar_emoji, o.avatar_color, o.invite_token,
-                    o.invite_expires_at, m.role AS my_role,
+            "SELECT o.id, o.display_name, o.avatar_emoji, o.avatar_color, o.avatar_image,
+                    o.invite_token, o.invite_expires_at, m.role AS my_role,
                     (SELECT COUNT(*) FROM org_members mm WHERE mm.org_id = o.id) AS member_count,
                     u.balance_nano_usd
              FROM orgs o
@@ -497,18 +454,21 @@ pub async fn list_my_orgs(
         ))
         .await
         .map_err(storage)?;
-    let is_owner = |row: &sea_orm::QueryResult| {
-        row.try_get::<String>("", "my_role").map(|role| role == "owner").unwrap_or(false)
-    };
     let orgs = rows
         .iter()
         .map(|row| {
-            let owner = is_owner(row);
+            let owner = row
+                .try_get::<String>("", "my_role")
+                .map(|role| role == "owner")
+                .unwrap_or(false);
             Ok(OrgSummary {
                 id: row.try_get("", "id").map_err(storage)?,
                 display_name: row.try_get("", "display_name").map_err(storage)?,
                 avatar_emoji: row.try_get("", "avatar_emoji").map_err(storage)?,
                 avatar_color: row.try_get("", "avatar_color").map_err(storage)?,
+                avatar_image: row
+                    .try_get::<Option<String>>("", "avatar_image")
+                    .map_err(storage)?,
                 role: row.try_get("", "my_role").map_err(storage)?,
                 member_count: row.try_get("", "member_count").map_err(storage)?,
                 balance_nano_usd: row.try_get("", "balance_nano_usd").map_err(storage)?,
@@ -545,8 +505,8 @@ pub async fn org_detail(
     let org = read
         .query_one(Statement::from_sql_and_values(
             backend,
-            "SELECT display_name, avatar_emoji, avatar_color, invite_token, invite_expires_at,
-                    owner_user_id FROM orgs WHERE id = $1",
+            "SELECT display_name, avatar_emoji, avatar_color, avatar_image, invite_token,
+                    invite_expires_at, owner_user_id FROM orgs WHERE id = $1",
             [org_id.clone().into()],
         ))
         .await
@@ -574,12 +534,14 @@ pub async fn org_detail(
         .try_get::<String>("", "balance_nano_usd")
         .map_err(storage)?;
 
+    let avatar_image: Option<String> = org.try_get("", "avatar_image").map_err(storage)?;
     let is_owner = role == "owner";
     Ok(Json(json!({
         "id": org_id,
         "display_name": org.try_get::<String>("", "display_name").map_err(storage)?,
         "avatar_emoji": org.try_get::<String>("", "avatar_emoji").map_err(storage)?,
         "avatar_color": org.try_get::<String>("", "avatar_color").map_err(storage)?,
+        "avatar_image": avatar_image,
         "my_role": role,
         "balance_nano_usd": balance,
         "members": members
@@ -617,8 +579,8 @@ pub async fn invite_preview(
     let row = read
         .query_one(Statement::from_sql_and_values(
             backend,
-            "SELECT o.id, o.display_name, o.avatar_emoji, o.avatar_color, o.invite_expires_at,
-                    u.username AS owner_username,
+            "SELECT o.id, o.display_name, o.avatar_emoji, o.avatar_color, o.avatar_image,
+                    o.invite_expires_at, u.username AS owner_username,
                     (SELECT COUNT(*) FROM org_members m WHERE m.org_id = o.id) AS member_count
              FROM orgs o JOIN users u ON u.id = o.owner_user_id WHERE o.invite_token = $1",
             [token.into()],
@@ -645,6 +607,7 @@ pub async fn invite_preview(
         "display_name": row.try_get::<String>("", "display_name").map_err(storage)?,
         "avatar_emoji": row.try_get::<String>("", "avatar_emoji").map_err(storage)?,
         "avatar_color": row.try_get::<String>("", "avatar_color").map_err(storage)?,
+        "avatar_image": row.try_get::<Option<String>>("", "avatar_image").map_err(storage)?,
         "owner_username": row.try_get::<String>("", "owner_username").map_err(storage)?,
         "member_count": member_count,
     })))
@@ -864,22 +827,36 @@ pub async fn create_org_key(
     if name.is_empty() || name.len() > 64 {
         return Err(bad_request("name must be 1..64 characters"));
     }
-    let share_mode = match body.share_mode.as_deref() {
-        None | Some("default") => None,
-        Some("all") => Some("all".to_string()),
-        Some("private") => Some("__private".to_string()),
-        other => return Err(bad_request(&format!("share_mode must be default, all, or private: {other:?}"))),
-    };
-    // The owner shares by default; members keep their keys private by default.
-    let effective_mode = match share_mode {
-        Some(mode) if mode == "__private" => None,
-        Some(mode) => Some(mode),
-        None => (role == "owner").then(|| "all".to_string()),
+    // The owner shares with everyone by default; a member keeps keys private by default.
+    let effective_mode = match body.share_mode.as_deref() {
+        None => if role == "owner" { "public" } else { "private" }.to_string(),
+        Some(mode) if valid_share_mode(mode) => mode.to_string(),
+        Some(other) => {
+            return Err(bad_request(&format!(
+                "share_mode must be private, public, allow, or deny: {other}"
+            )))
+        }
     };
 
+    let input = crate::users::CreateApiKeyInput {
+        name: name.to_string(),
+        expires_in_days: None,
+        sub_account_enabled: false,
+        sub_account_balance_nano_usd: None,
+        model_limits_enabled: !body.model_limits.is_empty(),
+        model_limits: body.model_limits.clone(),
+        ip_whitelist: Vec::new(),
+        group_ids: Vec::new(),
+        channel_bindings: Vec::new(),
+        max_multiplier: None,
+        transforms: Vec::new(),
+        model_redirects: Vec::new(),
+        reasoning_envelope_enabled: true,
+        request_capture_mode: crate::users::RequestCaptureMode::Off,
+    };
     let (api_key, plaintext) = state
         .user_store
-        .create_api_key(&user.id, name, None)
+        .create_api_key_extended(&user.id, input, false)
         .await
         .map_err(|e| bad_request(&e))?;
     state
@@ -900,7 +877,8 @@ pub async fn create_org_key(
     Ok((
         StatusCode::CREATED,
         Json(json!({ "id": api_key.id, "name": api_key.name, "key": plaintext,
-                     "share_mode": effective_mode, "owner_username": user.username })),
+                     "share_mode": effective_mode, "owner_username": user.username,
+                     "model_limits_enabled": !body.model_limits.is_empty() })),
     ))
 }
 
@@ -909,6 +887,8 @@ pub struct CreateOrgKeyRequest {
     pub name: String,
     #[serde(default)]
     pub share_mode: Option<String>,
+    #[serde(default)]
+    pub model_limits: Vec<String>,
 }
 
 /// ORG-15: my keys plus keys shared to me (with material for copying).
@@ -927,7 +907,7 @@ pub async fn list_org_keys(
     let mine = read
         .query_all(Statement::from_sql_and_values(
             backend,
-            "SELECT id, name, key_prefix, org_share_mode, created_at
+            "SELECT id, name, key, key_prefix, org_share_mode, model_limits_enabled, model_limits, created_at
              FROM api_keys WHERE org_id = $1 AND user_id = $2 ORDER BY created_at DESC",
             [org_id.clone().into(), user.id.clone().into()],
         ))
@@ -936,13 +916,18 @@ pub async fn list_org_keys(
     let shared = read
         .query_all(Statement::from_sql_and_values(
             backend,
-            "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, u.username AS owner_username
+            "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled,
+                    k.model_limits, u.username AS owner_username
              FROM api_keys k
              JOIN users u ON u.id = k.user_id
-             WHERE k.org_id = $1 AND k.user_id != $2
-               AND (k.org_share_mode = 'all'
-                    OR EXISTS (SELECT 1 FROM org_key_shares s
-                               WHERE s.api_key_id = k.id AND s.member_user_id = $2))
+             WHERE k.org_id = $1 AND k.user_id != $2 AND (
+                    k.org_share_mode = 'public'
+                    OR (k.org_share_mode = 'allow'
+                        AND EXISTS (SELECT 1 FROM org_key_shares s
+                                    WHERE s.api_key_id = k.id AND s.member_user_id = $2))
+                    OR (k.org_share_mode = 'deny'
+                        AND NOT EXISTS (SELECT 1 FROM org_key_shares s
+                                        WHERE s.api_key_id = k.id AND s.member_user_id = $2)))
              ORDER BY k.created_at DESC",
             [org_id.clone().into(), user.id.clone().into()],
         ))
@@ -955,8 +940,14 @@ pub async fn list_org_keys(
             .map(|row| json!({
                 "id": row.try_get::<String>("", "id").unwrap_or_default(),
                 "name": row.try_get::<String>("", "name").unwrap_or_default(),
+                // ORG-15b: a member's own key material stays readable in the space.
+                "key": row.try_get::<String>("", "key").unwrap_or_default(),
                 "key_prefix": row.try_get::<String>("", "key_prefix").unwrap_or_default(),
                 "share_mode": row.try_get::<Option<String>>("", "org_share_mode").unwrap_or_default(),
+                "model_limits_enabled": row.try_get::<i32>("", "model_limits_enabled").unwrap_or(0) == 1,
+                "model_limits": serde_json::from_str::<Vec<String>>(
+                    &row.try_get::<String>("", "model_limits").unwrap_or_else(|_| "[]".to_string()),
+                ).unwrap_or_default(),
                 "created_at": row.try_get::<String>("", "created_at").unwrap_or_default(),
             }))
             .collect::<Vec<_>>(),
@@ -968,6 +959,10 @@ pub async fn list_org_keys(
                 "key": row.try_get::<String>("", "key").unwrap_or_default(),
                 "key_prefix": row.try_get::<String>("", "key_prefix").unwrap_or_default(),
                 "share_mode": row.try_get::<Option<String>>("", "org_share_mode").unwrap_or_default(),
+                "model_limits_enabled": row.try_get::<i32>("", "model_limits_enabled").unwrap_or(0) == 1,
+                "model_limits": serde_json::from_str::<Vec<String>>(
+                    &row.try_get::<String>("", "model_limits").unwrap_or_else(|_| "[]".to_string()),
+                ).unwrap_or_default(),
                 "owner_username": row.try_get::<String>("", "owner_username").unwrap_or_default(),
             }))
             .collect::<Vec<_>>(),
@@ -1000,9 +995,8 @@ pub async fn update_key_sharing(
 
     let mode = match body.mode.as_str() {
         "private" => None,
-        "all" => Some("all".to_string()),
-        "selected" => Some("selected".to_string()),
-        other => return Err(bad_request(&format!("mode must be private, all, or selected: {other}"))),
+        "public" | "allow" | "deny" => Some(body.mode.clone()),
+        other => return Err(bad_request(&format!("mode must be private, public, allow, or deny: {other}"))),
     };
     tx.execute(Statement::from_sql_and_values(
         backend,
@@ -1011,7 +1005,7 @@ pub async fn update_key_sharing(
     ))
     .await
     .map_err(storage)?;
-    if mode.as_deref() == Some("selected") {
+    if mode.as_deref() == Some("allow") || mode.as_deref() == Some("deny") {
         for member_id in &body.member_ids {
             if member_role(&tx, backend, &org_id, member_id).await?.is_none() {
                 return Err(bad_request("member_ids contains a non-member"));
@@ -1042,6 +1036,42 @@ pub struct UpdateSharingRequest {
     pub mode: String,
     #[serde(default)]
     pub member_ids: Vec<String>,
+}
+
+/// ORG-22: the org wallet ledger, newest first.
+pub async fn org_ledger(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(org_id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let backend = state.db_pool.read().get_database_backend();
+    let read = state.db_pool.read();
+    member_role(&*read, backend, &org_id, &user.id)
+        .await?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
+    let rows = read
+        .query_all(Statement::from_sql_and_values(
+            backend,
+            "SELECT id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at
+             FROM billing_ledger WHERE user_id = $1
+             ORDER BY created_at DESC, id DESC LIMIT 200",
+            [org_id.into()],
+        ))
+        .await
+        .map_err(storage)?;
+    Ok(Json(json!(rows
+        .iter()
+        .map(|row| json!({
+            "id": row.try_get::<String>("", "id").unwrap_or_default(),
+            "kind": row.try_get::<String>("", "kind").unwrap_or_default(),
+            "delta_nano_usd": row.try_get::<String>("", "delta_nano_usd").unwrap_or_default(),
+            "balance_after_nano_usd": row
+                .try_get::<String>("", "balance_after_nano_usd")
+                .unwrap_or_default(),
+            "created_at": row.try_get::<String>("", "created_at").unwrap_or_default(),
+        }))
+        .collect::<Vec<_>>())))
 }
 
 /// ORG-17: removal also un-shares the member's keys in this space.
