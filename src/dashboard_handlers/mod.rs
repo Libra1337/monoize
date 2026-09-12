@@ -9,6 +9,7 @@ mod groups;
 mod model_registry;
 mod providers;
 mod sales;
+mod subaccounts;
 mod request_captures;
 pub(crate) mod session_helpers;
 mod settings;
@@ -65,6 +66,11 @@ pub use providers::{
     get_provider_presets, get_transform_registry, list_providers, reorder_providers,
     test_channel, update_provider,
 };
+pub use subaccounts::{
+    CreateSubAccountRequest, SubAccountResponse, TransferToSubRequest, create_sub_account,
+    distribute_to_sub_account, list_sub_accounts, sub_account_creation_allowed,
+};
+
 pub use sales::{
     create_sales_agent_admin, create_sales_claim, create_sales_claim_admin,
     cancel_sales_withdrawal, create_sales_withdrawal,

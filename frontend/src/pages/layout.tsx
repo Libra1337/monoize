@@ -27,6 +27,7 @@ import {
   Activity,
   PanelLeftClose,
   PanelLeftOpen,
+  UsersRound,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -132,6 +133,11 @@ function Sidebar({
   const { user } = useAuth();
   const { t } = useTranslation();
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
+  // SAU-2/SAU-4: only an eligible main account sees the sub-account page, and a
+  // sub-account cannot recharge so it loses the Store entry.
+  const isSubAccount = !!user?.parent_user_id;
+  const isSalesAccount = !!user?.is_sales_agent;
+  const isAgentClass = user?.account_class === "agent";
   const { data: publicSite } = usePublicSiteSettings();
   const siteName = publicSite?.site_name || "LynShen Console";
 
@@ -142,11 +148,14 @@ function Sidebar({
     { to: "/dashboard/usage-ranking", icon: ChartSpline, label: t("nav.usageRanking") },
     { to: "/dashboard/status", icon: Activity, label: t("nav.runtimeStatus") },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
+    ...(!isSubAccount && !isSalesAccount && !isAgentClass
+      ? [{ to: "/dashboard/subaccounts", icon: UsersRound, label: t("nav.subAccounts") }]
+      : []),
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
-    { to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") },
+    ...(!isSubAccount ? [{ to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") }] : []),
     { to: "/dashboard/wallet", icon: WalletCards, label: t("nav.wallet") },
     { to: "/dashboard/orders", icon: ReceiptText, label: t("nav.orders") },
   ];

@@ -218,6 +218,7 @@
     "dashboard": "Dashboard",
     "providers": "Providers",
     "apiKeys": "Token Management",
+    "subAccounts": "Sub-accounts",
     "playground": "Playground",
     "users": "Users",
     "settings": "Settings",
@@ -1041,8 +1042,10 @@
       "enterprise": "Enterprise",
       "private": "Private",
       "agent": "Agent",
+      "subaccounts": "Sub-accounts",
       "sales": "Sales"
-    }
+    },
+    "parentAccount": "Main account"
   },
   "apiKeys": {
     "title": "Token Management",
@@ -1620,7 +1623,9 @@
     "grantAmount": "Grant amount",
     "nextGrant": "Next reset",
     "noPlan": "No subscription assigned",
-    "unrestrictedGroups": "No group restriction from this plan"
+    "unrestrictedGroups": "No group restriction from this plan",
+    "subAccountTitle": "Sub-account",
+    "subAccountDescription": "This is a sub-account. The main account manages its username, password, and balance."
   },
   "modelMetadata": {
     "title": "Model Database",
@@ -2223,5 +2228,31 @@
   "salesAdmin": {
     "title": "Sales management",
     "description": "Agents, commission records, and withdrawals."
+  },
+  "subaccounts": {
+    "title": "Sub-accounts",
+    "description": "Open sub-accounts under this account, distribute balance to them, and follow their usage.",
+    "create": "Create sub-account",
+    "createTitle": "Create a sub-account",
+    "createDescription": "The sub-account inherits this account class and group. It can create its own API keys but cannot recharge or change its profile.",
+    "createSuccess": "Sub-account {{name}} created",
+    "username": "Username",
+    "password": "Password",
+    "passwordHint": "At least 8 characters. Share it with the sub-account user out of band.",
+    "mainBalance": "Main account balance",
+    "distributeHint": "Sub-accounts cannot recharge. Distribute balance from this account; both ledgers record the transfer.",
+    "empty": "No sub-accounts yet",
+    "emptyDescription": "Create a sub-account to share this account group with teammates while keeping usage separate.",
+    "balance": "Balance",
+    "apiKeys": "API keys",
+    "todayCalls": "Today calls",
+    "todaySpend": "Today spend",
+    "distribute": "Distribute",
+    "transferTitle": "Distribute to {{name}}",
+    "transferDescription": "Moves the amount from the main balance. Entered in {{currency}}.",
+    "transferAmount": "Amount ({{currency}})",
+    "transferCurrent": "Current sub-account balance: {{balance}}",
+    "transferSuccess": "Distributed to {{name}}",
+    "transferInvalidAmount": "Enter a positive amount with at most two decimals"
   }
 }

@@ -148,6 +148,12 @@ pub async fn list_users(
         today_cost_nano_usd: 0,
     };
 
+    // SAU-8: the sub-account grouping shows the owning main account's username, so every
+    // parent id is resolved once from the same list instead of per row.
+    let username_by_id: HashMap<_, _> = users
+        .iter()
+        .map(|user| (user.id.clone(), user.username.clone()))
+        .collect();
     let responses: Vec<UserResponse> = users
         .into_iter()
         .map(|user| {
@@ -157,7 +163,14 @@ pub async fn list_users(
                 .and_then(|id| plan_by_id.get(id).cloned());
             let today = usage_by_id.get(&user.id).unwrap_or(&zero_usage);
             let is_sales_agent = sales_agent_ids.contains(&user.id);
-            UserResponse::from_user_with_sales(user, plan, Some(today), is_sales_agent)
+            let parent_username = user
+                .parent_user_id
+                .as_ref()
+                .and_then(|id| username_by_id.get(id).cloned());
+            let mut response =
+                UserResponse::from_user_with_sales(user, plan, Some(today), is_sales_agent);
+            response.parent_username = parent_username;
+            response
         })
         .collect();
     Ok(Json(responses))

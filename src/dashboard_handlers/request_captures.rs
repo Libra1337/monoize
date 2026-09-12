@@ -159,6 +159,7 @@ mod tests {
         User {
             id: id.to_string(),
             username: format!("{id}-name"),
+            parent_user_id: None,
             password_hash: String::new(),
             role,
             account_class: Default::default(),

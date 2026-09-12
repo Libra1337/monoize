@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::utils::parse_nano_usd;
 use super::{
     AccountClass, AdminUpdateUserInput, ApiKey, ApiKeyChannelBinding, BillingError,
@@ -652,6 +654,7 @@ impl UserStore {
 
         Ok(User {
             id,
+            parent_user_id: None,
             username: username.to_string(),
             password_hash,
             role,
@@ -702,10 +705,213 @@ impl UserStore {
             .map_err(RegisterUserError::Storage)
     }
 
+    /// SAU-3: creates a sub-account under one main account. The sub inherits the main
+    /// account's class and Group, starts at zero balance, and is an ordinary user row in
+    /// every other respect.
+    pub async fn create_sub_user(
+        &self,
+        parent: &User,
+        username: &str,
+        password: &str,
+    ) -> Result<User, String> {
+        if self
+            .get_user_by_username(username)
+            .await?
+            .is_some()
+        {
+            return Err("username_exists".to_string());
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let password_hash = Self::hash_password_async(password).await?;
+        let now = Utc::now();
+        self.db
+            .write()
+            .await
+            .execute(self.db.stmt(
+                "INSERT INTO users (id, username, password_hash, role, created_at, updated_at,
+                                    enabled, balance_nano_usd, balance_unlimited, group_id,
+                                    account_class, parent_user_id)
+                 VALUES ($1, $2, $3, 'user', $4, $4, 1, '0', 0, $5, $6, $7)",
+                vec![
+                    id.clone().into(),
+                    username.into(),
+                    password_hash.into(),
+                    now.to_rfc3339().into(),
+                    parent.group_id.clone().into(),
+                    parent.account_class.as_str().into(),
+                    parent.id.clone().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(User {
+            id,
+            username: username.to_string(),
+            parent_user_id: Some(parent.id.clone()),
+            password_hash: String::new(),
+            role: UserRole::User,
+            account_class: parent.account_class,
+            created_at: now,
+            updated_at: now,
+            last_login_at: None,
+            enabled: true,
+            balance_nano_usd: "0".to_string(),
+            balance_unlimited: false,
+            usage_ranking_anonymous: false,
+            email: None,
+            group_id: parent.group_id.clone(),
+            billing_plan_id: None,
+            next_grant_at: None,
+        })
+    }
+
+    /// SAU-5: API key counts for a set of users in one grouped query.
+    pub async fn count_api_keys_by_users(
+        &self,
+        user_ids: &[String],
+    ) -> Result<HashMap<String, i64>, String> {
+        if user_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = (0..user_ids.len())
+            .map(|index| format!("${}", index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                &format!(
+                    "SELECT user_id, COUNT(*) AS keys FROM api_keys WHERE user_id IN ({placeholders}) GROUP BY user_id"
+                ),
+                user_ids.iter().cloned().map(Into::into).collect(),
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        rows.into_iter()
+            .map(|row| {
+                let user_id: String = row.try_get("", "user_id").map_err(|e| e.to_string())?;
+                let count: i64 = row.try_get("", "keys").map_err(|e| e.to_string())?;
+                Ok((user_id, count))
+            })
+            .collect()
+    }
+
+    /// SAU-5: the caller's sub-accounts, oldest first.
+    pub async fn list_sub_users(&self, parent_user_id: &str) -> Result<Vec<User>, String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, parent_user_id, billing_plan_id, next_grant_at FROM users WHERE parent_user_id = $1 ORDER BY created_at ASC, id ASC",
+                vec![parent_user_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        rows.iter().map(|row| self.row_to_user(row)).collect()
+    }
+
+    /// SAU-6: moves `amount_nano` from the main balance to one sub-account in one
+    /// transaction, writing both ledger sides. Locking order is always main before sub, and
+    /// only this direction is possible, so two concurrent distributions cannot deadlock.
+    pub async fn transfer_balance_to_sub(
+        &self,
+        parent_user_id: &str,
+        sub_user_id: &str,
+        amount_nano: i128,
+    ) -> Result<(String, String), String> {
+        if amount_nano <= 0 {
+            return Err("invalid_amount".to_string());
+        }
+        let write = self.db.write().await;
+        let tx = write.begin().await.map_err(|e| e.to_string())?;
+        let lock_suffix = if self.db.is_postgres() { " FOR UPDATE" } else { "" };
+        let parent_row = tx
+            .query_one(self.db.stmt(
+                &format!("SELECT balance_nano_usd FROM users WHERE id = $1{lock_suffix}"),
+                vec![parent_user_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "user not found".to_string())?;
+        let parent_balance = parse_nano_usd(
+            &parent_row
+                .try_get::<String>("", "balance_nano_usd")
+                .map_err(|e| e.to_string())?,
+        )?;
+        let sub_row = tx
+            .query_one(self.db.stmt(
+                &format!(
+                    "SELECT balance_nano_usd FROM users WHERE id = $1 AND parent_user_id = $2{lock_suffix}"
+                ),
+                vec![sub_user_id.into(), parent_user_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "sub account not found".to_string())?;
+        let sub_balance = parse_nano_usd(
+            &sub_row
+                .try_get::<String>("", "balance_nano_usd")
+                .map_err(|e| e.to_string())?,
+        )?;
+        let parent_after = parent_balance
+            .checked_sub(amount_nano)
+            .ok_or_else(|| "insufficient_balance".to_string())?;
+        if parent_after < 0 {
+            return Err("insufficient_balance".to_string());
+        }
+        let sub_after = sub_balance
+            .checked_add(amount_nano)
+            .ok_or_else(|| "balance overflow".to_string())?;
+        let now = Utc::now().to_rfc3339();
+
+        tx.execute(self.db.stmt(
+            "UPDATE users SET balance_nano_usd = $2, updated_at = $3 WHERE id = $1",
+            vec![parent_user_id.into(), parent_after.to_string().into(), now.clone().into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+        tx.execute(self.db.stmt(
+            "UPDATE users SET balance_nano_usd = $2, updated_at = $3 WHERE id = $1",
+            vec![sub_user_id.into(), sub_after.to_string().into(), now.clone().into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+
+        for (user_id, delta, balance_after, kind, counterparty_field, counterparty_id) in [
+            (parent_user_id, -amount_nano, parent_after, "sub_account_grant", "to_user_id", sub_user_id),
+            (sub_user_id, amount_nano, sub_after, "sub_account_receive", "from_user_id", parent_user_id),
+        ] {
+            let entry_id = uuid::Uuid::new_v4().to_string();
+            tx.execute(self.db.stmt(
+                "INSERT INTO billing_ledger
+                    (id, user_id, kind, delta_nano_usd, balance_after_nano_usd,
+                     meta_json, created_at, idempotency_key)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                vec![
+                    entry_id.clone().into(),
+                    user_id.into(),
+                    kind.into(),
+                    delta.to_string().into(),
+                    balance_after.to_string().into(),
+                    format!("{{\"{counterparty_field}\":\"{counterparty_id}\"}}").into(),
+                    now.clone().into(),
+                    format!("sub-transfer:{entry_id}").into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok((parent_after.to_string(), sub_after.to_string()))
+    }
+
     pub async fn get_user_by_id(&self, id: &str) -> Result<Option<User>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE id = $1",
+                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, parent_user_id, billing_plan_id, next_grant_at FROM users WHERE id = $1",
                 vec![id.into()],
             ))
             .await
@@ -721,7 +927,7 @@ impl UserStore {
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE username = $1",
+                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, parent_user_id, billing_plan_id, next_grant_at FROM users WHERE username = $1",
                 vec![username.into()],
             ))
             .await
@@ -737,7 +943,7 @@ impl UserStore {
     pub async fn list_users(&self) -> Result<Vec<User>, String> {
         let rows = self.db.read()
             .query_all(self.db.stmt(
-                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, billing_plan_id, next_grant_at FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
+                "SELECT id, username, password_hash, role, account_class, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, usage_ranking_anonymous, email, group_id, parent_user_id, billing_plan_id, next_grant_at FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
                 vec![],
             ))
             .await
@@ -1852,6 +2058,7 @@ impl UserStore {
             .map_err(|error| format!("invalid persisted users.group_id: {error}"))?;
         let user = User {
             id: row.try_get("", "owner_id").map_err(|e| e.to_string())?,
+            parent_user_id: None,
             username: row
                 .try_get("", "owner_username")
                 .map_err(|e| e.to_string())?,
@@ -2467,9 +2674,14 @@ impl UserStore {
         parse_nano_usd(&balance_nano_usd)
             .map_err(|e| format!("invalid persisted user balance: {e}"))?;
 
+        let parent_user_id: Option<String> = row
+            .try_get("", "parent_user_id")
+            .map_err(|e| e.to_string())?;
+
         Ok(User {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
             username: row.try_get("", "username").map_err(|e| e.to_string())?,
+            parent_user_id,
             password_hash: row
                 .try_get("", "password_hash")
                 .map_err(|e| e.to_string())?,
@@ -3465,7 +3677,8 @@ mod tests {
         parse_session_cleanup_interval_secs, sanitize_api_key_transforms, serialize_group_ids_json,
         validate_api_key_transforms,
     };
-    use crate::db::DbPool;
+    use std::collections::HashMap;
+use crate::db::DbPool;
     use crate::migration::Migrator;
     use crate::transforms::{Phase, TransformRuleConfig};
     use crate::users::{

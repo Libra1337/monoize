@@ -343,6 +343,24 @@ MM-ENT4. An unavailable Enterprise model and an unavailable standard model MUST 
 
 MM-ENT5. The public Marketplace and public status endpoints are reachable without a session. A request that carries a valid session cookie MUST resolve the account class of the authenticated user and return that class' catalog. A request without a valid session cookie (missing, expired, disabled user, or not authenticated) MUST resolve the standard class.
 
+## 7.2 Group-Scoped Discovery
+
+MM-G1. The authenticated public Marketplace (`/api/public/marketplace` and
+`/api/public/marketplace/offers`) MUST narrow a signed-in non-Admin viewer to that viewer's
+own `group_id`: only Groups, models, offers, and prices whose Group id equals the viewer's
+`group_id` may be returned. An anonymous visitor and an Admin keep the full class catalogue
+of MM-ENT2/MM-ENT5. The public status page is not model discovery and is exempt.
+
+MM-G2. The dashboard model catalogue endpoint
+(`GET /api/dashboard/marketplace/models`) MUST return the full catalogue to an Admin. For
+every other viewer it MUST return only models served by an enabled Provider of exactly one
+Group: the optional `group_id` query parameter when that Group is accessible to the viewer
+(class match plus public or granted visibility), otherwise the viewer's own `group_id`. An
+inaccessible `group_id` MUST be rejected with HTTP `400` code `invalid_request`.
+
+AKG-M1 (defined in `api-key-authentication.spec.md` section 4) applies the same Group
+scoping to API-key model discovery on `/v1/models`.
+
 ## 8. Qualification
 
 MM-Q1. The supported catalog envelope is 128 Groups, 5,000 Providers and embedded

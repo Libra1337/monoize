@@ -57,8 +57,12 @@ export function PlaygroundPage() {
 
   const { data: apiKeys, isLoading: keysLoading } = useApiKeys();
   const { data: groups, isLoading: groupsLoading } = useDashboardGroups();
-  const { data: models, isLoading: modelsLoading } = useMarketplaceModels();
   const { data: user } = useCurrentUser();
+  // MM-G2: the catalogue follows the selected Group so a switch cannot offer models the
+  // current Group cannot route to.
+  const { data: models, isLoading: modelsLoading } = useMarketplaceModels(
+    prefs.group || user?.group_id || undefined,
+  );
 
   const modelForMode = mode === "image" ? prefs.imageModel : prefs.chatModel;
   const resolution = useMemo(

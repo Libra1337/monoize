@@ -937,6 +937,14 @@ pub async fn create_store_order(
     body: Result<Json<CreatePaymentOrderRequest>, JsonRejection>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
+    // SAU-4: a sub-account cannot recharge; its balance comes only from the main account.
+    if user.parent_user_id.is_some() {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "sub_account_restricted",
+            "sub-accounts cannot create store orders",
+        ));
+    }
     let input = parse_store_json(body)?;
     let idempotency_key = required_idempotency_key(&headers)?;
     let store = PaymentOrderStore::new(state.db_pool.clone());
@@ -1723,7 +1731,34 @@ pub async fn list_all_store_orders_admin(
         .list_orders_admin(query.limit())
         .await
         .map_err(map_payment_order_error)?;
-    Ok(Json(orders))
+
+    // The admin table shows the buyer's username, not the raw user id; resolve every buyer
+    // once from the user list instead of one lookup per order.
+    let username_by_id: std::collections::HashMap<String, String> = state
+        .user_store
+        .list_users()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .into_iter()
+        .map(|user| (user.id, user.username))
+        .collect();
+    let enriched = orders
+        .into_iter()
+        .map(|order| {
+            let username = username_by_id.get(&order.user_id).cloned();
+            let mut value = serde_json::to_value(&order).map_err(|e| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e.to_string())
+            })?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "username".to_string(),
+                    username.unwrap_or_default().into(),
+                );
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+    Ok(Json(enriched))
 }
 
 pub async fn get_store_order_admin(

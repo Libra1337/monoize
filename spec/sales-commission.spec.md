@@ -28,9 +28,9 @@ usage, and MUST NOT enter `billing_ledger`. It becomes money only when an Admin 
 withdrawal out of band under section 6.
 
 SC-0.4. A **discount** is expressed in basis points of the order face value. One basis point
-is 1/10000. A discount reduces what the buyer pays and reduces the agent's commission by the
-same basis points; it MUST NOT change what the buyer receives and MUST NOT change platform
-revenue.
+is 1/10000. A discount is the agent's commission rate on that order: it pays the agent out
+of the full payment and MUST NOT change what the buyer pays, MUST NOT change what the buyer
+receives, and MUST NOT be deducted at payment time.
 
 ## 1. Rates and bounds
 
@@ -40,11 +40,10 @@ A change MUST NOT alter any existing `sales_commission_entries` row, because eac
 the rate that applied to its order.
 
 SC-1.2. `discount_bp` MUST be an integer in `[0, commission_rate_bp]`. A value above the
-current rate MUST be rejected with `sales_discount_above_rate`. The discount is funded from
-the commission, so a discount larger than the rate would make the agent's commission
-negative. Lowering `commission_rate_bp` below an existing agent's `discount_bp` MUST be
-rejected with the same code rather than silently clamping, so no agent is left owing money
-on a sale.
+current rate MUST be rejected with `sales_discount_above_rate`; the global rate is the
+ceiling on an agent's per-order commission. Lowering `commission_rate_bp` below an existing
+agent's `discount_bp` MUST be rejected with the same code rather than silently clamping, so
+no agent is left owing money on a sale.
 
 SC-1.2a. `discount_bp` MUST be settable only by the agent who owns the code, via
 `PUT /dashboard/sales/discount`. Admin endpoints MUST expose `discount_bp` as read-only:
@@ -53,35 +52,37 @@ reject a body containing `discount_bp`. The discount is funded from the agent's 
 commission (SC-1.5), so the agent bears its full cost and is the only party entitled to
 choose it.
 
-SC-1.3. For an order with face value `base_fen`, applied rate `r = commission_rate_bp`, and
-an applied code with `discount_bp = d`:
+SC-1.3. For an order with face value `base_fen` and an applied code with `discount_bp = d`
+(the global rate `r = commission_rate_bp` only bounds `d` and no longer enters the
+arithmetic):
 
 ```
 discount_fen   = floor(base_fen * d / 10000)
-payment_fen    = base_fen - discount_fen
-commission_fen = floor(base_fen * (r - d) / 10000)
+payment_fen    = base_fen
+commission_fen = discount_fen
 received_fen   = base_fen
 ```
 
-All four MUST use integer arithmetic. Worked example with `r = 500`, `base_fen = 10000`, and
-`d = 100`: `discount_fen = 100`, `payment_fen = 9900`, `commission_fen = 400`,
-`received_fen = 10000`.
+All four MUST use integer arithmetic. Worked example with `base_fen = 10000` and `d = 100`:
+`discount_fen = 100`, `payment_fen = 10000`, `commission_fen = 100`, `received_fen = 10000`.
+Worked example with `base_fen = 500` (a 5 CNY recharge) and `d = 100` (a 1% rate):
+`payment_fen = 500`, `commission_fen = 5` — the buyer pays 5 CNY, the platform collects
+5 CNY, and the agent is later paid 0.05 CNY; nothing is deducted at payment time.
 
-SC-1.4. Platform revenue for that order is `payment_fen - commission_fen`, which equals
-`base_fen - floor(base_fen * d / 10000) - floor(base_fen * (r - d) / 10000)` and is
-independent of `d` up to one fen of floor rounding. At `r = 500` a 100 CNY face value yields
-95 CNY of platform revenue whether the discount is 0% or 5%. The discount is therefore funded
-by the agent's own commission; the platform MUST NOT subsidize it.
+SC-1.4. Platform revenue for that order is `payment_fen - commission_fen =
+base_fen - floor(base_fen * d / 10000)`. The buyer's payment never changes, so the
+commission is funded by the payment itself; the platform pays only the commission and MUST
+NOT subsidize it and MUST NOT reduce the buyer's payable amount or credited balance.
 
 SC-1.5. An entry MUST record the `commission_rate_bp` that applied, so the arithmetic of a
 past order remains reproducible after the rate changes.
 
-SC-1.6. Both shares use floor division, so neither the discount nor the commission is ever
-rounded up at the platform's expense. At `r = 500` the commission is `floor(base_fen / 20)`.
+SC-1.6. The commission uses floor division, so it is never rounded up at the platform's
+expense. At `d = 500` the commission is `floor(base_fen / 20)`.
 
 SC-1.7. The minimum custom recharge for CNY MUST be 100 fen (1 CNY), which is the default of
-`store-billing.spec.md` SB-P-4b. At `r = 500` this yields a minimum commission of 5 fen
-(0.05 CNY), so every order a buyer can place through the custom-amount field earns a
+`store-billing.spec.md` SB-P-4b. At `d = 500` this yields a minimum commission of 5 fen
+(0.05 CNY), so every order a buyer can place through the custom-amount field can earn a
 commission expressible in two decimal places.
 
 ## 2. Data model
@@ -192,9 +193,8 @@ is the face value that SB-P-3 or SB-P-4 would have produced without a code. It M
 `sales_code` and `sales_discount_bp` on the order.
 
 SC-2.5. The SB-P-3 equality between a fixed balance product's price and the order's
-`payment_minor` MUST be evaluated against `base_fen`, not against the discounted
-`payment_minor`. Without this, every discounted order fails the existing
-`balance recharge and product price differ` check.
+`payment_minor` holds directly, because SC-1.3 keeps `payment_minor = base_fen` when a code
+is applied; the check MUST NOT be bypassed.
 
 SC-2.6. The channel amount bounds of SB-C-30 and SB-C-31 MUST be evaluated against the
 discounted `payment_minor`, because that is the amount the provider will charge. A discount
@@ -242,14 +242,11 @@ increase `sales_agents.commission_balance_fen` by `commission_fen`. Both writes 
 that transaction. A unique-violation on `order_id` MUST be treated as already accrued and
 MUST NOT fail fulfillment, which makes a repeated callback idempotent.
 
-SC-3.3. `base_fen` for accrual MUST be the balance quote's `recharge_minor`: the amount the
-buyer owed before any discount, read from the frozen quote.
-
-It MUST NOT be `payment_minor`, which a discount lowers, because SC-1.4 defines the
-commission against the undiscounted amount. It MUST NOT be `actual_received_minor`, which a
-bonus raises above what the platform was paid: a product selling 100 CNY of balance with a
-20 CNY bonus collects 100 CNY, and accruing on 120 would pay the agent 6 CNY out of that 100
-and cut platform revenue to 94.
+SC-3.3. `base_fen` for accrual MUST be the balance quote's `recharge_minor`, read from the
+frozen quote. `payment_minor` equals it under SC-1.3. It MUST NOT be
+`actual_received_minor`, which a bonus raises above what the platform was paid: a product
+selling 100 CNY of balance with a 20 CNY bonus collects 100 CNY, and accruing on 120 would
+pay the agent for money the platform never collected.
 
 SC-3.3a. An order whose `payment_currency` is not CNY MUST NOT accrue commission, and SC-2.2
 MUST reject a code submitted on such an order with `sales_code_currency_unsupported`. The
@@ -293,9 +290,11 @@ An operator or agent handling a request has the username, not the UUID. Requirin
 made the form unusable for the situation it exists to serve.
 
 SC-4.3. A successful claim MUST insert one entry with `origin = 'claim'`,
-`discount_bp = 0`, `commission_fen = floor(base_fen * 500 / 10000)`, and MUST increase the
-agent's balance by that amount in the same transaction. It MUST record one
-`sales_claim_attempts` row with `succeeded = 1`.
+`discount_bp` equal to the claiming agent's own `discount_bp` at claim time, and
+`commission_fen = floor(base_fen * discount_bp / 10000)`, and MUST increase the agent's
+balance by that amount in the same transaction. The buyer already paid the full face value
+(SC-1.3), so a claim credits exactly the rate a coded order would have credited, bounded by
+the configured cap. It MUST record one `sales_claim_attempts` row with `succeeded = 1`.
 
 SC-4.4. A claim whose order number and user ID do not correspond, or whose order does not
 exist, MUST return HTTP `404` with code `sales_claim_mismatch` and the message that the
@@ -437,9 +436,9 @@ SC-UI-4. A rejected code MUST render the message that the sales code is invalid 
 the user to re-enter it. The page MUST NOT submit an order while a code is present and known
 to be invalid.
 
-SC-UI-5. When a code with a nonzero discount is applied, the order summary MUST show the
-face value, the discount, and the amount payable as separate lines, so the buyer can see
-that the amount received is the face value rather than the discounted amount.
+SC-UI-5. When a code is applied, the order summary MUST show the face value and the amount
+payable, which are equal under SC-1.3, and MUST NOT render any deducted amount. The summary
+MUST NOT suggest that the buyer pays less than the face value.
 
 SC-UI-6. Sales administration MUST be its own dashboard page at `/dashboard/sales-admin`
 with its own admin navigation entry. It MUST NOT be a child tab of Store Management: agents,

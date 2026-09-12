@@ -218,6 +218,7 @@
     "dashboard": "儀表板",
     "providers": "服務供應商",
     "apiKeys": "Token 管理",
+    "subAccounts": "子帳號",
     "playground": "Playground",
     "users": "使用者管理",
     "settings": "系統設定",
@@ -1041,8 +1042,10 @@
       "enterprise": "企業分組",
       "private": "私有",
       "agent": "代理",
+      "subaccounts": "子帳號",
       "sales": "銷售"
-    }
+    },
+    "parentAccount": "歸屬主帳戶"
   },
   "apiKeys": {
     "title": "Token 管理",
@@ -1617,7 +1620,9 @@
     "grantAmount": "發放額度",
     "nextGrant": "下次重置",
     "noPlan": "未指派訂閱方案",
-    "unrestrictedGroups": "此方案不限制群組"
+    "unrestrictedGroups": "此方案不限制群組",
+    "subAccountTitle": "子帳號",
+    "subAccountDescription": "目前登入的是子帳號，使用者名稱、密碼與餘額由主帳戶管理。"
   },
   "modelMetadata": {
     "title": "模型資料庫",
@@ -2220,5 +2225,31 @@
   "salesAdmin": {
     "title": "銷售管理",
     "description": "銷售帳號、分成記錄與提領。"
+  },
+  "subaccounts": {
+    "title": "子帳號",
+    "description": "在目前帳戶下開設子帳號，向子帳號分發餘額，並檢視其使用情況。",
+    "create": "新增子帳號",
+    "createTitle": "新增子帳號",
+    "createDescription": "子帳號繼承目前帳戶的帳戶類別與分組，可自行建立 API key，但不能儲值或修改帳戶資料。",
+    "createSuccess": "子帳號 {{name}} 已建立",
+    "username": "使用者名稱",
+    "password": "密碼",
+    "passwordHint": "至少 8 位，請透過其他管道告知子帳號使用者。",
+    "mainBalance": "主帳戶餘額",
+    "distributeHint": "子帳號不能儲值，餘額由主帳戶分發，雙方帳本都會記錄。",
+    "empty": "還沒有子帳號",
+    "emptyDescription": "建立子帳號，與團隊成員共享目前分組，用量獨立統計。",
+    "balance": "餘額",
+    "apiKeys": "API key",
+    "todayCalls": "今日呼叫",
+    "todaySpend": "今日消費",
+    "distribute": "分發餘額",
+    "transferTitle": "向 {{name}} 分發餘額",
+    "transferDescription": "金額從主帳戶餘額劃出，以 {{currency}} 輸入。",
+    "transferAmount": "金額（{{currency}}）",
+    "transferCurrent": "子帳號目前餘額：{{balance}}",
+    "transferSuccess": "已向 {{name}} 分發餘額",
+    "transferInvalidAmount": "請輸入最多兩位小數的正數金額"
   }
 }

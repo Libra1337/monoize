@@ -131,6 +131,12 @@ owner's `account_class`. In that state every API key of that owner MUST fail clo
 AKG5b regardless of its stored selection, because step 5 yields an empty array in both
 branches.
 
+AKG-M1. `GET /v1/models` MUST intersect the visible model list with the key's resolved
+effective groups (section 4): a model is listed only when an enabled Provider of one of
+those groups serves it through an enabled embedded Channel. `effective_groups == null`
+(internal system traffic) and an empty resolved list (every group eligible, R-GRP-1a) keep
+the unrestricted list. The API-key `model_limits` filter applies after the Group filter.
+
 AKG6. The attached array MUST be deduplicated preserving first occurrence order. Elements
 MUST NOT be lowercased, sorted, or otherwise rewritten; group ids are opaque and their
 order defines routing preference (`database-provider-routing.spec.md` R-GRP-2).

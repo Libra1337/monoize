@@ -1534,6 +1534,69 @@ impl MonoizeRoutingStore {
             .collect()
     }
 
+    /// Model names from `candidates` that at least one enabled Provider of the given Groups
+    /// serves through an enabled Channel. Group scoping for model discovery (AKG-M1).
+    pub async fn available_model_names_for_groups(
+        &self,
+        candidates: &[String],
+        group_ids: &[String],
+    ) -> Result<HashSet<String>, String> {
+        if candidates.is_empty() || group_ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let candidates = candidates
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let groups = group_ids
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut available = HashSet::new();
+        // The bound mirrors the routing index chunk limit: one statement stays below the
+        // portable SQLite parameter ceiling with both IN lists expanded.
+        const LOOKUP_CHUNK_SIZE: usize = 199;
+        for chunk in candidates.chunks(LOOKUP_CHUNK_SIZE) {
+            for group_chunk in groups.chunks(LOOKUP_CHUNK_SIZE) {
+                let model_placeholders = (0..chunk.len())
+                    .map(|index| format!("${}", index + 1))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let group_placeholders = (0..group_chunk.len())
+                    .map(|index| format!("${}", chunk.len() + index + 1))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sql = format!(
+                    "SELECT DISTINCT pm.model_name FROM monoize_provider_models pm
+                     JOIN monoize_providers p ON p.id = pm.provider_id
+                     WHERE p.enabled = 1 AND p.channel_enabled = 1
+                       AND p.group_id IN ({group_placeholders})
+                       AND pm.model_name IN ({model_placeholders})"
+                );
+                let mut values: Vec<sea_orm::Value> =
+                    chunk.iter().cloned().map(Into::into).collect();
+                values.extend(group_chunk.iter().cloned().map(Into::into));
+                let rows = self
+                    .db
+                    .read()
+                    .query_all(self.db.stmt(&sql, values))
+                    .await
+                    .map_err(|error| error.to_string())?;
+                for row in rows {
+                    available.insert(
+                        row.try_get("", "model_name")
+                            .map_err(|error| error.to_string())?,
+                    );
+                }
+            }
+        }
+        Ok(available)
+    }
+
     pub async fn list_providers_for_model(
         &self,
         model: &str,

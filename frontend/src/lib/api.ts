@@ -2,6 +2,23 @@ const API_BASE = "/api/dashboard";
 
 export type AccountClass = "standard" | "enterprise" | "private" | "agent";
 
+export interface SubAccount {
+  id: string;
+  username: string;
+  enabled: boolean;
+  balance_nano_usd: string;
+  created_at: string;
+  last_login_at?: string | null;
+  api_key_count: number;
+  today_calls: number;
+  today_cost_nano_usd: string;
+}
+
+export interface CreateSubAccountInput {
+  username: string;
+  password: string;
+}
+
 type UnauthorizedHandler = () => void;
 
 const unauthorizedHandlers = new Set<UnauthorizedHandler>();
@@ -83,6 +100,10 @@ export interface User {
   /** SC-UI-1: the Sales surface is outside the dashboard, so routing needs this. */
   is_sales_agent: boolean;
   account_class: AccountClass;
+  /** Owning main account id when this row is a sub-account; null otherwise. */
+  parent_user_id?: string | null;
+  /** Owning main account username, resolved on the admin user list. */
+  parent_username?: string | null;
 }
 
 export interface BillingPlan {
@@ -1325,6 +1346,27 @@ class ApiClient {
     });
   }
 
+  async listSubAccounts(): Promise<SubAccount[]> {
+    return this.request("/subaccounts");
+  }
+
+  async createSubAccount(input: CreateSubAccountInput): Promise<SubAccount> {
+    return this.request("/subaccounts", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async distributeToSubAccount(
+    subUserId: string,
+    amountNanoUsd: string,
+  ): Promise<{ parent_balance_nano_usd: string; sub_balance_nano_usd: string }> {
+    return this.request(`/subaccounts/${subUserId}/transfer`, {
+      method: "POST",
+      body: JSON.stringify({ amount_nano_usd: amountNanoUsd }),
+    });
+  }
+
   async getTransformRegistry(): Promise<TransformRegistryItem[]> {
     return this.request("/transforms/registry");
   }
@@ -1505,8 +1547,10 @@ class ApiClient {
     });
   }
 
-  async listMarketplaceModels(): Promise<ModelMetadataRecord[]> {
-    return this.request("/marketplace/models");
+  async listMarketplaceModels(groupId?: string): Promise<ModelMetadataRecord[]> {
+    return this.request(
+      groupId ? `/marketplace/models?group_id=${encodeURIComponent(groupId)}` : "/marketplace/models",
+    );
   }
 }
 

@@ -11,6 +11,7 @@ import { AdminDashboardPage } from "@/pages/admin-dashboard";
 import { AdminUsagePage } from "@/pages/admin-usage";
 import { AdminRuntimePage } from "@/pages/admin-runtime";
 import { ProvidersPage } from "@/pages/providers";
+import { SubAccountsPage } from "./pages/subaccounts";
 import { ApiKeysPage } from "@/pages/api-keys";
 import { UsersPage } from "@/pages/users";
 import { GroupsPage } from "@/pages/groups";
@@ -101,6 +102,7 @@ function App() {
             <Route path="admin/runtime" element={<AdminRoute><AdminRuntimePage /></AdminRoute>} />
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="tokens" element={<ApiKeysPage />} />
+            <Route path="subaccounts" element={<SubAccountsPage />} />
             <Route path="logs" element={<RequestLogsPage />} />
             <Route path="playground" element={<PlaygroundPage />} />
             <Route path="marketplace" element={<ModelMarketplacePage />} />

@@ -423,6 +423,25 @@ impl ModelRegistryStore {
         rows.iter().map(row_to_model_metadata).collect()
     }
 
+    /// Same catalogue narrowed to the model names one Group's enabled Providers serve
+    /// (MM-G2). An empty candidate set short-circuits so the caller keeps control of the
+    /// authorization boundary.
+    pub async fn list_marketplace_model_metadata_for_models(
+        &self,
+        model_names: &[String],
+    ) -> Result<Vec<DbModelMetadataRecord>, String> {
+        if model_names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let records = self.list_marketplace_model_metadata().await?;
+        let allowed: std::collections::HashSet<&str> =
+            model_names.iter().map(String::as_str).collect();
+        Ok(records
+            .into_iter()
+            .filter(|record| allowed.contains(record.model_id.as_str()))
+            .collect())
+    }
+
     pub async fn list_priced_model_ids(&self) -> Result<std::collections::HashSet<String>, String> {
         let rows = self
             .db

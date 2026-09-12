@@ -59,7 +59,7 @@ const fetchers = {
   billingRates: () => api.listBillingRates(),
   billingPlans: () => api.listBillingPlans(),
   pricingProfilePatterns: async () => (await api.getPricingProfilePatterns()).patterns,
-  marketplaceModels: () => api.listMarketplaceModels(),
+  marketplaceModels: (groupId?: string) => api.listMarketplaceModels(groupId),
 };
 
 // SWR cache keys
@@ -264,10 +264,10 @@ export function usePricingProfilePatterns(config?: SWRConfiguration) {
   );
 }
 
-export function useMarketplaceModels(config?: SWRConfiguration) {
+export function useMarketplaceModels(groupId?: string, config?: SWRConfiguration) {
   return useSWR<ModelMetadataRecord[]>(
-    SWR_KEYS.MARKETPLACE_MODELS,
-    fetchers.marketplaceModels,
+    groupId ? `${SWR_KEYS.MARKETPLACE_MODELS}?group_id=${groupId}` : SWR_KEYS.MARKETPLACE_MODELS,
+    () => fetchers.marketplaceModels(groupId),
     { ...defaultConfig, ...config }
   );
 }

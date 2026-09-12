@@ -119,6 +119,10 @@ pub struct User {
     /// The user's single routing group id (`groups-registry.spec.md` §1.1).
     #[serde(default)]
     pub group_id: String,
+    /// Owning main account when this row is a sub-account (`user-sub-accounts.spec.md`
+    /// SAU-1); NULL for an ordinary main account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_user_id: Option<String>,
     /// Assigned billing plan, if any. Referential integrity is enforced by write paths.
     #[serde(default)]
     pub billing_plan_id: Option<String>,

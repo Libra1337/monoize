@@ -30,7 +30,7 @@ function parseSignedMinor(value: string): bigint {
   return BigInt(value);
 }
 
-function parseRate(value: string): { numerator: bigint; denominator: bigint } {
+export function parseRate(value: string): { numerator: bigint; denominator: bigint } {
   if (!POSITIVE_DECIMAL.test(value)) {
     throw new Error("exchange rate must be a positive decimal string");
   }

@@ -6,9 +6,10 @@ use crate::model_registry_store::{
     UpsertModelMetadataInput,
 };
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use serde::Deserialize;
 use serde_json::json;
 
 pub async fn list_models(
@@ -222,14 +223,62 @@ pub async fn delete_model_metadata(
 pub async fn list_marketplace_models(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<MarketplaceModelsQuery>,
 ) -> AppResult<impl IntoResponse> {
-    get_current_user(&headers, &state).await?;
+    let user = get_current_user(&headers, &state).await?;
+
+    // MM-G2: an Admin keeps the full catalogue; every other viewer sees only the models of
+    // one Group — the optional `group_id` when it is accessible, else the viewer's own.
+    if user.role.can_manage_users() {
+        let metadata = state
+            .model_registry_store
+            .list_marketplace_model_metadata()
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+        return Ok(Json(metadata));
+    }
+
+    let mut scope_group = user.group_id.clone();
+    if let Some(requested) = query.group_id.as_deref() {
+        let accessible = state
+            .user_store
+            .accessible_group_ids(&user.id, user.role)
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+        if !accessible.iter().any(|id| id == requested) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "group_id is not accessible",
+            ));
+        }
+        scope_group = requested.to_string();
+    }
+
+    let candidates = state
+        .monoize_store
+        .list_available_model_names()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let group_models = state
+        .monoize_store
+        .available_model_names_for_groups(&candidates, &[scope_group])
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     let metadata = state
         .model_registry_store
-        .list_marketplace_model_metadata()
+        .list_marketplace_model_metadata_for_models(
+            &group_models.into_iter().collect::<Vec<_>>(),
+        )
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     Ok(Json(metadata))
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct MarketplaceModelsQuery {
+    #[serde(default)]
+    pub group_id: Option<String>,
 }

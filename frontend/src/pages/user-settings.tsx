@@ -123,6 +123,20 @@ export function UserSettingsPage() {
       </motion.div>
 
       <StaggerList className="grid gap-6">
+        {user?.parent_user_id && (
+          <StaggerItem>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <User className="h-5 w-5" />
+                  {t("userSettings.subAccountTitle")}
+                </CardTitle>
+                <CardDescription>{t("userSettings.subAccountDescription")}</CardDescription>
+              </CardHeader>
+            </Card>
+          </StaggerItem>
+        )}
+        {!user?.parent_user_id && (
         <StaggerItem>
           <Card>
             <CardHeader>
@@ -176,6 +190,7 @@ export function UserSettingsPage() {
             </CardContent>
           </Card>
         </StaggerItem>
+        )}
 
         <StaggerItem>
           <Card>
@@ -249,6 +264,7 @@ export function UserSettingsPage() {
           </Card>
         </StaggerItem>
 
+        {!user?.parent_user_id && (
         <StaggerItem>
           <Card>
             <CardHeader>
@@ -329,6 +345,7 @@ export function UserSettingsPage() {
             </CardFooter>
           </Card>
         </StaggerItem>
+        )}
 
         <StaggerItem>
           <Card>

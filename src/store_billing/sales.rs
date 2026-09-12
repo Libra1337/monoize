@@ -55,23 +55,23 @@ pub enum SalesError {
 /// The four amounts an order carries once a code is applied (SC-1.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SalesAmounts {
-    /// Face value: what the buyer receives, unaffected by the discount.
+    /// Face value: what the buyer receives and pays, unaffected by the discount.
     pub base_minor: i128,
-    /// What the discount removes from the payable amount.
+    /// What the agent earns: the discount rate applied to the face value.
     pub discount_minor: i128,
-    /// What the buyer pays.
+    /// What the buyer pays: always the full face value (SC-1.3).
     pub payment_minor: i128,
-    /// What the agent earns.
+    /// What the agent earns: equal to `discount_minor`.
     pub commission_minor: i128,
 }
 
 /// Computes the SC-1.3 amounts for one order.
 ///
-/// The discount and the commission are both taken from the face value, and the discount is
-/// subtracted from the commission rate rather than from platform revenue. Platform revenue is
-/// `payment_minor - commission_minor`, which is independent of the discount up to one minor
-/// unit of floor rounding (SC-1.4): at a 500 bp rate a 100 CNY face value yields 95 CNY
-/// whether the discount is 0% or 5%.
+/// The buyer always pays the full face value; the sales code never reduces the payment or
+/// the credited balance. The agent earns `floor(base * discount_bp / 10000)`, so the
+/// discount rate is the agent's commission rate on that order, and platform revenue is
+/// `payment_minor - commission_minor` (SC-1.4). The global `commission_rate_bp` no longer
+/// enters the arithmetic; it only caps `discount_bp`.
 pub fn compute_amounts(
     base_minor: i128,
     commission_rate_bp: i64,
@@ -86,38 +86,39 @@ pub fn compute_amounts(
     if base_minor <= 0 {
         return Err(SalesError::InvalidAmount);
     }
-    // SC-2.7a: below 1 CNY the commission floors to zero, so the sale would credit nothing.
+    // SC-2.7a: below 1 CNY a 1% commission floors to zero, so the sale would credit nothing.
     if base_minor < MIN_CODED_ORDER_MINOR {
         return Err(SalesError::AmountTooSmall);
     }
 
-    let discount_minor = base_minor
+    let commission_minor = base_minor
         .checked_mul(i128::from(discount_bp))
         .ok_or(SalesError::InvalidAmount)?
         / BP_DENOMINATOR;
-    let payment_minor = base_minor
-        .checked_sub(discount_minor)
-        .ok_or(SalesError::InvalidAmount)?;
-    let commission_minor = base_minor
-        .checked_mul(i128::from(commission_rate_bp - discount_bp))
-        .ok_or(SalesError::InvalidAmount)?
-        / BP_DENOMINATOR;
 
-    // A discount that consumed the whole commission must still leave something payable.
-    if payment_minor <= 0 {
+    // The commission is paid out of the payment, so it can never exceed the face value.
+    if commission_minor > base_minor {
         return Err(SalesError::InvalidAmount);
     }
     Ok(SalesAmounts {
         base_minor,
-        discount_minor,
-        payment_minor,
+        discount_minor: commission_minor,
+        payment_minor: base_minor,
         commission_minor,
     })
 }
 
-/// Commission for a retroactive claim, which carries no discount (SC-4.3).
-pub fn claim_commission(base_minor: i128, commission_rate_bp: i64) -> Result<i128, SalesError> {
-    compute_amounts(base_minor, commission_rate_bp, 0).map(|amounts| amounts.commission_minor)
+/// Commission for a retroactive claim (SC-4.3).
+///
+/// The buyer already paid the full face value, so a claim credits the agent's own discount
+/// rate — the same rate a coded order would have credited — bounded by the global cap.
+pub fn claim_commission(
+    base_minor: i128,
+    commission_rate_bp: i64,
+    agent_discount_bp: i64,
+) -> Result<i128, SalesError> {
+    compute_amounts(base_minor, commission_rate_bp, agent_discount_bp)
+        .map(|amounts| amounts.commission_minor)
 }
 
 /// Generates one sales code from a cryptographically secure source (SC-D1b).
@@ -168,34 +169,42 @@ pub fn normalize_code(input: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// SC-1.3 worked example, and SC-1.4: platform revenue does not move with the discount.
+    /// SC-1.3 worked example, and SC-1.4: the buyer always pays the face value and the
+    /// commission comes out of the payment, so platform revenue falls only by the commission.
     #[test]
-    fn discount_is_funded_by_commission_not_by_the_platform() {
+    fn the_buyer_pays_the_face_value_and_funds_the_commission() {
         let base = 10_000; // 100 CNY
 
         let without = compute_amounts(base, 500, 0).expect("no discount");
         assert_eq!(without.payment_minor, 10_000);
-        assert_eq!(without.commission_minor, 500);
-        assert_eq!(without.payment_minor - without.commission_minor, 9_500);
+        assert_eq!(without.commission_minor, 0);
+        assert_eq!(without.payment_minor - without.commission_minor, 10_000);
 
-        let with_one_percent = compute_amounts(base, 500, 100).expect("1% discount");
+        let with_one_percent = compute_amounts(base, 500, 100).expect("1% rate");
         assert_eq!(with_one_percent.discount_minor, 100);
-        assert_eq!(with_one_percent.payment_minor, 9_900);
-        assert_eq!(with_one_percent.commission_minor, 400);
+        assert_eq!(with_one_percent.payment_minor, 10_000);
+        assert_eq!(with_one_percent.commission_minor, 100);
         assert_eq!(
             with_one_percent.payment_minor - with_one_percent.commission_minor,
-            9_500
+            9_900
         );
 
-        let at_the_cap = compute_amounts(base, 500, 500).expect("5% discount");
-        assert_eq!(at_the_cap.payment_minor, 9_500);
-        assert_eq!(at_the_cap.commission_minor, 0);
+        let at_the_cap = compute_amounts(base, 500, 500).expect("5% rate");
+        assert_eq!(at_the_cap.payment_minor, 10_000);
+        assert_eq!(at_the_cap.commission_minor, 500);
         assert_eq!(at_the_cap.payment_minor - at_the_cap.commission_minor, 9_500);
 
-        // The buyer always receives the face value.
+        // The buyer always receives the face value and pays it in full.
         for amounts in [without, with_one_percent, at_the_cap] {
             assert_eq!(amounts.base_minor, base);
+            assert_eq!(amounts.payment_minor, base);
         }
+
+        // The reported example: a 5 CNY recharge at a 1% sales rate pays 5 CNY and earns
+        // the agent exactly 0.05 CNY, with nothing deducted at payment time.
+        let example = compute_amounts(500, 500, 100).expect("5 CNY at 1%");
+        assert_eq!(example.payment_minor, 500);
+        assert_eq!(example.commission_minor, 5);
     }
 
     /// SC-1.2: the bound follows the configured rate, not a hardcoded 500.
@@ -219,22 +228,23 @@ mod tests {
     /// Floor division must never round a share up, or the platform pays the rounding.
     #[test]
     fn rounding_never_favours_the_agent() {
-        // 199 fen at 5% is 9.95 fen.
-        let odd = compute_amounts(199, 500, 0).expect("199 fen");
+        // 199 fen at a 5% rate is 9.95 fen of commission.
+        let odd = compute_amounts(199, 500, 500).expect("199 fen at 5%");
         assert_eq!(odd.commission_minor, 9);
 
-        // A discount that floors to zero must not reduce the payable amount.
-        let sub_fen_discount = compute_amounts(100, 500, 1).expect("0.01% of 1 CNY");
-        assert_eq!(sub_fen_discount.discount_minor, 0);
-        assert_eq!(sub_fen_discount.payment_minor, 100);
+        // A rate that floors to zero earns nothing but never changes the payable amount.
+        let sub_fen_rate = compute_amounts(100, 500, 1).expect("0.01% of 1 CNY");
+        assert_eq!(sub_fen_rate.discount_minor, 0);
+        assert_eq!(sub_fen_rate.payment_minor, 100);
     }
 
     /// SC-2.7a: 1 CNY is the smallest face value whose commission is nonzero and expressible
-    /// in two decimal places. Anything smaller would credit the agent nothing for a real sale.
+    /// in two decimal places at a 1% rate. Anything smaller would credit the agent nothing
+    /// for a real sale.
     #[test]
     fn one_yuan_is_the_smallest_face_value_that_earns_anything() {
-        let one_yuan = compute_amounts(MIN_CODED_ORDER_MINOR, 500, 0).expect("1 CNY");
-        assert_eq!(one_yuan.commission_minor, 5); // 0.05 CNY
+        let one_yuan = compute_amounts(MIN_CODED_ORDER_MINOR, 500, 100).expect("1 CNY at 1%");
+        assert_eq!(one_yuan.commission_minor, 1); // 0.01 CNY
         assert_eq!(one_yuan.payment_minor, 100);
 
         for below in [1, 50, MIN_CODED_ORDER_MINOR - 1] {
@@ -252,10 +262,16 @@ mod tests {
         assert_eq!(compute_amounts(-100, 500, 0), Err(SalesError::InvalidAmount));
     }
 
+    /// SC-4.3: a claim credits the agent's own rate, bounded by the configured cap.
     #[test]
-    fn a_claim_earns_the_undiscounted_commission() {
-        assert_eq!(claim_commission(10_000, 500), Ok(500));
-        assert_eq!(claim_commission(10_000, 300), Ok(300));
+    fn a_claim_earns_the_agents_own_rate() {
+        assert_eq!(claim_commission(10_000, 500, 100), Ok(100));
+        assert_eq!(claim_commission(10_000, 300, 300), Ok(300));
+        assert_eq!(claim_commission(10_000, 500, 0), Ok(0));
+        assert_eq!(
+            claim_commission(10_000, 300, 400),
+            Err(SalesError::DiscountAboveRate)
+        );
     }
 
     /// SC-D1b: the alphabet excludes the four characters that are misread when transcribed.

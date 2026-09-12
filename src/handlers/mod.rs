@@ -222,6 +222,22 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> A
         model_ids.retain(|id| allowed.contains(id.as_str()));
     }
 
+    // AKG-M1: a key may only discover models its effective Groups can actually route to.
+    // `None` is internal system traffic and keeps the unrestricted list; an empty list makes
+    // every provider group-eligible (R-GRP-1a), so it also keeps the list.
+    if let Some(groups) = auth.effective_groups.as_ref()
+        && !groups.is_empty()
+    {
+        let group_models = state
+            .monoize_store
+            .available_model_names_for_groups(&model_ids, groups)
+            .await
+            .map_err(|e| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "provider_store_error", e)
+            })?;
+        model_ids.retain(|id| group_models.contains(id));
+    }
+
     let codex_model_ids = state.monoize_runtime.read().await.codex_model_ids.clone();
     let visible_model_ids: HashSet<&str> = model_ids.iter().map(String::as_str).collect();
     let codex_models: Vec<Value> = codex_model_ids

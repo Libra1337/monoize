@@ -2193,6 +2193,7 @@ mod tests {
         User {
             id: id.to_string(),
             username: format!("user-{id}"),
+            parent_user_id: None,
             password_hash: String::new(),
             role: UserRole::User,
             account_class: Default::default(),

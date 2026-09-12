@@ -55,6 +55,9 @@ import {
 } from "@/lib/swr";
 import type { AccountClass, User } from "@/lib/api";
 import { formatNanoUsd, formatUsdDecimal, isSignedIntegerString } from "@/lib/exact-decimal";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
+import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
+import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { getGravatarUrl } from "@/lib/utils";
 import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
@@ -117,19 +120,22 @@ const roleVariants = {
  * accounts, so without a grouping of their own they sit indistinguishable among the standard
  * users. This grouping is presentational only: it changes no permission, class, or route.
  */
-const USER_SCOPES = ["standard", "enterprise", "private", "agent", "sales"] as const;
+const USER_SCOPES = ["standard", "enterprise", "private", "agent", "subaccounts", "sales"] as const;
 
 type UserScope = (typeof USER_SCOPES)[number];
 
-/** Assigns a user to exactly one grouping, with agents taking precedence over their class. */
+/** Assigns a user to exactly one grouping: sales first, then sub-accounts, then class. */
 function scopeOf(user: User): UserScope {
   if (user.is_sales_agent) return "sales";
+  if (user.parent_user_id) return "subaccounts";
   return user.account_class;
 }
 
 export function UsersPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { currency } = useStoreCurrency();
+  const { data: exchangeRate } = useStoreExchangeRate();
   const { user: currentUser } = useAuth();
   const { data: users = [], isLoading } = useUsers();
   const [scope, setScope] = useState<UserScope>("standard");
@@ -149,6 +155,7 @@ export function UsersPage() {
       enterprise: 0,
       private: 0,
       agent: 0,
+      subaccounts: 0,
       sales: 0,
     };
     for (const user of users) counts[scopeOf(user)] += 1;
@@ -768,7 +775,7 @@ export function UsersPage() {
           toolbar={(
             <div className="flex flex-col gap-3">
               <Tabs value={scope} onValueChange={(value) => setScope(value as UserScope)}>
-                <TabsList className="grid h-10 w-full grid-cols-5 rounded-lg sm:w-[40rem]">
+                <TabsList className="grid h-10 w-full grid-cols-6 rounded-lg sm:w-[48rem]">
                   {USER_SCOPES.map((value) => (
                     <TabsTrigger key={value} value={value} className="gap-1.5">
                       {t(`users.scopes.${value}`)}
@@ -836,6 +843,11 @@ export function UsersPage() {
                   <VirtualTableHeaderCell>
                     {t("users.plan")}
                   </VirtualTableHeaderCell>
+                  {scope === "subaccounts" && (
+                    <VirtualTableHeaderCell>
+                      {t("users.parentAccount")}
+                    </VirtualTableHeaderCell>
+                  )}
                   <VirtualTableHeaderCell>
                     {t("users.balance")}
                   </VirtualTableHeaderCell>
@@ -901,10 +913,21 @@ export function UsersPage() {
                         <span className="text-sm text-muted-foreground">{t("users.noPlan")}</span>
                       )}
                     </VirtualTableCell>
+                    {scope === "subaccounts" && (
+                      <VirtualTableCell className="whitespace-nowrap text-muted-foreground">
+                        {user.parent_username ?? user.parent_user_id}
+                      </VirtualTableCell>
+                    )}
                     <VirtualTableCell className="tabular-nums">
                       {user.balance_unlimited
                         ? t("users.unlimited")
-                        : formatUsdDecimal(user.balance_usd, 2)}
+                        : currency === "CNY" && exchangeRate?.cny_per_usd
+                          ? formatCoinFromNanoUsdForCurrency(
+                              user.balance_nano_usd,
+                              "CNY",
+                              exchangeRate.cny_per_usd,
+                            )
+                          : formatUsdDecimal(user.balance_usd, 2)}
                     </VirtualTableCell>
                     <VirtualTableCell className="tabular-nums">
                       {formatNanoUsd(user.today_cost_nano_usd, 2)}

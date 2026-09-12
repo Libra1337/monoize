@@ -626,9 +626,13 @@ impl SalesStore {
     ) -> Result<SalesCommissionEntry, SalesStoreError> {
         self.check_claim_rate(agent_user_id, now).await?;
         let rate_bp = self.commission_rate_bp().await?;
+        let agent = self
+            .agent_for_user(agent_user_id)
+            .await?
+            .ok_or(SalesStoreError::NotAgent)?;
 
         let outcome = self
-            .claim_order_inner(agent_user_id, order_number, buyer_user_id, rate_bp, now)
+            .claim_order_inner(agent_user_id, order_number, buyer_user_id, rate_bp, agent.discount_bp, now)
             .await;
         // SC-4.3 and SC-4.4 both record an attempt; only the flag differs.
         self.record_claim_attempt(agent_user_id, outcome.is_ok(), now)
@@ -650,11 +654,12 @@ impl SalesStore {
         now: DateTime<Utc>,
     ) -> Result<SalesCommissionEntry, SalesStoreError> {
         // A code that no longer exists has nobody to credit, so the agent must be real.
-        self.agent_for_user(agent_user_id)
+        let agent = self
+            .agent_for_user(agent_user_id)
             .await?
             .ok_or(SalesStoreError::NotAgent)?;
         let rate_bp = self.commission_rate_bp().await?;
-        self.claim_order_inner(agent_user_id, order_number, buyer_user_id, rate_bp, now)
+        self.claim_order_inner(agent_user_id, order_number, buyer_user_id, rate_bp, agent.discount_bp, now)
             .await
     }
 
@@ -664,6 +669,7 @@ impl SalesStore {
         order_number: &str,
         buyer_user_id: &str,
         rate_bp: i64,
+        agent_discount_bp: i64,
         now: DateTime<Utc>,
     ) -> Result<SalesCommissionEntry, SalesStoreError> {
         if agent_user_id == buyer_user_id {
@@ -696,7 +702,7 @@ impl SalesStore {
         }
         let order_id = row_string(&order, "id")?;
         let base_minor = face_value_minor(&row_string(&order, "quote_json")?)?;
-        let commission_minor = claim_commission(base_minor, rate_bp)?;
+        let commission_minor = claim_commission(base_minor, rate_bp, agent_discount_bp)?;
 
         let existing = tx
             .query_one(self.db.stmt(
@@ -715,7 +721,7 @@ impl SalesStore {
             order_number: order_number.to_string(),
             base_minor: base_minor.to_string(),
             commission_minor: commission_minor.to_string(),
-            discount_bp: 0,
+            discount_bp: agent_discount_bp,
             commission_rate_bp: rate_bp,
             origin: "claim".to_string(),
             reversed_at: None,
@@ -725,7 +731,7 @@ impl SalesStore {
             "INSERT INTO sales_commission_entries
                 (id, agent_user_id, order_id, order_number, buyer_user_id, base_fen,
                  commission_fen, discount_bp, commission_rate_bp, origin, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, 'claim', $9)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'claim', $10)",
             vec![
                 entry.id.clone().into(),
                 agent_user_id.into(),
@@ -734,6 +740,7 @@ impl SalesStore {
                 buyer_user_id.into(),
                 entry.base_minor.clone().into(),
                 entry.commission_minor.clone().into(),
+                agent_discount_bp.into(),
                 rate_bp.into(),
                 entry.created_at.clone().into(),
             ],
@@ -1385,7 +1392,7 @@ mod tests {
     /// the commission base. That is what holds platform revenue at 95% under SC-1.4.
     #[test]
     fn face_value_ignores_the_discount() {
-        // 100 CNY face value, 1% discount: the buyer pays 99 and receives 100.
+        // 100 CNY face value, 1% rate: the buyer pays 100 and receives 100.
         assert_eq!(
             face_value_minor(&balance_quote("10000", "0", "10000")),
             Ok(10_000)
@@ -1403,12 +1410,13 @@ mod tests {
         let base = face_value_minor(&quote).expect("face value");
         assert_eq!(base, 10_000, "the bonus must not enter the commission base");
 
-        let amounts = compute_amounts(base, 500, 0).expect("amounts");
+        let amounts = compute_amounts(base, 500, 500).expect("amounts at a 5% rate");
+        assert_eq!(amounts.payment_minor, 10_000);
         assert_eq!(amounts.commission_minor, 500);
         assert_eq!(amounts.payment_minor - amounts.commission_minor, 9_500);
 
         // Had the bonus been included the agent would take 600 and leave the platform 9400.
-        let inflated = compute_amounts(12_000, 500, 0).expect("amounts");
+        let inflated = compute_amounts(12_000, 500, 500).expect("amounts");
         assert_eq!(inflated.commission_minor, 600);
     }
 
@@ -1445,14 +1453,15 @@ mod tests {
     }
 
     /// SC-1.7 and SC-2.7a: 1 CNY is both the smallest purchasable amount and the smallest
-    /// face value a code may price, and its commission is exactly 0.05 CNY.
+    /// face value a code may price, and at a 5% rate its commission is exactly 0.05 CNY.
     #[test]
     fn the_minimum_recharge_earns_a_commission_in_whole_fen() {
         use crate::store_billing::sales::{MIN_CODED_ORDER_MINOR, SalesError, compute_amounts};
 
         assert_eq!(MIN_CODED_ORDER_MINOR, 100);
-        let minimum = compute_amounts(MIN_CODED_ORDER_MINOR, 500, 0).expect("1 CNY");
+        let minimum = compute_amounts(MIN_CODED_ORDER_MINOR, 500, 500).expect("1 CNY at 5%");
         assert_eq!(minimum.commission_minor, 5);
+        assert_eq!(minimum.payment_minor, 100);
 
         // A smaller face value is refused rather than accruing zero, so an agent never makes
         // a sale that credits nothing.

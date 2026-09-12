@@ -96,6 +96,13 @@ pub struct UserResponse {
     /// SC-UI-1: the Sales surface lives outside the dashboard, so the client must know which
     /// of the two to route to before it renders either.
     pub is_sales_agent: bool,
+    /// SAU-1: set for a sub-account; the id of the owning main account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_user_id: Option<String>,
+    /// SAU-8: the owning main account's username, resolved by the admin list for the
+    /// sub-account grouping's attribution column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_username: Option<String>,
 }
 
 impl UserResponse {
@@ -142,6 +149,8 @@ impl UserResponse {
             today_cost_nano_usd,
             today_cost_usd,
             is_sales_agent,
+            parent_user_id: u.parent_user_id,
+            parent_username: None,
         }
     }
 }
@@ -394,6 +403,14 @@ pub async fn update_me(
     Json(body): Json<UpdateMeRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
+    // SAU-4: a sub-account has usage-only access; the main account owns its profile.
+    if user.parent_user_id.is_some() {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "sub_account_restricted",
+            "sub-accounts cannot change the account profile",
+        ));
+    }
 
     let user_store = &state.user_store;
 
@@ -437,6 +454,14 @@ pub async fn change_password(
     Json(body): Json<ChangePasswordRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
+    // SAU-4: password changes belong to the main account that owns the sub-account.
+    if user.parent_user_id.is_some() {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "sub_account_restricted",
+            "sub-accounts cannot change the account password",
+        ));
+    }
 
     if body.new_password.len() < 8 {
         return Err(AppError::new(

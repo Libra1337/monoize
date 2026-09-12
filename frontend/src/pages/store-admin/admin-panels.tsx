@@ -353,7 +353,9 @@ export function OrdersPanel({
                       </Button>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{order.user_id}</td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {order.username || order.user_id}
+                  </td>
                   <td className="px-4 py-3 tabular-nums">{formatMinor(order.payment_minor, order.payment_currency)}</td>
                   <td className="px-4 py-3">
                     <Badge variant={order.payment_state === "paid" ? "default" : "outline"}>

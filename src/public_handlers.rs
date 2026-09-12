@@ -476,10 +476,14 @@ fn rate_range(rates: &[PublicRate], usage_class: &str) -> Option<RateRange> {
 /// visitor gets the standard catalogue. A signed-in user gets their own class, which is what
 /// keeps an enterprise account from being shown standard Groups, models, and rates.
 async fn viewer_account_class(state: &AppState, headers: &HeaderMap) -> crate::users::AccountClass {
-    crate::dashboard_handlers::session_helpers::optional_current_user(headers, state)
+    viewer(state, headers)
         .await
         .map(|user| user.account_class)
         .unwrap_or_default()
+}
+
+async fn viewer(state: &AppState, headers: &HeaderMap) -> Option<crate::users::User> {
+    crate::dashboard_handlers::session_helpers::optional_current_user(headers, state).await
 }
 
 /// CNY per USD from the current snapshot, used to express a USD-basis rate in Coin.
@@ -519,6 +523,29 @@ fn groups_by_id(
             .collect::<Result<HashMap<_, _>, String>>()?;
         Ok(rows)
     }
+}
+
+/// Groups whose offers the caller may see: every Group of the class for anonymous visitors
+/// and Admins, and only the signed-in non-admin viewer's own Group for everyone else
+/// (MM-G1). Returning the single Group keeps the account-class query as the authorization
+/// boundary while narrowing discovery to what the user can actually route to.
+async fn visible_groups_for_viewer(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<HashMap<String, String>, String> {
+    let viewer = viewer(state, headers).await;
+    let account_class = viewer
+        .as_ref()
+        .map(|user| user.account_class)
+        .unwrap_or_default();
+    let mut groups = groups_by_id(state, account_class).await?;
+    if let Some(user) = viewer.as_ref()
+        && !user.role.can_manage_users()
+        && !user.group_id.is_empty()
+    {
+        groups.retain(|id, _| id == &user.group_id);
+    }
+    Ok(groups)
 }
 
 async fn public_provider_names_by_id(
@@ -635,7 +662,7 @@ pub async fn list_marketplace(
         .transpose()?;
     let account_class = viewer_account_class(&state, &headers).await;
     let coin_rate = coin_rate_per_usd(&state).await;
-    let groups = groups_by_id(&state, account_class)
+    let groups = visible_groups_for_viewer(&state, &headers)
         .await
         .map_err(marketplace_source_error)?;
     let providers = state
@@ -787,7 +814,7 @@ pub async fn marketplace_offers(
     }
     let account_class = viewer_account_class(&state, &headers).await;
     let coin_rate = coin_rate_per_usd(&state).await;
-    let groups = groups_by_id(&state, account_class)
+    let groups = visible_groups_for_viewer(&state, &headers)
         .await
         .map_err(marketplace_source_error)?;
     let providers = state

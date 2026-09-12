@@ -669,6 +669,7 @@ fn user_response_serializes_group_id() {
     let user = User {
         id: "user-1".to_string(),
         username: "alice".to_string(),
+        parent_user_id: None,
         password_hash: "hash".to_string(),
         role: UserRole::User,
         account_class: Default::default(),

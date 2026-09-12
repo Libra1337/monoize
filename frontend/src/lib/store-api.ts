@@ -435,6 +435,8 @@ export interface StoreOrder {
   id: string;
   order_number: string;
   user_id: string;
+  /** Buyer username, resolved by the admin list endpoint. */
+  username?: string;
   product_id: string;
   product_kind: ProductKind;
   payment_state: StorePaymentState;

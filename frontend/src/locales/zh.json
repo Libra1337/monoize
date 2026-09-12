@@ -218,6 +218,7 @@
     "dashboard": "仪表盘",
     "providers": "服务提供者",
     "apiKeys": "令牌管理",
+    "subAccounts": "子账号",
     "playground": "Playground",
     "users": "用户管理",
     "settings": "系统设置",
@@ -1041,8 +1042,10 @@
       "enterprise": "企业分组",
       "private": "私有",
       "agent": "代理",
+      "subaccounts": "子账号",
       "sales": "销售"
-    }
+    },
+    "parentAccount": "归属主账户"
   },
   "apiKeys": {
     "title": "令牌管理",
@@ -1620,7 +1623,9 @@
     "grantAmount": "发放额度",
     "nextGrant": "下次重置",
     "noPlan": "未分配订阅套餐",
-    "unrestrictedGroups": "该套餐不限制分组"
+    "unrestrictedGroups": "该套餐不限制分组",
+    "subAccountTitle": "子账号",
+    "subAccountDescription": "当前登录的是子账号，用户名、密码和余额由主账户管理。"
   },
   "modelMetadata": {
     "title": "模型数据库",
@@ -2223,5 +2228,31 @@
   "salesAdmin": {
     "title": "销售管理",
     "description": "销售账户、分成记录与提现。"
+  },
+  "subaccounts": {
+    "title": "子账号",
+    "description": "在当前账户下开设子账号，向子账号分发余额，并查看其使用情况。",
+    "create": "新建子账号",
+    "createTitle": "新建子账号",
+    "createDescription": "子账号继承当前账户的账户类别与分组，可自行创建 API key，但不能充值或修改账户资料。",
+    "createSuccess": "子账号 {{name}} 已创建",
+    "username": "用户名",
+    "password": "密码",
+    "passwordHint": "至少 8 位，请通过其他渠道告知子账号使用者。",
+    "mainBalance": "主账户余额",
+    "distributeHint": "子账号不能充值，余额由主账户分发，双方账本都会记录。",
+    "empty": "还没有子账号",
+    "emptyDescription": "创建子账号，与团队成员共享当前分组，用量独立统计。",
+    "balance": "余额",
+    "apiKeys": "API key",
+    "todayCalls": "今日调用",
+    "todaySpend": "今日消费",
+    "distribute": "分发余额",
+    "transferTitle": "向 {{name}} 分发余额",
+    "transferDescription": "金额从主账户余额划出，按 {{currency}} 输入。",
+    "transferAmount": "金额（{{currency}}）",
+    "transferCurrent": "子账号当前余额：{{balance}}",
+    "transferSuccess": "已向 {{name}} 分发余额",
+    "transferInvalidAmount": "请输入最多两位小数的正数金额"
   }
 }
