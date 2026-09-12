@@ -34,7 +34,9 @@ import { PageWrapper, StaggerList, StaggerItem, motion, transitions } from "@/co
 import { PageHeader } from "@/components/ui/page-header";
 import { setLanguage, getCurrentLanguage } from "@/i18n";
 import { updateMeOptimistic } from "@/lib/swr";
-import { formatUsdDecimal } from "@/lib/exact-decimal";
+import { useStoreCurrency } from "@/hooks/use-store-currency";
+import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
+import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
 import { getGravatarUrl } from "@/lib/utils";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { toast } from "sonner";
@@ -42,6 +44,12 @@ import { toast } from "sonner";
 export function UserSettingsPage() {
   const { t } = useTranslation();
   const { user, changePassword, refreshUser } = useAuth();
+  const { currency } = useStoreCurrency();
+  const { data: exchangeRate } = useStoreExchangeRate();
+  const formatMoney = (nanoUsd?: string) =>
+    nanoUsd === undefined
+      ? "-"
+      : formatCoinFromNanoUsdForCurrency(nanoUsd, currency, exchangeRate?.cny_per_usd ?? "0");
   const { theme, setTheme } = useTheme();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -208,7 +216,7 @@ export function UserSettingsPage() {
                   <p className="text-xl font-semibold tabular-nums">
                     {user?.balance_unlimited
                       ? t("users.unlimited")
-                      : formatUsdDecimal(user?.balance_usd, 2)}
+                      : formatMoney(user?.balance_nano_usd)}
                   </p>
                 </div>
                 <div className="space-y-1">
@@ -236,7 +244,7 @@ export function UserSettingsPage() {
                     <div className="space-y-1">
                       <p className="text-sm text-muted-foreground">{t("userSettings.grantAmount")}</p>
                       <p className="font-medium tabular-nums">
-                        {formatUsdDecimal(user.billing_plan.grant_amount_usd, 2)}
+                        {formatMoney(user.billing_plan.grant_amount_nano_usd)}
                         {" / "}
                         <span className="font-mono">{user.billing_plan.schedule}</span>
                       </p>

@@ -72,12 +72,21 @@ function formatSignedMinor(minor: bigint, currency: StoreCurrency): string {
   return negative ? `-${formatted}` : formatted;
 }
 
+/** Coin minor units are CNY magnitude, so the label is the CNY sign (SC-0.3, MB-D3). */
 function formatCoinMinor(minor: bigint): string {
   const negative = minor < 0n;
   const absolute = negative ? -minor : minor;
   const whole = absolute / 100n;
   const fraction = (absolute % 100n).toString().padStart(2, "0");
-  return `${negative ? "-" : ""}C${whole}.${fraction}`;
+  return `${negative ? "-" : ""}¥${whole}.${fraction}`;
+}
+
+function formatUsdMinor(minor: bigint): string {
+  const negative = minor < 0n;
+  const absolute = negative ? -minor : minor;
+  const whole = absolute / 100n;
+  const fraction = (absolute % 100n).toString().padStart(2, "0");
+  return `${negative ? "-" : ""}$${whole}.${fraction}`;
 }
 
 /** Format a payment amount as Coin in the selected display currency. */
@@ -96,7 +105,9 @@ export function formatCoinFromMinorForCurrency(
     : sourceCurrency === "USD"
       ? amount
       : BigInt(convertMinor(cnyMinor.toString(), "CNY", "USD", cnyPerUsd));
-  return formatCoinMinor(displayMinor);
+  return displayCurrency === "CNY"
+    ? formatCoinMinor(displayMinor)
+    : formatUsdMinor(displayMinor);
 }
 
 /** Format a payment-currency minor amount as Coin (1 C = 1 CNY). */
@@ -131,7 +142,7 @@ export function formatCoinFromNanoUsdForCurrency(
 ): string {
   const nano = parseSignedMinor(nanoUsd);
   if (displayCurrency === "USD") {
-    return formatCoinMinor(divideRoundHalfAwayFromZero(nano, 10_000_000n));
+    return formatUsdMinor(divideRoundHalfAwayFromZero(nano, 10_000_000n));
   }
   return formatCoinFromNanoUsd(nanoUsd, cnyPerUsd);
 }

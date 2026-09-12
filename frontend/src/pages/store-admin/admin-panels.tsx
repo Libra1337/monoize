@@ -323,8 +323,8 @@ export function OrdersPanel({
       {orders.length === 0 ? (
         <EmptyPanel icon={<ReceiptText className="size-8" />} title={t("store.admin.orders.empty")} />
       ) : (
-        <div className="overflow-x-auto rounded-2xl border">
-          <table className="w-full min-w-[56rem] text-sm">
+        <div className="rounded-2xl border">
+          <table className="w-full table-fixed text-sm">
             <thead className="bg-muted/50 text-left text-muted-foreground">
               <tr>
                 <th className="px-4 py-3 font-medium">{t("store.admin.orders.number")}</th>
@@ -339,7 +339,7 @@ export function OrdersPanel({
               {orders.map((order) => (
                 <tr key={order.id} className="border-t transition-colors hover:bg-muted/30">
                   <td className="px-4 py-2 font-medium">
-                    <div className="flex min-w-44 items-center justify-between gap-2">
+                    <div className="flex items-center justify-between gap-2">
                       <span>{order.order_number}</span>
                       <Button
                         type="button"
@@ -412,8 +412,8 @@ export function RedemptionsPanel({ codes, onGenerate, onReveal, onCopy }: { code
       {codes.length === 0 ? (
         <EmptyPanel icon={<TicketCheck className="size-8" />} title={t("store.admin.redemptions.empty")} />
       ) : (
-        <div className="overflow-x-auto rounded-2xl border">
-          <table className="w-full min-w-[44rem] text-sm">
+        <div className="rounded-2xl border">
+          <table className="w-full text-sm">
             <thead className="bg-muted/50 text-left text-muted-foreground">
               <tr>
                 <th className="px-4 py-3 font-medium">{t("store.admin.redemptions.hint")}</th>

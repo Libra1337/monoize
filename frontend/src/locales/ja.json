@@ -242,6 +242,7 @@
     "expandSidebar": "サイドバーを展開",
     "orders": "注文",
     "storeManagement": "ストア管理",
+    "ordersAdmin": "注文統計",
     "salesManagement": "セールス管理"
   },
   "wallet": {

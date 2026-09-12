@@ -242,6 +242,7 @@
     "expandSidebar": "Expand sidebar",
     "orders": "Orders",
     "storeManagement": "Store Management",
+    "ordersAdmin": "Order Statistics",
     "salesManagement": "Sales"
   },
   "wallet": {

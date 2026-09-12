@@ -12,6 +12,7 @@ import { AdminUsagePage } from "@/pages/admin-usage";
 import { AdminRuntimePage } from "@/pages/admin-runtime";
 import { ProvidersPage } from "@/pages/providers";
 import { SubAccountsPage } from "./pages/subaccounts";
+import { OrdersAdminPage } from "./pages/orders-admin";
 import { ApiKeysPage } from "@/pages/api-keys";
 import { UsersPage } from "@/pages/users";
 import { GroupsPage } from "@/pages/groups";
@@ -114,6 +115,7 @@ function App() {
             <Route path="store" element={<StorePage />} />
             <Route path="wallet" element={<WalletPage />} />
             <Route path="orders" element={<OrdersPage />} />
+            <Route path="orders-admin" element={<AdminRoute><OrdersAdminPage /></AdminRoute>} />
             <Route path="store-admin" element={<StoreAdminRoute />} />
             <Route path="sales-admin" element={<AdminRoute><SalesAdminPage /></AdminRoute>} />
             <Route path="admin-settings" element={<SettingsPage />} />

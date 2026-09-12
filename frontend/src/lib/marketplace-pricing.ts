@@ -27,5 +27,5 @@ export function formatMarketplaceRateRange(range: MarketplaceRateRange): string 
 
   const maximum = formatMarketplaceRate(range.max, range.unit);
   const suffix = isTokenUnit(range.unit) ? " / 1M tokens" : ` / ${range.unit}`;
-  return `${minimum.slice(0, -suffix.length)}–${maximum.replace(/^C/, "")}`;
+  return `${minimum.slice(0, -suffix.length)}–${maximum.replace(/^[¥$]/, "")}`;
 }

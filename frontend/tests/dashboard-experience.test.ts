@@ -109,8 +109,8 @@ describe("Dashboard navigation", () => {
   test("formats administrator costs in both display currencies", () => {
     // The USD branch returns before reading the rate, so an absent rate must not
     // turn a USD administrator's cost into a placeholder.
-    expect(formatCoinFromNanoUsdForCurrency("2500000000", "USD", "0")).toBe("C2.50");
-    expect(formatCoinFromNanoUsdForCurrency("2500000000", "CNY", "7.200000")).toBe("C18.00");
+    expect(formatCoinFromNanoUsdForCurrency("2500000000", "USD", "0")).toBe("$2.50");
+    expect(formatCoinFromNanoUsdForCurrency("2500000000", "CNY", "7.200000")).toBe("¥18.00");
   });
 
   test("supports selected ranges for authenticated rankings and a dedicated wallet page", () => {

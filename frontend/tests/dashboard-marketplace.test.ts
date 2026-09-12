@@ -46,12 +46,12 @@ describe("authenticated Model Marketplace", () => {
   // MM-P2a/MM-UA5: `display_rate_nano` arrives in nano-CNY, and `1 C = 1 CNY`, so the client
   // only scales to the display unit and rounds once. No exchange rate is applied here.
   test("renders human per-million prices with exact final rounding", () => {
-    expect(formatMarketplaceRate("2505", "token")).toBe("C2.51 / 1M tokens");
-    expect(formatMarketplaceRate("2504.999999999", "token")).toBe("C2.50 / 1M tokens");
-    expect(formatMarketplaceRate("1250000000.5", "call")).toBe("C1.25 / call");
+    expect(formatMarketplaceRate("2505", "token")).toBe("¥2.51 / 1M tokens");
+    expect(formatMarketplaceRate("2504.999999999", "token")).toBe("¥2.50 / 1M tokens");
+    expect(formatMarketplaceRate("1250000000.5", "call")).toBe("¥1.25 / call");
     // A range carries one leading symbol; the upper bound omits it.
     expect(formatMarketplaceRateRange({ min: "1000", max: "2500", unit: "token" })).toBe(
-      "C1.00–2.50 / 1M tokens",
+      "¥1.00–2.50 / 1M tokens",
     );
   });
 

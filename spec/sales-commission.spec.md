@@ -28,9 +28,10 @@ usage, and MUST NOT enter `billing_ledger`. It becomes money only when an Admin 
 withdrawal out of band under section 6.
 
 SC-0.4. A **discount** is expressed in basis points of the order face value. One basis point
-is 1/10000. A discount is the agent's commission rate on that order: it pays the agent out
-of the full payment and MUST NOT change what the buyer pays, MUST NOT change what the buyer
-receives, and MUST NOT be deducted at payment time.
+is 1/10000. The global commission rate is the agent's base commission; the discount is the
+part of that commission the agent concedes. A discount MUST NOT change what the buyer pays
+(the full face value), MUST NOT change what the buyer receives, and MUST NOT be deducted at
+payment time: only the agent's own commission shrinks by it.
 
 ## 1. Rates and bounds
 
@@ -40,10 +41,10 @@ A change MUST NOT alter any existing `sales_commission_entries` row, because eac
 the rate that applied to its order.
 
 SC-1.2. `discount_bp` MUST be an integer in `[0, commission_rate_bp]`. A value above the
-current rate MUST be rejected with `sales_discount_above_rate`; the global rate is the
-ceiling on an agent's per-order commission. Lowering `commission_rate_bp` below an existing
-agent's `discount_bp` MUST be rejected with the same code rather than silently clamping, so
-no agent is left owing money on a sale.
+current rate MUST be rejected with `sales_discount_above_rate`; conceding more than the
+base commission would make the agent's commission negative. Lowering `commission_rate_bp`
+below an existing agent's `discount_bp` MUST be rejected with the same code rather than
+silently clamping, so no agent is left owing money on a sale.
 
 SC-1.2a. `discount_bp` MUST be settable only by the agent who owns the code, via
 `PUT /dashboard/sales/discount`. Admin endpoints MUST expose `discount_bp` as read-only:
@@ -52,33 +53,34 @@ reject a body containing `discount_bp`. The discount is funded from the agent's 
 commission (SC-1.5), so the agent bears its full cost and is the only party entitled to
 choose it.
 
-SC-1.3. For an order with face value `base_fen` and an applied code with `discount_bp = d`
-(the global rate `r = commission_rate_bp` only bounds `d` and no longer enters the
-arithmetic):
+SC-1.3. For an order with face value `base_fen`, applied rate `r = commission_rate_bp`, and
+an applied code with `discount_bp = d`:
 
 ```
 discount_fen   = floor(base_fen * d / 10000)
 payment_fen    = base_fen
-commission_fen = discount_fen
+commission_fen = floor(base_fen * (r - d) / 10000)
 received_fen   = base_fen
 ```
 
-All four MUST use integer arithmetic. Worked example with `base_fen = 10000` and `d = 100`:
-`discount_fen = 100`, `payment_fen = 10000`, `commission_fen = 100`, `received_fen = 10000`.
-Worked example with `base_fen = 500` (a 5 CNY recharge) and `d = 100` (a 1% rate):
-`payment_fen = 500`, `commission_fen = 5` — the buyer pays 5 CNY, the platform collects
-5 CNY, and the agent is later paid 0.05 CNY; nothing is deducted at payment time.
+All four MUST use integer arithmetic. The buyer always pays and receives the full face
+value. Worked example with `base_fen = 500` (a 5 CNY recharge), `r = 500` (5%), `d = 0`:
+`payment_fen = 500`, `commission_fen = 25` — the buyer pays 5 CNY, the platform collects
+5 CNY, and the agent earns 0.25 CNY. With a 1% concession (`d = 100`): `payment_fen = 500`
+and `commission_fen = 20` — the buyer still pays 5 CNY and the agent earns
+`5 * (5% - 1%) = 0.2` CNY; nothing is deducted at payment time.
 
 SC-1.4. Platform revenue for that order is `payment_fen - commission_fen =
-base_fen - floor(base_fen * d / 10000)`. The buyer's payment never changes, so the
-commission is funded by the payment itself; the platform pays only the commission and MUST
-NOT subsidize it and MUST NOT reduce the buyer's payable amount or credited balance.
+base_fen - floor(base_fen * (r - d) / 10000)`. The buyer's payment never changes, so the
+commission is funded by the payment itself; the platform pays only the agent's remaining
+commission, MUST NOT subsidize the concession, and MUST NOT reduce the buyer's payable
+amount or credited balance.
 
 SC-1.5. An entry MUST record the `commission_rate_bp` that applied, so the arithmetic of a
 past order remains reproducible after the rate changes.
 
-SC-1.6. The commission uses floor division, so it is never rounded up at the platform's
-expense. At `d = 500` the commission is `floor(base_fen / 20)`.
+SC-1.6. Both shares use floor division, so neither is ever rounded up at the platform's
+expense. At `r = 500` and `d = 0` the commission is `floor(base_fen / 20)`.
 
 SC-1.7. The minimum custom recharge for CNY MUST be 100 fen (1 CNY), which is the default of
 `store-billing.spec.md` SB-P-4b. At `d = 500` this yields a minimum commission of 5 fen
@@ -289,12 +291,11 @@ so a claim cannot be used to test whether a username exists.
 An operator or agent handling a request has the username, not the UUID. Requiring the UUID
 made the form unusable for the situation it exists to serve.
 
-SC-4.3. A successful claim MUST insert one entry with `origin = 'claim'`,
-`discount_bp` equal to the claiming agent's own `discount_bp` at claim time, and
-`commission_fen = floor(base_fen * discount_bp / 10000)`, and MUST increase the agent's
-balance by that amount in the same transaction. The buyer already paid the full face value
-(SC-1.3), so a claim credits exactly the rate a coded order would have credited, bounded by
-the configured cap. It MUST record one `sales_claim_attempts` row with `succeeded = 1`.
+SC-4.3. A successful claim MUST insert one entry with `origin = 'claim'`, `discount_bp = 0`,
+and `commission_fen = floor(base_fen * r / 10000)`, and MUST increase the agent's balance by
+that amount in the same transaction. A claimed order carried no code, so no concession
+applies and the agent earns the full base rate. It MUST record one `sales_claim_attempts`
+row with `succeeded = 1`.
 
 SC-4.4. A claim whose order number and user ID do not correspond, or whose order does not
 exist, MUST return HTTP `404` with code `sales_claim_mismatch` and the message that the

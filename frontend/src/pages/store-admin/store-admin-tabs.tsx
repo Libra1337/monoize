@@ -2,14 +2,14 @@ import { useReducedMotion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { motion } from "@/components/ui/motion";
 
-export type StoreAdminTab = "products" | "channels" | "orders" | "redemptions";
+export type StoreAdminTab = "products" | "channels" | "redemptions";
 
 interface StoreAdminTabsProps {
   activeTab: StoreAdminTab;
   onTabChange: (tab: StoreAdminTab) => void;
 }
 
-const tabs: StoreAdminTab[] = ["products", "channels", "orders", "redemptions"];
+const tabs: StoreAdminTab[] = ["products", "channels", "redemptions"];
 
 export function StoreAdminTabs({ activeTab, onTabChange }: StoreAdminTabsProps) {
   const { t } = useTranslation();
@@ -17,7 +17,7 @@ export function StoreAdminTabs({ activeTab, onTabChange }: StoreAdminTabsProps) 
 
   return (
     <div
-      className="grid w-full grid-cols-2 gap-1 rounded-xl bg-muted p-1 sm:grid-cols-4"
+      className="grid w-full grid-cols-3 gap-1 rounded-xl bg-muted p-1"
       role="tablist"
       aria-label={t("store.admin.tabsLabel")}
     >

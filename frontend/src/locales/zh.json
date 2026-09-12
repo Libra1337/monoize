@@ -242,6 +242,7 @@
     "expandSidebar": "展开侧边栏",
     "orders": "订单",
     "storeManagement": "商店管理",
+    "ordersAdmin": "订单统计",
     "salesManagement": "销售管理"
   },
   "wallet": {

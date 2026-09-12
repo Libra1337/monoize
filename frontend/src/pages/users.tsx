@@ -809,14 +809,13 @@ export function UsersPage() {
           )}
         >
             <TableVirtuoso
-              style={{ height: "calc(100dvh - 280px)", minHeight: 400, overflowX: "auto" }}
+              style={{ height: "calc(100dvh - 280px)", minHeight: 400, overflowX: "hidden" }}
               data={scopedUsers}
               components={{
                 Table: (props) => (
                   <table
                     {...props}
-                    className="w-full caption-bottom text-sm"
-                    style={{ minWidth: "80rem" }}
+                    className="w-full table-fixed caption-bottom text-sm"
                   />
                 ),
                 TableHead: (props) => (
@@ -834,10 +833,10 @@ export function UsersPage() {
               }}
               fixedHeaderContent={() => (
                 <tr className="border-b bg-background">
-                  <VirtualTableHeaderCell className="min-w-[14rem]">
+                  <VirtualTableHeaderCell>
                     {t("users.user")}
                   </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell className="w-[8.5rem] whitespace-nowrap">
+                  <VirtualTableHeaderCell className="w-[7rem] whitespace-nowrap">
                     {t("users.role")}
                   </VirtualTableHeaderCell>
                   <VirtualTableHeaderCell>

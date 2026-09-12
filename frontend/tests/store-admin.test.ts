@@ -43,16 +43,18 @@ const channelSource = readSource("../src/pages/store-admin/channel-dialog.tsx");
 const redemptionSource = readSource("../src/pages/store-admin/redemption-dialog.tsx");
 const redemptionAccessSource = readSource("../src/pages/store-admin/redemption-access-dialog.tsx");
 const panelsSource = readSource("../src/pages/store-admin/admin-panels.tsx");
+const ordersAdminSource = readSource("../src/pages/orders-admin.tsx");
 const orderDialogSource = readSource("../src/pages/store-admin/order-dialog.tsx");
 const governanceDialogsSource = readSource("../src/pages/store-admin/governance-dialogs.tsx");
 const apiSource = readSource("../src/lib/store-api.ts");
 
 describe("Store admin page", () => {
-  test("renders four animated administration tabs", () => {
+  test("renders three animated administration tabs", () => {
     expect(tabsSource).toContain('"products"');
     expect(tabsSource).toContain('"channels"');
-    expect(tabsSource).toContain('"orders"');
     expect(tabsSource).toContain('"redemptions"');
+    // Orders moved to its own admin sub-page (SB-UI-10O), so it is not a tab here.
+    expect(tabsSource).not.toContain('"orders"');
     expect(tabsSource).toContain("layoutId");
     expect(tabsSource).toContain('role="tablist"');
   });
@@ -66,9 +68,9 @@ describe("Store admin page", () => {
         onTabChange: () => undefined,
       }),
     ));
-    // Products, Channels, Orders, Redemptions. Sales is its own page under SC-UI-6, not a
-    // fifth tab here.
-    expect(html.match(/role="tab"/g)).toHaveLength(4);
+    // Products, Channels, Redemptions. Sales is its own page under SC-UI-6 and Order
+    // statistics is its own sub-page under SB-UI-10O.
+    expect(html.match(/role="tab"/g)).toHaveLength(3);
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain('aria-selected="false"');
   });
@@ -310,9 +312,9 @@ describe("Store admin page", () => {
   });
 
   test("opens an Admin order detail dialog backed by SWR data", () => {
-    expect(pageSource).toContain("selectedOrderId");
-    expect(pageSource).toContain("getOrderDetail");
-    expect(pageSource).toContain("OrderDialog");
+    expect(ordersAdminSource).toContain("selectedOrderId");
+    expect(ordersAdminSource).toContain("getOrderDetail");
+    expect(ordersAdminSource).toContain("OrderDialog");
     expect(panelsSource).toContain("onSelectOrder");
     expect(orderDialogSource).toContain("rounded-2xl");
     expect(orderDialogSource).toContain("min-h-");
@@ -365,17 +367,17 @@ describe("Store admin page", () => {
   });
 
   test("revalidates order detail and list after every Admin mutation", () => {
-    expect(pageSource).toContain("refreshSelectedOrder");
-    expect(pageSource).toContain("orders.mutate()");
-    expect(pageSource).toContain("orderDetail.mutate()");
-    expect(pageSource).toContain("crypto.randomUUID()");
-    expect(pageSource).toContain('createReauthGrant(currentPassword, "refund")');
-    expect(pageSource).not.toContain("optimisticRefund");
-    expect(pageSource).toContain("mutateSelectedOrderDetail");
-    expect(pageSource).not.toMatch(/optimisticData:\s*\(current\)\s*=>\s*current,\s*rollbackOnError/);
-    expect(pageSource).toContain("pending_action: actionKey");
-    expect(pageSource).toContain("orderDetail.data?.pending_action");
-    expect(pageSource).toContain("rollbackOnError: true");
+    expect(ordersAdminSource).toContain("refreshSelectedOrder");
+    expect(ordersAdminSource).toContain("orders.mutate()");
+    expect(ordersAdminSource).toContain("orderDetail.mutate()");
+    expect(ordersAdminSource).toContain("crypto.randomUUID()");
+    expect(ordersAdminSource).toContain('createReauthGrant(currentPassword, "refund")');
+    expect(ordersAdminSource).not.toContain("optimisticRefund");
+    expect(ordersAdminSource).toContain("mutateSelectedOrderDetail");
+    expect(ordersAdminSource).not.toMatch(/optimisticData:\s*\(current\)\s*=>\s*current,\s*rollbackOnError/);
+    expect(ordersAdminSource).toContain("pending_action: actionKey");
+    expect(ordersAdminSource).toContain("orderDetail.data?.pending_action");
+    expect(ordersAdminSource).toContain("rollbackOnError: true");
     expect(orderDialogSource).toMatch(/await onQueryRefund\(refundId, currentPassword\);\s*setCurrentPassword\(""\);/);
   });
 

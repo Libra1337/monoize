@@ -75,7 +75,7 @@ function DetailItem({ label, value, mono = false }: { label: string; value: Reac
   return (
     <div className="min-w-0 rounded-xl border bg-muted/20 p-3">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className={`mt-1 break-words text-sm font-medium ${mono ? "font-mono" : ""}`}>{value}</dd>
+      <dd className={`mt-0.5 break-words text-xs font-medium ${mono ? "font-mono" : ""}`}>{value}</dd>
     </div>
   );
 }
@@ -129,7 +129,7 @@ export function OrderDialog({
         onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className="flex h-[min(46rem,calc(100dvh-2rem))] min-h-96 w-[calc(100vw-2rem)] max-w-3xl flex-col gap-0 overflow-hidden rounded-2xl p-0">
+      <DialogContent className="flex h-[min(58rem,calc(100dvh-2rem))] min-h-96 w-[calc(100vw-2rem)] max-w-6xl flex-col gap-0 overflow-hidden rounded-2xl p-0">
         <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12 sm:px-6">
           <DialogTitle>{t("store.admin.orders.detailTitle")}</DialogTitle>
           <DialogDescription className="break-all font-mono">
@@ -158,7 +158,7 @@ export function OrderDialog({
                 <h3 id="admin-order-summary-title" className="text-sm font-semibold">
                   {t("store.admin.orders.summary")}
                 </h3>
-                <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <dl className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
                   <DetailItem label={t("store.admin.orders.number")} value={detail.order.order_number} mono />
                   <DetailItem label={t("store.admin.orders.user")} value={detail.order.user_id} mono />
                   <DetailItem
