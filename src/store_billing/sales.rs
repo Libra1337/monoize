@@ -55,12 +55,13 @@ pub enum SalesError {
 /// The four amounts an order carries once a code is applied (SC-1.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SalesAmounts {
-    /// Face value: what the buyer receives and pays, unaffected by the discount.
+    /// Face value: what the buyer receives; the payable before the discount.
     pub base_minor: i128,
-    /// The concession the agent grants: the discount rate applied to the face value. It is
-    /// taken out of the agent's commission, never out of the payment.
+    /// The concession the agent grants: the amount deducted from the buyer's payable.
+    /// Its cost is borne by the agent's commission, which shrinks by the same basis
+    /// points (SC-1.4).
     pub discount_minor: i128,
-    /// What the buyer pays: always the full face value (SC-1.3).
+    /// What the buyer pays: the face value minus the concession.
     pub payment_minor: i128,
     /// What the agent earns: `floor(base * (rate - discount) / 10000)`.
     pub commission_minor: i128,
@@ -68,12 +69,14 @@ pub struct SalesAmounts {
 
 /// Computes the SC-1.3 amounts for one order.
 ///
-/// The buyer always pays the full face value and the platform collects it in full; the
-/// sales code never reduces the payment or the credited balance. The agent earns
+/// The buyer pays `base - floor(base * discount / 10000)` and still receives the full face
+/// value, so the concession moves the discounted fraction from the agent's commission to
+/// the buyer's payable. The agent earns
 /// `floor(base * (commission_rate_bp - discount_bp) / 10000)`: the global rate is the
-/// agent's base commission, and the agent's discount concedes part of that commission
-/// without moving a cent of the buyer's payment. Platform revenue is
-/// `payment_minor - commission_minor` (SC-1.4).
+/// agent's base commission and the discount concedes part of it. Platform revenue is
+/// `payment_minor - commission_minor`, which equals the undiscounted revenue up to one
+/// minor unit of floor rounding (SC-1.4): the agent funds the concession, never the
+/// platform.
 pub fn compute_amounts(
     base_minor: i128,
     commission_rate_bp: i64,
@@ -97,19 +100,22 @@ pub fn compute_amounts(
         .checked_mul(i128::from(discount_bp))
         .ok_or(SalesError::InvalidAmount)?
         / BP_DENOMINATOR;
+    let payment_minor = base_minor
+        .checked_sub(discount_minor)
+        .ok_or(SalesError::InvalidAmount)?;
     let commission_minor = base_minor
         .checked_mul(i128::from(commission_rate_bp - discount_bp))
         .ok_or(SalesError::InvalidAmount)?
         / BP_DENOMINATOR;
 
-    // The commission is paid out of the payment, so it can never exceed the face value.
-    if commission_minor > base_minor {
+    // The commission is paid out of the payment, so it can never exceed the payment.
+    if commission_minor > payment_minor {
         return Err(SalesError::InvalidAmount);
     }
     Ok(SalesAmounts {
         base_minor,
         discount_minor,
-        payment_minor: base_minor,
+        payment_minor,
         commission_minor,
     })
 }
@@ -168,10 +174,11 @@ pub fn normalize_code(input: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// SC-1.3 worked example, and SC-1.4: the buyer always pays the face value, the
-    /// platform collects it, and the discount only concedes part of the agent's commission.
+    /// SC-1.3 worked example, and SC-1.4: the discount lowers what the buyer pays, the
+    /// buyer still receives the full face value, and the platform's revenue is unchanged
+    /// up to floor rounding because the agent's commission absorbs the concession.
     #[test]
-    fn the_buyer_pays_the_face_value_and_funds_the_commission() {
+    fn the_discount_lowers_the_buyers_payment_not_the_platforms_revenue() {
         let base = 10_000; // 100 CNY
 
         let without = compute_amounts(base, 500, 0).expect("no discount");
@@ -181,32 +188,38 @@ mod tests {
 
         let with_one_percent = compute_amounts(base, 500, 100).expect("1% concession");
         assert_eq!(with_one_percent.discount_minor, 100);
-        assert_eq!(with_one_percent.payment_minor, 10_000);
+        assert_eq!(with_one_percent.payment_minor, 9_900);
         assert_eq!(with_one_percent.commission_minor, 400);
         assert_eq!(
             with_one_percent.payment_minor - with_one_percent.commission_minor,
-            9_600
+            9_500
         );
 
         let at_the_cap = compute_amounts(base, 500, 500).expect("5% concession");
-        assert_eq!(at_the_cap.payment_minor, 10_000);
+        assert_eq!(at_the_cap.payment_minor, 9_500);
         assert_eq!(at_the_cap.commission_minor, 0);
+        assert_eq!(at_the_cap.payment_minor - at_the_cap.commission_minor, 9_500);
 
-        // The buyer always receives the face value and pays it in full.
+        // The buyer always receives the face value; only the payable shrinks.
         for amounts in [without, with_one_percent, at_the_cap] {
             assert_eq!(amounts.base_minor, base);
-            assert_eq!(amounts.payment_minor, base);
+            assert!(amounts.payment_minor <= base);
+            assert_eq!(amounts.payment_minor, base - amounts.discount_minor);
         }
 
-        // The reported example: a 5 CNY recharge pays 5 CNY, the platform collects 5 CNY,
-        // and a 5% base rate with a 1% concession earns the agent 5 * (5% - 1%) = 0.2 CNY.
+        // The reported example: a 5 CNY face value with a 1% concession is paid at 4.95 CNY,
+        // the platform collects 4.95 CNY, and a 5% base rate earns the agent
+        // 5 * (5% - 1%) = 0.2 CNY, leaving platform revenue at 4.75 CNY — the same as an
+        // undiscounted sale (5 - 0.25).
         let example = compute_amounts(500, 500, 100).expect("5 CNY, 1% concession");
-        assert_eq!(example.payment_minor, 500);
+        assert_eq!(example.payment_minor, 495);
         assert_eq!(example.commission_minor, 20);
+        assert_eq!(example.payment_minor - example.commission_minor, 475);
 
         // Without a concession the same order earns the full base rate: 5 * 5% = 0.25 CNY.
         let no_concession = compute_amounts(500, 500, 0).expect("5 CNY, no concession");
         assert_eq!(no_concession.commission_minor, 25);
+        assert_eq!(no_concession.payment_minor - no_concession.commission_minor, 475);
     }
 
     /// SC-1.2: the bound follows the configured rate, not a hardcoded 500.
