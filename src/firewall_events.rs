@@ -22,6 +22,8 @@ pub struct NewFirewallEvent {
     pub content: String,
     /// CF-20: `blocked` (request rejected) or `marked` (allowed but recorded).
     pub action: &'static str,
+    /// CF-20: the judge's stated evidence; empty when no judge verdict exists.
+    pub reason: String,
 }
 
 pub const ACTION_BLOCKED: &str = "blocked";
@@ -49,6 +51,7 @@ pub async fn record_event(db: &DbPool, event: NewFirewallEvent) -> Result<(), St
         term: Set(event.term),
         content: Set(event.content),
         action: Set(event.action.to_string()),
+        reason: Set(event.reason),
         created_at: Set(now.to_rfc3339()),
         created_at_unix_ms: Set(now.timestamp_millis()),
     };

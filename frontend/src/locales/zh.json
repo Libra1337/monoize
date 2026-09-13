@@ -1847,7 +1847,8 @@
       "all": "全部事件",
       "blocked": "已拦截",
       "marked": "已标记"
-    }
+    },
+    "judgeReason": "审核理由"
   },
   "requestLogs": {
     "title": "请求日志",

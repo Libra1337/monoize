@@ -406,6 +406,12 @@ export function FirewallPage() {
                 </dd>
                 <dt className="text-muted-foreground">{t("firewall.column.apiKey")}</dt>
                 <dd className="break-all">{selected.api_key_name ?? selected.api_key_id ?? "—"}</dd>
+                {selected.reason ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("firewall.judgeReason")}</dt>
+                    <dd className="break-all text-muted-foreground">{selected.reason}</dd>
+                  </>
+                ) : null}
               </dl>
               <div>
                 <p className="mb-2 text-sm font-medium">{t("firewall.blockedContent")}</p>

@@ -7,9 +7,28 @@ use serde_json::{Value, json};
 /// CF-28: total budget for the user message across all scanned strings.
 pub const JUDGE_TEXT_BUDGET_CHARS: usize = 6000;
 
+/// CF-20/CF-28a: hard cap for the judge's stored reason.
+pub const REASON_MAX_CHARS: usize = 500;
+
 pub const CATEGORY_PORN: &str = "porn";
 pub const CATEGORY_POLITICAL: &str = "political";
 pub const CATEGORY_BENIGN: &str = "benign";
+pub const CATEGORY_UNCERTAIN: &str = "uncertain";
+
+/// CF-28: verdict categories. Only `porn` and `political` reject (CF-31);
+/// `benign` and `uncertain` always allow.
+const CATEGORIES: [&str; 4] = [
+    CATEGORY_PORN,
+    CATEGORY_POLITICAL,
+    CATEGORY_BENIGN,
+    CATEGORY_UNCERTAIN,
+];
+
+#[derive(Debug, Clone)]
+pub struct Verdict {
+    pub category: &'static str,
+    pub reason: String,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct JudgeConfig {
@@ -38,11 +57,18 @@ impl JudgeConfig {
     }
 }
 
-const SYSTEM_PROMPT: &str = r#"You are the content-safety classifier of an LLM API gateway. Classify the request text into exactly one category and answer with a single JSON object and nothing else: {"category":"porn"} or {"category":"political"} or {"category":"benign"}.
+const SYSTEM_PROMPT: &str = r#"You are the content-safety judge of an LLM API gateway. Your job is to decide what the request text is trying to accomplish, not which words appear in it.
+
+Take your time: reason about the text's intent, context, and phrasing before answering. You may write that analysis as plain text first. Then end your reply with EXACTLY ONE JSON object on its own last line and nothing after it:
+{"category": "...", "reason": "..."}
+
+Categories:
 - "porn": the text seeks to produce, continue, or roleplay sexually explicit content. Anything sexualizing minors is always "porn".
 - "political": the text seeks to produce politically illegal content such as subverting state power, inciting separatism, or extremist propaganda.
-- "benign": everything else. Discussing, mentioning, reporting on, prohibiting, or studying these topics (news, education, law, moderation policy, technical work) is "benign", even when it quotes prohibited words.
-Judge what the text is trying to accomplish, not which words appear in it."#;
+- "benign": everything else. Discussing, mentioning, reporting on, prohibiting, or studying sensitive topics (news, education, law, moderation policy, technical work) is "benign" even when it quotes prohibited words. Agent or tool system prompts, developer configuration, and defensive security policy text (security testing, CTF, refusing attacks) are "benign".
+- "uncertain": you genuinely cannot decide. Use it freely — an undecided text must never be forced into "porn" or "political".
+
+In "reason" state the concrete evidence: what the text asks for, and why that makes it blocking or not. One to three sentences."#;
 
 /// Assembles the user message: keyword hint line first (CF-28), then the
 /// scanned strings, truncated to the CF-28 budget in total.
@@ -69,19 +95,41 @@ pub fn build_user_message(keyword_hits: &[String], texts: &[&str]) -> String {
     message
 }
 
-/// Extracts the category from the assistant content: the first JSON object's
-/// `category` field, validated against the three known values (CF-28a).
-pub fn parse_verdict(content: &str) -> Option<&'static str> {
-    let start = content.find('{')?;
-    let end = content[start..].find('}')? + start;
-    let value: Value = serde_json::from_str(&content[start..=end]).ok()?;
-    let category = value.get("category")?.as_str()?;
-    match category {
-        CATEGORY_PORN => Some(CATEGORY_PORN),
-        CATEGORY_POLITICAL => Some(CATEGORY_POLITICAL),
-        CATEGORY_BENIGN => Some(CATEGORY_BENIGN),
-        _ => None,
+fn category_of(value: &str) -> Option<&'static str> {
+    CATEGORIES.iter().copied().find(|known| *known == value)
+}
+
+/// CF-28a: extracts the verdict from the assistant content. The judge may
+/// think in plain text before its answer, so scanning takes the LAST JSON
+/// object whose `category` is a known value; earlier JSON-looking fragments
+/// of the analysis are ignored.
+pub fn parse_verdict(content: &str) -> Option<Verdict> {
+    let bytes = content.as_bytes();
+    let mut best: Option<Verdict> = None;
+    for (index, _) in bytes.iter().enumerate().filter(|(_, b)| **b == b'{') {
+        let candidate = &content[index..];
+        let Some(end) = candidate.find('}') else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&candidate[..=end]) else {
+            continue;
+        };
+        let Some(category) = value.get("category").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(category) = category_of(category) else {
+            continue;
+        };
+        let reason = value
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .chars()
+            .take(REASON_MAX_CHARS)
+            .collect::<String>();
+        best = Some(Verdict { category, reason });
     }
+    best
 }
 
 pub struct JudgeCall<'a> {
@@ -91,13 +139,13 @@ pub struct JudgeCall<'a> {
     pub user_message: String,
 }
 
-/// Performs one judge call (CF-28). Returns the category, or an error string
+/// Performs one judge call (CF-28). Returns the verdict, or an error string
 /// on any failure (CF-28a); the caller treats every error as fail-open.
-pub async fn call_judge(call: JudgeCall<'_>) -> Result<&'static str, String> {
+pub async fn call_judge(call: JudgeCall<'_>) -> Result<Verdict, String> {
     let body = json!({
         "model": call.config.model,
         "temperature": 0,
-        "max_tokens": 64,
+        "max_tokens": 512,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": call.user_message}
@@ -129,7 +177,7 @@ pub async fn call_judge(call: JudgeCall<'_>) -> Result<&'static str, String> {
         .and_then(|message| message.get("content"))
         .and_then(Value::as_str)
         .ok_or_else(|| "judge response has no assistant content".to_string())?;
-    parse_verdict(content).ok_or_else(|| format!("judge verdict not parseable: {content}"))
+    parse_verdict(content).ok_or_else(|| "judge verdict not parseable".to_string())
 }
 
 #[cfg(test)]
@@ -145,7 +193,10 @@ mod tests {
             model: "m".to_string(),
             timeout_ms: 1000,
         };
-        assert_eq!(config.endpoint(), "https://api.example.com/v1/chat/completions");
+        assert_eq!(
+            config.endpoint(),
+            "https://api.example.com/v1/chat/completions"
+        );
         let config = JudgeConfig {
             enabled: true,
             base_url: "https://api.example.com".to_string(),
@@ -153,7 +204,10 @@ mod tests {
             model: "m".to_string(),
             timeout_ms: 1000,
         };
-        assert_eq!(config.endpoint(), "https://api.example.com/v1/chat/completions");
+        assert_eq!(
+            config.endpoint(),
+            "https://api.example.com/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -164,14 +218,29 @@ mod tests {
     }
 
     #[test]
-    fn verdict_parsing_accepts_json_with_surroundings_and_rejects_garbage() {
-        assert_eq!(
-            parse_verdict("Sure! {\"category\":\"porn\"} hope that helps"),
-            Some(CATEGORY_PORN)
+    fn verdict_parsing_takes_the_last_valid_object_and_keeps_reason() {
+        // The judge may think in text containing JSON-like fragments first;
+        // the last parseable verdict wins.
+        let content = concat!(
+            "The text mentions {\"category\":\"porn\"} only as a quoted word. ",
+            "Its intent is policy discussion.\n",
+            "{\"category\":\"benign\",\"reason\":\"moderation policy discussion\"}"
         );
-        assert_eq!(parse_verdict("{\"category\":\"benign\"}"), Some(CATEGORY_BENIGN));
+        let verdict = parse_verdict(content).expect("verdict");
+        assert_eq!(verdict.category, CATEGORY_BENIGN);
+        assert_eq!(verdict.reason, "moderation policy discussion");
+
         assert_eq!(parse_verdict("{\"category\":\"weapon\"}"), None);
         assert_eq!(parse_verdict("no json here"), None);
         assert_eq!(parse_verdict("{\"broken\""), None);
+    }
+
+    #[test]
+    fn uncertain_is_a_valid_verdict() {
+        let verdict = parse_verdict(
+            "Hard to tell.\n{\"category\":\"uncertain\",\"reason\":\"ambiguous phrasing\"}",
+        )
+        .expect("verdict");
+        assert_eq!(verdict.category, CATEGORY_UNCERTAIN);
     }
 }

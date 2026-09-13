@@ -133,8 +133,8 @@ async fn ensure_content_allowed(
     .await;
     drop(runtime);
 
-    let category = match verdict {
-        Ok(category) => category,
+    let verdict = match verdict {
+        Ok(verdict) => verdict,
         Err(judge_error) => {
             // CF-31: a judge failure never blocks, even with keyword hits.
             tracing::warn!(
@@ -146,35 +146,39 @@ async fn ensure_content_allowed(
             return Ok(());
         }
     };
+    let category = verdict.category;
+    let verdict_reason = verdict.reason;
 
-    if category == crate::moderation_judge::CATEGORY_BENIGN {
-        // CF-30: benign verdicts are allowed; record an event only for
-        // keyword-flagged text so borderline requests stay auditable.
-        if let Some(term) = keyword_hits.first() {
-            let text = scanned
-                .iter()
-                .find(|text| {
-                    text.to_lowercase().contains(term.as_str())
-                })
-                .copied()
-                .unwrap_or_default();
-            tracing::info!(
-                user_id = ?auth.user_id,
-                api_key_id = ?auth.api_key_id,
-                term,
-                "content firewall marked request as benign"
-            );
-            persist_firewall_event(
-                state,
-                auth,
-                endpoint,
-                model,
-                crate::firewall_events::ACTION_MARKED,
-                term,
-                text,
-            )
-            .await;
-        }
+    if category != crate::moderation_judge::CATEGORY_PORN
+        && category != crate::moderation_judge::CATEGORY_POLITICAL
+    {
+        // CF-30: benign and uncertain verdicts are allowed; record an event
+        // (always on a keyword hit per CF-33) so borderline requests stay
+        // auditable together with the judge's stated reason.
+        let term = keyword_hits.first().cloned().unwrap_or_default();
+        let text = scanned
+            .iter()
+            .find(|text| !term.is_empty() && text.to_lowercase().contains(term.as_str()))
+            .copied()
+            .unwrap_or_default();
+        tracing::info!(
+            user_id = ?auth.user_id,
+            api_key_id = ?auth.api_key_id,
+            term,
+            judge_category = category,
+            "content firewall marked request as allowed"
+        );
+        persist_firewall_event(
+            state,
+            auth,
+            endpoint,
+            model,
+            crate::firewall_events::ACTION_MARKED,
+            &term,
+            text,
+            &verdict_reason,
+        )
+        .await;
         return Ok(());
     }
 
@@ -183,6 +187,7 @@ async fn ensure_content_allowed(
         user_id = ?auth.user_id,
         api_key_id = ?auth.api_key_id,
         category,
+        reason = %verdict_reason,
         "content firewall blocked request"
     );
     let text = scanned.first().copied().unwrap_or_default();
@@ -194,6 +199,7 @@ async fn ensure_content_allowed(
         crate::firewall_events::ACTION_BLOCKED,
         category,
         text,
+        &verdict_reason,
     )
     .await;
     let keyword_list = keyword_hits.join("、");
@@ -216,6 +222,7 @@ async fn persist_firewall_event(
     action: &'static str,
     term: &str,
     text: &str,
+    reason: &str,
 ) {
     if let Err(error) = crate::firewall_events::record_event(
         &state.db_pool,
@@ -229,6 +236,7 @@ async fn persist_firewall_event(
             term: term.to_string(),
             content: crate::firewall_events::content_of(text),
             action,
+            reason: reason.chars().take(crate::moderation_judge::REASON_MAX_CHARS).collect(),
         },
     )
     .await

@@ -1847,7 +1847,8 @@
       "all": "All events",
       "blocked": "Blocked",
       "marked": "Marked"
-    }
+    },
+    "judgeReason": "Judge Reason"
   },
   "requestLogs": {
     "title": "Request Logs",

@@ -100,6 +100,7 @@ pub async fn list_firewall_events(
                 "term": row.term,
                 "content": row.content,
                 "action": row.action,
+                "reason": row.reason,
                 "created_at": row.created_at,
                 "created_at_unix_ms": row.created_at_unix_ms,
             })

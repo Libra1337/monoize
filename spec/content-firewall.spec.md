@@ -158,8 +158,9 @@ the `firewall_events` table with columns: `id` (uuid text, primary key),
 `user_id` (text, null when absent), `username` (text, null when absent),
 `api_key_id` (text, null when absent), `api_key_name` (text, null when
 absent), `endpoint` (text), `model` (text), `term` (text), `content` (text),
-`action` (text, `blocked` or `marked`), `created_at` (RFC 3339 UTC text),
-`created_at_unix_ms` (integer).
+`action` (text, `blocked` or `marked`), `reason` (text, the judge's stated
+evidence; empty string for events without a judge verdict), `created_at`
+(RFC 3339 UTC text), `created_at_unix_ms` (integer).
 
 CF-21. `endpoint` is one of: `chat_completions`, `responses`, `messages`,
 `responses_compact`, `embeddings`, `images_generations`, `images_edits`. The
@@ -195,8 +196,9 @@ CF-25. `GET /api/dashboard/firewall/events` (admin session required) returns
 descending over the whole deployment, with query parameters `limit` (default
 50, clamped to 1..200), `offset` (default 0), `term` (optional substring
 filter), `action` (optional, `blocked` or `marked`), `since_ms` and
-`until_ms` (optional inclusive `created_at_unix_ms` bounds). Non-admin
-callers receive HTTP 403.
+`until_ms` (optional inclusive `created_at_unix_ms` bounds). Each row
+includes the `reason` field of CF-20, and the dashboard's click-open detail
+dialog displays it. Non-admin callers receive HTTP 403.
 
 CF-26. The dashboard renders an admin-only page at `/dashboard/firewall`
 (labeled by i18n key `nav.firewall`) containing, in order: a judge-status
@@ -225,22 +227,31 @@ CF-28. When invoked, the firewall sends one judge request: an
 OpenAI-compatible `POST {moderation_judge_base_url}/chat/completions` (a
 `/v1` suffix on the base URL is stripped before appending
 `/chat/completions`) with `model = moderation_judge_model`,
-`temperature = 0`, and `max_tokens = 64`. The system prompt instructs the
-judge to classify the request text into exactly one category and to answer
-with a single JSON object `{"category": "porn" | "political" | "benign"}`:
-`porn` is producing, continuing, or roleplaying sexually explicit content
-(zero tolerance for anything sexualizing minors); `political` is producing
-politically illegal content per operator policy; `benign` is everything
-else, including news, education, law-enforcement, academic, and technical
-discussion that merely mentions or prohibits these topics. The user message
-contains the keyword matches (CF-5) followed by the CF-7..CF-12 scanned
-strings joined with newlines and truncated to at most 6000 Unicode scalar
-values in total. The request carries the loop-guard header of CF-29.
+`temperature = 0`, and `max_tokens = 512`. The system prompt instructs the
+judge to analyze what the text is trying to accomplish before answering,
+to end its reply with exactly one JSON object, and to classify the request
+into exactly one category of `{"category": "porn" | "political" | "benign" |
+"uncertain", "reason": "<one to three sentences>"}`: `porn` is producing,
+continuing, or roleplaying sexually explicit content (zero tolerance for
+anything sexualizing minors); `political` is producing politically illegal
+content per operator policy (subverting state power, inciting separatism,
+extremist propaganda); `benign` is everything else, including news,
+education, law-enforcement, academic, technical, and moderation-policy
+discussion that merely mentions or prohibits these topics, and agent or
+tool system prompts and defensive security policy text; `uncertain` is the
+mandatory answer whenever the judge cannot decide, so that a borderline
+text is never forced into a blocking category. The `reason` field must
+state the concrete evidence for the verdict. The user message contains the
+keyword matches (CF-5) followed by the CF-7..CF-12 scanned strings joined
+with newlines and truncated to at most 6000 Unicode scalar values in
+total. The request carries the loop-guard header of CF-29.
 
-CF-28a. The judge response is parsed by extracting the first JSON object from
-the assistant content and reading its `category` string. A response that
-yields no parseable category, a non-2xx HTTP status, or a timeout
-(`moderation_judge_timeout_ms`) is a judge failure.
+CF-28a. The judge response is parsed by taking the LAST JSON object in the
+assistant content that parses and whose `category` is one of the four
+values above; its `reason` string (at most 500 Unicode scalar values) is
+kept alongside the category. A response that yields no such object, a
+non-2xx HTTP status, or a timeout (`moderation_judge_timeout_ms`) is a
+judge failure.
 
 CF-29. Judge-loop guard: the process generates a random UUID bypass token at
 startup. Judge requests carry the header
@@ -249,16 +260,19 @@ incoming request bearing this exact header value, so judge traffic routed
 back through the gateway cannot recurse. The token is process-local memory
 only and is never persisted, logged, or exposed.
 
-CF-30. Marked requests: when the judge verdict is `benign` (which by CF-33
-implies at least one keyword match), the request is forwarded normally and
-exactly one `firewall_events` row with `action = 'marked'` is persisted
-(CF-20, CF-21).
+CF-30. Marked requests: when the judge verdict is `benign` or `uncertain`
+(which by CF-33 implies at least one keyword match), the request is
+forwarded normally and exactly one `firewall_events` row with
+`action = 'marked'` is persisted (CF-20, CF-21), carrying the judge's
+`reason`.
 
 CF-31. Fail-open: if `moderation_enabled` is false, the judge is not enabled
 or not fully configured, or a judge failure occurs (CF-28a), the firewall
 allows the request. A judge failure on a keyword hit is allowed with a
-`tracing::warn` record and no event row. The keyword list therefore never
-blocks by itself; the judge is the only decision-maker for rejections.
+`tracing::warn` record and no event row. Only `porn` and `political`
+verdicts reject; `benign` and `uncertain` always allow. The keyword list
+therefore never blocks by itself; the judge is the only decision-maker for
+rejections.
 
 CF-32. Judge rejections and marked requests use the judge category and the
 first keyword hit respectively as the event `term` and reason, per CF-21 and

@@ -1843,7 +1843,8 @@
       "all": "すべて",
       "blocked": "拒否",
       "marked": "マーク"
-    }
+    },
+    "judgeReason": "レビュー理由"
   },
   "requestLogs": {
     "title": "リクエストログ",

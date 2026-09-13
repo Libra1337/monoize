@@ -1140,6 +1140,7 @@ export interface FirewallEvent {
   term: string;
   content: string;
   action: "blocked" | "marked";
+  reason: string;
   created_at: string;
   created_at_unix_ms: number;
 }

@@ -22,7 +22,10 @@ async fn start_judge(category: &'static str) -> (String, Arc<AtomicUsize>) {
                 assert_eq!(body.0["temperature"], json!(0));
                 axum::Json(json!({
                     "choices": [{
-                        "message": {"content": format!("{{\"category\":\"{category}\"}}")}
+                        "message": {"content": format!(
+                            "Analyzing the request intent.
+{{\"category\":\"{category}\",\"reason\":\"test evidence\"}}"
+                        )}
                     }]
                 }))
             },
@@ -117,6 +120,7 @@ async fn porn_verdict_blocks_and_records_blocked_event() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].action, "blocked");
     assert_eq!(rows[0].term, "porn");
+    assert_eq!(rows[0].reason, "test evidence");
 }
 
 /// The user's acceptance case (CF-30): a moderation-policy text that contains
@@ -251,6 +255,46 @@ async fn bypass_token_skips_firewall_without_judge_call() {
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(judge_calls.load(Ordering::SeqCst), 0);
+}
+
+/// CF-30/CF-31: an uncertain verdict is the judge's escape hatch — it must
+/// never block; the request passes and is marked with the judge's reason.
+#[tokio::test]
+async fn uncertain_verdict_allows_and_marks_instead_of_blocking() {
+    let ctx = setup().await;
+    configure_firewall(&ctx, true, "BadWord
+").await;
+    let (judge_url, _calls) = start_judge("uncertain").await;
+    configure_judge(&ctx, &judge_url, true).await;
+
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [{ "role": "user", "content": "contains badword" }]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(upstream_call_count(&ctx), 1);
+    let (rows, total) = monoize::firewall_events::list_events(
+        &ctx.state.db_pool,
+        &monoize::firewall_events::FirewallEventFilter {
+            term: None,
+            action: None,
+            since_ms: None,
+            until_ms: None,
+        },
+        10,
+        0,
+    )
+    .await
+    .expect("list events");
+    assert_eq!(total, 1);
+    assert_eq!(rows[0].action, "marked");
+    assert_eq!(rows[0].reason, "test evidence");
 }
 
 /// CF-24: stats separate blocked rows from marked rows.

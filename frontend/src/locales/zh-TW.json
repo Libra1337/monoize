@@ -1844,7 +1844,8 @@
       "all": "全部事件",
       "blocked": "已攔截",
       "marked": "已標記"
-    }
+    },
+    "judgeReason": "審核理由"
   },
   "requestLogs": {
     "title": "請求日誌",
