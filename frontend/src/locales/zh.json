@@ -1680,6 +1680,7 @@
     "limits": "Token 限制",
     "mode": "模式",
     "providerSource": "定价来源",
+    "providerSourceFailed": "定价来源加载失败。关闭并重新打开对话框以重试。",
     "tabs": {
       "modelDatabase": "模型数据库",
       "billingRates": "计费费率",

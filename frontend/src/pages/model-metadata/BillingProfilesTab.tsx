@@ -36,7 +36,8 @@ import {
 	syncModelMetadata,
 	updatePricingProfilePatternsOptimistic,
 	upsertBillingRateOptimistic,
-	useBillingRates,
+	useBillingRateProfiles,
+	useBillingRatesForProfile,
 	useModelMetadata,
 	usePricingProfilePatterns
 } from '@/lib/swr'
@@ -97,10 +98,13 @@ export function BillingProfilesTab() {
 	const { i18n } = useTranslation()
 	const zh = i18n.language.startsWith('zh')
 	const c = (zhText: string, enText: string) => zh ? zhText : enText
-	const { data: metadata = [], isLoading: metadataLoading } = useModelMetadata()
-	const { data: rates = [], isLoading: ratesLoading } = useBillingRates()
-	const { data: patterns = [], isLoading: patternsLoading } = usePricingProfilePatterns()
 	const [selectedProfile, setSelectedProfile] = useState('')
+	const { data: metadata = [], isLoading: metadataLoading } = useModelMetadata()
+	// UI17c: profile names/counts come from the summary endpoint and rate rows load per
+	// selected profile, so this tab never downloads the unfiltered rate catalog.
+	const { data: profileSummaries = [], isLoading: ratesLoading } = useBillingRateProfiles()
+	const { data: rates = [], isLoading: profileRatesLoading } = useBillingRatesForProfile(selectedProfile || null)
+	const { data: patterns = [], isLoading: patternsLoading } = usePricingProfilePatterns()
 	const [search, setSearch] = useState('')
 	const [syncing, setSyncing] = useState(false)
 	const [autoSyncError, setAutoSyncError] = useState<string | null>(null)
@@ -115,13 +119,15 @@ export function BillingProfilesTab() {
 	const [patternsDirty, setPatternsDirty] = useState(false)
 	const [savingPatterns, setSavingPatterns] = useState(false)
 
-	const modelsDevRates = useMemo(() => rates.filter(rate => rate.source === 'models_dev'), [rates])
+	// The summary rows carry source presence, so the first-run auto-sync check keeps its
+	// old meaning without loading any rate row.
+	const hasModelsDevRates = profileSummaries.some(summary => summary.has_models_dev)
 	const profiles = useMemo(() => {
 		const names = new Set<string>()
-		for (const rate of rates) if (rate.pricing_profile) names.add(rate.pricing_profile)
+		for (const summary of profileSummaries) names.add(summary.pricing_profile)
 		for (const item of metadata) if (item.models_dev_provider) names.add(item.models_dev_provider)
 		return [...names].sort((a, b) => a.localeCompare(b))
-	}, [metadata, rates])
+	}, [metadata, profileSummaries])
 
 	useEffect(() => {
 		if (!profiles.length) return
@@ -171,14 +177,14 @@ export function BillingProfilesTab() {
 
 	useEffect(() => {
 		if (metadataLoading || ratesLoading || autoSyncAttempted.current) return
-		if (metadata.some(item => item.source === 'models_dev') || modelsDevRates.length > 0) return
+		if (metadata.some(item => item.source === 'models_dev') || hasModelsDevRates) return
 		autoSyncAttempted.current = true
 		setSyncing(true)
 		setAutoSyncError(null)
 		void syncModelMetadata()
 			.catch(error => setAutoSyncError(error instanceof Error ? error.message : 'models.dev sync failed'))
 			.finally(() => setSyncing(false))
-	}, [metadata, metadataLoading, modelsDevRates.length, ratesLoading])
+	}, [metadata, metadataLoading, hasModelsDevRates, ratesLoading])
 
 	const selectedModelRates = useMemo(() => {
 		const grouped = new Map<string, BillingRateRecord[]>()
@@ -199,20 +205,20 @@ export function BillingProfilesTab() {
 	}, [metadata, rates, search, selectedProfile])
 
 	const profileCounts = useMemo(() => {
-		const counts = new Map<string, Set<string>>()
-		for (const rate of rates) {
-			if (!rate.pricing_profile || !rate.model_pattern) continue
-			const models = counts.get(rate.pricing_profile) ?? new Set<string>()
-			models.add(rate.model_pattern)
-			counts.set(rate.pricing_profile, models)
+		const counts = new Map<string, number>()
+		for (const summary of profileSummaries) {
+			counts.set(summary.pricing_profile, summary.model_count)
 		}
 		return counts
-	}, [rates])
+	}, [profileSummaries])
 
 	const latestSync = useMemo(() => {
-		const timestamps = [...metadata, ...modelsDevRates].map(item => new Date(item.updated_at).getTime()).filter(Number.isFinite)
+		const timestamps = metadata
+			.filter(item => item.source === 'models_dev')
+			.map(item => new Date(item.updated_at).getTime())
+			.filter(Number.isFinite)
 		return timestamps.length ? new Date(Math.max(...timestamps)) : null
-	}, [metadata, modelsDevRates])
+	}, [metadata])
 
 	const openOverride = (profile: string, model: string, modelRates: BillingRateRecord[]) => {
 		setOverrideTarget({ profile, model })
@@ -242,7 +248,7 @@ export function BillingProfilesTab() {
 						rate.usage_class === 'cache_read'
 					)
 					if (existingManualCacheRate) {
-						await deleteBillingRateOptimistic(existingManualCacheRate.id, rates)
+						await deleteBillingRateOptimistic(existingManualCacheRate.id)
 					}
 					continue
 				}
@@ -277,7 +283,7 @@ export function BillingProfilesTab() {
 
 	const deleteManualOverrides = async (modelRates: BillingRateRecord[]) => {
 		const manual = modelRates.filter(rate => rate.source === 'manual')
-		for (const rate of manual) await deleteBillingRateOptimistic(rate.id, rates)
+		for (const rate of manual) await deleteBillingRateOptimistic(rate.id)
 		toast.success(c('已恢复 models.dev 价格', 'Restored models.dev pricing'))
 	}
 
@@ -314,7 +320,7 @@ export function BillingProfilesTab() {
 				<aside className='border-b bg-muted/10 lg:border-b-0 lg:border-r'>
 					<div className='border-b px-4 py-3'><h4 className='text-sm font-medium'>{c('计费 Profile', 'Billing profiles')}</h4><p className='mt-1 text-xs text-muted-foreground'>{profiles.length} {c('个数据源', 'sources')}</p></div>
 					<div className='flex gap-2 overflow-x-auto p-2 lg:flex-col lg:overflow-visible'>
-						{profiles.map(profile => <button type='button' key={profile} onClick={() => setSelectedProfile(profile)} className={cn('flex min-w-40 shrink-0 items-center gap-3 rounded-lg border-l-2 px-3 py-2.5 text-left transition-colors lg:min-w-0', selectedProfile === profile ? 'border-l-primary bg-primary/10' : 'border-l-transparent hover:bg-muted')}><CircleDollarSign className='size-4 shrink-0 text-muted-foreground' /><span className='min-w-0 flex-1'><span className='block truncate text-sm font-medium'>{profile}</span><span className='block text-xs text-muted-foreground'>{profileCounts.get(profile)?.size ?? 0} models</span></span><ChevronRight className='hidden size-4 text-muted-foreground lg:block' /></button>)}
+						{profiles.map(profile => <button type='button' key={profile} onClick={() => setSelectedProfile(profile)} className={cn('flex min-w-40 shrink-0 items-center gap-3 rounded-lg border-l-2 px-3 py-2.5 text-left transition-colors lg:min-w-0', selectedProfile === profile ? 'border-l-primary bg-primary/10' : 'border-l-transparent hover:bg-muted')}><CircleDollarSign className='size-4 shrink-0 text-muted-foreground' /><span className='min-w-0 flex-1'><span className='block truncate text-sm font-medium'>{profile}</span><span className='block text-xs text-muted-foreground'>{profileCounts.get(profile) ?? 0} models</span></span><ChevronRight className='hidden size-4 text-muted-foreground lg:block' /></button>)}
 					</div>
 				</aside>
 
@@ -323,6 +329,11 @@ export function BillingProfilesTab() {
 
 					<div className='mt-5 hidden grid-cols-[minmax(220px,1fr)_110px_110px_110px_90px] gap-2 border-b px-3 pb-2 text-xs font-medium text-muted-foreground md:grid'><span>Model</span><span>Input / 1M</span><span>Cache / 1M</span><span>Output / 1M</span><span /></div>
 					<div className='mt-2 flex flex-col gap-2'>
+						{profileRatesLoading && rates.length === 0 ? <>
+							<Skeleton className='h-[76px] w-full rounded-lg' />
+							<Skeleton className='h-[76px] w-full rounded-lg' />
+							<Skeleton className='h-[76px] w-full rounded-lg' />
+						</> : <>
 						{selectedModelRates.map(([model, modelRates]) => {
 							const manual = modelRates.some(rate => rate.source === 'manual')
 							const metadataItem = metadata.find(item => item.model_id === model)
@@ -333,6 +344,7 @@ export function BillingProfilesTab() {
 							</div>
 						})}
 						{selectedModelRates.length === 0 ? <div className='rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground'>{c('这个 Profile 没有匹配的模型。', 'No models match this profile.')}</div> : null}
+						</>}
 					</div>
 
 					<details className='group mt-6 rounded-xl border'>

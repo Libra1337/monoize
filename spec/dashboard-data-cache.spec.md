@@ -20,9 +20,13 @@ DC6. A successful full settings mutation MUST revalidate `PUBLIC_SETTINGS`, `PRI
 
 DC7. A successful Provider create, update, or delete MUST revalidate `PROVIDERS`, `CONFIG`, and `MARKETPLACE_MODELS`. Create and delete MUST also revalidate `STATS`. Delete MUST remove the deleted Provider-detail key without revalidation. Provider mutations MUST NOT revalidate `DASHBOARD_GROUPS`: the group registry is a first-class resource and is not derived from provider rows.
 
-DC8. A successful model-metadata create, update, delete, or models.dev sync MUST revalidate `MODEL_METADATA`, `MARKETPLACE_MODELS`, and `PROVIDERS`. Models.dev sync MUST also revalidate `BILLING_RATES`.
+DC8. A successful model-metadata create, update, delete, or models.dev sync MUST revalidate `MODEL_METADATA`, `MARKETPLACE_MODELS`, and `PROVIDERS`. Models.dev sync MUST also revalidate `BILLING_RATES`. Models.dev sync MUST also revalidate `BILLING_RATE_PROFILES`, every present `BILLING_RATES_FOR_PROFILE(profile)` key, and every present `MODEL_METADATA_DETAIL(model_id)` key, because the sync replaces both catalogs wholesale.
 
-DC9. A successful billing-rate create, update, delete, or catalog sync MUST revalidate `BILLING_RATES` and `PROVIDERS`.
+DC8a. A successful model-metadata delete MUST remove the deleted record's `MODEL_METADATA_DETAIL(model_id)` key without revalidation. A successful model-metadata update MUST publish the server's returned record into that key without revalidation.
+
+DC9. A successful billing-rate create, update, delete, or catalog sync MUST revalidate `BILLING_RATES` and `PROVIDERS`. Each MUST also revalidate `BILLING_RATE_PROFILES` and every present `BILLING_RATES_FOR_PROFILE(profile)` key, because rate writes can change per-profile counts and rows.
+
+DC9a. `BILLING_RATE_PROFILES` MUST be the canonical SWR key for the profile-summary resource served by `GET /api/dashboard/billing-rates/profiles`. `BILLING_RATES_FOR_PROFILE(profile)` MUST be the canonical SWR key for the filtered rate list served by `GET /api/dashboard/billing-rates?pricing_profile={profile}`. A page MUST NOT derive profile names or counts from the unfiltered `BILLING_RATES` key when it does not otherwise need rate rows.
 
 DC10. A successful pricing-pattern mutation MUST publish the returned `PRICING_PROFILE_PATTERNS` value and revalidate `SETTINGS` and `PROVIDERS`.
 

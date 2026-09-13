@@ -4697,3 +4697,33 @@ fn affinity_prefix_hash_is_deterministic_across_decodes() {
         );
     }
 }
+
+#[test]
+fn usage_breakdown_persists_only_normalized_members() {
+    use crate::handlers::billing::build_usage_breakdown;
+    use std::collections::HashMap;
+
+    // RL15c: the upstream usage echo must never reach the persisted snapshot, no matter
+    // how large the attribution map inside extra_body is.
+    let mut extra = HashMap::new();
+    extra.insert(
+        "attribution".to_string(),
+        serde_json::json!({ "items": { "at_1": { "input_tokens": 5 }, "at_2": { "input_tokens": 7 } } }),
+    );
+    extra.insert("cache_read_input_tokens".to_string(), serde_json::json!(11));
+    let usage = urp::Usage {
+        input_tokens: 100,
+        output_tokens: 4,
+        input_details: None,
+        output_details: None,
+        extra_body: extra,
+    };
+
+    let snapshot = build_usage_breakdown(&usage);
+    assert!(snapshot.get("raw_usage_extra").is_none());
+    assert!(snapshot.get("attribution").is_none());
+    assert_eq!(snapshot["input"]["total_tokens"], serde_json::json!(100));
+    assert_eq!(snapshot["output"]["total_tokens"], serde_json::json!(4));
+    // Normalized fallbacks that read extra_body still land in the normalized object.
+    assert_eq!(snapshot["input"]["cached_tokens"], serde_json::json!(11));
+}

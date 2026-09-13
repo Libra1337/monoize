@@ -48,6 +48,7 @@ import {
 import { ModelBadge } from "@/components/ModelBadge";
 import {
   useModelMetadata,
+  useModelMetadataDetail,
   useBillingRates,
   usePricingProfilePatterns,
   upsertModelMetadataOptimistic,
@@ -254,10 +255,20 @@ export function ModelMetadataPage() {
     r.model_id.toLowerCase().includes(search.toLowerCase())
   );
 
+  // UI9: the provider switcher needs raw_json, which only the detail endpoint serves.
+  const {
+    data: editDetail,
+    error: detailError,
+    isLoading: detailLoading,
+  } = useModelMetadataDetail(editRecord?.model_id ?? null, {
+    revalidateOnFocus: false,
+  });
+
   const providerVariants = useMemo(() => {
-    if (!editRecord?.raw_json) return [];
-    return extractProviderVariants(editRecord.raw_json);
-  }, [editRecord?.raw_json]);
+    const raw = editDetail?.raw_json;
+    if (!raw) return [];
+    return extractProviderVariants(raw);
+  }, [editDetail?.raw_json]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -372,7 +383,20 @@ export function ModelMetadataPage() {
               placeholder="e.g., openai"
             />
           </div>
-          {!isCreate && providerVariants.length > 0 && (
+          {!isCreate && detailLoading && (
+            <div className="space-y-2">
+              <Label>{t("modelMetadata.providerSource")}</Label>
+              <Skeleton className="h-9 w-full" />
+            </div>
+          )}
+          {!isCreate && !detailLoading && detailError && (
+            <p className="text-xs text-destructive">
+              {t("modelMetadata.providerSourceFailed", {
+                defaultValue: "Provider source failed to load. Close and reopen the dialog to retry.",
+              })}
+            </p>
+          )}
+          {!isCreate && !detailLoading && !detailError && providerVariants.length > 0 && (
             <div className="space-y-2">
               <Label>{t("modelMetadata.providerSource")}</Label>
               <Select
@@ -984,7 +1008,7 @@ function BillingRatesTab() {
   const confirmDelete = async () => {
     if (!deleteTargetId) return;
     try {
-      await deleteBillingRateOptimistic(deleteTargetId, rates, (error) =>
+      await deleteBillingRateOptimistic(deleteTargetId, (error) =>
         toast.error(t("modelMetadata.billingRates.deleteFailed", "Delete failed"), {
           description: error.message,
         })

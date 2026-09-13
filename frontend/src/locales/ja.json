@@ -1676,6 +1676,7 @@
     "limits": "トークン制限",
     "mode": "モード",
     "providerSource": "価格ソース",
+    "providerSourceFailed": "価格ソースの読み込みに失敗しました。ダイアログを閉じて開き直すと再試行されます。",
     "tabs": {
       "modelDatabase": "モデルデータベース",
       "billingRates": "課金レート",

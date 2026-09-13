@@ -231,6 +231,8 @@ RL15b. If normalized usage contains an authoritative cached-input modality split
 
 RL15a. `usage_breakdown_json.input.total_tokens` MUST be the aggregate/inclusive prompt token total as defined in `user-billing-and-model-metadata.spec.md` § 5 C3 — i.e. it MUST include cache-read tokens and cache-creation tokens. `usage_breakdown_json.input.uncached_tokens` MUST equal `input.total_tokens - cached_tokens - cache_creation_tokens` clamped at zero (the base-rate billable bucket). These fields MUST be computed uniformly across all upstream provider types, because upstream usage is normalized at decode time per C3-ii of the billing spec. Provider-type branching in usage-breakdown construction MUST NOT exist.
 
+RL15c. The stored snapshot MUST contain exactly the `version`, `input`, and `output` members of the normalized breakdown. It MUST NOT embed the upstream usage echo (`raw_usage_extra`) or any per-message, per-block, or per-item attribution map carried inside the upstream usage object, because those members grow with conversation length. Measured before this rule, `raw_usage_extra` attribution maps averaged 24 KB per row and occupied 3.29 GB of a 3.8 GB database while no dashboard surface read them. The normalized subtype fields of RL15, RL15a, and RL15b remain the only persisted usage detail.
+
 RL16. For successful requests where billing is executed, `billing_breakdown_json` MUST persist the request-time pricing snapshot used for billing. The snapshot MUST include at least:
 
 - unit prices used for each billed token class,
@@ -419,6 +421,8 @@ RL-S10. Expired-row cleanup defined in RL-S9 SHOULD execute once during startup 
 RL-S11. Expired-row cleanup defined in RL-S9 MUST also execute periodically in a background task while the process is running. The default cleanup interval MUST be 1 hour.
 
 RL-S12. Migration `m20260824_000040_drop_request_log_visible_tps` MUST drop columns `first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, and `tps_mode` from `request_logs` on SQLite and PostgreSQL. Each drop MUST be a no-op when that column is already absent, so running the up migration twice succeeds and leaves the same schema. The migration MUST NOT modify any other column, row, or index. The down migration MUST be a no-op because dropped visible-TPS values cannot be reconstructed.
+
+RL-S13. Migration `m20260914_000077_request_log_usage_breakdown_slim` MUST rewrite every `request_logs` row whose `usage_breakdown_json` parses as JSON and contains a top-level `raw_usage_extra` member, replacing the column value with the same JSON object minus that member. A row whose column is NULL, does not parse as JSON, or lacks the member MUST remain byte-identical. The migration MUST be idempotent: a second run changes no row. The migration MUST NOT modify any other column, row, or index and MUST NOT rebuild the table. Because SQLite returns freed pages to the file free list rather than to the filesystem, database file compaction after this migration is a deployment-time `VACUUM` outside the migration itself.
 
 ## 5. Frontend display
 

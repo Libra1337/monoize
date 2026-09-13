@@ -47,7 +47,7 @@ MD4a. `price_currency` MUST equal `"CNY"` or `"USD"`. A row created by manual ed
 default to `"CNY"`; a row written by Models.dev sync MUST use `"USD"`. An update that omits
 the field MUST preserve the stored value.
 
-MD5. `raw_json` stores all provider variants from models.dev as `{ "providers": { "openai": {...}, "azure": {...}, ... } }`. Every value inside a variant's `cost` object MUST be stored and returned as its exact decimal string rather than a JSON number. This enables the edit UI to switch pricing source without JavaScript binary-floating-point conversion.
+MD5. `raw_json` stores all provider variants from models.dev as `{ "providers": { "openai": {...}, "azure": {...}, ... } }`. Every value inside a variant's `cost` object MUST be stored and served by the §3.2 detail endpoint as its exact decimal string rather than a JSON number. This enables the edit UI to switch pricing source without JavaScript binary-floating-point conversion. The §3.1 list endpoint omits `raw_json` entirely.
 
 MD6. `models_dev_provider` indicates which models.dev provider's pricing is currently applied.
 
@@ -106,12 +106,14 @@ SP8. Admin MAY explicitly reset a manual record back to sync-managed by updating
 ### 3.1 List model metadata
 
 - Method/Path: `GET /api/dashboard/model-metadata`
-- No changes from original spec.
+- Auth: admin required.
+- Response: `ModelMetadataRecord[]` in which every record omits `raw_json`. The list serves catalog tables and profile grouping; `raw_json` (all models.dev provider variants, MD5) is served only by the single-record endpoint §3.2. The response body for the full catalog MUST stay below 2 MiB for a 2000-record catalog; embedding `raw_json` (measured 3.7 MB for 1710 records) violates this rule.
 
 ### 3.2 Get single model metadata
 
 - Method/Path: `GET /api/dashboard/model-metadata/{model_id}`
-- No changes from original spec.
+- Auth: admin required.
+- Response: `200 OK` with the full `ModelMetadataRecord` including `raw_json`.
 
 ### 3.3 Upsert model metadata
 
@@ -151,7 +153,12 @@ SP8. Admin MAY explicitly reset a manual record back to sync-managed by updating
 
 - Method/Path: `GET /api/dashboard/billing-rates`
 - Auth: admin required.
-- Response: `BillingRateRecord[]`.
+- Optional query parameter `pricing_profile`: when present, the response contains only rows whose `pricing_profile` equals it; when absent, the response contains every row. Ordering is unchanged (`pricing_profile` ASC, `priority` DESC, `id` ASC).
+- Response: `BillingRateRecord[]` (full records including `match_json` and `raw_json`).
+
+- Method/Path: `GET /api/dashboard/billing-rates/profiles`
+- Auth: admin required.
+- Response: `{ "profiles": [ { "pricing_profile": string, "rate_count": number, "model_count": number, "has_models_dev": boolean } ] }` ordered by `pricing_profile` ASC. `rate_count` is the number of `billing_rate_records` rows carrying that profile; `model_count` is the number of distinct non-null `model_pattern` values carrying that profile; `has_models_dev` is true when at least one row of the profile has `source = 'models_dev'`. This endpoint exists so surfaces that need only profile names, counts, or source presence do not download the full rate catalog (measured 2.6 MB for 5096 rows).
 
 - Method/Path: `PUT /api/dashboard/billing-rates/{id}`
 - Auth: admin required.
@@ -238,7 +245,7 @@ UI8. Page MUST include a search input that filters by `model_id` substring (clie
 
 ### 4.5 Edit dialog — provider source switcher
 
-UI9. When `raw_json.providers` contains multiple entries, the edit dialog MUST show a provider selector listing available providers with their pricing.
+UI9. When `raw_json.providers` contains multiple entries, the edit dialog MUST show a provider selector listing available providers with their pricing. The dialog MUST fetch the record from `GET /api/dashboard/model-metadata/{model_id}` when it opens, and the provider selector MUST consume that detail response's `raw_json`. While the detail request is in flight the dialog body MUST show a skeleton fallback and MUST NOT render the provider selector from the list row.
 
 UI10. Selecting a provider MUST auto-fill all pricing and limit fields from that provider's data in `raw_json.providers[provider]`.
 
@@ -268,6 +275,8 @@ UI15. Skeleton placeholders while loading.
 ### 4.8 Billing Profiles tab
 
 UI17. The Billing Profiles tab MUST group models.dev rate records by `pricing_profile` and present a master-detail workbench.
+
+UI17c. The Billing Profiles tab MUST load the profile list and per-profile model counts from `GET /api/dashboard/billing-rates/profiles` and the selected profile's rate rows from `GET /api/dashboard/billing-rates?pricing_profile={selected}`. The tab MUST NOT request the unfiltered billing-rate catalog.
 
 UI17a. Desktop (`lg` and above) MUST render a left profile list and a right detail pane. The detail pane MUST show model ID plus input, cache-read, and output token prices formatted as the price per one million tokens, prefixed by the symbol of that row's `unit_price_currency`: `¥` for `CNY` and `$` for `USD`. A price MUST NOT be shown under a currency symbol that does not match its stored `unit_price_currency`.
 
@@ -299,6 +308,8 @@ UI22. Advanced Rates MUST provide catalog sync, search, add, edit, and delete ac
 UI23. The low-level rate edit dialog MUST allow editing every mutable field exposed by the Billing-rate CRUD API, including `unit_price_currency` as a choice between `CNY` and `USD`. A new row MUST default that control to `CNY`. JSON fields MUST be edited as JSON text and rejected client-side when not valid JSON.
 
 UI24. Empty pricing-profile match-rule `pattern` or `pricing_profile` values MUST be blocked before submitting.
+
+UI24a. The Provider edit dialog MUST source its pricing-profile name list from `GET /api/dashboard/billing-rates/profiles`. The dialog MUST NOT request the full billing-rate catalog to derive profile names.
 
 ### 4.8 Billing integration note
 

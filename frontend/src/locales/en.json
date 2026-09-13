@@ -1680,6 +1680,7 @@
     "limits": "Token Limits",
     "mode": "Mode",
     "providerSource": "Pricing Source",
+    "providerSourceFailed": "Provider source failed to load. Close and reopen the dialog to retry.",
     "tabs": {
       "modelDatabase": "Model Database",
       "billingRates": "Billing Rates",

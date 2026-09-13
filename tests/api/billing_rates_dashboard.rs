@@ -227,3 +227,118 @@ async fn billing_rates_crud_catalog_sync_and_profile_patterns_api() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(deleted["success"], json!(true));
 }
+
+#[tokio::test]
+async fn billing_rate_profiles_endpoint_and_profile_filtered_list() {
+    let ctx = setup().await;
+    for (id, profile, model) in [
+        ("p1:a:input", "alpha", "model-a"),
+        ("p1:a:output", "alpha", "model-a"),
+        ("p1:b:input", "alpha", "model-b"),
+        ("p2:b:input", "beta", "model-b"),
+    ] {
+        let (status, _) = json_request(
+            &ctx,
+            Method::PUT,
+            &format!("/api/dashboard/billing-rates/{id}"),
+            Some(json!({
+                "source": "manual",
+                "pricing_profile": profile,
+                "model_pattern": model,
+                "rate_kind": "token",
+                "usage_class": "input_uncached",
+                "unit": "token",
+                "unit_price_nano": "10",
+                "enabled": true,
+                "match_json": {},
+                "raw_json": {}
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    let (status, body) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/billing-rates/profiles",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let profiles = body["profiles"].as_array().unwrap();
+    assert_eq!(profiles.len(), 2);
+    assert_eq!(profiles[0]["pricing_profile"], json!("alpha"));
+    assert_eq!(profiles[0]["rate_count"], json!(3));
+    assert_eq!(profiles[0]["model_count"], json!(2));
+    // Manual rows exist without any models.dev row, so source presence is false.
+    assert_eq!(profiles[0]["has_models_dev"], json!(false));
+    assert_eq!(profiles[1]["pricing_profile"], json!("beta"));
+    assert_eq!(profiles[1]["rate_count"], json!(1));
+
+    let (status, filtered) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/billing-rates?pricing_profile=beta",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = filtered.as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["pricing_profile"], json!("beta"));
+    // Full records are served on both list shapes so the low-level editor keeps working.
+    assert!(rows[0]["match_json"].is_object());
+    assert!(rows[0]["raw_json"].is_object());
+
+    let (status, unfiltered) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/billing-rates",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(unfiltered.as_array().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn model_metadata_list_omits_raw_json_and_detail_returns_it() {
+    let ctx = setup().await;
+    let (status, _) = json_request(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/model-metadata/gpt-slim-test",
+        Some(json!({
+            "models_dev_provider": "openai",
+            "input_cost_per_token_nano": "30000",
+            "output_cost_per_token_nano": "60000"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, list) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/model-metadata",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let records = list.as_array().unwrap();
+    assert_eq!(records.len(), 1);
+    // §3.1: the list projection must not carry the models.dev variants blob.
+    assert!(records[0].get("raw_json").is_none());
+    assert_eq!(records[0]["model_id"], json!("gpt-slim-test"));
+
+    let (status, detail) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/model-metadata/gpt-slim-test",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(detail["raw_json"].is_object());
+}

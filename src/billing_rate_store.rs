@@ -53,6 +53,19 @@ impl DbBillingRateRecord {
     }
 }
 
+/// Per-profile aggregate served by `GET /api/dashboard/billing-rates/profiles`
+/// (model-metadata-dashboard.spec.md §3.5). Exists so profile pickers do not download the
+/// full rate catalog, which measured 2.6 MB for 5096 rows.
+#[derive(Debug, Clone, Serialize)]
+pub struct BillingRateProfileSummary {
+    pub pricing_profile: String,
+    pub rate_count: i64,
+    pub model_count: i64,
+    /// True when the profile carries at least one `models_dev` row; drives the Billing
+    /// Profiles tab's first-run auto-sync decision without loading rate rows.
+    pub has_models_dev: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpsertBillingRateInput {
     pub source: Option<String>,
@@ -153,6 +166,64 @@ impl BillingRateStore {
             .await
             .map_err(|e| e.to_string())?;
         rows.iter().map(decode_billing_rate_row).collect()
+    }
+
+    /// Rate rows of one pricing profile (§3.5 `?pricing_profile=` filter). Ordering matches
+    /// the unfiltered list.
+    pub async fn list_billing_rates_for_profile(
+        &self,
+        pricing_profile: &str,
+    ) -> Result<Vec<DbBillingRateRecord>, String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT id, source, pricing_profile, model_pattern, provider_type, rate_kind,
+                        usage_class, unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                        modality, cache_ttl, match_json, priority, enabled, raw_json, updated_at
+                 FROM billing_rate_records
+                 WHERE pricing_profile = $1
+                 ORDER BY priority DESC, id ASC",
+                vec![pricing_profile.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        rows.iter().map(decode_billing_rate_row).collect()
+    }
+
+    pub async fn list_pricing_profile_summaries(
+        &self,
+    ) -> Result<Vec<BillingRateProfileSummary>, String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT pricing_profile,
+                        COUNT(*) AS rate_count,
+                        COUNT(DISTINCT model_pattern) AS model_count,
+                        MAX(CASE WHEN source = 'models_dev' THEN 1 ELSE 0 END) AS has_models_dev
+                 FROM billing_rate_records
+                 GROUP BY pricing_profile
+                 ORDER BY pricing_profile ASC",
+                vec![],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        rows.iter()
+            .map(|row| {
+                Ok(BillingRateProfileSummary {
+                    pricing_profile: row
+                        .try_get("", "pricing_profile")
+                        .map_err(|e| e.to_string())?,
+                    rate_count: row.try_get("", "rate_count").map_err(|e| e.to_string())?,
+                    model_count: row.try_get("", "model_count").map_err(|e| e.to_string())?,
+                    has_models_dev: row
+                        .try_get::<i64>("", "has_models_dev")
+                        .map_err(|e| e.to_string())?
+                        != 0,
+                })
+            })
+            .collect()
     }
 
     pub async fn list_matching_rates(

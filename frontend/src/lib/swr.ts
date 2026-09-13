@@ -1,5 +1,5 @@
 import useSWR, { mutate } from "swr";
-import type { SWRConfiguration } from "swr";
+import type { Key, SWRConfiguration } from "swr";
 import { api } from "./api";
 import type {
   User,
@@ -29,6 +29,7 @@ import type {
   ModelMetadataRecord,
   UpsertModelMetadataInput,
   BillingRateRecord,
+  BillingRateProfileSummary,
   UpsertBillingRateInput,
   PricingProfilePattern,
   BillingPlan,
@@ -56,7 +57,10 @@ const fetchers = {
   dashboardGroups: async () => (await api.listDashboardGroups()).groups,
   transformRegistry: () => api.getTransformRegistry(),
   modelMetadata: () => api.listModelMetadata(),
+  modelMetadataDetail: (modelId: string) => api.getModelMetadata(modelId),
   billingRates: () => api.listBillingRates(),
+  billingRatesForProfile: (profile: string) => api.listBillingRatesForProfile(profile),
+  billingRateProfiles: async () => (await api.listBillingRateProfiles()).profiles,
   billingPlans: () => api.listBillingPlans(),
   pricingProfilePatterns: async () => (await api.getPricingProfilePatterns()).patterns,
   marketplaceModels: (groupId?: string) => api.listMarketplaceModels(groupId),
@@ -79,6 +83,7 @@ export const SWR_KEYS = {
   TRANSFORM_REGISTRY: "/dashboard/transforms/registry",
   MODEL_METADATA: "/dashboard/model-metadata",
   BILLING_RATES: "/dashboard/billing-rates",
+  BILLING_RATE_PROFILES: "/dashboard/billing-rates/profiles",
   PRICING_PROFILE_PATTERNS: "/dashboard/pricing-profile-patterns",
   MARKETPLACE_MODELS: "/dashboard/marketplace/models",
   BILLING_PLANS: "/dashboard/billing-plans",
@@ -91,6 +96,41 @@ export const SWR_KEYS = {
 
 export function providerDetailSWRKey(providerId: string) {
   return `provider-detail:${providerId}`;
+}
+
+export function modelMetadataDetailSWRKey(modelId: string) {
+  return `model-metadata-detail:${modelId}`;
+}
+
+export function billingRatesForProfileSWRKey(profile: string) {
+  return `billing-rates-profile:${profile}`;
+}
+
+function revalidateBillingRateKeys() {
+  // DC9: rate writes can change every per-profile view plus the summary counts.
+  return mutate((key) => typeof key === "string" && key.startsWith("billing-rates-profile:"));
+}
+
+function isBillingRateCacheKey(key: Key) {
+  return (
+    key === SWR_KEYS.BILLING_RATES ||
+    (typeof key === "string" && key.startsWith("billing-rates-profile:"))
+  );
+}
+
+/**
+ * Optimistically rewrites every cached billing-rate view (flat catalog and profile-scoped)
+ * in place. Matching by cache key keeps a profile-scoped writer from planting partial data
+ * under the unmounted flat key.
+ */
+function mutateCachedBillingRates(
+  apply: (records: BillingRateRecord[]) => BillingRateRecord[]
+) {
+  return mutate(
+    isBillingRateCacheKey,
+    (records?: BillingRateRecord[]) => (records ? apply(records) : records),
+    false
+  );
 }
 
 // Default SWR config
@@ -252,6 +292,36 @@ export function useBillingRates(config?: SWRConfiguration) {
   return useSWR<BillingRateRecord[]>(
     SWR_KEYS.BILLING_RATES,
     fetchers.billingRates,
+    { ...defaultConfig, ...config }
+  );
+}
+
+export function useBillingRatesForProfile(
+  profile: string | null | undefined,
+  config?: SWRConfiguration
+) {
+  return useSWR<BillingRateRecord[]>(
+    profile ? billingRatesForProfileSWRKey(profile) : null,
+    () => fetchers.billingRatesForProfile(profile!),
+    { ...defaultConfig, ...config }
+  );
+}
+
+export function useBillingRateProfiles(config?: SWRConfiguration) {
+  return useSWR<BillingRateProfileSummary[]>(
+    SWR_KEYS.BILLING_RATE_PROFILES,
+    fetchers.billingRateProfiles,
+    { ...defaultConfig, ...config }
+  );
+}
+
+export function useModelMetadataDetail(
+  modelId: string | null | undefined,
+  config?: SWRConfiguration
+) {
+  return useSWR<ModelMetadataRecord>(
+    modelId ? modelMetadataDetailSWRKey(modelId) : null,
+    () => fetchers.modelMetadataDetail(modelId!),
     { ...defaultConfig, ...config }
   );
 }
@@ -1061,7 +1131,6 @@ export async function upsertModelMetadataOptimistic(
     model_id: modelId,
     source: "manual",
     updated_at: new Date().toISOString(),
-    raw_json: {},
     ...input,
     models_dev_provider: input.models_dev_provider ?? undefined,
     mode: input.mode ?? undefined,
@@ -1089,6 +1158,8 @@ export async function upsertModelMetadataOptimistic(
   try {
     const result = await api.upsertModelMetadata(modelId, input);
     mutate(SWR_KEYS.MODEL_METADATA);
+    // DC8a: the server response carries raw_json, which the list projection omits.
+    mutate(modelMetadataDetailSWRKey(modelId), result, false);
     mutate(SWR_KEYS.MARKETPLACE_MODELS);
     mutate(SWR_KEYS.PROVIDERS);
     return result;
@@ -1112,6 +1183,8 @@ export async function deleteModelMetadataOptimistic(
   try {
     await api.deleteModelMetadata(modelId);
     mutate(SWR_KEYS.MODEL_METADATA);
+    // DC8a: drop the detail entry without revalidation; the record no longer exists.
+    mutate(modelMetadataDetailSWRKey(modelId), undefined, false);
     mutate(SWR_KEYS.MARKETPLACE_MODELS);
     mutate(SWR_KEYS.PROVIDERS);
   } catch (error) {
@@ -1130,6 +1203,10 @@ export async function syncModelMetadata(
     const result = await api.syncModelMetadataFromModelsDev();
     mutate(SWR_KEYS.MODEL_METADATA);
     mutate(SWR_KEYS.BILLING_RATES);
+    mutate(SWR_KEYS.BILLING_RATE_PROFILES);
+    revalidateBillingRateKeys();
+    // DC8: sync replaces both catalogs wholesale, so cached detail rows are stale too.
+    mutate((key) => typeof key === "string" && key.startsWith("model-metadata-detail:"));
     mutate(SWR_KEYS.MARKETPLACE_MODELS);
     mutate(SWR_KEYS.PROVIDERS);
     return result;
@@ -1171,18 +1248,22 @@ export async function upsertBillingRateOptimistic(
     updated_at: new Date().toISOString(),
   };
   const exists = currentRecords.some((r) => r.id === id);
-  const optimistic = exists
-    ? currentRecords.map((r) => (r.id === id ? { ...r, ...tempRecord } : r))
-    : [...currentRecords, tempRecord];
-  mutate(SWR_KEYS.BILLING_RATES, optimistic, false);
+  const applyTo = (records: BillingRateRecord[]) =>
+    exists
+      ? records.map((r) => (r.id === id ? { ...r, ...tempRecord } : r))
+      : [...records, tempRecord];
+  mutateCachedBillingRates(applyTo);
 
   try {
     const result = await api.upsertBillingRate(id, input);
     mutate(SWR_KEYS.BILLING_RATES);
+    mutate(SWR_KEYS.BILLING_RATE_PROFILES);
+    revalidateBillingRateKeys();
     mutate(SWR_KEYS.PROVIDERS);
     return result;
   } catch (error) {
-    mutate(SWR_KEYS.BILLING_RATES, currentRecords, false);
+    revalidateBillingRateKeys();
+    mutate(SWR_KEYS.BILLING_RATES);
     if (onError && error instanceof Error) {
       onError(error);
     }
@@ -1192,21 +1273,19 @@ export async function upsertBillingRateOptimistic(
 
 export async function deleteBillingRateOptimistic(
   id: string,
-  currentRecords: BillingRateRecord[],
   onError?: (error: Error) => void
 ) {
-  mutate(
-    SWR_KEYS.BILLING_RATES,
-    currentRecords.filter((r) => r.id !== id),
-    false
-  );
+  mutateCachedBillingRates((records) => records.filter((r) => r.id !== id));
 
   try {
     await api.deleteBillingRate(id);
     mutate(SWR_KEYS.BILLING_RATES);
+    mutate(SWR_KEYS.BILLING_RATE_PROFILES);
+    revalidateBillingRateKeys();
     mutate(SWR_KEYS.PROVIDERS);
   } catch (error) {
-    mutate(SWR_KEYS.BILLING_RATES, currentRecords, false);
+    revalidateBillingRateKeys();
+    mutate(SWR_KEYS.BILLING_RATES);
     if (onError && error instanceof Error) {
       onError(error);
     }
@@ -1228,6 +1307,7 @@ export async function copyPricingProfile(
   try {
     const result = await api.copyPricingProfile(profile, targetProfile);
     await mutate(SWR_KEYS.BILLING_RATES);
+    mutate(SWR_KEYS.BILLING_RATE_PROFILES);
     mutate(SWR_KEYS.PROVIDERS);
     return result;
   } catch (error) {
@@ -1244,6 +1324,8 @@ export async function syncBillingRatesCatalog(
   try {
     const result = await api.syncBillingRatesCatalog();
     mutate(SWR_KEYS.BILLING_RATES);
+    mutate(SWR_KEYS.BILLING_RATE_PROFILES);
+    revalidateBillingRateKeys();
     mutate(SWR_KEYS.PROVIDERS);
     return result;
   } catch (error) {

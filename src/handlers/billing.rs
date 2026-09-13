@@ -525,8 +525,9 @@ pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
             "reasoning_tokens": output_reasoning,
             "audio_tokens": output_audio,
             "image_tokens": output_image
-        },
-        "raw_usage_extra": usage.extra_body
+        }
+        // RL15c: the upstream usage echo must not be persisted. Attribution maps inside
+        // `extra_body` grow with conversation length and once averaged 24 KB per row.
     })
 }
 

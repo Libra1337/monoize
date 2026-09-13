@@ -71,7 +71,7 @@ import type {
 } from '@/lib/api'
 import {
 	createProviderOptimistic,
-	useBillingRates,
+	useBillingRateProfiles,
 	useDashboardGroups,
 	useProviderDetail,
 	updateProviderOptimistic
@@ -246,7 +246,8 @@ export function ProviderDialog({
 	const [removeV1Open, setRemoveV1Open] = useState(false)
 	const [v1ChannelIndex, setV1ChannelIndex] = useState<number | null>(null)
 	const initialSnapshot = useRef('')
-	const { data: billingRates = [] } = useBillingRates({ revalidateOnFocus: false })
+	// UI24a: profile names come from the summary endpoint, not the full rate catalog.
+	const { data: rateProfiles = [] } = useBillingRateProfiles({ revalidateOnFocus: false })
 
 	const { data: detail, error: detailError, isLoading: detailLoading } = useProviderDetail(
 		open && isEdit && current ? current.id : null,
@@ -278,8 +279,8 @@ export function ProviderDialog({
 		[modelMetadata]
 	)
 	const pricingProfiles = useMemo(
-		() => Array.from(new Set(billingRates.map(rate => rate.pricing_profile))).sort(),
-		[billingRates]
+		() => rateProfiles.map(summary => summary.pricing_profile).sort(),
+		[rateProfiles]
 	)
 
 	const updateChannel = (index: number, patch: Partial<ChannelRow>) => {

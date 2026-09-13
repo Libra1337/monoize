@@ -42,10 +42,10 @@ pub use billing_plans::{
     delete_billing_plan, list_billing_plans, reset_billing_plan, update_billing_plan,
 };
 pub use billing_rates::{
-    PricingProfilePatternsResponse, UpdatePricingProfilePatternsRequest,
-    copy_pricing_profile, delete_billing_rate,
-    get_pricing_profile_patterns, list_billing_rates, sync_billing_rates_catalog,
-    update_pricing_profile_patterns, upsert_billing_rate,
+    BillingRateProfilesResponse, BillingRatesListQuery, PricingProfilePatternsResponse,
+    UpdatePricingProfilePatternsRequest, copy_pricing_profile, delete_billing_rate,
+    get_pricing_profile_patterns, list_billing_rate_profiles, list_billing_rates,
+    sync_billing_rates_catalog, update_pricing_profile_patterns, upsert_billing_rate,
 };
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
 pub use groups::{

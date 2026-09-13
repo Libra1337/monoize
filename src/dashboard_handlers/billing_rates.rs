@@ -1,28 +1,64 @@
 use crate::app::AppState;
 use crate::billing_rate_store::{
-    BillingRateSyncResult, CopyProfileError, DbBillingRateRecord, UpsertBillingRateInput,
+    BillingRateProfileSummary, BillingRateSyncResult, CopyProfileError, DbBillingRateRecord,
+    UpsertBillingRateInput,
 };
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
 use crate::settings::PricingProfilePattern;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+#[derive(Debug, Default, Deserialize)]
+pub struct BillingRatesListQuery {
+    #[serde(default)]
+    pub pricing_profile: Option<String>,
+}
+
 pub async fn list_billing_rates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<BillingRatesListQuery>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let rows: Vec<DbBillingRateRecord> = match query
+        .pricing_profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|profile| !profile.is_empty())
+    {
+        Some(profile) => {
+            state
+                .billing_rate_store
+                .list_billing_rates_for_profile(profile)
+                .await
+        }
+        None => state.billing_rate_store.list_billing_rates().await,
+    }
+    .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    Ok(Json(rows))
+}
+
+#[derive(Debug, Serialize)]
+pub struct BillingRateProfilesResponse {
+    pub profiles: Vec<BillingRateProfileSummary>,
+}
+
+pub async fn list_billing_rate_profiles(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
-    let rows: Vec<DbBillingRateRecord> = state
+    let profiles = state
         .billing_rate_store
-        .list_billing_rates()
+        .list_pricing_profile_summaries()
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    Ok(Json(rows))
+    Ok(Json(BillingRateProfilesResponse { profiles }))
 }
 
 #[derive(Debug, Deserialize)]

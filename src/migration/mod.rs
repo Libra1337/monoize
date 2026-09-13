@@ -79,6 +79,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260913_000074_user_sub_accounts::Migration),
             Box::new(m20260913_000075_org_spaces::Migration),
             Box::new(m20260914_000076_org_admin_controls::Migration),
+            Box::new(m20260914_000077_request_log_usage_breakdown_slim::Migration),
         ]
     }
 }
@@ -287,6 +288,7 @@ mod m20260912_000073_agent_account_class;
 mod m20260913_000074_user_sub_accounts;
 mod m20260913_000075_org_spaces;
 mod m20260914_000076_org_admin_controls;
+mod m20260914_000077_request_log_usage_breakdown_slim;
 
 #[cfg(test)]
 mod tests {

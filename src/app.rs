@@ -1557,9 +1557,6 @@ fn build_probe_usage_breakdown(prompt_tokens: u64, completion_tokens: u64) -> Va
             "reasoning_tokens": null,
             "audio_tokens": null,
             "image_tokens": null
-        },
-        "raw_usage_extra": {
-            "source": "active_probe"
         }
     })
 }
@@ -2881,6 +2878,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/billing-rates",
             get(crate::dashboard_handlers::list_billing_rates),
+        )
+        .route(
+            "/dashboard/billing-rates/profiles",
+            get(crate::dashboard_handlers::list_billing_rate_profiles),
         )
         .route(
             "/dashboard/billing-rates/profiles/{profile}/copy",

@@ -72,6 +72,9 @@ pub struct DbModelMetadataRecord {
     pub max_input_tokens: Option<i64>,
     pub max_output_tokens: Option<i64>,
     pub max_tokens: Option<i64>,
+    /// All models.dev provider variants. Absent from list projections (§3.1); present on
+    /// detail, sync, and mutation responses.
+    #[serde(skip_serializing_if = "Value::is_null")]
     pub raw_json: Value,
     pub source: String,
     /// Currency of every price field on this row (M4a): `CNY` or `USD`.
@@ -390,6 +393,9 @@ impl ModelRegistryStore {
         Ok(())
     }
 
+    /// Catalog projection for list surfaces: `raw_json` is not read and serializes as absent.
+    /// §3.1 of model-metadata-dashboard.spec.md — the list endpoint must stay small; the
+    /// variants blob measured 3.7 MB across 1710 rows and is served by the detail getter.
     pub async fn list_model_metadata(&self) -> Result<Vec<DbModelMetadataRecord>, String> {
         let rows = self
             .db
@@ -399,7 +405,7 @@ impl ModelRegistryStore {
                         output_cost_per_token_nano, cache_read_input_cost_per_token_nano,
                         cache_creation_input_cost_per_token_nano,
                         output_cost_per_reasoning_token_nano, max_input_tokens, max_output_tokens,
-                        max_tokens, raw_json, source, price_currency, updated_at
+                        max_tokens, source, price_currency, updated_at
                  FROM model_metadata_records
                  ORDER BY model_id ASC",
                 vec![],
@@ -407,7 +413,7 @@ impl ModelRegistryStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        rows.iter().map(row_to_model_metadata).collect()
+        rows.iter().map(row_to_model_metadata_slim).collect()
     }
 
     pub async fn list_marketplace_model_metadata(
@@ -420,7 +426,7 @@ impl ModelRegistryStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        rows.iter().map(row_to_model_metadata).collect()
+        rows.iter().map(row_to_model_metadata_slim).collect()
     }
 
     /// Same catalogue narrowed to the model names one Group's enabled Providers serve
@@ -1068,7 +1074,7 @@ const fn marketplace_model_metadata_sql() -> &'static str {
             m.cache_read_input_cost_per_token_nano,
             m.cache_creation_input_cost_per_token_nano,
             m.output_cost_per_reasoning_token_nano, m.max_input_tokens,
-            m.max_output_tokens, m.max_tokens, m.raw_json, m.source, m.price_currency,
+            m.max_output_tokens, m.max_tokens, m.source, m.price_currency,
             m.updated_at
      FROM model_metadata_records AS m
      INNER JOIN monoize_provider_models AS pm ON pm.model_name = m.model_id
@@ -1114,12 +1120,22 @@ fn row_to_record(row: &sea_orm::QueryResult) -> Result<DbModelRecord, String> {
 }
 
 fn row_to_model_metadata(row: &sea_orm::QueryResult) -> Result<DbModelMetadataRecord, String> {
+    let raw_json_str: String = row.try_get("", "raw_json").map_err(|e| e.to_string())?;
+    let raw_json: Value = serde_json::from_str(&raw_json_str).map_err(|e| e.to_string())?;
+    let mut record = row_to_model_metadata_slim(row)?;
+    record.raw_json = raw_json;
+    Ok(record)
+}
+
+/// Builds the record without `raw_json` (left as `Value::Null`, which serializes as absent).
+/// Used by list queries that do not select the column.
+fn row_to_model_metadata_slim(
+    row: &sea_orm::QueryResult,
+) -> Result<DbModelMetadataRecord, String> {
     let updated_at_str: String = row.try_get("", "updated_at").map_err(|e| e.to_string())?;
     let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
         .map_err(|e| e.to_string())?
         .with_timezone(&Utc);
-    let raw_json_str: String = row.try_get("", "raw_json").map_err(|e| e.to_string())?;
-    let raw_json: Value = serde_json::from_str(&raw_json_str).map_err(|e| e.to_string())?;
 
     Ok(DbModelMetadataRecord {
         model_id: row.try_get("", "model_id").map_err(|e| e.to_string())?,
@@ -1149,7 +1165,7 @@ fn row_to_model_metadata(row: &sea_orm::QueryResult) -> Result<DbModelMetadataRe
             .try_get("", "max_output_tokens")
             .map_err(|e| e.to_string())?,
         max_tokens: row.try_get("", "max_tokens").map_err(|e| e.to_string())?,
-        raw_json,
+        raw_json: Value::Null,
         source: row.try_get("", "source").map_err(|e| e.to_string())?,
         price_currency: row
             .try_get("", "price_currency")

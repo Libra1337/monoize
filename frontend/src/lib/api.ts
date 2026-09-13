@@ -661,7 +661,8 @@ export interface ModelMetadataRecord {
   max_input_tokens?: number;
   max_output_tokens?: number;
   max_tokens?: number;
-  raw_json: Record<string, unknown>;
+  /** Only present on detail responses; list projections omit it (spec §3.1). */
+  raw_json?: Record<string, unknown>;
   source: string;
   /** Currency of every price field on this row (M4a). */
   price_currency: RateCurrency;
@@ -746,6 +747,18 @@ export interface BillingRateSyncResult {
   skipped: number;
   deleted: number;
   fetched_at: string;
+}
+
+/** Per-profile aggregate (spec §3.5), so profile pickers skip the full rate catalog. */
+export interface BillingRateProfileSummary {
+  pricing_profile: string;
+  rate_count: number;
+  model_count: number;
+  has_models_dev: boolean;
+}
+
+export interface BillingRateProfilesResponse {
+  profiles: BillingRateProfileSummary[];
 }
 
 export interface PricingProfilePattern {
@@ -1628,6 +1641,19 @@ class ApiClient {
 
   async listBillingRates(): Promise<BillingRateRecord[]> {
     return this.request("/billing-rates");
+  }
+
+  /** Filtered rate rows of one pricing profile (spec §3.5). */
+  async listBillingRatesForProfile(
+    profile: string
+  ): Promise<BillingRateRecord[]> {
+    return this.request(
+      `/billing-rates?pricing_profile=${encodeURIComponent(profile)}`
+    );
+  }
+
+  async listBillingRateProfiles(): Promise<BillingRateProfilesResponse> {
+    return this.request("/billing-rates/profiles");
   }
 
   async upsertBillingRate(

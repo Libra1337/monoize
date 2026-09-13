@@ -1677,6 +1677,7 @@
     "limits": "Token 限制",
     "mode": "模式",
     "providerSource": "定價來源",
+    "providerSourceFailed": "定價來源載入失敗。關閉並重新開啟對話框以重試。",
     "tabs": {
       "modelDatabase": "模型資料庫",
       "billingRates": "計費費率",
