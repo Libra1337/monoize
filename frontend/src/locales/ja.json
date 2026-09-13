@@ -1281,9 +1281,17 @@
     "contentFirewallGroupWords": "禁止語リスト",
     "contentFirewallEnabled": "コンテンツファイアウォールを有効化",
     "contentFirewallEnabledDescription": "有効にすると、禁止語に一致したリクエストは上流呼び出し前に 403 で拒否されます。すべての呼び出し元に適用され、例外はありません。",
-    "contentFirewallWords": "禁止語一覧",
+    "contentFirewallWords": "キーワードヒント",
     "contentFirewallWordsPlaceholder": "1行に1語",
-    "contentFirewallWordsDescription": "1行に1語、現在 {{termCount}} 語。照合は大文字小文字を区別しない部分一致です。"
+    "contentFirewallWordsDescription": "1行に1語、現在 {{termCount}} 語。キーワード自体は拒否しません:レビュアーへのヒントになり、一致した良性リクエストはファイアウォールページに記録(マーク)されます。",
+    "contentFirewallGroupJudge": "意味論レビュアー",
+    "contentFirewallJudgeEnabled": "LLMレビューを有効化",
+    "contentFirewallJudgeEnabledDescription": "軽量モデルが各リクエストを意味的に分類します:ポルノや政治的違反コンテンツは拒否、良性のリクエスト(これらの話題の議論・禁止・研究を含む)は通過します。無効またはレビュー不可のとき、ファイアウォールは何も拒否しません。",
+    "contentFirewallJudgeBaseUrl": "レビュー Base URL",
+    "contentFirewallJudgeModel": "レビューモデル",
+    "contentFirewallJudgeApiKey": "レビュー APIキー",
+    "contentFirewallJudgeTimeout": "レビュー タイムアウト (ms)",
+    "contentFirewallJudgeTimeoutDescription": "レビューがこの時間を超えた場合はリクエストを通過させます(fail-open)。"
   },
   "providers": {
     "title": "プロバイダー",
@@ -1829,7 +1837,13 @@
     "eventDetailTitle": "拒否リクエストの詳細",
     "blockedContent": "拒否された内容",
     "close": "閉じる",
-    "blockedRequests": "拒否回数"
+    "blockedRequests": "拒否回数",
+    "judgeInactive": "LLMレビュアーが未設定か無効のため、ファイアウォールは現在何も拒否していません。設定 → コンテンツファイアウォールで設定してください。",
+    "action": {
+      "all": "すべて",
+      "blocked": "拒否",
+      "marked": "マーク"
+    }
   },
   "requestLogs": {
     "title": "リクエストログ",

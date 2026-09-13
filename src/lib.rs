@@ -22,6 +22,7 @@ pub mod migration;
 pub mod model_registry;
 pub mod model_registry_store;
 pub mod monoize_routing;
+pub mod moderation_judge;
 pub mod node_config;
 pub mod presets;
 pub mod public_name;

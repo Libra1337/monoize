@@ -77,6 +77,11 @@ pub struct SystemSettings {
     pub monoize_affinity_failback_delay_seconds: u64,
     pub moderation_enabled: bool,
     pub moderation_blocked_words: String,
+    pub moderation_judge_enabled: bool,
+    pub moderation_judge_base_url: String,
+    pub moderation_judge_api_key: String,
+    pub moderation_judge_model: String,
+    pub moderation_judge_timeout_ms: u64,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -220,6 +225,11 @@ impl Default for SystemSettings {
             monoize_affinity_failback_delay_seconds: 5 * 60,
             moderation_enabled: true,
             moderation_blocked_words: crate::content_firewall::DEFAULT_BLOCKED_WORDS.to_string(),
+            moderation_judge_enabled: false,
+            moderation_judge_base_url: String::new(),
+            moderation_judge_api_key: String::new(),
+            moderation_judge_model: String::new(),
+            moderation_judge_timeout_ms: 8000,
             updated_at: Utc::now(),
         }
     }
@@ -438,6 +448,31 @@ impl SettingsStore {
         self.set_if_not_exists(
             "moderation_blocked_words",
             &defaults.moderation_blocked_words,
+        )
+        .await?;
+        self.set_if_not_exists(
+            "moderation_judge_enabled",
+            &defaults.moderation_judge_enabled.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "moderation_judge_base_url",
+            &defaults.moderation_judge_base_url,
+        )
+        .await?;
+        self.set_if_not_exists(
+            "moderation_judge_api_key",
+            &defaults.moderation_judge_api_key,
+        )
+        .await?;
+        self.set_if_not_exists(
+            "moderation_judge_model",
+            &defaults.moderation_judge_model,
+        )
+        .await?;
+        self.set_if_not_exists(
+            "moderation_judge_timeout_ms",
+            &defaults.moderation_judge_timeout_ms.to_string(),
         )
         .await?;
         Ok(())
@@ -763,6 +798,21 @@ impl SettingsStore {
                 "moderation_blocked_words" => {
                     settings.moderation_blocked_words = row.value;
                 }
+                "moderation_judge_enabled" => {
+                    settings.moderation_judge_enabled = row.value.parse().unwrap_or(false);
+                }
+                "moderation_judge_base_url" => {
+                    settings.moderation_judge_base_url = row.value;
+                }
+                "moderation_judge_api_key" => {
+                    settings.moderation_judge_api_key = row.value;
+                }
+                "moderation_judge_model" => {
+                    settings.moderation_judge_model = row.value;
+                }
+                "moderation_judge_timeout_ms" => {
+                    settings.moderation_judge_timeout_ms = row.value.parse().unwrap_or(8000);
+                }
                 _ => {}
             }
         }
@@ -925,6 +975,26 @@ impl SettingsStore {
             (
                 "moderation_blocked_words",
                 settings.moderation_blocked_words.clone(),
+            ),
+            (
+                "moderation_judge_enabled",
+                settings.moderation_judge_enabled.to_string(),
+            ),
+            (
+                "moderation_judge_base_url",
+                settings.moderation_judge_base_url.clone(),
+            ),
+            (
+                "moderation_judge_api_key",
+                settings.moderation_judge_api_key.clone(),
+            ),
+            (
+                "moderation_judge_model",
+                settings.moderation_judge_model.clone(),
+            ),
+            (
+                "moderation_judge_timeout_ms",
+                settings.moderation_judge_timeout_ms.to_string(),
             ),
         ];
 

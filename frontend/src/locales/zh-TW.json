@@ -1281,9 +1281,17 @@
     "contentFirewallGroupWords": "違禁詞表",
     "contentFirewallEnabled": "啟用內容防火牆",
     "contentFirewallEnabledDescription": "開啟後，文字命中違禁詞的請求會在呼叫上游模型之前以 403 拒絕。對所有呼叫方生效，無豁免。",
-    "contentFirewallWords": "違禁詞列表",
+    "contentFirewallWords": "關鍵詞提示",
     "contentFirewallWordsPlaceholder": "每行一個詞",
-    "contentFirewallWordsDescription": "每行一個詞，目前 {{termCount}} 個。比對規則為不分大小寫的子字串比對。"
+    "contentFirewallWordsDescription": "每行一個詞，目前 {{termCount}} 個。關鍵詞本身不會攔截：它們提示審核員關注，並讓命中的良性請求在防火牆頁面留痕（標記）。",
+    "contentFirewallGroupJudge": "語義審核員",
+    "contentFirewallJudgeEnabled": "啟用 LLM 審核",
+    "contentFirewallJudgeEnabledDescription": "由一個便宜模型對每個請求做語義分類：色情或政治違規內容被攔截；良性請求（包括討論、禁止、研究此類話題的內容）放行。關閉或審核不可用時，防火牆不攔截任何請求。",
+    "contentFirewallJudgeBaseUrl": "審核 Base URL",
+    "contentFirewallJudgeModel": "審核模型",
+    "contentFirewallJudgeApiKey": "審核 API Key",
+    "contentFirewallJudgeTimeout": "審核逾時（毫秒）",
+    "contentFirewallJudgeTimeoutDescription": "審核超過該時限時放行請求（fail-open）。"
   },
   "providers": {
     "title": "服務供應商",
@@ -1830,7 +1838,13 @@
     "eventDetailTitle": "攔截詳情",
     "blockedContent": "被攔截內容",
     "close": "關閉",
-    "blockedRequests": "攔截次數"
+    "blockedRequests": "攔截次數",
+    "judgeInactive": "LLM 審核員未設定或未啟用，防火牆目前不會攔截任何請求。請前往 設定 → 內容防火牆 設定。",
+    "action": {
+      "all": "全部事件",
+      "blocked": "已攔截",
+      "marked": "已標記"
+    }
   },
   "requestLogs": {
     "title": "請求日誌",

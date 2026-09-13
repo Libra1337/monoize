@@ -44,6 +44,8 @@ const RANGE_OPTIONS = [
   { value: "all", hours: 0 },
 ] as const;
 
+const ACTION_OPTIONS = ["all", "blocked", "marked"] as const;
+
 type RangeValue = (typeof RANGE_OPTIONS)[number]["value"];
 
 const endpointLabels: Record<string, string> = {
@@ -87,6 +89,7 @@ function StatTile({
 export function FirewallPage() {
   const { t } = useTranslation();
   const [range, setRange] = useState<RangeValue>("7d");
+  const [actionFilter, setActionFilter] = useState<(typeof ACTION_OPTIONS)[number]>("all");
   const [termFilter, setTermFilter] = useState("");
   const [termInput, setTermInput] = useState("");
   const [pageOffset, setPageOffset] = useState(0);
@@ -98,9 +101,10 @@ export function FirewallPage() {
     const option = RANGE_OPTIONS.find((item) => item.value === range);
     return {
       term: termFilter || undefined,
+      action: actionFilter === "all" ? undefined : actionFilter,
       since_ms: option?.hours ? Date.now() - option.hours * 60 * 60 * 1000 : undefined,
     } as const;
-  }, [range, termFilter]);
+  }, [range, termFilter, actionFilter]);
 
   const { data: events, isLoading: eventsLoading, mutate: mutateEvents } = useFirewallEvents(
     PAGE_SIZE,
@@ -130,6 +134,13 @@ export function FirewallPage() {
           description={t("firewall.description")}
         />
       </motion.div>
+
+      {/* CF-26: the firewall blocks nothing while the judge is inert. */}
+      {stats && !stats.judge_active ? (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-400">
+          {t("firewall.judgeInactive")}
+        </div>
+      ) : null}
 
       {/* Stat tiles (CF-26) */}
       <motion.div
@@ -244,6 +255,24 @@ export function FirewallPage() {
             </Button>
           </div>
           <Select
+            value={actionFilter}
+            onValueChange={(value) => {
+              setActionFilter(value as (typeof ACTION_OPTIONS)[number]);
+              setPageOffset(0);
+            }}
+          >
+            <SelectTrigger className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ACTION_OPTIONS.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {t(`firewall.action.${option}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
             value={range}
             onValueChange={(value) => {
               setRange(value as RangeValue);
@@ -306,7 +335,10 @@ export function FirewallPage() {
                     </TableCell>
                     <TableCell className="max-w-40 truncate font-mono text-xs">{event.model}</TableCell>
                     <TableCell>
-                      <Badge variant="destructive" className="max-w-32 truncate font-mono">
+                      <Badge
+                        variant={event.action === "marked" ? "secondary" : "destructive"}
+                        className="max-w-32 truncate font-mono"
+                      >
                         {event.term}
                       </Badge>
                     </TableCell>

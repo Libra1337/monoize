@@ -415,6 +415,11 @@ export interface SystemSettings {
   monoize_mask_sensitive_info: boolean;
   moderation_enabled: boolean;
   moderation_blocked_words: string;
+  moderation_judge_enabled: boolean;
+  moderation_judge_base_url: string;
+  moderation_judge_api_key: string;
+  moderation_judge_model: string;
+  moderation_judge_timeout_ms: number;
   pricing_profile_model_patterns: PricingProfilePattern[];
   updated_at: string;
 }
@@ -1134,6 +1139,7 @@ export interface FirewallEvent {
   model: string;
   term: string;
   content: string;
+  action: "blocked" | "marked";
   created_at: string;
   created_at_unix_ms: number;
 }
@@ -1158,15 +1164,18 @@ export interface FirewallTermCount {
 
 export interface FirewallStats {
   total: number;
+  marked: number;
   last_24h: number;
   last_7d: number;
   distinct_users: number;
+  judge_active: boolean;
   daily: FirewallDailyCount[];
   top_terms: FirewallTermCount[];
 }
 
 export interface FirewallEventsFilter {
   term?: string;
+  action?: "blocked" | "marked";
   since_ms?: number;
   until_ms?: number;
 }
@@ -1800,6 +1809,7 @@ class ApiClient {
     params.set("limit", String(limit));
     params.set("offset", String(offset));
     if (filters?.term) params.set("term", filters.term);
+    if (filters?.action) params.set("action", filters.action);
     if (filters?.since_ms !== undefined) params.set("since_ms", String(filters.since_ms));
     if (filters?.until_ms !== undefined) params.set("until_ms", String(filters.until_ms));
     return this.request(`/firewall/events?${params.toString()}`);

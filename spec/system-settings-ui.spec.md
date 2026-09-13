@@ -43,7 +43,7 @@ these stable ids, in this order:
 | 07 | `affinity` | `settings.affinityRouting` | `monoize_affinity_enabled`, `monoize_affinity_failback_mode`, `monoize_affinity_idle_ttl_seconds`, `monoize_affinity_failback_delay_seconds` |
 | 08 | `health` | `settings.healthMonitoring` | `monoize_active_probe_enabled`, `monoize_active_probe_interval_seconds`, `monoize_active_probe_success_threshold`, `monoize_active_probe_model`, `monoize_passive_failure_threshold`, `monoize_passive_cooldown_seconds`, `monoize_passive_window_seconds`, `monoize_passive_min_samples`, `monoize_passive_failure_rate_threshold`, `monoize_passive_rate_limit_cooldown_seconds`, `monoize_request_capture_enabled`, `monoize_mask_sensitive_info`, `monoize_request_capture_retention_days`, `monoize_enable_estimated_billing`, `monoize_strip_cross_protocol_nested_extra`, `monoize_request_timeout_ms` |
 | 09 | `extra` | `settings.extraFieldsWhitelist` | `monoize_extra_fields_whitelist` (sub-keys `chat_completion`, `responses`, `messages`, `gemini`) |
-| 10 | `moderation` | `settings.contentFirewall` | `moderation_enabled`, `moderation_blocked_words` (behavior: `content-firewall.spec.md`) |
+| 10 | `moderation` | `settings.contentFirewall` | `moderation_enabled`, `moderation_judge_enabled`, `moderation_judge_base_url`, `moderation_judge_api_key`, `moderation_judge_model`, `moderation_judge_timeout_ms`, `moderation_blocked_words` (behavior: `content-firewall.spec.md`) |
 
 SSU-2. Every field listed in SSU-1 MUST be editable through exactly one category panel.
 No field present in the pre-redesign page may become unreachable.

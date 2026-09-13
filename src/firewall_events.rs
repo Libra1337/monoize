@@ -20,7 +20,12 @@ pub struct NewFirewallEvent {
     pub model: String,
     pub term: String,
     pub content: String,
+    /// CF-20: `blocked` (request rejected) or `marked` (allowed but recorded).
+    pub action: &'static str,
 }
+
+pub const ACTION_BLOCKED: &str = "blocked";
+pub const ACTION_MARKED: &str = "marked";
 
 /// CF-21: content is the matched scanned string truncated to at most 8000
 /// Unicode scalar values so an adversarial oversized request cannot bloat the
@@ -43,6 +48,7 @@ pub async fn record_event(db: &DbPool, event: NewFirewallEvent) -> Result<(), St
         model: Set(event.model),
         term: Set(event.term),
         content: Set(event.content),
+        action: Set(event.action.to_string()),
         created_at: Set(now.to_rfc3339()),
         created_at_unix_ms: Set(now.timestamp_millis()),
     };
@@ -65,6 +71,7 @@ pub async fn record_event(db: &DbPool, event: NewFirewallEvent) -> Result<(), St
 
 pub struct FirewallEventFilter {
     pub term: Option<String>,
+    pub action: Option<&'static str>,
     pub since_ms: Option<i64>,
     pub until_ms: Option<i64>,
 }
@@ -73,6 +80,9 @@ fn filtered_events(filter: &FirewallEventFilter) -> sea_orm::Select<firewall_eve
     let mut query = firewall_events::Entity::find();
     if let Some(term) = filter.term.as_deref().filter(|t| !t.is_empty()) {
         query = query.filter(firewall_events::Column::Term.contains(term));
+    }
+    if let Some(action) = filter.action {
+        query = query.filter(firewall_events::Column::Action.eq(action));
     }
     if let Some(since_ms) = filter.since_ms {
         query = query.filter(firewall_events::Column::CreatedAtUnixMs.gte(since_ms));
@@ -106,7 +116,9 @@ pub async fn list_events(
 
 #[derive(Debug, Serialize)]
 pub struct FirewallStats {
+    /// CF-24: blocked rows only; marked rows are reported separately.
     pub total: u64,
+    pub marked: u64,
     pub last_24h: u64,
     pub last_7d: u64,
     pub distinct_users: u64,
@@ -148,8 +160,17 @@ pub async fn compute_stats(db: &DbPool) -> Result<FirewallStats, String> {
     let mut users: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut last_24h = 0_u64;
     let mut last_7d = 0_u64;
+    let mut blocked = 0_u64;
+    let mut marked = 0_u64;
 
     for row in &rows {
+        if row.action == ACTION_MARKED {
+            marked += 1;
+            // CF-24: aggregate the marked count only; every other statistic
+            // describes blocked requests.
+            continue;
+        }
+        blocked += 1;
         if now_ms - row.created_at_unix_ms <= day_ms {
             last_24h += 1;
         }
@@ -175,7 +196,8 @@ pub async fn compute_stats(db: &DbPool) -> Result<FirewallStats, String> {
     top_terms.truncate(10);
 
     Ok(FirewallStats {
-        total: rows.len() as u64,
+        total: blocked,
+        marked,
         last_24h,
         last_7d,
         distinct_users: users.len() as u64,

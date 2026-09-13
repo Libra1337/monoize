@@ -208,6 +208,9 @@ pub struct AppState {
     pub channel_affinity: Arc<Mutex<HashMap<String, ChannelAffinityBinding>>>,
     pub routing_config_revision: Arc<AtomicU64>,
     pub settings_update_lock: Arc<Mutex<()>>,
+    /// CF-29: process-local judge-loop guard token. Judge requests carry it so
+    /// firewall checks skip their own traffic; external callers cannot forge it.
+    pub moderation_bypass_token: String,
     pub model_registry_store: ModelRegistryStore,
     pub billing_rate_store: BillingRateStore,
     pub store_billing: StoreBillingStore,
@@ -1117,6 +1120,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         channel_affinity,
         routing_config_revision,
         settings_update_lock,
+        moderation_bypass_token: uuid::Uuid::new_v4().to_string(),
         model_registry_store,
         billing_rate_store,
         store_billing,
@@ -2102,6 +2106,13 @@ pub(crate) fn runtime_config_from_settings(
     runtime.moderation_enabled = settings_snapshot.moderation_enabled;
     runtime.content_firewall =
         crate::content_firewall::ContentFirewall::compile(&settings_snapshot.moderation_blocked_words);
+    runtime.moderation_judge = crate::moderation_judge::JudgeConfig {
+        enabled: settings_snapshot.moderation_judge_enabled,
+        base_url: settings_snapshot.moderation_judge_base_url.clone(),
+        api_key: settings_snapshot.moderation_judge_api_key.clone(),
+        model: settings_snapshot.moderation_judge_model.clone(),
+        timeout_ms: settings_snapshot.moderation_judge_timeout_ms.max(1),
+    };
     runtime
 }
 

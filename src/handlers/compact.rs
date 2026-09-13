@@ -63,6 +63,7 @@ pub async fn compact_response(
         .map_err(|message| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message))?;
     ensure_content_allowed(
         &state,
+        &headers,
         &auth,
         "responses_compact",
         &logical_model,

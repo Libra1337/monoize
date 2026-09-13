@@ -397,6 +397,7 @@ pub struct MonoizeRuntimeConfig {
     pub moderation_enabled: bool,
     #[serde(skip)]
     pub content_firewall: Option<crate::content_firewall::ContentFirewall>,
+    pub moderation_judge: crate::moderation_judge::JudgeConfig,
 }
 
 impl Default for MonoizeRuntimeConfig {
@@ -433,6 +434,13 @@ impl Default for MonoizeRuntimeConfig {
             content_firewall: crate::content_firewall::ContentFirewall::compile(
                 crate::content_firewall::DEFAULT_BLOCKED_WORDS,
             ),
+            moderation_judge: crate::moderation_judge::JudgeConfig {
+                enabled: false,
+                base_url: String::new(),
+                api_key: String::new(),
+                model: String::new(),
+                timeout_ms: 8000,
+            },
         }
     }
 }

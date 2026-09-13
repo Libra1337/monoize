@@ -51,6 +51,11 @@ pub struct UpdateSettingsRequest {
     pub monoize_affinity_failback_delay_seconds: Option<u64>,
     pub moderation_enabled: Option<bool>,
     pub moderation_blocked_words: Option<String>,
+    pub moderation_judge_enabled: Option<bool>,
+    pub moderation_judge_base_url: Option<String>,
+    pub moderation_judge_api_key: Option<String>,
+    pub moderation_judge_model: Option<String>,
+    pub moderation_judge_timeout_ms: Option<u64>,
 }
 
 pub async fn get_settings(
@@ -236,6 +241,21 @@ pub async fn update_settings(
     if let Some(v) = body.moderation_blocked_words {
         settings.moderation_blocked_words = v;
     }
+    if let Some(v) = body.moderation_judge_enabled {
+        settings.moderation_judge_enabled = v;
+    }
+    if let Some(v) = body.moderation_judge_base_url {
+        settings.moderation_judge_base_url = v.trim().to_string();
+    }
+    if let Some(v) = body.moderation_judge_api_key {
+        settings.moderation_judge_api_key = v;
+    }
+    if let Some(v) = body.moderation_judge_model {
+        settings.moderation_judge_model = v.trim().to_string();
+    }
+    if let Some(v) = body.moderation_judge_timeout_ms {
+        settings.moderation_judge_timeout_ms = v.max(1);
+    }
 
     let updated = settings_store
         .update_all(&settings)
@@ -274,6 +294,13 @@ pub async fn update_settings(
         rt.moderation_enabled = updated.moderation_enabled;
         rt.content_firewall =
             crate::content_firewall::ContentFirewall::compile(&updated.moderation_blocked_words);
+        rt.moderation_judge = crate::moderation_judge::JudgeConfig {
+            enabled: updated.moderation_judge_enabled,
+            base_url: updated.moderation_judge_base_url.clone(),
+            api_key: updated.moderation_judge_api_key.clone(),
+            model: updated.moderation_judge_model.clone(),
+            timeout_ms: updated.moderation_judge_timeout_ms.max(1),
+        };
     }
 
     let affinity_settings_after = (

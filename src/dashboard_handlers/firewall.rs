@@ -19,6 +19,8 @@ pub struct FirewallEventsQuery {
     #[serde(default)]
     pub term: Option<String>,
     #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
     pub since_ms: Option<i64>,
     #[serde(default)]
     pub until_ms: Option<i64>,
@@ -41,7 +43,19 @@ pub async fn get_firewall_stats(
     let stats: FirewallStats = crate::firewall_events::compute_stats(&state.db_pool)
         .await
         .map_err(events_error)?;
-    Ok(Json(stats))
+    // CF-24: the page shows a banner while the judge is inert, because the
+    // firewall then blocks nothing.
+    let judge_active = state.monoize_runtime.read().await.moderation_judge.is_active();
+    Ok(Json(json!({
+        "total": stats.total,
+        "marked": stats.marked,
+        "last_24h": stats.last_24h,
+        "last_7d": stats.last_7d,
+        "distinct_users": stats.distinct_users,
+        "judge_active": judge_active,
+        "daily": stats.daily,
+        "top_terms": stats.top_terms,
+    })))
 }
 
 /// CF-25: newest-first paginated event rows for the calling tenant.
@@ -53,8 +67,14 @@ pub async fn list_firewall_events(
     let _admin = require_admin(&headers, &state).await?;
     let limit = query.limit.clamp(1, 200);
     let offset = query.offset.max(0);
+    let action: Option<&'static str> = match query.action.as_deref() {
+        Some("blocked") => Some(crate::firewall_events::ACTION_BLOCKED),
+        Some("marked") => Some(crate::firewall_events::ACTION_MARKED),
+        _ => None,
+    };
     let filter = FirewallEventFilter {
         term: query.term.filter(|t| !t.trim().is_empty()),
+        action,
         since_ms: query.since_ms,
         until_ms: query.until_ms,
     };
@@ -79,6 +99,7 @@ pub async fn list_firewall_events(
                 "model": row.model,
                 "term": row.term,
                 "content": row.content,
+                "action": row.action,
                 "created_at": row.created_at,
                 "created_at_unix_ms": row.created_at_unix_ms,
             })

@@ -1284,9 +1284,17 @@
     "contentFirewallGroupWords": "Prohibited Terms",
     "contentFirewallEnabled": "Enable Content Firewall",
     "contentFirewallEnabledDescription": "When on, a request whose text matches a prohibited term is rejected with 403 before any upstream call. Applies to every caller; no exemptions.",
-    "contentFirewallWords": "Prohibited Term List",
+    "contentFirewallWords": "Keyword Hints",
     "contentFirewallWordsPlaceholder": "one term per line",
-    "contentFirewallWordsDescription": "One term per line; {{termCount}} active. Matching is case-insensitive substring matching."
+    "contentFirewallWordsDescription": "One term per line; {{termCount}} active. Keywords never block by themselves: they steer the judge and mark allowed borderline requests in the firewall page.",
+    "contentFirewallGroupJudge": "Semantic Judge",
+    "contentFirewallJudgeEnabled": "Enable LLM Judge",
+    "contentFirewallJudgeEnabledDescription": "A cheap model classifies every request: porn or political content is rejected; benign requests (including discussions of these topics) pass. When off or unreachable, the firewall blocks nothing.",
+    "contentFirewallJudgeBaseUrl": "Judge Base URL",
+    "contentFirewallJudgeModel": "Judge Model",
+    "contentFirewallJudgeApiKey": "Judge API Key",
+    "contentFirewallJudgeTimeout": "Judge Timeout (ms)",
+    "contentFirewallJudgeTimeoutDescription": "Fail open and forward the request when the judge exceeds this budget."
   },
   "providers": {
     "title": "Providers",
@@ -1833,7 +1841,13 @@
     "eventDetailTitle": "Blocked Request Detail",
     "blockedContent": "Blocked Content",
     "close": "Close",
-    "blockedRequests": "Blocked Requests"
+    "blockedRequests": "Blocked Requests",
+    "judgeInactive": "The LLM judge is not configured or disabled. The firewall currently blocks nothing. Configure it in Settings → Content Firewall.",
+    "action": {
+      "all": "All events",
+      "blocked": "Blocked",
+      "marked": "Marked"
+    }
   },
   "requestLogs": {
     "title": "Request Logs",

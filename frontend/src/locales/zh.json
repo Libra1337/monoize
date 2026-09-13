@@ -1284,9 +1284,17 @@
     "contentFirewallGroupWords": "违禁词表",
     "contentFirewallEnabled": "启用内容防火墙",
     "contentFirewallEnabledDescription": "开启后，文本命中违禁词的请求会在调用上游模型之前以 403 拒绝。对所有调用方生效，无豁免。",
-    "contentFirewallWords": "违禁词列表",
+    "contentFirewallWords": "关键词提示",
     "contentFirewallWordsPlaceholder": "每行一个词",
-    "contentFirewallWordsDescription": "每行一个词，当前 {{termCount}} 个。匹配规则为忽略大小写的子串匹配。"
+    "contentFirewallWordsDescription": "每行一个词，当前 {{termCount}} 个。关键词本身不会拦截：它们提示审核员关注，并让命中的良性请求在防火墙页面留痕（标记）。",
+    "contentFirewallGroupJudge": "语义审核员",
+    "contentFirewallJudgeEnabled": "启用 LLM 审核",
+    "contentFirewallJudgeEnabledDescription": "由一个便宜模型对每个请求做语义分类：色情或政治违规内容被拦截；良性请求（包括讨论、禁止、研究此类话题的内容）放行。关闭或审核不可用时，防火墙不拦截任何请求。",
+    "contentFirewallJudgeBaseUrl": "审核 Base URL",
+    "contentFirewallJudgeModel": "审核模型",
+    "contentFirewallJudgeApiKey": "审核 API Key",
+    "contentFirewallJudgeTimeout": "审核超时（毫秒）",
+    "contentFirewallJudgeTimeoutDescription": "审核超过该时限时放行请求（fail-open）。"
   },
   "providers": {
     "title": "服务提供者",
@@ -1833,7 +1841,13 @@
     "eventDetailTitle": "拦截详情",
     "blockedContent": "被拦截内容",
     "close": "关闭",
-    "blockedRequests": "拦截次数"
+    "blockedRequests": "拦截次数",
+    "judgeInactive": "LLM 审核员未配置或未启用，防火墙当前不会拦截任何请求。请前往 设置 → 内容防火墙 配置。",
+    "action": {
+      "all": "全部事件",
+      "blocked": "已拦截",
+      "marked": "已标记"
+    }
   },
   "requestLogs": {
     "title": "请求日志",

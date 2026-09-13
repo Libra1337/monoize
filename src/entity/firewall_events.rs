@@ -22,6 +22,8 @@ pub struct Model {
     pub term: String,
     #[sea_orm(column_type = "Text")]
     pub content: String,
+    #[sea_orm(default_value = "blocked", column_type = "Text")]
+    pub action: String,
     #[sea_orm(column_type = "Text")]
     pub created_at: String,
     pub created_at_unix_ms: i64,

@@ -71,42 +71,148 @@ fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> 
     ))
 }
 
-/// CF-14..CF-23: request-side prohibited-word firewall. Runs after the model
-/// allowlist and before routing, the balance gate, request-log admission, and
-/// any upstream I/O, so a rejection never reaches a provider.
+/// CF-14..CF-32: request-side content firewall. Runs after the model allowlist
+/// and before routing, the balance gate, request-log admission, and any
+/// upstream I/O, so a rejection never reaches a provider. The LLM judge is the
+/// only decision-maker (CF-31): keyword matches are hints for the judge and the
+/// mark trigger, never a rejection by themselves.
 #[allow(clippy::result_large_err)]
 async fn ensure_content_allowed(
     state: &AppState,
+    headers: &HeaderMap,
     auth: &crate::auth::AuthResult,
     endpoint: &str,
     model: &str,
     scanned: &[&str],
 ) -> AppResult<()> {
-    let blocked = {
-        let runtime = state.monoize_runtime.read().await;
-        if !runtime.moderation_enabled {
-            None
-        } else {
-            runtime.content_firewall.as_ref().and_then(|firewall| {
-                scanned.iter().find_map(|text| {
-                    firewall
-                        .find_blocked_term(text)
-                        .map(|term| (term.to_string(), *text))
-                })
-            })
+    // CF-29: judge traffic routed back through the gateway carries the
+    // process-local bypass token; skip checks so the judge cannot recurse.
+    if headers
+        .get("x-monoize-moderation-bypass")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|token| token == state.moderation_bypass_token)
+    {
+        return Ok(());
+    }
+
+    let runtime = state.monoize_runtime.read().await;
+    if !runtime.moderation_enabled {
+        return Ok(());
+    }
+    let keyword_hits: Vec<String> = runtime
+        .content_firewall
+        .as_ref()
+        .map(|firewall| {
+            scanned
+                .iter()
+                .filter_map(|text| firewall.find_blocked_term(text))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect()
+        })
+        .unwrap_or_default();
+    let judge = &runtime.moderation_judge;
+    if !judge.is_active() {
+        // CF-31: fail-open when the judge is not enabled or configured.
+        return Ok(());
+    }
+
+    let user_message = crate::moderation_judge::build_user_message(&keyword_hits, scanned);
+    let verdict = crate::moderation_judge::call_judge(crate::moderation_judge::JudgeCall {
+        http: &state.http,
+        config: judge,
+        bypass_token: &state.moderation_bypass_token,
+        user_message,
+    })
+    .await;
+    drop(runtime);
+
+    let category = match verdict {
+        Ok(category) => category,
+        Err(judge_error) => {
+            // CF-31: a judge failure never blocks, even with keyword hits.
+            tracing::warn!(
+                user_id = ?auth.user_id,
+                api_key_id = ?auth.api_key_id,
+                error = %judge_error,
+                "content firewall judge failed; failing open"
+            );
+            return Ok(());
         }
     };
-    let Some((term, text)) = blocked else {
+
+    if category == crate::moderation_judge::CATEGORY_BENIGN {
+        // CF-30: benign verdicts are allowed; record an event only for
+        // keyword-flagged text so borderline requests stay auditable.
+        if let Some(term) = keyword_hits.first() {
+            let text = scanned
+                .iter()
+                .find(|text| {
+                    text.to_lowercase().contains(term.as_str())
+                })
+                .copied()
+                .unwrap_or_default();
+            tracing::info!(
+                user_id = ?auth.user_id,
+                api_key_id = ?auth.api_key_id,
+                term,
+                "content firewall marked request as benign"
+            );
+            persist_firewall_event(
+                state,
+                auth,
+                endpoint,
+                model,
+                crate::firewall_events::ACTION_MARKED,
+                term,
+                text,
+            )
+            .await;
+        }
         return Ok(());
-    };
+    }
+
+    // CF-15/CF-32: porn and political verdicts reject with the judge category.
+    let reason = format!("prohibited category '{category}'");
     tracing::warn!(
         user_id = ?auth.user_id,
         api_key_id = ?auth.api_key_id,
-        term,
+        category,
         "content firewall blocked request"
     );
-    // CF-22: a persistence failure never changes the rejection outcome.
-    let record_result = crate::firewall_events::record_event(
+    let text = scanned.first().copied().unwrap_or_default();
+    persist_firewall_event(
+        state,
+        auth,
+        endpoint,
+        model,
+        crate::firewall_events::ACTION_BLOCKED,
+        category,
+        text,
+    )
+    .await;
+    Err(AppError::new(
+        StatusCode::FORBIDDEN,
+        "content_blocked",
+        format!("request blocked by content firewall: {reason}"),
+    )
+    .with_type("content_policy_violation"))
+}
+
+/// CF-22: a persistence failure never changes the enforcement outcome.
+async fn persist_firewall_event(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    endpoint: &str,
+    model: &str,
+    action: &'static str,
+    term: &str,
+    text: &str,
+) {
+    if let Err(error) = crate::firewall_events::record_event(
         &state.db_pool,
         crate::firewall_events::NewFirewallEvent {
             user_id: auth.user_id.clone(),
@@ -115,24 +221,19 @@ async fn ensure_content_allowed(
             api_key_name: auth.api_key_name.clone(),
             endpoint: endpoint.to_string(),
             model: model.to_string(),
+            term: term.to_string(),
             content: crate::firewall_events::content_of(text),
-            term: term.clone(),
+            action,
         },
     )
-    .await;
-    if let Err(error) = record_result {
+    .await
+    {
         tracing::warn!(error = %error, "failed to persist firewall event");
     }
-    Err(AppError::new(
-        StatusCode::FORBIDDEN,
-        "content_blocked",
-        format!("request blocked by content firewall: prohibited term '{term}'"),
-    )
-    .with_type("content_policy_violation"))
 }
 
 /// CF-7..CF-10: text carried by a decoded URP request, regardless of node role.
-fn urp_request_texts<'a>(req: &'a urp::UrpRequest) -> Vec<&'a str> {
+fn urp_request_texts(req: &urp::UrpRequest) -> Vec<&str> {
     let mut texts = Vec::with_capacity(req.input.len());
     for node in &req.input {
         match node {
@@ -390,7 +491,7 @@ pub async fn create_response(
     let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
-    ensure_content_allowed(&state, &auth, "responses", &req.model, &urp_request_texts(&req)).await?;
+    ensure_content_allowed(&state, &headers, &auth, "responses", &req.model, &urp_request_texts(&req)).await?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
@@ -485,7 +586,7 @@ pub async fn create_chat_completions(
     let mut req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
-    ensure_content_allowed(&state, &auth, "chat_completions", &req.model, &urp_request_texts(&req)).await?;
+    ensure_content_allowed(&state, &headers, &auth, "chat_completions", &req.model, &urp_request_texts(&req)).await?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
@@ -578,7 +679,7 @@ async fn create_messages_inner(
     let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
-    ensure_content_allowed(&state, &auth, "messages", &req.model, &urp_request_texts(&req)).await?;
+    ensure_content_allowed(&state, &headers, &auth, "messages", &req.model, &urp_request_texts(&req)).await?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
@@ -712,6 +813,7 @@ pub async fn create_embeddings(
     }
     ensure_content_allowed(
         &state,
+        &headers,
         &auth,
         "embeddings",
         &logical_model,
