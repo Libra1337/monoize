@@ -241,7 +241,8 @@ discussion that merely mentions or prohibits these topics, and agent or
 tool system prompts and defensive security policy text; `uncertain` is the
 mandatory answer whenever the judge cannot decide, so that a borderline
 text is never forced into a blocking category. The `reason` field must
-state the concrete evidence for the verdict. The user message contains the
+state the concrete evidence for the verdict, written in Simplified
+Chinese. The user message contains the
 keyword matches (CF-5) followed by the CF-7..CF-12 scanned strings joined
 with newlines and truncated to at most 6000 Unicode scalar values in
 total. The request carries the loop-guard header of CF-29.

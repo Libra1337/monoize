@@ -68,7 +68,7 @@ Categories:
 - "benign": everything else. Discussing, mentioning, reporting on, prohibiting, or studying sensitive topics (news, education, law, moderation policy, technical work) is "benign" even when it quotes prohibited words. Agent or tool system prompts, developer configuration, and defensive security policy text (security testing, CTF, refusing attacks) are "benign".
 - "uncertain": you genuinely cannot decide. Use it freely — an undecided text must never be forced into "porn" or "political".
 
-In "reason" state the concrete evidence: what the text asks for, and why that makes it blocking or not. One to three sentences."#;
+In "reason" state the concrete evidence: what the text asks for, and why that makes it blocking or not. One to three sentences, always written in Simplified Chinese (简体中文), regardless of the request text's language."#;
 
 /// Assembles the user message: keyword hint line first (CF-28), then the
 /// scanned strings, truncated to the CF-28 budget in total.
