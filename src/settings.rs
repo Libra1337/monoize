@@ -75,6 +75,8 @@ pub struct SystemSettings {
     pub monoize_affinity_idle_ttl_seconds: u64,
     pub monoize_affinity_failback_mode: AffinityFailbackMode,
     pub monoize_affinity_failback_delay_seconds: u64,
+    pub moderation_enabled: bool,
+    pub moderation_blocked_words: String,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -216,6 +218,8 @@ impl Default for SystemSettings {
             monoize_affinity_idle_ttl_seconds: 30 * 60,
             monoize_affinity_failback_mode: AffinityFailbackMode::Sticky,
             monoize_affinity_failback_delay_seconds: 5 * 60,
+            moderation_enabled: true,
+            moderation_blocked_words: crate::content_firewall::DEFAULT_BLOCKED_WORDS.to_string(),
             updated_at: Utc::now(),
         }
     }
@@ -424,6 +428,16 @@ impl SettingsStore {
         self.set_if_not_exists(
             "monoize_affinity_failback_delay_seconds",
             &defaults.monoize_affinity_failback_delay_seconds.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "moderation_enabled",
+            &defaults.moderation_enabled.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "moderation_blocked_words",
+            &defaults.moderation_blocked_words,
         )
         .await?;
         Ok(())
@@ -743,6 +757,12 @@ impl SettingsStore {
                     settings.monoize_affinity_failback_delay_seconds =
                         row.value.parse().unwrap_or(5 * 60);
                 }
+                "moderation_enabled" => {
+                    settings.moderation_enabled = row.value.parse().unwrap_or(true);
+                }
+                "moderation_blocked_words" => {
+                    settings.moderation_blocked_words = row.value;
+                }
                 _ => {}
             }
         }
@@ -897,6 +917,14 @@ impl SettingsStore {
             (
                 "monoize_affinity_failback_delay_seconds",
                 settings.monoize_affinity_failback_delay_seconds.to_string(),
+            ),
+            (
+                "moderation_enabled",
+                settings.moderation_enabled.to_string(),
+            ),
+            (
+                "moderation_blocked_words",
+                settings.moderation_blocked_words.clone(),
             ),
         ];
 

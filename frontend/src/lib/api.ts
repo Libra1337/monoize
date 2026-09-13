@@ -413,6 +413,8 @@ export interface SystemSettings {
   monoize_request_capture_enabled: boolean;
   monoize_request_capture_retention_days: number;
   monoize_mask_sensitive_info: boolean;
+  moderation_enabled: boolean;
+  moderation_blocked_words: string;
   pricing_profile_model_patterns: PricingProfilePattern[];
   updated_at: string;
 }
@@ -1122,6 +1124,53 @@ export interface RequestLogsResponse {
   total_charge_nano_usd: string;
 }
 
+export interface FirewallEvent {
+  id: string;
+  user_id: string | null;
+  username: string | null;
+  api_key_id: string | null;
+  api_key_name: string | null;
+  endpoint: string;
+  model: string;
+  term: string;
+  content: string;
+  created_at: string;
+  created_at_unix_ms: number;
+}
+
+export interface FirewallEventsResponse {
+  data: FirewallEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+  server_time_ms: number;
+}
+
+export interface FirewallDailyCount {
+  date: string;
+  count: number;
+}
+
+export interface FirewallTermCount {
+  term: string;
+  count: number;
+}
+
+export interface FirewallStats {
+  total: number;
+  last_24h: number;
+  last_7d: number;
+  distinct_users: number;
+  daily: FirewallDailyCount[];
+  top_terms: FirewallTermCount[];
+}
+
+export interface FirewallEventsFilter {
+  term?: string;
+  since_ms?: number;
+  until_ms?: number;
+}
+
 export interface ChannelTestResult {
   success: boolean;
   latency_ms: number;
@@ -1736,6 +1785,24 @@ class ApiClient {
     if (filters?.time_from) params.set("time_from", filters.time_from);
     if (filters?.time_to) params.set("time_to", filters.time_to);
     return this.request(`/request-logs?${params.toString()}`);
+  }
+
+  async getFirewallStats(): Promise<FirewallStats> {
+    return this.request("/firewall/stats");
+  }
+
+  async listFirewallEvents(
+    limit = 50,
+    offset = 0,
+    filters?: FirewallEventsFilter
+  ): Promise<FirewallEventsResponse> {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+    if (filters?.term) params.set("term", filters.term);
+    if (filters?.since_ms !== undefined) params.set("since_ms", String(filters.since_ms));
+    if (filters?.until_ms !== undefined) params.set("until_ms", String(filters.until_ms));
+    return this.request(`/firewall/events?${params.toString()}`);
   }
 
   async getRequestCapture(requestId: string, userId?: string): Promise<RequestCaptureDetail> {

@@ -2573,6 +2573,7 @@ name = "monoize"
 version = "1.6.0"
 dependencies = [
  "aes-gcm",
+ "aho-corasick",
  "argon2",
  "async-trait",
  "axum",

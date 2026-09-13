@@ -31,6 +31,7 @@ import { AccessSection } from "@/components/settings/access-section";
 import { AffinitySection } from "@/components/settings/affinity-section";
 import { HealthSection } from "@/components/settings/health-section";
 import { ExtraFieldsSection } from "@/components/settings/extra-fields-section";
+import { ContentFirewallSection } from "@/components/settings/content-firewall-section";
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -182,6 +183,8 @@ export function SettingsPage() {
         return <HealthSection settings={currentSettings} onChange={handleChange} />;
       case "extra":
         return <ExtraFieldsSection settings={currentSettings} onChange={handleChange} />;
+      case "moderation":
+        return <ContentFirewallSection settings={currentSettings} onChange={handleChange} />;
     }
   };
 

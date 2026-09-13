@@ -244,6 +244,7 @@
     "storeManagement": "Store Management",
     "ordersAdmin": "Order Statistics",
     "salesManagement": "Sales",
+    "firewall": "Firewall",
     "workspace": "Workspace",
     "modeSwitch": "Switch workspace",
     "orgsAdmin": "Org spaces"
@@ -1276,7 +1277,16 @@
     "extraFieldsWhitelist": "Extra Fields Whitelist",
     "extraFieldsWhitelistDescription": "Additional fields allowed to pass through to each upstream API type, extending the built-in defaults.",
     "extraFieldsWhitelistPlaceholder": "field1, field2, ...",
-    "extraFieldsWhitelistHelp": "Comma-separated field names per provider type. Leave empty to use built-in defaults only."
+    "extraFieldsWhitelistHelp": "Comma-separated field names per provider type. Leave empty to use built-in defaults only.",
+    "contentFirewall": "Content Firewall",
+    "contentFirewallDescription": "Reject requests whose text contains a prohibited term before any upstream model call.",
+    "contentFirewallGroupSwitch": "Enforcement",
+    "contentFirewallGroupWords": "Prohibited Terms",
+    "contentFirewallEnabled": "Enable Content Firewall",
+    "contentFirewallEnabledDescription": "When on, a request whose text matches a prohibited term is rejected with 403 before any upstream call. Applies to every caller; no exemptions.",
+    "contentFirewallWords": "Prohibited Term List",
+    "contentFirewallWordsPlaceholder": "one term per line",
+    "contentFirewallWordsDescription": "One term per line; {{termCount}} active. Matching is case-insensitive substring matching."
   },
   "providers": {
     "title": "Providers",
@@ -1787,6 +1797,43 @@
     "currencyUnavailable": "The CNY exchange rate is unavailable. Select USD or retry later.",
     "noModels": "No models available",
     "noModelsDesc": "Change the filters or ask an administrator to publish priced models."
+  },
+  "firewall": {
+    "title": "Content Firewall",
+    "description": "Blocked request events, counts, and matched prohibited terms.",
+    "last24h": "Blocked (24h)",
+    "last7d": "Blocked (7d)",
+    "totalBlocked": "Total Blocked",
+    "affectedUsers": "Affected Users",
+    "trendTitle": "Blocked Requests (Last 14 Days)",
+    "topTermsTitle": "Most Hit Terms",
+    "noBlocks": "No blocked requests",
+    "searchTermPlaceholder": "Filter by term…",
+    "search": "Search",
+    "range": {
+      "24h": "Last 24 hours",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days",
+      "all": "All time"
+    },
+    "noEvents": "No events",
+    "noEventsDescription": "No blocked requests match the current filters.",
+    "column": {
+      "time": "Time",
+      "user": "User",
+      "endpoint": "Endpoint",
+      "model": "Model",
+      "term": "Matched Term",
+      "content": "Content",
+      "apiKey": "API Key"
+    },
+    "showing": "Showing {{from}}–{{to}} of {{total}}",
+    "prevPage": "Previous",
+    "nextPage": "Next",
+    "eventDetailTitle": "Blocked Request Detail",
+    "blockedContent": "Blocked Content",
+    "close": "Close",
+    "blockedRequests": "Blocked Requests"
   },
   "requestLogs": {
     "title": "Request Logs",

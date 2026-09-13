@@ -3,6 +3,7 @@ pub mod billing_ledger;
 pub mod billing_plans;
 pub mod billing_rate_records;
 pub mod file_bytes;
+pub mod firewall_events;
 pub mod model_metadata_records;
 pub mod model_registry_records;
 pub mod monoize_groups;
@@ -20,6 +21,7 @@ pub mod prelude {
     pub use super::billing_plans::Entity as BillingPlans;
     pub use super::billing_rate_records::Entity as BillingRateRecords;
     pub use super::file_bytes::Entity as FileBytes;
+    pub use super::firewall_events::Entity as FirewallEvents;
     pub use super::model_metadata_records::Entity as ModelMetadataRecords;
     pub use super::model_registry_records::Entity as ModelRegistryRecords;
     pub use super::monoize_groups::Entity as MonoizeGroups;

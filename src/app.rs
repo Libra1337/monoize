@@ -2099,6 +2099,9 @@ pub(crate) fn runtime_config_from_settings(
     runtime.affinity_failback_mode = settings_snapshot.monoize_affinity_failback_mode;
     runtime.affinity_failback_delay_seconds =
         settings_snapshot.monoize_affinity_failback_delay_seconds;
+    runtime.moderation_enabled = settings_snapshot.moderation_enabled;
+    runtime.content_firewall =
+        crate::content_firewall::ContentFirewall::compile(&settings_snapshot.moderation_blocked_words);
     runtime
 }
 
@@ -2942,6 +2945,14 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/admin/overview",
             get(crate::dashboard_handlers::get_admin_overview),
+        )
+        .route(
+            "/dashboard/firewall/stats",
+            get(crate::dashboard_handlers::get_firewall_stats),
+        )
+        .route(
+            "/dashboard/firewall/events",
+            get(crate::dashboard_handlers::list_firewall_events),
         )
         .route(
             "/dashboard/admin/usage-ranking",

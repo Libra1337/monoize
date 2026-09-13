@@ -244,6 +244,7 @@
     "storeManagement": "商店管理",
     "ordersAdmin": "訂單統計",
     "salesManagement": "銷售管理",
+    "firewall": "內容防火牆",
     "workspace": "工作台",
     "modeSwitch": "切換空間",
     "orgsAdmin": "組織空間管理"
@@ -1273,7 +1274,16 @@
     "extraFieldsWhitelist": "額外欄位白名單",
     "extraFieldsWhitelistDescription": "設定允許透傳到每種上游 API 類型的額外欄位，擴展內建預設值。",
     "extraFieldsWhitelistPlaceholder": "field1, field2, ...",
-    "extraFieldsWhitelistHelp": "每種上游類型以逗號分隔的欄位名稱。留空則僅使用內建預設值。"
+    "extraFieldsWhitelistHelp": "每種上游類型以逗號分隔的欄位名稱。留空則僅使用內建預設值。",
+    "contentFirewall": "內容防火牆",
+    "contentFirewallDescription": "請求文字命中違禁詞時，在任何上游模型呼叫之前直接拒絕。",
+    "contentFirewallGroupSwitch": "攔截開關",
+    "contentFirewallGroupWords": "違禁詞表",
+    "contentFirewallEnabled": "啟用內容防火牆",
+    "contentFirewallEnabledDescription": "開啟後，文字命中違禁詞的請求會在呼叫上游模型之前以 403 拒絕。對所有呼叫方生效，無豁免。",
+    "contentFirewallWords": "違禁詞列表",
+    "contentFirewallWordsPlaceholder": "每行一個詞",
+    "contentFirewallWordsDescription": "每行一個詞，目前 {{termCount}} 個。比對規則為不分大小寫的子字串比對。"
   },
   "providers": {
     "title": "服務供應商",
@@ -1784,6 +1794,43 @@
     "currencyUnavailable": "人民幣匯率暫時無法使用。請選擇美元或稍後重試。",
     "noModels": "尚無可用模型",
     "noModelsDesc": "請調整篩選條件，或請管理員發佈已定價的模型。"
+  },
+  "firewall": {
+    "title": "內容防火牆",
+    "description": "被攔截請求的事件、次數與命中的違禁詞。",
+    "last24h": "近 24 小時攔截",
+    "last7d": "近 7 天攔截",
+    "totalBlocked": "累計攔截",
+    "affectedUsers": "涉及使用者",
+    "trendTitle": "近 14 天攔截趨勢",
+    "topTermsTitle": "高頻命中違禁詞",
+    "noBlocks": "暫無攔截記錄",
+    "searchTermPlaceholder": "依違禁詞篩選…",
+    "search": "搜尋",
+    "range": {
+      "24h": "近 24 小時",
+      "7d": "近 7 天",
+      "30d": "近 30 天",
+      "all": "全部時間"
+    },
+    "noEvents": "暫無事件",
+    "noEventsDescription": "目前篩選條件下沒有被攔截的請求。",
+    "column": {
+      "time": "時間",
+      "user": "使用者",
+      "endpoint": "入口",
+      "model": "模型",
+      "term": "命中違禁詞",
+      "content": "內容",
+      "apiKey": "API 金鑰"
+    },
+    "showing": "顯示第 {{from}}–{{to}} 筆，共 {{total}} 筆",
+    "prevPage": "上一頁",
+    "nextPage": "下一頁",
+    "eventDetailTitle": "攔截詳情",
+    "blockedContent": "被攔截內容",
+    "close": "關閉",
+    "blockedRequests": "攔截次數"
   },
   "requestLogs": {
     "title": "請求日誌",

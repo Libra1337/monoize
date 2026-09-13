@@ -27,6 +27,9 @@ mod usage_cache_scope;
 #[path = "api/adapters_nonstream.rs"]
 mod adapters_nonstream;
 
+#[path = "api/content_firewall.rs"]
+mod content_firewall;
+
 #[path = "api/streaming_responses.rs"]
 mod streaming_responses;
 

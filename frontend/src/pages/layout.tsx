@@ -26,6 +26,7 @@ import {
   HeartPulse,
   Activity,
   Building2,
+  ShieldAlert,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -192,6 +193,7 @@ function Sidebar({
     { to: "/dashboard/orgs-admin", icon: Building2, label: t("nav.orgsAdmin") },
     { to: "/dashboard/orders-admin", icon: ReceiptText, label: t("nav.ordersAdmin") },
     { to: "/dashboard/sales-admin", icon: HandCoins, label: t("nav.salesManagement") },
+    { to: "/dashboard/firewall", icon: ShieldAlert, label: t("nav.firewall") },
     { to: "/dashboard/admin-settings", icon: Settings, label: t("nav.settings") },
   ];
 

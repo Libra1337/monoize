@@ -244,6 +244,7 @@
     "storeManagement": "ストア管理",
     "ordersAdmin": "注文統計",
     "salesManagement": "セールス管理",
+    "firewall": "ファイアウォール",
     "workspace": "ワークスペース",
     "modeSwitch": "スペース切替",
     "orgsAdmin": "組織スペース"
@@ -1273,7 +1274,16 @@
     "extraFieldsWhitelist": "追加フィールドホワイトリスト",
     "extraFieldsWhitelistDescription": "各上流APIタイプに透過を許可する追加フィールドを設定します。組み込みデフォルトを拡張します。",
     "extraFieldsWhitelistPlaceholder": "field1, field2, ...",
-    "extraFieldsWhitelistHelp": "上流タイプごとのカンマ区切りフィールド名。空欄の場合は組み込みデフォルトのみ使用します。"
+    "extraFieldsWhitelistHelp": "上流タイプごとのカンマ区切りフィールド名。空欄の場合は組み込みデフォルトのみ使用します。",
+    "contentFirewall": "コンテンツファイアウォール",
+    "contentFirewallDescription": "リクエスト本文が禁止語に一致した場合、上流モデルの呼び出し前に拒否します。",
+    "contentFirewallGroupSwitch": "適用設定",
+    "contentFirewallGroupWords": "禁止語リスト",
+    "contentFirewallEnabled": "コンテンツファイアウォールを有効化",
+    "contentFirewallEnabledDescription": "有効にすると、禁止語に一致したリクエストは上流呼び出し前に 403 で拒否されます。すべての呼び出し元に適用され、例外はありません。",
+    "contentFirewallWords": "禁止語一覧",
+    "contentFirewallWordsPlaceholder": "1行に1語",
+    "contentFirewallWordsDescription": "1行に1語、現在 {{termCount}} 語。照合は大文字小文字を区別しない部分一致です。"
   },
   "providers": {
     "title": "プロバイダー",
@@ -1783,6 +1793,43 @@
     "currencyUnavailable": "CNY 為替レートを取得できません。USD を選択するか、後で再試行してください。",
     "noModels": "利用可能なモデルがありません",
     "noModelsDesc": "フィルターを変更するか、管理者に料金設定済みモデルの公開を依頼してください。"
+  },
+  "firewall": {
+    "title": "コンテンツファイアウォール",
+    "description": "拒否されたリクエストのイベント、回数、一致した禁止語。",
+    "last24h": "24時間の拒否",
+    "last7d": "7日間の拒否",
+    "totalBlocked": "累計拒否",
+    "affectedUsers": "対象ユーザー",
+    "trendTitle": "直近14日間の拒否推移",
+    "topTermsTitle": "検出回数の多い禁止語",
+    "noBlocks": "拒否記録はありません",
+    "searchTermPlaceholder": "禁止語で絞り込み…",
+    "search": "検索",
+    "range": {
+      "24h": "直近24時間",
+      "7d": "直近7日間",
+      "30d": "直近30日間",
+      "all": "全期間"
+    },
+    "noEvents": "イベントなし",
+    "noEventsDescription": "現在の条件に一致する拒否リクエストはありません。",
+    "column": {
+      "time": "時刻",
+      "user": "ユーザー",
+      "endpoint": "エンドポイント",
+      "model": "モデル",
+      "term": "一致した禁止語",
+      "content": "内容",
+      "apiKey": "APIキー"
+    },
+    "showing": "{{total}} 件中 {{from}}–{{to}} 件を表示",
+    "prevPage": "前へ",
+    "nextPage": "次へ",
+    "eventDetailTitle": "拒否リクエストの詳細",
+    "blockedContent": "拒否された内容",
+    "close": "閉じる",
+    "blockedRequests": "拒否回数"
   },
   "requestLogs": {
     "title": "リクエストログ",

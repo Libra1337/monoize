@@ -394,6 +394,9 @@ pub struct MonoizeRuntimeConfig {
     pub affinity_idle_ttl_seconds: u64,
     pub affinity_failback_mode: AffinityFailbackMode,
     pub affinity_failback_delay_seconds: u64,
+    pub moderation_enabled: bool,
+    #[serde(skip)]
+    pub content_firewall: Option<crate::content_firewall::ContentFirewall>,
 }
 
 impl Default for MonoizeRuntimeConfig {
@@ -426,6 +429,10 @@ impl Default for MonoizeRuntimeConfig {
             affinity_idle_ttl_seconds: 30 * 60,
             affinity_failback_mode: AffinityFailbackMode::Sticky,
             affinity_failback_delay_seconds: 5 * 60,
+            moderation_enabled: true,
+            content_firewall: crate::content_firewall::ContentFirewall::compile(
+                crate::content_firewall::DEFAULT_BLOCKED_WORDS,
+            ),
         }
     }
 }

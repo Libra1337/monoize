@@ -244,6 +244,7 @@
     "storeManagement": "商店管理",
     "ordersAdmin": "订单统计",
     "salesManagement": "销售管理",
+    "firewall": "内容防火墙",
     "workspace": "工作台",
     "modeSwitch": "切换空间",
     "orgsAdmin": "组织空间管理"
@@ -1276,7 +1277,16 @@
     "extraFieldsWhitelist": "额外字段白名单",
     "extraFieldsWhitelistDescription": "配置允许透传到每种上游 API 类型的额外字段，扩展内置默认值。",
     "extraFieldsWhitelistPlaceholder": "field1, field2, ...",
-    "extraFieldsWhitelistHelp": "每种上游类型的逗号分隔字段名。留空则仅使用内置默认值。"
+    "extraFieldsWhitelistHelp": "每种上游类型的逗号分隔字段名。留空则仅使用内置默认值。",
+    "contentFirewall": "内容防火墙",
+    "contentFirewallDescription": "请求文本命中违禁词时，在任何上游模型调用之前直接拒绝。",
+    "contentFirewallGroupSwitch": "拦截开关",
+    "contentFirewallGroupWords": "违禁词表",
+    "contentFirewallEnabled": "启用内容防火墙",
+    "contentFirewallEnabledDescription": "开启后，文本命中违禁词的请求会在调用上游模型之前以 403 拒绝。对所有调用方生效，无豁免。",
+    "contentFirewallWords": "违禁词列表",
+    "contentFirewallWordsPlaceholder": "每行一个词",
+    "contentFirewallWordsDescription": "每行一个词，当前 {{termCount}} 个。匹配规则为忽略大小写的子串匹配。"
   },
   "providers": {
     "title": "服务提供者",
@@ -1787,6 +1797,43 @@
     "currencyUnavailable": "人民币汇率暂不可用。请选择美元或稍后重试。",
     "noModels": "暂无可用模型",
     "noModelsDesc": "请调整筛选条件，或让管理员发布已定价的模型。"
+  },
+  "firewall": {
+    "title": "内容防火墙",
+    "description": "被拦截请求的事件、次数与命中的违禁词。",
+    "last24h": "近 24 小时拦截",
+    "last7d": "近 7 天拦截",
+    "totalBlocked": "累计拦截",
+    "affectedUsers": "涉及用户",
+    "trendTitle": "近 14 天拦截趋势",
+    "topTermsTitle": "高频命中违禁词",
+    "noBlocks": "暂无拦截记录",
+    "searchTermPlaceholder": "按违禁词筛选…",
+    "search": "搜索",
+    "range": {
+      "24h": "近 24 小时",
+      "7d": "近 7 天",
+      "30d": "近 30 天",
+      "all": "全部时间"
+    },
+    "noEvents": "暂无事件",
+    "noEventsDescription": "当前筛选条件下没有被拦截的请求。",
+    "column": {
+      "time": "时间",
+      "user": "用户",
+      "endpoint": "入口",
+      "model": "模型",
+      "term": "命中违禁词",
+      "content": "内容",
+      "apiKey": "API 密钥"
+    },
+    "showing": "显示第 {{from}}–{{to}} 条，共 {{total}} 条",
+    "prevPage": "上一页",
+    "nextPage": "下一页",
+    "eventDetailTitle": "拦截详情",
+    "blockedContent": "被拦截内容",
+    "close": "关闭",
+    "blockedRequests": "拦截次数"
   },
   "requestLogs": {
     "title": "请求日志",

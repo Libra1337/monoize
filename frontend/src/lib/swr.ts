@@ -40,6 +40,9 @@ import type {
   UserLiveUsage,
   ApiKeyChannelConflict,
   AccountClass,
+  FirewallStats,
+  FirewallEventsResponse,
+  FirewallEventsFilter,
 } from "./api";
 
 // SWR fetcher functions
@@ -92,6 +95,8 @@ export const SWR_KEYS = {
   ADMIN_OVERVIEW: "/dashboard/admin/overview",
   ADMIN_USAGE: "/dashboard/admin/usage-ranking",
   LIVE_USAGE: "/dashboard/me/live-usage",
+  FIREWALL_STATS: "/dashboard/firewall/stats",
+  FIREWALL_EVENTS: "/dashboard/firewall/events",
 } as const;
 
 export function providerDetailSWRKey(providerId: string) {
@@ -338,6 +343,28 @@ export function useMarketplaceModels(groupId?: string, config?: SWRConfiguration
   return useSWR<ModelMetadataRecord[]>(
     groupId ? `${SWR_KEYS.MARKETPLACE_MODELS}?group_id=${groupId}` : SWR_KEYS.MARKETPLACE_MODELS,
     () => fetchers.marketplaceModels(groupId),
+    { ...defaultConfig, ...config }
+  );
+}
+
+export function useFirewallStats(config?: SWRConfiguration) {
+  return useSWR<FirewallStats>(
+    SWR_KEYS.FIREWALL_STATS,
+    () => api.getFirewallStats(),
+    { ...defaultConfig, ...config }
+  );
+}
+
+export function useFirewallEvents(
+  limit = 50,
+  offset = 0,
+  filters?: FirewallEventsFilter,
+  config?: SWRConfiguration
+) {
+  const filterKey = filters ? JSON.stringify(filters) : "";
+  return useSWR<FirewallEventsResponse>(
+    `${SWR_KEYS.FIREWALL_EVENTS}?limit=${limit}&offset=${offset}&f=${filterKey}`,
+    () => api.listFirewallEvents(limit, offset, filters),
     { ...defaultConfig, ...config }
   );
 }

@@ -29,7 +29,7 @@ preserve an administrator-defined site name.
 
 ## 1. Category model
 
-SSU-1. The page MUST partition the editable settings fields into exactly 9 categories with
+SSU-1. The page MUST partition the editable settings fields into exactly 10 categories with
 these stable ids, in this order:
 
 | # | id | title key | fields |
@@ -43,6 +43,7 @@ these stable ids, in this order:
 | 07 | `affinity` | `settings.affinityRouting` | `monoize_affinity_enabled`, `monoize_affinity_failback_mode`, `monoize_affinity_idle_ttl_seconds`, `monoize_affinity_failback_delay_seconds` |
 | 08 | `health` | `settings.healthMonitoring` | `monoize_active_probe_enabled`, `monoize_active_probe_interval_seconds`, `monoize_active_probe_success_threshold`, `monoize_active_probe_model`, `monoize_passive_failure_threshold`, `monoize_passive_cooldown_seconds`, `monoize_passive_window_seconds`, `monoize_passive_min_samples`, `monoize_passive_failure_rate_threshold`, `monoize_passive_rate_limit_cooldown_seconds`, `monoize_request_capture_enabled`, `monoize_mask_sensitive_info`, `monoize_request_capture_retention_days`, `monoize_enable_estimated_billing`, `monoize_strip_cross_protocol_nested_extra`, `monoize_request_timeout_ms` |
 | 09 | `extra` | `settings.extraFieldsWhitelist` | `monoize_extra_fields_whitelist` (sub-keys `chat_completion`, `responses`, `messages`, `gemini`) |
+| 10 | `moderation` | `settings.contentFirewall` | `moderation_enabled`, `moderation_blocked_words` (behavior: `content-firewall.spec.md`) |
 
 SSU-2. Every field listed in SSU-1 MUST be editable through exactly one category panel.
 No field present in the pre-redesign page may become unreachable.
@@ -53,7 +54,7 @@ Save MUST pass them through unchanged from the current draft object.
 ## 2. Horizontal category rail
 
 SSU-4. Below the page header the page MUST render exactly one horizontal category rail
-that lists all 9 categories of SSU-1 in SSU-1 order.
+that lists all 10 categories of SSU-1 in SSU-1 order.
 
 SSU-5. The rail MUST lay its items out in a single horizontal row. The row MUST NOT wrap.
 When the row's content width exceeds the available width, the rail MUST scroll

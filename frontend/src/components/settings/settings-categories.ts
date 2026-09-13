@@ -3,7 +3,7 @@
  *
  * Order and ids are part of the UI contract defined in
  * `spec/system-settings-ui.spec.md` (SSU-1): the horizontal rail renders these
- * entries in array order and numbers them 01..09.
+ * entries in array order and numbers them 01..10.
  */
 export const SETTINGS_CATEGORIES = [
   {
@@ -50,6 +50,11 @@ export const SETTINGS_CATEGORIES = [
     id: "extra",
     titleKey: "settings.extraFieldsWhitelist",
     descriptionKey: "settings.extraFieldsWhitelistDescription",
+  },
+  {
+    id: "moderation",
+    titleKey: "settings.contentFirewall",
+    descriptionKey: "settings.contentFirewallDescription",
   },
 ] as const;
 

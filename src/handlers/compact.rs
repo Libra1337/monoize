@@ -61,6 +61,14 @@ pub async fn compact_response(
     let max_multiplier = resolve_max_multiplier_for_embeddings(&body, &headers, &auth);
     let routing_request = urp::decode::openai_responses::decode_request(&body)
         .map_err(|message| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message))?;
+    ensure_content_allowed(
+        &state,
+        &auth,
+        "responses_compact",
+        &logical_model,
+        &urp_request_texts(&routing_request),
+    )
+    .await?;
     let routing_stub = build_routing_stub(&routing_request, max_multiplier);
     let mut attempts = build_monoize_attempts_for_provider_type(
         &state,

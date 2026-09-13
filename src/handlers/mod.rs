@@ -71,6 +71,100 @@ fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> 
     ))
 }
 
+/// CF-14..CF-23: request-side prohibited-word firewall. Runs after the model
+/// allowlist and before routing, the balance gate, request-log admission, and
+/// any upstream I/O, so a rejection never reaches a provider.
+#[allow(clippy::result_large_err)]
+async fn ensure_content_allowed(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    endpoint: &str,
+    model: &str,
+    scanned: &[&str],
+) -> AppResult<()> {
+    let blocked = {
+        let runtime = state.monoize_runtime.read().await;
+        if !runtime.moderation_enabled {
+            None
+        } else {
+            runtime.content_firewall.as_ref().and_then(|firewall| {
+                scanned.iter().find_map(|text| {
+                    firewall
+                        .find_blocked_term(text)
+                        .map(|term| (term.to_string(), *text))
+                })
+            })
+        }
+    };
+    let Some((term, text)) = blocked else {
+        return Ok(());
+    };
+    tracing::warn!(
+        user_id = ?auth.user_id,
+        api_key_id = ?auth.api_key_id,
+        term,
+        "content firewall blocked request"
+    );
+    // CF-22: a persistence failure never changes the rejection outcome.
+    let record_result = crate::firewall_events::record_event(
+        &state.db_pool,
+        crate::firewall_events::NewFirewallEvent {
+            user_id: auth.user_id.clone(),
+            username: auth.username.clone(),
+            api_key_id: auth.api_key_id.clone(),
+            api_key_name: auth.api_key_name.clone(),
+            endpoint: endpoint.to_string(),
+            model: model.to_string(),
+            content: crate::firewall_events::content_of(text),
+            term: term.clone(),
+        },
+    )
+    .await;
+    if let Err(error) = record_result {
+        tracing::warn!(error = %error, "failed to persist firewall event");
+    }
+    Err(AppError::new(
+        StatusCode::FORBIDDEN,
+        "content_blocked",
+        format!("request blocked by content firewall: prohibited term '{term}'"),
+    )
+    .with_type("content_policy_violation"))
+}
+
+/// CF-7..CF-10: text carried by a decoded URP request, regardless of node role.
+fn urp_request_texts<'a>(req: &'a urp::UrpRequest) -> Vec<&'a str> {
+    let mut texts = Vec::with_capacity(req.input.len());
+    for node in &req.input {
+        match node {
+            urp::Node::Text { content, .. } | urp::Node::Refusal { content, .. } => {
+                texts.push(content.as_str());
+            }
+            urp::Node::Reasoning { content, summary, .. } => {
+                if let Some(content) = content {
+                    texts.push(content.as_str());
+                }
+                if let Some(summary) = summary {
+                    texts.push(summary.as_str());
+                }
+            }
+            urp::Node::ToolCall { arguments, .. } => {
+                texts.push(arguments.as_str());
+            }
+            _ => {}
+        }
+    }
+    texts
+}
+
+/// CF-11: embeddings input, already validated as a string or string array.
+fn embeddings_input_texts(input: &Value) -> Vec<&str> {
+    match input {
+        Value::String(text) => vec![text.as_str()],
+        Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn apply_first_model_redirect(
     model: &mut String,
     rules: &[crate::users::CompiledModelRedirectRule],
@@ -296,6 +390,7 @@ pub async fn create_response(
     let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
+    ensure_content_allowed(&state, &auth, "responses", &req.model, &urp_request_texts(&req)).await?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
@@ -390,6 +485,7 @@ pub async fn create_chat_completions(
     let mut req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
+    ensure_content_allowed(&state, &auth, "chat_completions", &req.model, &urp_request_texts(&req)).await?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
@@ -482,6 +578,7 @@ async fn create_messages_inner(
     let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
+    ensure_content_allowed(&state, &auth, "messages", &req.model, &urp_request_texts(&req)).await?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
@@ -613,6 +710,14 @@ pub async fn create_embeddings(
             "input must be string or array of strings",
         ));
     }
+    ensure_content_allowed(
+        &state,
+        &auth,
+        "embeddings",
+        &logical_model,
+        &embeddings_input_texts(input),
+    )
+    .await?;
 
     if let Some(encoding_format) = obj.get("encoding_format") {
         let encoding_format = encoding_format.as_str().ok_or_else(|| {

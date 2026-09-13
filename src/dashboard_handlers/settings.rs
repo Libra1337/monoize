@@ -49,6 +49,8 @@ pub struct UpdateSettingsRequest {
     pub monoize_affinity_idle_ttl_seconds: Option<u64>,
     pub monoize_affinity_failback_mode: Option<AffinityFailbackMode>,
     pub monoize_affinity_failback_delay_seconds: Option<u64>,
+    pub moderation_enabled: Option<bool>,
+    pub moderation_blocked_words: Option<String>,
 }
 
 pub async fn get_settings(
@@ -228,6 +230,12 @@ pub async fn update_settings(
     if let Some(v) = body.monoize_affinity_failback_delay_seconds {
         settings.monoize_affinity_failback_delay_seconds = v;
     }
+    if let Some(v) = body.moderation_enabled {
+        settings.moderation_enabled = v;
+    }
+    if let Some(v) = body.moderation_blocked_words {
+        settings.moderation_blocked_words = v;
+    }
 
     let updated = settings_store
         .update_all(&settings)
@@ -263,6 +271,9 @@ pub async fn update_settings(
         rt.affinity_idle_ttl_seconds = updated.monoize_affinity_idle_ttl_seconds.max(1);
         rt.affinity_failback_mode = updated.monoize_affinity_failback_mode;
         rt.affinity_failback_delay_seconds = updated.monoize_affinity_failback_delay_seconds;
+        rt.moderation_enabled = updated.moderation_enabled;
+        rt.content_firewall =
+            crate::content_firewall::ContentFirewall::compile(&updated.moderation_blocked_words);
     }
 
     let affinity_settings_after = (

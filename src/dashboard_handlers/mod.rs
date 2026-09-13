@@ -5,6 +5,7 @@ mod auth;
 mod billing_plans;
 mod billing_rates;
 mod captcha;
+mod firewall;
 mod groups;
 mod model_registry;
 mod providers;
@@ -37,6 +38,7 @@ pub use auth::{
     UserBillingPlanResponse, UserResponse, change_password, get_me, login, logout, register,
     update_me, user_response_from_store,
 };
+pub use firewall::{FirewallEventsQuery, get_firewall_stats, list_firewall_events};
 pub use billing_plans::{
     BillingPlanResponse, CreateBillingPlanRequest, UpdateBillingPlanRequest, create_billing_plan,
     delete_billing_plan, list_billing_plans, reset_billing_plan, update_billing_plan,

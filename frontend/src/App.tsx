@@ -27,6 +27,7 @@ import { UsersPage } from "@/pages/users";
 import { GroupsPage } from "@/pages/groups";
 import { BillingPlansPage } from "@/pages/billing-plans";
 import { SettingsPage } from "@/pages/settings";
+import { FirewallPage } from "@/pages/firewall";
 import { UserSettingsPage } from "@/pages/user-settings";
 import { PlaygroundPage } from "@/pages/playground";
 import { RequestLogsPage } from "@/pages/request-logs";
@@ -129,6 +130,7 @@ function App() {
             <Route path="store-admin" element={<StoreAdminRoute />} />
             <Route path="sales-admin" element={<AdminRoute><SalesAdminPage /></AdminRoute>} />
             <Route path="admin-settings" element={<SettingsPage />} />
+            <Route path="firewall" element={<AdminRoute><FirewallPage /></AdminRoute>} />
           </Route>
           <Route path="/join/:token" element={<JoinOrgPage />} />
           <Route path="/org" element={<DashboardGuard><Outlet /></DashboardGuard>}>

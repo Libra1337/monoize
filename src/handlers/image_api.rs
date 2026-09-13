@@ -43,6 +43,7 @@ pub async fn create_image_generation(
     let n = parse_n_field(obj.get("n"))?;
 
     ensure_model_allowed(&auth, &model)?;
+    ensure_content_allowed(&state, &auth, "images_edits", &model, &[&prompt]).await?;
 
     let max_multiplier_val =
         resolve_image_max_multiplier(obj.get("max_multiplier"), &headers, &auth);
@@ -181,6 +182,7 @@ pub async fn create_image_edit(
     };
 
     ensure_model_allowed(&auth, &model)?;
+    ensure_content_allowed(&state, &auth, "images_generations", &model, &[&prompt]).await?;
 
     let max_multiplier_val = {
         let ceiling = auth.max_multiplier;
