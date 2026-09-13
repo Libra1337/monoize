@@ -110,15 +110,15 @@ CF-15. A rejection returns HTTP `403 Forbidden` with the standard OpenAI-style
 error envelope:
 
 ```json
-{"error": {"message": "request blocked by content firewall: <reason>", "type": "content_policy_violation", "param": null, "code": "content_blocked"}}
+{"error": {"message": "触发网站风控违禁词，无法调用模型：内容命中网关内容防火墙规则[关键词：a、b]，已被拦截。请修改内容后重试。", "type": "content_policy_violation", "param": null, "code": "content_blocked"}}
 ```
 
-where `<reason>` is `prohibited category '<category>'` for a judge rejection
-(`<category>` is the judge category) or `prohibited term '<term>'` for a
-keyword fallback rejection (CF-31). On `/v1/messages` the same status, code,
-type, and message are wrapped in the Anthropic error envelope by the existing
-handler wrapper. On the responses WebSocket the same fields are delivered
-through the existing WebSocket error event path.
+The message lists the canonicalized keyword hits (CF-5) joined with `、`
+inside the brackets; by CF-33 every rejection has at least one. On
+`/v1/messages` the same status, code, type, and message are wrapped in the
+Anthropic error envelope by the existing handler wrapper. On the responses
+WebSocket the same fields are delivered through the existing WebSocket error
+event path.
 
 CF-16. No caller-facing bypass exists. The firewall applies to every
 authenticated caller (API keys, dashboard sessions, playground, internal

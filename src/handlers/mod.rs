@@ -179,7 +179,6 @@ async fn ensure_content_allowed(
     }
 
     // CF-15/CF-32: porn and political verdicts reject with the judge category.
-    let reason = format!("prohibited category '{category}'");
     tracing::warn!(
         user_id = ?auth.user_id,
         api_key_id = ?auth.api_key_id,
@@ -197,10 +196,13 @@ async fn ensure_content_allowed(
         text,
     )
     .await;
+    let keyword_list = keyword_hits.join("、");
     Err(AppError::new(
         StatusCode::FORBIDDEN,
         "content_blocked",
-        format!("request blocked by content firewall: {reason}"),
+        format!(
+            "触发网站风控违禁词，无法调用模型：内容命中网关内容防火墙规则[关键词：{keyword_list}]，已被拦截。请修改内容后重试。"
+        ),
     )
     .with_type("content_policy_violation"))
 }

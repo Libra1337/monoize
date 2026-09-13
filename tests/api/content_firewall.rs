@@ -96,7 +96,7 @@ async fn porn_verdict_blocks_and_records_blocked_event() {
     assert_eq!(error["error"]["type"], json!("content_policy_violation"));
     assert_eq!(
         error["error"]["message"],
-        json!("request blocked by content firewall: prohibited category 'porn'")
+        json!("触发网站风控违禁词，无法调用模型：内容命中网关内容防火墙规则[关键词：badword]，已被拦截。请修改内容后重试。")
     );
     assert_eq!(upstream_call_count(&ctx), 0);
     assert_eq!(judge_calls.load(Ordering::SeqCst), 1);
