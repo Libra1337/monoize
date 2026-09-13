@@ -1002,8 +1002,12 @@
     "emptyDescription": "この期間に検索条件と一致するモデルはありません。",
     "columns": {
       "model": "モデル",
-      "assessment": "評価"
-    }
+      "assessment": "評価",
+      "user": "ユーザー"
+    },
+    "usersTitle": "ユーザー別キャッシュヒット率",
+    "usersDescription": "選択した期間のキャッシュ読み取り Token と入力 Token をユーザーごとに比較します。",
+    "usersEmptyDescription": "この期間に検索に一致するユーザーはいません。"
   },
   "users": {
     "title": "ユーザー管理",

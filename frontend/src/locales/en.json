@@ -1002,8 +1002,12 @@
     "emptyDescription": "No model matches the search in this range.",
     "columns": {
       "model": "Model",
-      "assessment": "Assessment"
-    }
+      "assessment": "Assessment",
+      "user": "User"
+    },
+    "usersTitle": "Cache hit rate by user",
+    "usersDescription": "Compare cache-read Tokens against input Tokens for every user in the selected range.",
+    "usersEmptyDescription": "No user matches the search in this range."
   },
   "users": {
     "title": "Users",

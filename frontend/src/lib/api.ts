@@ -1054,6 +1054,18 @@ export interface DashboardAnalyticsBucket {
   output_tokens_by_model: Record<string, string>;
 }
 
+export interface CacheHitRateUserRow {
+  user_id: string;
+  username: string;
+  input_tokens: string;
+  cache_read_tokens: string;
+}
+
+export interface CacheHitRateUsersResponse {
+  range_hours: number;
+  users: CacheHitRateUserRow[];
+}
+
 export interface DashboardAnalytics {
   buckets: DashboardAnalyticsBucket[];
   time_from: string;
@@ -1712,13 +1724,19 @@ class ApiClient {
   async getDashboardAnalytics(
     buckets = 8,
     rangeHours = 24,
-    scope?: "self",
+    scope?: "self" | "group",
   ): Promise<DashboardAnalytics> {
     const params = new URLSearchParams();
     params.set("buckets", String(buckets));
     params.set("range_hours", String(rangeHours));
     if (scope) params.set("scope", scope);
     return this.request(`/analytics?${params.toString()}`);
+  }
+
+  async getCacheHitRateUsers(rangeHours = 168): Promise<CacheHitRateUsersResponse> {
+    return this.request(
+      `/usage/cache/users?range_hours=${encodeURIComponent(String(rangeHours))}`,
+    );
   }
 
   async getMyLiveUsage(): Promise<UserLiveUsage> {

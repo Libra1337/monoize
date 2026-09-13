@@ -862,6 +862,14 @@ pub struct UserTodayUsage {
 }
 
 #[derive(Debug, Clone)]
+pub struct UserCacheHitRow {
+    pub user_id: String,
+    pub username: String,
+    pub input_tokens: i128,
+    pub cache_read_tokens: i128,
+}
+
+#[derive(Debug, Clone)]
 pub struct UserUsageRankingRow {
     pub user_id: String,
     pub username: Option<String>,

@@ -71,11 +71,18 @@ DH-15. A resolved response with zero total Tokens MUST render an explicit empty 
 
 ## 3. Analytics API
 
-DH-16. `GET /api/dashboard/analytics` accepts optional `scope`. The only valid explicit
-value is `self`. Another explicit value MUST return HTTP `400` with `invalid_request`.
+DH-16. `GET /api/dashboard/analytics` accepts optional `scope`. The valid explicit values are
+`self` and `group`. Any other explicit value MUST return HTTP `400` with `invalid_request`.
+`scope=group` MUST be accepted only when the authenticated role is `admin` or `super_admin`;
+otherwise it MUST return HTTP `400` with `invalid_request`.
 
 DH-17. `scope=self` MUST aggregate only rows whose user ID equals the authenticated user ID,
 including when the authenticated role is `admin` or `super_admin`.
+
+DH-17a. `scope=group` MUST aggregate only request-log rows whose `user_id` equals the `id` of
+a user whose `group_id` equals the authenticated user's `group_id`. The group predicate
+applies to the model buckets, the provider buckets, the response-wide totals, and the today
+aggregate, in combination with the DH-18a probe exclusion.
 
 DH-18. An omitted `scope` keeps the existing role behavior: Admin roles aggregate all users,
 and role `user` aggregates only the authenticated user.

@@ -1002,8 +1002,12 @@
     "emptyDescription": "此時間範圍內沒有符合搜尋的模型。",
     "columns": {
       "model": "模型",
-      "assessment": "評估"
-    }
+      "assessment": "評估",
+      "user": "使用者"
+    },
+    "usersTitle": "使用者快取命中率",
+    "usersDescription": "按使用者比較所選時間範圍內快取讀取 Token 與輸入 Token。",
+    "usersEmptyDescription": "此時間範圍內沒有符合搜尋的使用者。"
   },
   "users": {
     "title": "使用者管理",

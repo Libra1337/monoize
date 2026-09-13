@@ -1316,6 +1316,7 @@ pub async fn org_analytics(
             None,
             None,
             Some(&org_id),
+            None,
             &time_from,
             &time_to,
             &today_start,

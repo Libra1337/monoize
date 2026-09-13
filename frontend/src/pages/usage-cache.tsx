@@ -1,5 +1,6 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { DataTableShell, TableToolbarSearch } from "@/components/ui/data-table-shell";
@@ -18,9 +19,11 @@ import {
 } from "@/components/ui/table";
 import { useAuth } from "@/hooks/use-auth";
 import { useProviders } from "@/lib/swr";
-import { useUsageAnalytics } from "@/lib/org-analytics";
+import { api } from "@/lib/api";
+import { useUsageAnalytics, type WorkspaceAnalyticsScope } from "@/lib/org-analytics";
 import {
   aggregateTokenTotals,
+  cacheHitRateForTotals,
   cacheHitRateTable,
   formatCacheHitRate,
   formatTokenCount,
@@ -62,10 +65,21 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
   const config = CACHE_RANGES[range];
 
-  // UA-35: no explicit scope, so an Admin role aggregates every user and a member aggregates
-  // itself. A per-model cache rate is only actionable when it covers the traffic the operator
-  // is responsible for. In org mode the source is the org's shared keys instead.
-  const analytics = useUsageAnalytics(orgId, config.buckets, config.hours);
+  const isSuperAdmin = !orgId && user?.role === "super_admin";
+  // UA-25: a super admin aggregates every user, an admin its group, a member itself.
+  // In org mode the source is the org's shared keys instead and the scope is ignored.
+  const scope: WorkspaceAnalyticsScope = isSuperAdmin
+    ? "all"
+    : !orgId && user?.role === "admin"
+      ? "group"
+      : "self";
+  const analytics = useUsageAnalytics(orgId, config.buckets, config.hours, undefined, scope);
+  // UA-41: the per-user table is super_admin-only.
+  const cacheUsers = useSWR(
+    isSuperAdmin ? `/api/dashboard/usage/cache/users?range_hours=${config.hours}` : null,
+    () => api.getCacheHitRateUsers(config.hours),
+    { keepPreviousData: true, refreshInterval: 2000 },
+  );
   // UA-36: the routable catalog is admin-only, so a member sees the models it used.
   // Org space is always member-level: the table lists the models the org actually used.
   const providers = useProviders({ keepPreviousData: true }, !orgId && isAdmin);
@@ -90,6 +104,27 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
     [rows, trafficOnly, deferredSearch],
   );
   const trackedCount = rows.filter((row) => row.input > 0n).length;
+  const userRows = useMemo(
+    () => (cacheUsers.data?.users ?? []).map((row) => {
+      const input = BigInt(row.input_tokens);
+      const cacheRead = BigInt(row.cache_read_tokens);
+      return {
+        user_id: row.user_id,
+        username: row.username,
+        input,
+        cacheRead,
+        ...cacheHitRateForTotals(input, cacheRead),
+      };
+    }),
+    [cacheUsers.data],
+  );
+  const visibleUsers = useMemo(
+    () => userRows.filter((row) => (
+      (!trafficOnly || row.input > 0n)
+      && (!deferredSearch || row.username.toLowerCase().includes(deferredSearch))
+    )),
+    [userRows, trafficOnly, deferredSearch],
+  );
 
   if (analytics.error && !analytics.data) {
     return (
@@ -222,6 +257,70 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
           </TableBody>
         </Table>
       </DataTableShell>
+
+      {isSuperAdmin ? (
+        <section className="flex min-w-0 flex-col gap-3" aria-labelledby="usage-cache-users-title">
+          <h2 id="usage-cache-users-title" className="text-base font-semibold">
+            {t("usageCache.usersTitle")}
+          </h2>
+          <p className="max-w-3xl text-sm text-muted-foreground">
+            {t("usageCache.usersDescription")}
+          </p>
+          <DataTableShell
+            isEmpty={!cacheUsers.isLoading && visibleUsers.length === 0}
+            emptyState={<EmptyState title={t("usageAnalysis.empty")} description={t("usageCache.usersEmptyDescription")} />}
+          >
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("usageCache.columns.user")}</TableHead>
+                  <TableHead className="text-right">{t("usageAnalysis.metrics.input")}</TableHead>
+                  <TableHead className="text-right">{t("usageAnalysis.metrics.cacheRead")}</TableHead>
+                  <TableHead className="text-right">{t("usageAnalysis.cacheHitRate")}</TableHead>
+                  <TableHead>{t("usageCache.columns.assessment")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {cacheUsers.isLoading && !cacheUsers.data ? Array.from({ length: 5 }, (_, index) => (
+                  <TableRow key={index}>
+                    {Array.from({ length: 5 }, (_, cell) => (
+                      <TableCell key={cell}><Skeleton className="h-4 w-full" /></TableCell>
+                    ))}
+                  </TableRow>
+                )) : visibleUsers.map((row) => (
+                  <TableRow key={row.user_id}>
+                    <TableCell className="max-w-[22rem] font-medium [overflow-wrap:anywhere]">{row.username}</TableCell>
+                    <TableCell className="text-right font-mono text-xs tabular-nums">
+                      {formatTokenCount(row.input, i18n.language)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs tabular-nums">
+                      {formatTokenCount(row.cacheRead, i18n.language)}
+                    </TableCell>
+                    <TableCell className={cn("text-right font-mono text-sm tabular-nums", GRADE_TEXT[row.grade])}>
+                      {formatCacheHitRate(row.input, row.cacheRead)}
+                    </TableCell>
+                    <TableCell className="min-w-[9rem]">
+                      <div className="flex items-center gap-2">
+                        <span className={cn("text-xs", GRADE_TEXT[row.grade])}>
+                          {t(`usageAnalysis.cacheByModel.grades.${row.grade}`)}
+                        </span>
+                        {row.input > 0n ? (
+                          <span className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+                            <span
+                              className={cn("block h-full rounded-full", GRADE_BAR[row.grade])}
+                              style={{ width: `${Number(row.basisPoints) / 100}%` }}
+                            />
+                          </span>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </DataTableShell>
+        </section>
+      ) : null}
     </PageWrapper>
   );
 }

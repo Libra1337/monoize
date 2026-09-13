@@ -720,6 +720,7 @@ pub async fn get_api_key_analytics(
             Some(&api_key.user_id),
             Some(&api_key.id),
             None,
+            None,
             &time_from.to_rfc3339(),
             &time_to.to_rfc3339(),
             &today_start.to_rfc3339(),

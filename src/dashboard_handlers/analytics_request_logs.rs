@@ -276,16 +276,27 @@ fn default_analytics_range_hours() -> i64 {
     24
 }
 
-fn analytics_user_id_filter(
+/// The resolved row-visibility rule for the analytics endpoint (DH-16..DH-18).
+enum AnalyticsUserScope {
+    SelfUser(String),
+    Group(String),
+    All,
+}
+
+fn analytics_user_scope(
     can_manage_users: bool,
     user_id: &str,
+    group_id: &str,
     scope: Option<&str>,
-) -> Result<Option<String>, &'static str> {
+) -> Result<AnalyticsUserScope, &'static str> {
     match scope {
-        Some("self") => Ok(Some(user_id.to_string())),
-        Some(_) => Err("scope must equal self"),
-        None if can_manage_users => Ok(None),
-        None => Ok(Some(user_id.to_string())),
+        Some("self") => Ok(AnalyticsUserScope::SelfUser(user_id.to_string())),
+        Some("group") if can_manage_users => Ok(AnalyticsUserScope::Group(
+            group_id.to_string(),
+        )),
+        Some(_) => Err("scope must equal self or group"),
+        None if can_manage_users => Ok(AnalyticsUserScope::All),
+        None => Ok(AnalyticsUserScope::SelfUser(user_id.to_string())),
     }
 }
 
@@ -295,26 +306,45 @@ fn exact_integer_json(value: i128) -> Value {
 
 #[cfg(test)]
 mod dashboard_analytics_tests {
-    use super::{analytics_user_id_filter, exact_integer_json};
+    use super::{AnalyticsUserScope, analytics_user_scope, exact_integer_json};
     use serde_json::Value;
+
+    fn scope(
+        can_manage_users: bool,
+        user_id: &str,
+        group_id: &str,
+        raw: Option<&str>,
+    ) -> Result<(Option<String>, Option<String>), &'static str> {
+        Ok(match analytics_user_scope(can_manage_users, user_id, group_id, raw)? {
+            AnalyticsUserScope::SelfUser(id) => (Some(id), None),
+            AnalyticsUserScope::Group(id) => (None, Some(id)),
+            AnalyticsUserScope::All => (None, None),
+        })
+    }
 
     #[test]
     fn dashboard_analytics_self_scope_filters_admin_to_current_user() {
         assert_eq!(
-            analytics_user_id_filter(true, "admin-user", Some("self")).unwrap(),
-            Some("admin-user".to_string())
+            scope(true, "admin-user", "g1", Some("self")).unwrap(),
+            (Some("admin-user".to_string()), None)
+        );
+        assert_eq!(scope(true, "admin-user", "g1", None).unwrap(), (None, None));
+        assert_eq!(
+            scope(false, "member-user", "g1", None).unwrap(),
+            (Some("member-user".to_string()), None)
         );
         assert_eq!(
-            analytics_user_id_filter(true, "admin-user", None).unwrap(),
-            None
+            scope(false, "member-user", "g1", Some("all")).unwrap_err(),
+            "scope must equal self or group"
+        );
+        // scope=group is reserved for Admin roles (DH-16).
+        assert_eq!(
+            scope(false, "member-user", "g1", Some("group")).unwrap_err(),
+            "scope must equal self or group"
         );
         assert_eq!(
-            analytics_user_id_filter(false, "member-user", None).unwrap(),
-            Some("member-user".to_string())
-        );
-        assert_eq!(
-            analytics_user_id_filter(false, "member-user", Some("all")).unwrap_err(),
-            "scope must equal self"
+            scope(true, "admin-user", "g7", Some("group")).unwrap(),
+            (None, Some("g7".to_string()))
         );
     }
 
@@ -343,12 +373,22 @@ pub async fn get_dashboard_analytics(
         .and_utc()
         .to_rfc3339();
 
-    let user_id_filter = analytics_user_id_filter(
-        user.role.can_manage_users(),
-        &user.id,
-        query.scope.as_deref(),
-    )
-    .map_err(|message| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message))?;
+    let (user_id_filter, group_id_filter) = {
+        let resolved = analytics_user_scope(
+            user.role.can_manage_users(),
+            &user.id,
+            &user.group_id,
+            query.scope.as_deref(),
+        )
+        .map_err(|message| {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+        })?;
+        match resolved {
+            AnalyticsUserScope::SelfUser(id) => (Some(id), None),
+            AnalyticsUserScope::Group(id) => (None, Some(id)),
+            AnalyticsUserScope::All => (None, None),
+        }
+    };
 
     let raw = state
         .user_store
@@ -356,6 +396,7 @@ pub async fn get_dashboard_analytics(
             user_id_filter.as_deref(),
             None,
             None,
+            group_id_filter.as_deref(),
             &time_from,
             &time_to,
             &today_start,
@@ -367,6 +408,55 @@ pub async fn get_dashboard_analytics(
     Ok(Json(render_analytics_json(
         &raw, buckets, range_hours, now, &time_from, &time_to,
     )?))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CacheUsersQuery {
+    #[serde(default = "default_cache_users_range_hours")]
+    pub range_hours: i64,
+}
+
+fn default_cache_users_range_hours() -> i64 {
+    168
+}
+
+/// `GET /api/dashboard/usage/cache/users` (dashboard-usage-analysis.spec.md UA-42):
+/// per-user input and cache-read token aggregates for the super_admin cache table.
+pub async fn get_cache_hit_rate_by_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<CacheUsersQuery>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    if user.role != crate::users::UserRole::SuperAdmin {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "cache hit rate per user requires the super_admin role",
+        ));
+    }
+    let range_hours = query.range_hours.clamp(1, 720);
+    let time_from_unix_ms = (Utc::now() - chrono::Duration::hours(range_hours))
+        .timestamp_millis();
+    let rows = state
+        .user_store
+        .get_cache_hit_rate_by_users(time_from_unix_ms)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    Ok(Json(json!({
+        "range_hours": range_hours,
+        "users": rows
+            .iter()
+            .map(|row| {
+                json!({
+                    "user_id": row.user_id,
+                    "username": row.username,
+                    "input_tokens": row.input_tokens.to_string(),
+                    "cache_read_tokens": row.cache_read_tokens.to_string(),
+                })
+            })
+            .collect::<Vec<_>>(),
+    })))
 }
 
 /// Shared response shape for every analytics consumer (self, admin, org space).

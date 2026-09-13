@@ -337,6 +337,7 @@ fn analytics_model_bucket_sql(
     user_scoped: bool,
     api_key_scoped: bool,
     org_scoped: bool,
+    group_scoped: bool,
     bucketing: AnalyticsBucketing,
 ) -> String {
     let bucket_expr = analytics_bucket_expr(is_sqlite, bucketing);
@@ -353,7 +354,7 @@ fn analytics_model_bucket_sql(
         (false, true) => " AND rl.api_key_id = $6",
         (_, false) => "",
     };
-    // The org scope binds after the optional user and key scopes.
+    // The org and group scopes bind after the optional user and key scopes.
     let org_filter = if org_scoped {
         format!(
             " AND rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = ${})",
@@ -362,7 +363,27 @@ fn analytics_model_bucket_sql(
     } else {
         String::new()
     };
-    let token_columns = if is_sqlite {
+    let group_filter = if group_scoped {
+        format!(
+            " AND rl.user_id IN (SELECT id FROM users WHERE group_id = ${})",
+            6 + user_scoped as usize + api_key_scoped as usize + org_scoped as usize
+        )
+    } else {
+        String::new()
+    };
+    let token_columns = token_aggregate_columns(is_sqlite);
+    let probe_filter = analytics_probe_exclusion();
+    format!(
+        "SELECT {bucket_expr} AS bucket_idx, {model_expr} AS model, {charge_columns}, {token_columns}, COUNT(*) AS call_count \
+         FROM request_logs rl \
+         WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter}{api_key_filter}{org_filter}{group_filter}{probe_filter} \
+         GROUP BY bucket_idx, {model_expr} \
+         ORDER BY bucket_idx, model"
+    )
+}
+
+fn token_aggregate_columns(is_sqlite: bool) -> &'static str {
+    if is_sqlite {
         "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
          CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS TEXT) AS cache_read_tokens, \
          CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS TEXT) AS output_tokens, \
@@ -376,15 +397,7 @@ fn analytics_model_bucket_sql(
          SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS input_tokens_negative, \
          SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS cache_read_tokens_negative, \
          SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
-    };
-    let probe_filter = analytics_probe_exclusion();
-    format!(
-        "SELECT {bucket_expr} AS bucket_idx, {model_expr} AS model, {charge_columns}, {token_columns}, COUNT(*) AS call_count \
-         FROM request_logs rl \
-         WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter}{api_key_filter}{org_filter}{probe_filter} \
-         GROUP BY bucket_idx, {model_expr} \
-         ORDER BY bucket_idx, model"
-    )
+    }
 }
 
 fn decode_token_aggregate(row: &sea_orm::QueryResult, column: &str) -> Result<i128, String> {
@@ -492,6 +505,7 @@ mod tests {
                         is_sqlite,
                         user_scoped,
                         api_key_scoped,
+                        false,
                         false,
                         bucketing,
                     );
@@ -728,7 +742,7 @@ mod tests {
         assert_eq!(last_month - first_month, 3);
 
         let sql =
-            analytics_model_bucket_sql(true, true, false, false, AnalyticsBucketing::CalendarMonths);
+            analytics_model_bucket_sql(true, true, false, false, false, AnalyticsBucketing::CalendarMonths);
         let rows = db
             .read()
             .query_all(db.stmt(
@@ -870,7 +884,7 @@ mod tests {
             .await
             .unwrap();
 
-        let sql = analytics_model_bucket_sql(true, true, false, false, AnalyticsBucketing::EqualIntervals);
+        let sql = analytics_model_bucket_sql(true, true, false, false, false, AnalyticsBucketing::EqualIntervals);
         assert!(sql.contains(
             "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')"
         ));
@@ -1280,7 +1294,7 @@ mod tests {
         }
         let analytics_rows = txn
             .query_all(db.stmt(
-                &analytics_model_bucket_sql(false, true, false, false, AnalyticsBucketing::EqualIntervals),
+                &analytics_model_bucket_sql(false, true, false, false, false, AnalyticsBucketing::EqualIntervals),
                 vec![
                     1_704_067_199_000_i64.into(),
                     2_i64.into(),
@@ -2165,6 +2179,7 @@ impl UserStore {
         user_id: Option<&str>,
         api_key_id: Option<&str>,
         org_id: Option<&str>,
+        group_id: Option<&str>,
         time_from: &str,
         time_to: &str,
         today_start: &str,
@@ -2174,6 +2189,7 @@ impl UserStore {
             user_id,
             api_key_id,
             org_id,
+            group_id,
             time_from,
             time_to,
             today_start,
@@ -2189,6 +2205,7 @@ impl UserStore {
         user_id: Option<&str>,
         api_key_id: Option<&str>,
         org_id: Option<&str>,
+        group_id: Option<&str>,
         time_from: &str,
         time_to: &str,
         today_start: &str,
@@ -2214,6 +2231,7 @@ impl UserStore {
             user_id.is_some(),
             api_key_id.is_some(),
             org_id.is_some(),
+            group_id.is_some(),
             bucketing,
         );
         // The three bucket parameters carry a different meaning per mode; see
@@ -2246,6 +2264,9 @@ impl UserStore {
         }
         if let Some(oid) = org_id {
             model_values.push(oid.into());
+        }
+        if let Some(gid) = group_id {
+            model_values.push(gid.into());
         }
 
         let model_rows = self
@@ -2311,13 +2332,20 @@ impl UserStore {
         if let Some(key_id) = api_key_id {
             prov_sql.push_str(&format!(" AND rl.api_key_id = ${prov_idx}"));
             prov_values.push(key_id.into());
+            prov_idx += 1;
         }
         if let Some(oid) = org_id {
-            let org_idx = prov_idx + api_key_id.is_some() as usize;
             prov_sql.push_str(&format!(
-                " AND rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = ${org_idx})"
+                " AND rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = ${prov_idx})"
             ));
             prov_values.push(oid.into());
+            prov_idx += 1;
+        }
+        if let Some(gid) = group_id {
+            prov_sql.push_str(&format!(
+                " AND rl.user_id IN (SELECT id FROM users WHERE group_id = ${prov_idx})"
+            ));
+            prov_values.push(gid.into());
         }
         prov_sql.push_str(" GROUP BY bucket_idx, provider_label");
 
@@ -2403,6 +2431,13 @@ impl UserStore {
                 " AND rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = ${today_idx})"
             ));
             today_values.push(oid.into());
+            today_idx += 1;
+        }
+        if let Some(gid) = group_id {
+            today_sql.push_str(&format!(
+                " AND rl.user_id IN (SELECT id FROM users WHERE group_id = ${today_idx})"
+            ));
+            today_values.push(gid.into());
         }
         let today_row = self
             .db
@@ -2469,6 +2504,46 @@ impl UserStore {
                     user_id,
                     today_calls,
                     today_cost_nano_usd,
+                })
+            })
+            .collect()
+    }
+
+    /// Cache hit rate per user (dashboard-usage-analysis.spec.md UA-42): token aggregates
+    /// over request-log rows newer than `time_from_unix_ms`, joined with usernames,
+    /// ordered by input volume desc then username asc, capped at 100 rows.
+    pub async fn get_cache_hit_rate_by_users(
+        &self,
+        time_from_unix_ms: i64,
+    ) -> Result<Vec<super::UserCacheHitRow>, String> {
+        let is_sqlite = self.db.is_sqlite();
+        let token_columns = token_aggregate_columns(is_sqlite);
+        let sql = format!(
+            "SELECT rl.user_id AS user_id, u.username AS username, {token_columns} \
+             FROM request_logs rl \
+             JOIN users u ON u.id = rl.user_id \
+             WHERE rl.created_at_unix_ms >= $1 \
+               AND rl.created_at_unix_ms IS NOT NULL \
+               AND rl.user_id IS NOT NULL{} \
+             GROUP BY rl.user_id, u.username \
+             ORDER BY SUM(COALESCE(rl.input_tokens, 0)) DESC, u.username ASC \
+             LIMIT 100",
+            analytics_probe_exclusion()
+        );
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(&sql, vec![time_from_unix_ms.into()]))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(super::UserCacheHitRow {
+                    user_id: row.try_get("", "user_id").map_err(|e| e.to_string())?,
+                    username: row.try_get("", "username").map_err(|e| e.to_string())?,
+                    input_tokens: decode_token_aggregate(&row, "input_tokens")?,
+                    cache_read_tokens: decode_token_aggregate(&row, "cache_read_tokens")?,
                 })
             })
             .collect()

@@ -132,10 +132,13 @@ UA-24. Cache hit rate MUST be reported on its own authenticated sub-page at
 as an entry adjacent to the Usage Analysis entry, in both the standard and the enterprise
 navigation sets. `/dashboard/usage` MUST NOT render a cache hit rate panel.
 
-UA-25. The sub-page MUST use `GET /api/dashboard/analytics` with **no** `scope` parameter, so
-DH-18 applies: an `admin` or `super_admin` session aggregates every user and a `user` session
-aggregates only itself. A per-model cache hit rate is actionable only when it covers the
-traffic the reader is responsible for.
+UA-25. The sub-page MUST select its analytics scope from the authenticated role. A
+`super_admin` session requests `GET /api/dashboard/analytics` with no `scope` parameter, so
+DH-18 aggregates every user. An `admin` session requests it with `scope=group`, so the
+aggregate covers exactly the request-log rows whose `user_id` belongs to a user whose
+`group_id` equals the admin's own `group_id` (DH-18c). A `user` session requests
+`scope=self`, which aggregates only itself. A per-model cache hit rate is actionable only
+when it covers the traffic the reader is responsible for.
 
 UA-26. The range control MUST contain exactly `24h`, `7d`, and `30d` with the mapping of
 UA-5. The initial range is `7d`. The sub-page MUST NOT expose the metric control of UA-7,
@@ -214,3 +217,27 @@ retry action that revalidates the active SWR key.
 
 UA-40. Every visible string on the sub-page MUST use an i18n key present in `en`, `zh`,
 `zh-TW`, and `ja`.
+
+### 6.4 Per-user cache table (super_admin)
+
+UA-41. For a `super_admin` session on `/dashboard/usage/cache`, the sub-page MUST additionally
+render one per-user cache table below the per-model table, sourced from
+`GET /api/dashboard/usage/cache/users?range_hours=N` where `N` equals the `range_hours` of the
+range selected per UA-26. An `admin` or `user` session MUST NOT render the per-user table.
+
+UA-42. The endpoint MUST require role `super_admin`; any other session MUST receive HTTP 403
+with code `forbidden`. It MUST clamp `range_hours` to `1..=720`, MUST apply the DH-18a probe
+exclusion, and MUST aggregate only request-log rows with a resolvable `users` row. The
+response MUST be a JSON object with `range_hours` and a `users` array whose entries contain
+exactly `user_id`, `username`, `input_tokens`, and `cache_read_tokens` as integer strings.
+Entries MUST order by `input_tokens` descending with ties broken by `username` in ascending
+byte order, and the array MUST be capped at 100 entries.
+
+UA-43. Each per-user row MUST show the username, `input_tokens`, `cache_read_tokens`, and the
+hit rate computed and rounded as in UA-32 and UA-33. Rows MUST carry the UA-34 grade assigned
+from `(input_tokens, hitBasisPoints)` and the UA-35 color rules. The UA-37 filter controls
+MUST apply to this table: the substring filter matches the username, and the boolean control
+restricts the table to rows with `input_tokens > 0`.
+
+UA-44. The per-user table MUST follow the UA-38 loading and UA-39 empty/error states with the
+same SWR refresh interval.

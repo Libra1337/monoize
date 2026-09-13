@@ -23,8 +23,8 @@ pub use admin::{
     get_admin_overview, get_admin_usage_ranking, get_metrics, get_public_usage_ranking,
 };
 pub use analytics_request_logs::{
-    AnalyticsQuery, RequestLogsQuery, get_dashboard_analytics, get_my_live_usage,
-    list_my_request_logs, stream_request_logs,
+    AnalyticsQuery, RequestLogsQuery, get_cache_hit_rate_by_users, get_dashboard_analytics,
+    get_my_live_usage, list_my_request_logs, stream_request_logs,
 };
 pub use api_keys::{
     ApiKeyCreatedResponse, ApiKeyResponse, BatchDeleteApiKeysRequest, CreateApiKeyRequest,

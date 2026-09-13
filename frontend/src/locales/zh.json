@@ -1002,8 +1002,12 @@
     "emptyDescription": "此时间范围内没有匹配搜索的模型。",
     "columns": {
       "model": "模型",
-      "assessment": "评估"
-    }
+      "assessment": "评估",
+      "user": "用户"
+    },
+    "usersTitle": "用户缓存命中率",
+    "usersDescription": "按用户比较所选时间范围内缓存读取 Token 与输入 Token。",
+    "usersEmptyDescription": "此时间范围内没有匹配搜索的用户。"
   },
   "users": {
     "title": "用户管理",

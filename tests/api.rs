@@ -21,6 +21,9 @@ mod billing_plans_dashboard;
 #[path = "api/users_dashboard.rs"]
 mod users_dashboard;
 
+#[path = "api/usage_cache_scope.rs"]
+mod usage_cache_scope;
+
 #[path = "api/adapters_nonstream.rs"]
 mod adapters_nonstream;
 

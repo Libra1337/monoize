@@ -138,6 +138,21 @@ function gradeCacheHitRate(input: bigint, basisPoints: bigint): CacheHitGrade {
 }
 
 /**
+ * UA-32/UA-34 for a pre-aggregated pair of token totals (one user, one model,
+ * any scope): basis points under half-away rounding and the matching grade.
+ */
+export function cacheHitRateForTotals(
+  input: bigint,
+  cacheRead: bigint,
+): { basisPoints: bigint; grade: CacheHitGrade } {
+  if (input <= 0n) {
+    return { basisPoints: 0n, grade: "no_traffic" };
+  }
+  const basisPoints = (cacheRead * 10_000n + input / 2n) / input;
+  return { basisPoints, grade: gradeCacheHitRate(input, basisPoints) };
+}
+
+/**
  * Ranks logical models by input Token volume and reports the prompt-cache hit rate of
  * each one. Input volume drives the ordering because it decides how much a low hit rate
  * actually costs. Rows with a zero input total are omitted: their hit rate is undefined.
