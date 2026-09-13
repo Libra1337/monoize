@@ -20,7 +20,7 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { useProviders } from "@/lib/swr";
 import { api } from "@/lib/api";
-import { useUsageAnalytics, type WorkspaceAnalyticsScope } from "@/lib/org-analytics";
+import { useUsageAnalytics } from "@/lib/org-analytics";
 import {
   aggregateTokenTotals,
   cacheHitRateForTotals,
@@ -66,14 +66,9 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
   const config = CACHE_RANGES[range];
 
   const isSuperAdmin = !orgId && user?.role === "super_admin";
-  // UA-25: a super admin aggregates every user, an admin its group, a member itself.
-  // In org mode the source is the org's shared keys instead and the scope is ignored.
-  const scope: WorkspaceAnalyticsScope = isSuperAdmin
-    ? "all"
-    : !orgId && user?.role === "admin"
-      ? "group"
-      : "self";
-  const analytics = useUsageAnalytics(orgId, config.buckets, config.hours, undefined, scope);
+  // UA-25: the shared hook resolves the role scope (all / group / self) and the org mode
+  // reads the org's shared keys instead.
+  const analytics = useUsageAnalytics(orgId, config.buckets, config.hours);
   // UA-41: the per-user table is super_admin-only.
   const cacheUsers = useSWR(
     isSuperAdmin ? `/api/dashboard/usage/cache/users?range_hours=${config.hours}` : null,

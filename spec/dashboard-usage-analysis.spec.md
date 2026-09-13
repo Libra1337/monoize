@@ -12,8 +12,11 @@ inspection. `request-logs.spec.md` remains the source of truth for `/dashboard/l
 UA-1. `/dashboard/usage` MUST render inside `DashboardLayout` and require an authenticated
 session.
 
-UA-2. The page MUST use `GET /api/dashboard/analytics` with `scope=self`. It MUST NOT import,
-mount, or call the request-log page, request-log hook, or request-log endpoint.
+UA-2. The page MUST use `GET /api/dashboard/analytics` with the role-based scope of UA-25:
+no `scope` parameter for `super_admin` (every user), `scope=group` for `admin` (the caller's
+group), `scope=self` for `user`. The org-space variant uses the org analytics endpoint and
+is unchanged. The page MUST NOT import, mount, or call the request-log page, request-log
+hook, or request-log endpoint.
 
 UA-3. `/dashboard/logs` MUST keep its existing route, components, filters, and behavior.
 
