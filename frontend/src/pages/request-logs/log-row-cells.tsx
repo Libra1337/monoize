@@ -8,6 +8,7 @@ import {
 	TooltipTrigger
 } from '@/components/ui/tooltip'
 import { ModelBadge } from '@/components/ModelBadge'
+import { useCostFormatter } from '@/hooks/use-cost-formatter'
 import { cn } from '@/lib/utils'
 import type { RequestLog } from '@/lib/api'
 import {
@@ -23,7 +24,6 @@ import {
 	billingValueTranslationKey,
 	computeTps,
 	formatCachePercentage,
-	formatCost,
 	formatDuration,
 	formatTime,
 	getDurationMs,
@@ -104,6 +104,7 @@ export function LogRowCells({
 	const rowTooltipIdsRef = useRef<Set<string>>(new Set())
 	const tooltipPrefix = log.request_id || log.id
 	const [durationTooltipOpen, setDurationTooltipOpen] = useState(false)
+	const formatCost = useCostFormatter()
 	const [costTooltipOpen, setCostTooltipOpen] = useState(false)
 
 	const bindTooltipOpenChange = useCallback(

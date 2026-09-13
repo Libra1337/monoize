@@ -23,12 +23,14 @@ import { AnimatePresence } from 'framer-motion'
 import { CaptureViewerDialog } from './request-logs/capture-viewer-dialog'
 import { DateRangePicker } from './request-logs/date-range-picker'
 import { RequestLogsTable } from './request-logs/request-logs-table'
-import { asObject, formatCost } from './request-logs/utils'
+import { asObject } from './request-logs/utils'
+import { useCostFormatter } from '@/hooks/use-cost-formatter'
 
 const REQUEST_LOGS_PAGE_SIZE = 100
 
 export function RequestLogsPage() {
 	const { t } = useTranslation()
+	const formatCost = useCostFormatter()
 	const { user } = useAuth()
 	const [searchParams] = useSearchParams()
 	const isAdmin = user?.role === 'super_admin' || user?.role === 'admin'
