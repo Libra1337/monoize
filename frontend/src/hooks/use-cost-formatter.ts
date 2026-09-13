@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { formatNanoUsd, isSignedIntegerString } from "@/lib/exact-decimal";
-import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
+import { formatCoinFromNanoUsdExact } from "@/lib/store-money";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 
@@ -16,7 +16,7 @@ export function useCostFormatter() {
     (nanoUsd: string | null | undefined): string => {
       if (nanoUsd == null || !isSignedIntegerString(nanoUsd)) return "-";
       if (currency === "CNY" && cnyPerUsd) {
-        return formatCoinFromNanoUsdForCurrency(nanoUsd, "CNY", cnyPerUsd);
+        return formatCoinFromNanoUsdExact(nanoUsd, cnyPerUsd, 6);
       }
       return formatNanoUsd(nanoUsd, 6);
     },

@@ -57,7 +57,7 @@ import type { AccountClass, User } from "@/lib/api";
 import { formatNanoUsd, formatUsdDecimal, isSignedIntegerString } from "@/lib/exact-decimal";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
-import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
+import { formatCoinFromNanoUsdExact, formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { getGravatarUrl } from "@/lib/utils";
 import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
@@ -792,10 +792,10 @@ export function UsersPage() {
                 {t("users.todaySummary", {
                   spend:
                     currency === "CNY" && exchangeRate?.cny_per_usd
-                      ? formatCoinFromNanoUsdForCurrency(
+                      ? formatCoinFromNanoUsdExact(
                           todayTotals.cost.toString(),
-                          "CNY",
                           exchangeRate.cny_per_usd,
+                          6,
                         )
                       : formatNanoUsd(todayTotals.cost, 2),
                   calls: todayTotals.calls.toLocaleString(),
@@ -921,10 +921,10 @@ export function UsersPage() {
                       <div className="whitespace-nowrap">
                         <div>
                           {currency === "CNY" && exchangeRate?.cny_per_usd
-                            ? formatCoinFromNanoUsdForCurrency(
+                            ? formatCoinFromNanoUsdExact(
                                 user.today_cost_nano_usd ?? "0",
-                                "CNY",
                                 exchangeRate.cny_per_usd,
+                                6,
                               )
                             : formatNanoUsd(user.today_cost_nano_usd, 2)}
                         </div>

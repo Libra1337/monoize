@@ -677,8 +677,9 @@ UP8. The today-spend cell MUST display `today_cost_nano_usd` in the selected dis
 (DL3h). When the display currency is USD, it MUST format as USD with 2 fractional digits using
 exact integer formatting (`BigInt`). When the display currency is CNY and the exchange-rate
 resource has loaded, it MUST format `today_cost_nano_usd` as CNY through the shared nano-USD
-conversion helper with the loaded `cny_per_usd` rate. While the CNY rate is unavailable, the
-cell MUST fall back to the USD formatting. A missing value MUST display as `$0.00` (USD) or
+conversion helper with the loaded `cny_per_usd` rate and 6 fractional digits, because a
+day total is routinely below ¥0.01. While the CNY rate is unavailable, the cell MUST fall
+back to the USD formatting. A missing value MUST display as `$0.00` (USD) or
 the equivalent zero in the selected currency.
 
 UP9. The today-calls cell MUST display `today_calls` as a locale integer. A missing value MUST

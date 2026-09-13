@@ -134,6 +134,33 @@ export function formatCoinFromNanoUsd(nanoUsd: string, cnyPerUsd: string): strin
   return formatCoinMinor(cnyMinor);
 }
 
+/**
+ * Formats an internal nano-USD amount as CNY at a caller-chosen sub-yuan precision, for
+ * surfaces where per-request charges are tiny and 2 fractional digits hide the amount
+ * (request logs). Same exact-integer math as formatCoinFromNanoUsd.
+ */
+export function formatCoinFromNanoUsdExact(
+  nanoUsd: string,
+  cnyPerUsd: string,
+  fractionalDigits: number,
+): string {
+  if (!Number.isInteger(fractionalDigits) || fractionalDigits < 2 || fractionalDigits > 9) {
+    throw new Error("fractionalDigits must be an integer between 2 and 9");
+  }
+  const nano = parseSignedMinor(nanoUsd);
+  const rate = parseRate(cnyPerUsd);
+  const scale = 10n ** BigInt(fractionalDigits);
+  const scaled = divideRoundHalfAwayFromZero(
+    nano * rate.numerator * (scale / 100n),
+    10_000_000n * rate.denominator,
+  );
+  const negative = scaled < 0n;
+  const absolute = negative ? -scaled : scaled;
+  const whole = absolute / scale;
+  const fraction = (absolute % scale).toString().padStart(fractionalDigits, "0");
+  return `${negative ? "-" : ""}¥${whole}.${fraction}`;
+}
+
 /** Format an internal nano-USD amount as Coin in the selected display currency. */
 export function formatCoinFromNanoUsdForCurrency(
   nanoUsd: string,
