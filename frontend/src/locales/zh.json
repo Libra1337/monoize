@@ -1289,7 +1289,7 @@
     "contentFirewallWordsDescription": "每行一个词，当前 {{termCount}} 个。关键词本身不会拦截：它们提示审核员关注，并让命中的良性请求在防火墙页面留痕（标记）。",
     "contentFirewallGroupJudge": "语义审核员",
     "contentFirewallJudgeEnabled": "启用 LLM 审核",
-    "contentFirewallJudgeEnabledDescription": "由一个便宜模型对每个请求做语义分类：色情或政治违规内容被拦截；良性请求（包括讨论、禁止、研究此类话题的内容）放行。关闭或审核不可用时，防火墙不拦截任何请求。",
+    "contentFirewallJudgeEnabledDescription": "仅当请求文本命中关键词时才调用模型判定：色情或政治违规判定为拦截；良性判定放行并标记。未命中关键词的请求完全不经过审核，零额外延迟。关闭或审核不可用时，关键词命中也会直接放行。",
     "contentFirewallJudgeBaseUrl": "审核 Base URL",
     "contentFirewallJudgeModel": "审核模型",
     "contentFirewallJudgeApiKey": "审核 API Key",

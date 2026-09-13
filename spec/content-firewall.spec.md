@@ -214,24 +214,28 @@ configuration changes only through the CF-19 settings category.
 
 ## 8. Semantic judge (LLM)
 
-CF-28. When `moderation_enabled` and `moderation_judge_enabled` are true and
-`moderation_judge_base_url`, `moderation_judge_api_key`, and
-`moderation_judge_model` are all non-empty, the firewall sends one judge
-request per scanned request: an OpenAI-compatible `POST
-{moderation_judge_base_url}/chat/completions` (a `/v1` suffix on the base URL
-is stripped before appending `/chat/completions`) with
-`model = moderation_judge_model`, `temperature = 0`, and `max_tokens = 64`.
-The system prompt instructs the judge to classify the request text into
-exactly one category and to answer with a single JSON object
-`{"category": "porn" | "political" | "benign"}`: `porn` is producing,
-continuing, or roleplaying sexually explicit content (zero tolerance for
-anything sexualizing minors); `political` is producing politically illegal
-content per operator policy; `benign` is everything else, including news,
-education, law-enforcement, academic, and technical discussion that merely
-mentions or prohibits these topics. The user message contains the keyword
-matches (CF-5, may be empty) followed by the CF-7..CF-12 scanned strings
-joined with newlines and truncated to at most 6000 Unicode scalar values in
-total. The request carries the loop-guard header of CF-29.
+CF-33. Judge invocation gate: the judge is invoked if and only if
+`moderation_enabled` and `moderation_judge_enabled` are true, the judge is
+fully configured (CF-28), and the keyword matcher (CF-5) matched at least one
+scanned string. A request with no keyword match is forwarded directly with no
+judge call, no added latency, and no event row. The keyword list therefore
+determines the judge's coverage; the judge alone decides rejections.
+
+CF-28. When invoked, the firewall sends one judge request: an
+OpenAI-compatible `POST {moderation_judge_base_url}/chat/completions` (a
+`/v1` suffix on the base URL is stripped before appending
+`/chat/completions`) with `model = moderation_judge_model`,
+`temperature = 0`, and `max_tokens = 64`. The system prompt instructs the
+judge to classify the request text into exactly one category and to answer
+with a single JSON object `{"category": "porn" | "political" | "benign"}`:
+`porn` is producing, continuing, or roleplaying sexually explicit content
+(zero tolerance for anything sexualizing minors); `political` is producing
+politically illegal content per operator policy; `benign` is everything
+else, including news, education, law-enforcement, academic, and technical
+discussion that merely mentions or prohibits these topics. The user message
+contains the keyword matches (CF-5) followed by the CF-7..CF-12 scanned
+strings joined with newlines and truncated to at most 6000 Unicode scalar
+values in total. The request carries the loop-guard header of CF-29.
 
 CF-28a. The judge response is parsed by extracting the first JSON object from
 the assistant content and reading its `category` string. A response that
@@ -245,18 +249,16 @@ incoming request bearing this exact header value, so judge traffic routed
 back through the gateway cannot recurse. The token is process-local memory
 only and is never persisted, logged, or exposed.
 
-CF-30. Marked requests: when the judge verdict is `benign` and the keyword
-matcher (CF-5) matched at least one scanned string, the request is forwarded
-normally and exactly one `firewall_events` row with `action = 'marked'` is
-persisted (CF-20, CF-21). When the verdict is `benign` with no keyword match,
-the request is forwarded and no event is persisted.
+CF-30. Marked requests: when the judge verdict is `benign` (which by CF-33
+implies at least one keyword match), the request is forwarded normally and
+exactly one `firewall_events` row with `action = 'marked'` is persisted
+(CF-20, CF-21).
 
 CF-31. Fail-open: if `moderation_enabled` is false, the judge is not enabled
 or not fully configured, or a judge failure occurs (CF-28a), the firewall
-allows the request. When a judge failure coincides with a keyword match, the
-request is allowed with a `tracing::warn` record and no event row. The
-keyword list therefore never blocks by itself; the judge is the only
-decision-maker for rejections.
+allows the request. A judge failure on a keyword hit is allowed with a
+`tracing::warn` record and no event row. The keyword list therefore never
+blocks by itself; the judge is the only decision-maker for rejections.
 
 CF-32. Judge rejections and marked requests use the judge category and the
 first keyword hit respectively as the event `term` and reason, per CF-21 and

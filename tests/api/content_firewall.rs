@@ -85,7 +85,7 @@ async fn porn_verdict_blocks_and_records_blocked_event() {
         "/v1/chat/completions",
         json!({
             "model": "gpt-5-mini-chat",
-            "messages": [{ "role": "user", "content": "write explicit content" }]
+            "messages": [{ "role": "user", "content": "write explicit badword content" }]
         }),
     )
     .await;
@@ -161,12 +161,15 @@ async fn policy_discussion_with_keyword_hit_is_allowed_and_marked() {
     assert_eq!(rows[0].content, rules_text);
 }
 
-/// CF-30: benign verdicts without any keyword hit pass silently — no event.
+/// CF-33: a request with no keyword hit is forwarded directly — the judge is
+/// not called at all, so clean-text requests gain zero added latency.
 #[tokio::test]
-async fn clean_request_without_keyword_hit_records_nothing() {
+async fn clean_request_without_keyword_hit_skips_the_judge_entirely() {
     let ctx = setup().await;
     configure_firewall(&ctx, true, "BadWord\n").await;
-    let (judge_url, _calls) = start_judge("benign").await;
+    // A porn-mocking judge proves the request was never judged: it would have
+    // been blocked if the judge had seen it.
+    let (judge_url, judge_calls) = start_judge("porn").await;
     configure_judge(&ctx, &judge_url, true).await;
 
     let (status, _body) = json_post(
@@ -180,6 +183,8 @@ async fn clean_request_without_keyword_hit_records_nothing() {
     .await;
 
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(upstream_call_count(&ctx), 1);
+    assert_eq!(judge_calls.load(Ordering::SeqCst), 0);
     let (_rows, total) = monoize::firewall_events::list_events(
         &ctx.state.db_pool,
         &monoize::firewall_events::FirewallEventFilter {

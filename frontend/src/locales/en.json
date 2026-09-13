@@ -1289,7 +1289,7 @@
     "contentFirewallWordsDescription": "One term per line; {{termCount}} active. Keywords never block by themselves: they steer the judge and mark allowed borderline requests in the firewall page.",
     "contentFirewallGroupJudge": "Semantic Judge",
     "contentFirewallJudgeEnabled": "Enable LLM Judge",
-    "contentFirewallJudgeEnabledDescription": "A cheap model classifies every request: porn or political content is rejected; benign requests (including discussions of these topics) pass. When off or unreachable, the firewall blocks nothing.",
+    "contentFirewallJudgeEnabledDescription": "The model judges only requests whose text hits a keyword: porn or political verdicts are rejected; benign verdicts (including discussions of these topics) pass and are marked. Requests without keyword hits bypass the judge entirely. When off or unreachable, keyword hits pass unmarked.",
     "contentFirewallJudgeBaseUrl": "Judge Base URL",
     "contentFirewallJudgeModel": "Judge Model",
     "contentFirewallJudgeApiKey": "Judge API Key",

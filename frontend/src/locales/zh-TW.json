@@ -1286,7 +1286,7 @@
     "contentFirewallWordsDescription": "每行一個詞，目前 {{termCount}} 個。關鍵詞本身不會攔截：它們提示審核員關注，並讓命中的良性請求在防火牆頁面留痕（標記）。",
     "contentFirewallGroupJudge": "語義審核員",
     "contentFirewallJudgeEnabled": "啟用 LLM 審核",
-    "contentFirewallJudgeEnabledDescription": "由一個便宜模型對每個請求做語義分類：色情或政治違規內容被攔截；良性請求（包括討論、禁止、研究此類話題的內容）放行。關閉或審核不可用時，防火牆不攔截任何請求。",
+    "contentFirewallJudgeEnabledDescription": "僅當請求文字命中關鍵詞時才呼叫模型判定：色情或政治違規判定為攔截；良性判定放行並標記。未命中關鍵詞的請求完全不經過審核，零額外延遲。關閉或審核不可用時，關鍵詞命中也會直接放行。",
     "contentFirewallJudgeBaseUrl": "審核 Base URL",
     "contentFirewallJudgeModel": "審核模型",
     "contentFirewallJudgeApiKey": "審核 API Key",

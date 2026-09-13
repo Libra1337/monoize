@@ -71,11 +71,12 @@ fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> 
     ))
 }
 
-/// CF-14..CF-32: request-side content firewall. Runs after the model allowlist
+/// CF-14..CF-33: request-side content firewall. Runs after the model allowlist
 /// and before routing, the balance gate, request-log admission, and any
 /// upstream I/O, so a rejection never reaches a provider. The LLM judge is the
-/// only decision-maker (CF-31): keyword matches are hints for the judge and the
-/// mark trigger, never a rejection by themselves.
+/// only decision-maker (CF-31) and runs only on keyword hits (CF-33), so
+/// clean-text requests gain zero added latency; keyword matches never reject
+/// by themselves.
 #[allow(clippy::result_large_err)]
 async fn ensure_content_allowed(
     state: &AppState,
@@ -107,13 +108,15 @@ async fn ensure_content_allowed(
                 .iter()
                 .filter_map(|text| firewall.find_blocked_term(text))
                 .map(str::to_string)
-                .collect::<Vec<_>>()
-                .into_iter()
                 .collect::<std::collections::HashSet<_>>()
                 .into_iter()
                 .collect()
         })
         .unwrap_or_default();
+    // CF-33: no keyword hit — forward directly with no judge call.
+    if keyword_hits.is_empty() {
+        return Ok(());
+    }
     let judge = &runtime.moderation_judge;
     if !judge.is_active() {
         // CF-31: fail-open when the judge is not enabled or configured.

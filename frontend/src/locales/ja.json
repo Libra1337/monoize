@@ -1286,7 +1286,7 @@
     "contentFirewallWordsDescription": "1行に1語、現在 {{termCount}} 語。キーワード自体は拒否しません:レビュアーへのヒントになり、一致した良性リクエストはファイアウォールページに記録(マーク)されます。",
     "contentFirewallGroupJudge": "意味論レビュアー",
     "contentFirewallJudgeEnabled": "LLMレビューを有効化",
-    "contentFirewallJudgeEnabledDescription": "軽量モデルが各リクエストを意味的に分類します:ポルノや政治的違反コンテンツは拒否、良性のリクエスト(これらの話題の議論・禁止・研究を含む)は通過します。無効またはレビュー不可のとき、ファイアウォールは何も拒否しません。",
+    "contentFirewallJudgeEnabledDescription": "リクエスト文がキーワードに一致したときのみモデルで判定します:ポルノまたは政治的違反の判定は拒否、良性の判定は通過してマークされます。キーワードに一致しないリクエストはレビューを経由せず、追加遅延はゼロです。無効またはレビュー不可の場合、キーワード一致もそのまま通過します。",
     "contentFirewallJudgeBaseUrl": "レビュー Base URL",
     "contentFirewallJudgeModel": "レビューモデル",
     "contentFirewallJudgeApiKey": "レビュー APIキー",
