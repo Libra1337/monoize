@@ -265,6 +265,7 @@ impl SettingsStore {
         let store = Self { db };
         store.ensure_defaults().await?;
         store.migrate_builtin_site_name().await?;
+        store.migrate_builtin_blocked_words().await?;
         store.migrate_transform_rule_ids().await?;
         Ok(store)
     }
@@ -465,11 +466,8 @@ impl SettingsStore {
             &defaults.moderation_judge_api_key,
         )
         .await?;
-        self.set_if_not_exists(
-            "moderation_judge_model",
-            &defaults.moderation_judge_model,
-        )
-        .await?;
+        self.set_if_not_exists("moderation_judge_model", &defaults.moderation_judge_model)
+            .await?;
         self.set_if_not_exists(
             "moderation_judge_timeout_ms",
             &defaults.moderation_judge_timeout_ms.to_string(),
@@ -515,6 +513,35 @@ impl SettingsStore {
             )
             .filter(system_settings::Column::Key.eq("site_name"))
             .filter(system_settings::Column::Value.eq("Monoize Dashboard"))
+            .exec(&*_write_guard)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// CF-3: replace a stored built-in keyword list that still equals a
+    /// superseded default. An operator-edited value is left unchanged.
+    async fn migrate_builtin_blocked_words(&self) -> Result<(), String> {
+        let stored = self.get("moderation_blocked_words").await?;
+        let Some(stored) = stored else {
+            return Ok(());
+        };
+        if !crate::content_firewall::SUPERSEDED_BLOCKED_WORDS.contains(&stored.as_str()) {
+            return Ok(());
+        }
+        let now = Utc::now().to_rfc3339();
+        let _write_guard = self.db.write().await;
+        system_settings::Entity::update_many()
+            .col_expr(
+                system_settings::Column::Value,
+                sea_orm::sea_query::Expr::value(crate::content_firewall::DEFAULT_BLOCKED_WORDS),
+            )
+            .col_expr(
+                system_settings::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(system_settings::Column::Key.eq("moderation_blocked_words"))
+            .filter(system_settings::Column::Value.eq(stored))
             .exec(&*_write_guard)
             .await
             .map_err(|error| error.to_string())?;

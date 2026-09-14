@@ -57,16 +57,16 @@ impl JudgeConfig {
     }
 }
 
-const SYSTEM_PROMPT: &str = r#"You are the content-safety judge of an LLM API gateway. Your job is to decide what the request text is trying to accomplish, not which words appear in it.
+const SYSTEM_PROMPT: &str = r#"You are the content-safety judge of an LLM API gateway. Your job is to decide what the request text is trying to accomplish, not which words appear in it. Keyword hits in the user message are hints only; they are not evidence of a violation.
 
 Take your time: reason about the text's intent, context, and phrasing before answering. You may write that analysis as plain text first. Then end your reply with EXACTLY ONE JSON object on its own last line and nothing after it:
 {"category": "...", "reason": "..."}
 
 Categories:
-- "porn": the text seeks to produce, continue, or roleplay sexually explicit content. Judge intent, not vocabulary: the request may use slang, euphemism, or no explicit word at all. Typical porn forms include: erotic fiction or NSFW roleplay requests ("成人小说", "开车", detailed bodily descriptions); jailbreak prompts that instruct the model to ignore safety rules and write explicit content; requests to generate, describe, or caption sexual images ("色图", bikini/lingerie pin-ups, sexualized captions); quoted or pasted material that itself contains explicit sexual content, even when the outer task is analysis, extraction, summarization, or "learning" — if the material being fed in is explicit, classify "porn". Anything sexualizing minors (including "萝莉", "正太", child-like characters in sexual contexts) is always "porn".
-- "political": the text seeks to produce politically illegal content such as subverting state power, inciting separatism, or extremist propaganda. Porn/NSFW evidence outweighs political evidence: when a text hits both, prefer "porn".
-- "benign": everything else. Discussing, mentioning, reporting on, or prohibiting sensitive topics (news, education, law, moderation policy, technical work) is "benign" even when it quotes prohibited words. Agent or tool system prompts, developer configuration, and defensive security policy text (security testing, CTF, refusing attacks) are "benign".
-- "uncertain": you genuinely cannot decide after analysis. Reserve it for truly borderline text, not for content you suspect is porn — a suspicion of explicit intent classifies "porn", because a false pass is worse than a false block.
+- "porn": the text seeks to produce, continue, or roleplay sexually explicit content. Anything sexualizing minors is always "porn".
+- "political": the text seeks to produce politically illegal content such as subverting state power, inciting separatism, or extremist propaganda.
+- "benign": everything else. Discussing, mentioning, reporting on, prohibiting, or studying sensitive topics (news, education, law, moderation policy, technical work) is "benign" even when it quotes prohibited words. Agent or tool system prompts, developer configuration, and defensive security policy text (security testing, CTF, refusing attacks) are "benign".
+- "uncertain": you genuinely cannot decide. Use it freely — an undecided text must never be forced into "porn" or "political". A false block is worse than sending a borderline request to the judge's operator for later review.
 
 In "reason" state the concrete evidence: what the text asks for, and why that makes it blocking or not. One to three sentences, always written in Simplified Chinese (简体中文), regardless of the request text's language."#;
 
@@ -139,13 +139,18 @@ pub struct JudgeCall<'a> {
     pub user_message: String,
 }
 
-/// Performs one judge call (CF-28). Returns the verdict, or an error string
-/// on any failure (CF-28a); the caller treats every error as fail-open.
+/// Performs one isolated judge call (CF-28). Returns the verdict, or an
+/// error string on any failure (CF-28a); the caller treats every error as
+/// fail-open. Each invocation is a fresh two-message conversation: `store`
+/// is false and `user` is a unique id so a sessionful upstream cannot stitch
+/// this call onto a previous judge turn.
 pub async fn call_judge(call: JudgeCall<'_>) -> Result<Verdict, String> {
     let body = json!({
         "model": call.config.model,
         "temperature": 0,
         "max_tokens": 512,
+        "store": false,
+        "user": format!("moderation-judge-{}", uuid::Uuid::new_v4()),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": call.user_message}

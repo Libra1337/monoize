@@ -8,10 +8,12 @@
 
 use aho_corasick::AhoCorasick;
 
-/// Built-in default for `moderation_blocked_words` (CF-3). Zero-tolerance
-/// Ordered by operator-assigned weight: NSFW/CSAM terms first (the
-/// enforcement priority and stronger signal to the judge), then political
-/// terms. Matching itself is set membership; order documents priority.
+/// Built-in default for `moderation_blocked_words` (CF-3). High-precision
+/// stems only: NSFW/CSAM terms first (the enforcement priority and stronger
+/// signal to the judge), then political terms. Matching itself is set
+/// membership; order documents priority. Everyday homographs and
+/// single-character CJK stems are excluded so ordinary chat is not sent to
+/// the judge.
 pub const DEFAULT_BLOCKED_WORDS: &str = concat!(
     // NSFW / CSAM (highest weight)
     "porn\n",
@@ -24,12 +26,10 @@ pub const DEFAULT_BLOCKED_WORDS: &str = concat!(
     "underage nude\n",
     "r18\n",
     "hentai\n",
-    "erotic\n",
     "色情\n",
     "色图\n",
     "涩图\n",
     "瑟瑟\n",
-    "开车\n",
     "荤段子\n",
     "黄片\n",
     "黄文\n",
@@ -38,10 +38,7 @@ pub const DEFAULT_BLOCKED_WORDS: &str = concat!(
     "成人漫画\n",
     "情色小说\n",
     "肉文\n",
-    "本子\n",
     "里番\n",
-    "萝莉\n",
-    "正太\n",
     "儿童裸照\n",
     "儿童裸体\n",
     "未成年裸照\n",
@@ -50,9 +47,6 @@ pub const DEFAULT_BLOCKED_WORDS: &str = concat!(
     "嫖宿幼女\n",
     "强奸幼女\n",
     "猥亵儿童\n",
-    "露骨\n",
-    "淫\n",
-    "骚\n",
     "裸聊\n",
     "裸照\n",
     "自慰\n",
@@ -60,7 +54,6 @@ pub const DEFAULT_BLOCKED_WORDS: &str = concat!(
     "肛交\n",
     "巨乳\n",
     "媚药\n",
-    "调教\n",
     // Political (lower weight)
     "颠覆国家政权\n",
     "煽动颠覆\n",
@@ -72,6 +65,90 @@ pub const DEFAULT_BLOCKED_WORDS: &str = concat!(
     "六四事件\n",
     "达赖\n",
 );
+
+/// Previous built-in defaults that a process start MUST replace with
+/// `DEFAULT_BLOCKED_WORDS` when the stored setting still equals one of them
+/// (CF-3). An operator-edited list is never rewritten.
+pub const SUPERSEDED_BLOCKED_WORDS: &[&str] = &[
+    concat!(
+        "porn\n",
+        "child erotica\n",
+        "child nude\n",
+        "csam\n",
+        "csem\n",
+        "sexualized minors\n",
+        "underage nude\n",
+        "色情\n",
+        "黄片\n",
+        "成人片\n",
+        "儿童裸照\n",
+        "儿童裸体\n",
+        "未成年裸照\n",
+        "未成年裸体\n",
+        "嫖宿幼女\n",
+        "强奸幼女\n",
+        "猥亵儿童\n",
+        "裸聊\n",
+    ),
+    concat!(
+        "porn\n",
+        "nsfw\n",
+        "child erotica\n",
+        "child nude\n",
+        "csam\n",
+        "csem\n",
+        "sexualized minors\n",
+        "underage nude\n",
+        "r18\n",
+        "hentai\n",
+        "erotic\n",
+        "色情\n",
+        "色图\n",
+        "涩图\n",
+        "瑟瑟\n",
+        "开车\n",
+        "荤段子\n",
+        "黄片\n",
+        "黄文\n",
+        "成人片\n",
+        "成人小说\n",
+        "成人漫画\n",
+        "情色小说\n",
+        "肉文\n",
+        "本子\n",
+        "里番\n",
+        "萝莉\n",
+        "正太\n",
+        "儿童裸照\n",
+        "儿童裸体\n",
+        "未成年裸照\n",
+        "未成年裸体\n",
+        "幼女\n",
+        "嫖宿幼女\n",
+        "强奸幼女\n",
+        "猥亵儿童\n",
+        "露骨\n",
+        "淫\n",
+        "骚\n",
+        "裸聊\n",
+        "裸照\n",
+        "自慰\n",
+        "口交\n",
+        "肛交\n",
+        "巨乳\n",
+        "媚药\n",
+        "调教\n",
+        "颠覆国家政权\n",
+        "煽动颠覆\n",
+        "分裂国家\n",
+        "煽动分裂\n",
+        "恐怖主义\n",
+        "极端主义\n",
+        "法轮功\n",
+        "六四事件\n",
+        "达赖\n",
+    ),
+];
 
 #[derive(Debug, Clone)]
 pub struct ContentFirewall {
@@ -143,7 +220,10 @@ mod tests {
             ContentFirewall::compile("  Porn \nporn\nPORN\n\n儿童色情\n").expect("compiles");
         assert_eq!(firewall.find_blocked_term("clean text"), None);
         assert_eq!(firewall.find_blocked_term("some PORN here"), Some("porn"));
-        assert_eq!(firewall.find_blocked_term("包含儿童色情内容"), Some("儿童色情"));
+        assert_eq!(
+            firewall.find_blocked_term("包含儿童色情内容"),
+            Some("儿童色情")
+        );
     }
 
     /// CF-5: terms match inside surrounding text without word boundaries, and
@@ -179,6 +259,15 @@ mod tests {
         assert_eq!(firewall.find_blocked_term("hello world"), None);
         // Substring coverage: longer variants hit through their stem.
         assert_eq!(firewall.find_blocked_term("teen porn"), Some("porn"));
+        // CF-3: everyday homographs and single-character CJK stems must not
+        // send ordinary chat to the judge.
+        assert_eq!(firewall.find_blocked_term("明天开车去上班"), None);
+        assert_eq!(firewall.find_blocked_term("把本子放回书包"), None);
+        assert_eq!(firewall.find_blocked_term("新员工需要调教"), None);
+        assert_eq!(firewall.find_blocked_term("这个批评很露骨"), None);
+        assert_eq!(firewall.find_blocked_term("萝莉角色立绘"), None);
+        assert_eq!(firewall.find_blocked_term("骚扰投诉处理"), None);
+        assert_eq!(firewall.find_blocked_term("test user"), None);
     }
 
     /// CF-5a: every distinct hit is extracted, in compiled-list (weight)

@@ -278,7 +278,7 @@ UI17. The Billing Profiles tab MUST group models.dev rate records by `pricing_pr
 
 UI17c. The Billing Profiles tab MUST load the profile list and per-profile model counts from `GET /api/dashboard/billing-rates/profiles` and the selected profile's rate rows from `GET /api/dashboard/billing-rates?pricing_profile={selected}`. The tab MUST NOT request the unfiltered billing-rate catalog.
 
-UI17a. Desktop (`lg` and above) MUST render a left profile list and a right detail pane. The detail pane MUST show model ID plus input, cache-read, and output token prices formatted as the price per one million tokens, prefixed by the symbol of that row's `unit_price_currency`: `¥` for `CNY` and `$` for `USD`. A price MUST NOT be shown under a currency symbol that does not match its stored `unit_price_currency`.
+UI17a. Desktop (`lg` and above) MUST render a left profile list and a right detail pane. The detail pane MUST show model ID plus input, cache-read, and output token prices formatted as the price per one million tokens, prefixed by the symbol of that row's `unit_price_currency`: `¥` for `CNY` and `$` for `USD`. A price MUST NOT be shown under a currency symbol that does not match its stored `unit_price_currency`. When the effective row has a non-null `peak_unit_price_nano`, that cell MUST show the off-peak price (`unit_price_nano`) and the peak price (`peak_unit_price_nano`) in that order, both converted as CNY-or-USD per one million tokens under the same currency symbol. When `peak_unit_price_nano` is null, the cell MUST show only the off-peak price.
 
 UI17b. Mobile (`< lg`) MUST render a horizontally scrollable profile selector and stacked model-price rows. No pricing table may require horizontal page scrolling.
 
@@ -293,6 +293,8 @@ UI19. Billing Profiles MUST provide:
 
 UI19c. The manual-override dialog MUST be denominated in CNY per one million tokens. Each price input MUST carry the `¥` symbol, and the dialog MUST state that prices are CNY per one million tokens. Every rate it writes MUST send `unit_price_currency = "CNY"`. The dialog MUST NOT offer a currency selector, and it MUST NOT apply an exchange rate to the typed number.
 
+UI19d. The manual-override dialog MUST expose, for each of Input, Cache read, and Output, an off-peak field (`unit_price_nano`) and an optional peak field (`peak_unit_price_nano`). Both fields are CNY per one million tokens and MUST use the same decimal-string conversion as UI7b. A blank peak field MUST send `peak_unit_price_nano = null` (MB-A8: clear the peak so the row always bills at the off-peak price). A filled peak field MUST send the converted nano-unit string. The dialog MUST state that the peak field applies only during the Beijing weekday peak window defined by `metered-billing.spec.md` MB-R14 (`09:00–12:00` and `14:00–18:00` Monday through Friday, UTC+08:00). Prefill of a peak field MUST follow the same CNY-only rule as UI19c: a stored USD peak leaves the field empty.
+
 UI19a. When metadata and billing rates have finished loading and no `models_dev` records exist, the UI MUST trigger at most one automatic models.dev sync for that mounted page instance. A failed automatic sync MUST show a retry action and MUST NOT loop.
 
 UI19b. A successful models.dev sync MUST revalidate both model metadata and billing-rate SWR resources in the same interaction.
@@ -301,11 +303,11 @@ UI20. Manual overrides MUST be visually separated from synchronized rates. Manua
 
 ### 4.9 Advanced Rates tab
 
-UI21. The Advanced Rates tab MUST list `billing_rate_records` with every low-level mutable field, including the nano-unit price, its currency, and JSON match fields. The price column MUST render `unit_price_nano`, its `unit_price_currency`, and `unit`.
+UI21. The Advanced Rates tab MUST list `billing_rate_records` with every low-level mutable field, including the nano-unit off-peak price, the optional nano-unit peak price, its currency, and JSON match fields. The price column MUST render `unit_price_nano`, and when `peak_unit_price_nano` is non-null MUST also render that peak value, then `unit_price_currency` and `unit`.
 
 UI22. Advanced Rates MUST provide catalog sync, search, add, edit, and delete actions.
 
-UI23. The low-level rate edit dialog MUST allow editing every mutable field exposed by the Billing-rate CRUD API, including `unit_price_currency` as a choice between `CNY` and `USD`. A new row MUST default that control to `CNY`. JSON fields MUST be edited as JSON text and rejected client-side when not valid JSON.
+UI23. The low-level rate edit dialog MUST allow editing every mutable field exposed by the Billing-rate CRUD API, including `unit_price_currency` as a choice between `CNY` and `USD`. A new row MUST default that control to `CNY`. The off-peak nano-unit field (`unit_price_nano`) and the optional peak nano-unit field (`peak_unit_price_nano`) MUST be labeled as off-peak and peak. The peak field MUST state that it applies only during the Beijing weekday window of `metered-billing.spec.md` MB-R14, and a blank peak field MUST send `peak_unit_price_nano = null`. JSON fields MUST be edited as JSON text and rejected client-side when not valid JSON.
 
 UI24. Empty pricing-profile match-rule `pattern` or `pricing_profile` values MUST be blocked before submitting.
 

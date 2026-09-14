@@ -74,6 +74,20 @@ function nanoToInput(rate?: BillingRateRecord): string {
 	return nanoPerTokenToPerMillion(rate.unit_price_nano) ?? ''
 }
 
+function nanoToPeakInput(rate?: BillingRateRecord): string {
+	if (!rate || rate.unit_price_currency !== 'CNY' || !rate.peak_unit_price_nano) return ''
+	return nanoPerTokenToPerMillion(rate.peak_unit_price_nano) ?? ''
+}
+
+function formatRatePrices(rate?: BillingRateRecord): { offPeak: string; peak: string | null } {
+	return {
+		offPeak: nanoToPerMillion(rate),
+		peak: rate?.peak_unit_price_nano
+			? formatNanoPerTokenPerMillion(rate.peak_unit_price_nano, rate.unit_price_currency)
+			: null,
+	}
+}
+
 function perMillionToNano(value: string): string {
 	const converted = perMillionToNanoPerToken(value)
 	if (converted == null) throw new Error('Price must be a non-negative decimal')
@@ -110,7 +124,14 @@ export function BillingProfilesTab() {
 	const [autoSyncError, setAutoSyncError] = useState<string | null>(null)
 	const autoSyncAttempted = useRef(false)
 	const [overrideTarget, setOverrideTarget] = useState<{ profile: string; model: string } | null>(null)
-	const [overrideForm, setOverrideForm] = useState({ input: '', cache: '', output: '' })
+	const [overrideForm, setOverrideForm] = useState({
+		input: '',
+		inputPeak: '',
+		cache: '',
+		cachePeak: '',
+		output: '',
+		outputPeak: '',
+	})
 	const [savingOverride, setSavingOverride] = useState(false)
 	const [copyTarget, setCopyTarget] = useState<string | null>(null)
 	const [copyName, setCopyName] = useState('')
@@ -224,62 +245,69 @@ export function BillingProfilesTab() {
 		setOverrideTarget({ profile, model })
 		setOverrideForm({
 			input: nanoToInput(effectiveRate(modelRates, 'input_uncached')),
+			inputPeak: nanoToPeakInput(effectiveRate(modelRates, 'input_uncached')),
 			cache: nanoToInput(effectiveRate(modelRates, 'cache_read')),
-			output: nanoToInput(effectiveRate(modelRates, 'output'))
+			cachePeak: nanoToPeakInput(effectiveRate(modelRates, 'cache_read')),
+			output: nanoToInput(effectiveRate(modelRates, 'output')),
+			outputPeak: nanoToPeakInput(effectiveRate(modelRates, 'output')),
 		})
 	}
 
-	const saveOverride = async () => {
-		if (!overrideTarget) return
-		setSavingOverride(true)
-		try {
-			const values: Record<UsageClass, string> = {
-				input_uncached: overrideForm.input,
-				cache_read: overrideForm.cache,
-				output: overrideForm.output
-			}
-			for (const { id: usageClass } of visibleUsageClasses) {
-				const value = values[usageClass]
-				if (!value.trim() && usageClass === 'cache_read') {
-					const existingManualCacheRate = rates.find(rate =>
-						rate.source === 'manual' &&
-						rate.pricing_profile === overrideTarget.profile &&
-						rate.model_pattern === overrideTarget.model &&
-						rate.usage_class === 'cache_read'
-					)
-					if (existingManualCacheRate) {
-						await deleteBillingRateOptimistic(existingManualCacheRate.id)
-					}
-					continue
+		const saveOverride = async () => {
+			if (!overrideTarget) return
+			setSavingOverride(true)
+			try {
+				const values: Record<UsageClass, { offPeak: string; peak: string }> = {
+					input_uncached: { offPeak: overrideForm.input, peak: overrideForm.inputPeak },
+					cache_read: { offPeak: overrideForm.cache, peak: overrideForm.cachePeak },
+					output: { offPeak: overrideForm.output, peak: overrideForm.outputPeak },
 				}
-				if (!value.trim()) throw new Error(c('输入和输出价格不能为空', 'Input and output prices are required'))
-				const id = `manual:${safeIdPart(overrideTarget.profile)}:${safeIdPart(overrideTarget.model)}:${usageClass}`
-				await upsertBillingRateOptimistic(id, {
-					source: 'manual',
-					pricing_profile: overrideTarget.profile,
-					model_pattern: overrideTarget.model,
-					provider_type: null,
-					rate_kind: 'token',
-					usage_class: usageClass,
-					unit: 'token',
-					unit_price_nano: perMillionToNano(value),
-					// UI19c: this dialog is denominated in CNY, so the currency is stated on
-					// every write instead of relying on the server default.
-					unit_price_currency: 'CNY',
-					priority: 1000,
-					enabled: true,
-					match_json: {},
-					raw_json: { editor: 'billing_profiles' }
-				}, rates)
+				for (const { id: usageClass } of visibleUsageClasses) {
+					const value = values[usageClass].offPeak
+					const peakValue = values[usageClass].peak
+					if (!value.trim() && usageClass === 'cache_read') {
+						const existingManualCacheRate = rates.find(rate =>
+							rate.source === 'manual' &&
+							rate.pricing_profile === overrideTarget.profile &&
+							rate.model_pattern === overrideTarget.model &&
+							rate.usage_class === 'cache_read'
+						)
+						if (existingManualCacheRate) {
+							await deleteBillingRateOptimistic(existingManualCacheRate.id)
+						}
+						continue
+					}
+					if (!value.trim()) throw new Error(c('输入和输出价格不能为空', 'Input and output prices are required'))
+					const id = `manual:${safeIdPart(overrideTarget.profile)}:${safeIdPart(overrideTarget.model)}:${usageClass}`
+					await upsertBillingRateOptimistic(id, {
+						source: 'manual',
+						pricing_profile: overrideTarget.profile,
+						model_pattern: overrideTarget.model,
+						provider_type: null,
+						rate_kind: 'token',
+						usage_class: usageClass,
+						unit: 'token',
+						unit_price_nano: perMillionToNano(value),
+						// UI19c: this dialog is denominated in CNY, so the currency is stated on
+						// every write instead of relying on the server default.
+						unit_price_currency: 'CNY',
+						// UI19d/MB-A8: a blank peak field clears the peak so the row always
+						// bills at the off-peak price.
+						peak_unit_price_nano: peakValue.trim() ? perMillionToNano(peakValue) : null,
+						priority: 1000,
+						enabled: true,
+						match_json: {},
+						raw_json: { editor: 'billing_profiles' }
+					}, rates)
+				}
+				toast.success(c('手动价格已保存', 'Manual pricing saved'))
+				setOverrideTarget(null)
+			} catch (error) {
+				toast.error(error instanceof Error ? error.message : c('保存失败', 'Save failed'))
+			} finally {
+				setSavingOverride(false)
 			}
-			toast.success(c('手动价格已保存', 'Manual pricing saved'))
-			setOverrideTarget(null)
-		} catch (error) {
-			toast.error(error instanceof Error ? error.message : c('保存失败', 'Save failed'))
-		} finally {
-			setSavingOverride(false)
 		}
-	}
 
 	const deleteManualOverrides = async (modelRates: BillingRateRecord[]) => {
 		const manual = modelRates.filter(rate => rate.source === 'manual')
@@ -325,9 +353,9 @@ export function BillingProfilesTab() {
 				</aside>
 
 				<section className='min-w-0 p-4 sm:p-5'>
-					<div className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'><div><div className='flex flex-wrap items-center gap-2'><h3 className='text-lg font-semibold'>{selectedProfile || c('选择 Profile', 'Select a profile')}</h3><Badge variant='secondary'>{selectedModelRates.length} models</Badge>{selectedProfile ? <Button size='sm' variant='outline' onClick={() => { setCopyTarget(selectedProfile); setCopyName(`${selectedProfile}-copy`) }}><Copy data-icon />{c('复制为新 Profile', 'Copy to new profile')}</Button> : null}</div><p className='mt-1 text-sm text-muted-foreground'>{c('价格按每 100 万 tokens 显示，¥ 为 CNY，$ 为同步的 USD 价格；手动覆盖优先于同步价格。', 'Prices are shown per 1M tokens. ¥ marks a CNY price, $ marks a synced USD price. Manual overrides take precedence.')}</p></div><div className='relative w-full sm:w-72'><Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={c('搜索模型', 'Search models')} className='pl-9' /></div></div>
+						<div className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'><div><div className='flex flex-wrap items-center gap-2'><h3 className='text-lg font-semibold'>{selectedProfile || c('选择 Profile', 'Select a profile')}</h3><Badge variant='secondary'>{selectedModelRates.length} models</Badge>{selectedProfile ? <Button size='sm' variant='outline' onClick={() => { setCopyTarget(selectedProfile); setCopyName(`${selectedProfile}-copy`) }}><Copy data-icon />{c('复制为新 Profile', 'Copy to new profile')}</Button> : null}</div><p className='mt-1 text-sm text-muted-foreground'>{c('价格按每 100 万 tokens 显示，¥ 为 CNY，$ 为同步的 USD 价格；手动覆盖优先于同步价格。峰价仅在北京时间工作日 09:00–12:00 与 14:00–18:00 生效。', 'Prices are shown per 1M tokens. ¥ marks a CNY price, $ marks a synced USD price. Manual overrides take precedence. Peak prices apply Mon–Fri 09:00–12:00 and 14:00–18:00 Beijing time.')}</p></div><div className='relative w-full sm:w-72'><Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={c('搜索模型', 'Search models')} className='pl-9' /></div></div>
 
-					<div className='mt-5 hidden grid-cols-[minmax(220px,1fr)_110px_110px_110px_90px] gap-2 border-b px-3 pb-2 text-xs font-medium text-muted-foreground md:grid'><span>Model</span><span>Input / 1M</span><span>Cache / 1M</span><span>Output / 1M</span><span /></div>
+						<div className='mt-5 hidden grid-cols-[minmax(220px,1fr)_128px_128px_128px_90px] gap-2 border-b px-3 pb-2 text-xs font-medium text-muted-foreground md:grid'><span>Model</span><span>Input / 1M</span><span>Cache / 1M</span><span>Output / 1M</span><span /></div>
 					<div className='mt-2 flex flex-col gap-2'>
 						{profileRatesLoading && rates.length === 0 ? <>
 							<Skeleton className='h-[76px] w-full rounded-lg' />
@@ -337,9 +365,12 @@ export function BillingProfilesTab() {
 						{selectedModelRates.map(([model, modelRates]) => {
 							const manual = modelRates.some(rate => rate.source === 'manual')
 							const metadataItem = metadata.find(item => item.model_id === model)
-							return <div key={model} className='grid gap-3 rounded-lg border p-3 transition-colors hover:bg-muted/30 md:grid-cols-[minmax(220px,1fr)_110px_110px_110px_90px] md:items-center'>
-								<div className='flex min-w-0 items-center gap-2'><ModelBadge model={model} provider={metadataItem?.models_dev_provider || selectedProfile} showDetails={false} /><div className='min-w-0'>{manual ? <Badge variant='default' className='mt-1'>{c('手动覆盖', 'Manual')}</Badge> : null}</div></div>
-								{visibleUsageClasses.map(item => <div key={item.id} className='flex items-center justify-between gap-3 md:block'><span className='text-xs text-muted-foreground md:hidden'>{item.label}</span><span className='font-mono text-sm'>{nanoToPerMillion(effectiveRate(modelRates, item.id))}</span></div>)}
+								return <div key={model} className='grid gap-3 rounded-lg border p-3 transition-colors hover:bg-muted/30 md:grid-cols-[minmax(220px,1fr)_128px_128px_128px_90px] md:items-center'>
+									<div className='flex min-w-0 items-center gap-2'><ModelBadge model={model} provider={metadataItem?.models_dev_provider || selectedProfile} showDetails={false} /><div className='min-w-0'>{manual ? <Badge variant='default' className='mt-1'>{c('手动覆盖', 'Manual')}</Badge> : null}</div></div>
+									{visibleUsageClasses.map(item => {
+										const prices = formatRatePrices(effectiveRate(modelRates, item.id))
+										return <div key={item.id} className='flex items-center justify-between gap-3 md:block'><span className='text-xs text-muted-foreground md:hidden'>{item.label}</span><span className='font-mono text-sm'>{prices.offPeak}{prices.peak ? <span className='mt-0.5 block text-xs text-muted-foreground'>{c(`峰 ${prices.peak}`, `peak ${prices.peak}`)}</span> : null}</span></div>
+									})}
 								<div className='flex justify-end gap-1'><Button size='sm' variant='ghost' onClick={() => openOverride(selectedProfile, model, modelRates)}>{c('编辑', 'Edit')}</Button>{manual ? <Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' onClick={() => void deleteManualOverrides(modelRates)} aria-label={c('删除手动覆盖', 'Delete manual override')}><Trash2 data-icon /></Button> : null}</div>
 							</div>
 						})}
@@ -362,8 +393,12 @@ export function BillingProfilesTab() {
 			<DialogContent className='max-w-lg'><DialogHeader><DialogTitle>{c('复制 Profile', 'Copy profile')}</DialogTitle><DialogDescription>{copyTarget ?? ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('把这个 Profile 的所有费率复制到一个新名字。企业分组和普通分组不能共用同一个 Profile 名，所以两边同价需要两份副本。', 'Copies every rate of this profile under a new name. Enterprise and standard Groups cannot share a profile name, so matching prices need two copies.')}</p><div className='flex flex-col gap-2'><Label htmlFor='copy-profile-name'>{c('新 Profile 名', 'New profile name')}</Label><Input id='copy-profile-name' value={copyName} onChange={event => setCopyName(event.target.value)} placeholder='deepseek-std' /><p className='text-xs text-muted-foreground'>{c('目标 Profile 必须不存在任何费率，否则复制会被拒绝，以免覆盖正在计费的价格。', 'The target profile must have no rates. A non-empty target is refused so prices already billing traffic are never overwritten.')}</p></div></div><DialogFooter><Button variant='outline' onClick={() => { setCopyTarget(null); setCopyName('') }}>{c('取消', 'Cancel')}</Button><Button disabled={copying || !copyName.trim() || copyName.trim() === copyTarget} onClick={() => void runCopy()}>{copying ? c('复制中…', 'Copying…') : c('复制', 'Copy')}</Button></DialogFooter></DialogContent>
 		</Dialog>
 
-		<Dialog open={!!overrideTarget} onOpenChange={open => { if (!open) setOverrideTarget(null) }}>
-			<DialogContent className='max-w-lg'><DialogHeader><DialogTitle>{c('手动价格覆盖', 'Manual price override')}</DialogTitle><DialogDescription>{overrideTarget ? `${overrideTarget.profile} / ${overrideTarget.model}` : ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('输入 CNY / 100 万 tokens。留空 Cache 表示不覆盖缓存价格。', 'Enter CNY per 1M tokens. Leave cache blank to keep it unspecified.')}</p><div className='grid gap-4 sm:grid-cols-3'>{[{ key: 'input', label: 'Input' }, { key: 'cache', label: 'Cache read' }, { key: 'output', label: 'Output' }].map(item => <div key={item.key} className='flex flex-col gap-2'><Label>{item.label}</Label><div className='relative'><span className='absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground'>¥</span><Input type='text' inputMode='decimal' className='pl-7' value={overrideForm[item.key as keyof typeof overrideForm]} onChange={event => setOverrideForm(previous => ({ ...previous, [item.key]: event.target.value }))} /></div></div>)}</div></div><DialogFooter><Button variant='outline' onClick={() => setOverrideTarget(null)}>{c('取消', 'Cancel')}</Button><Button disabled={savingOverride} onClick={() => void saveOverride()}>{savingOverride ? c('保存中…', 'Saving…') : c('保存覆盖', 'Save override')}</Button></DialogFooter></DialogContent>
-		</Dialog>
+			<Dialog open={!!overrideTarget} onOpenChange={open => { if (!open) setOverrideTarget(null) }}>
+				<DialogContent className='max-w-2xl'><DialogHeader><DialogTitle>{c('手动价格覆盖', 'Manual price override')}</DialogTitle><DialogDescription>{overrideTarget ? `${overrideTarget.profile} / ${overrideTarget.model}` : ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('输入 CNY / 100 万 tokens。留空 Cache 表示不覆盖缓存价格。峰价仅在北京时间工作日 09:00–12:00 与 14:00–18:00 生效；留空峰价表示始终按谷价计费。', 'Enter CNY per 1M tokens. Leave cache blank to keep it unspecified. Peak prices apply Mon–Fri 09:00–12:00 and 14:00–18:00 Beijing time. Leave a peak field blank to always bill at the off-peak price.')}</p><div className='grid gap-4 sm:grid-cols-3'>{([
+					{ key: 'input', peakKey: 'inputPeak', label: 'Input' },
+					{ key: 'cache', peakKey: 'cachePeak', label: 'Cache read' },
+					{ key: 'output', peakKey: 'outputPeak', label: 'Output' },
+				] as const).map(item => <div key={item.key} className='flex flex-col gap-3 rounded-lg border p-3'><Label>{item.label}</Label><div className='flex flex-col gap-2'><Label className='text-xs text-muted-foreground'>{c('谷价', 'Off-peak')}</Label><div className='relative'><span className='absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground'>¥</span><Input type='text' inputMode='decimal' className='pl-7' value={overrideForm[item.key]} onChange={event => setOverrideForm(previous => ({ ...previous, [item.key]: event.target.value }))} /></div></div><div className='flex flex-col gap-2'><Label className='text-xs text-muted-foreground'>{c('峰价（可选）', 'Peak (optional)')}</Label><div className='relative'><span className='absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground'>¥</span><Input type='text' inputMode='decimal' className='pl-7' value={overrideForm[item.peakKey]} onChange={event => setOverrideForm(previous => ({ ...previous, [item.peakKey]: event.target.value }))} /></div></div></div>)}</div></div><DialogFooter><Button variant='outline' onClick={() => setOverrideTarget(null)}>{c('取消', 'Cancel')}</Button><Button disabled={savingOverride} onClick={() => void saveOverride()}>{savingOverride ? c('保存中…', 'Saving…') : c('保存覆盖', 'Save override')}</Button></DialogFooter></DialogContent>
+			</Dialog>
 	</>
 }

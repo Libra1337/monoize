@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -14,22 +15,41 @@ async fn configure_firewall(ctx: &TestContext, enabled: bool, words: &str) {
 async fn start_judge(category: &'static str) -> (String, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let handler_calls = Arc::clone(&calls);
+    let seen_users = Arc::new(Mutex::new(Vec::<String>::new()));
+    let handler_users = Arc::clone(&seen_users);
     let app = axum::Router::new().route(
         "/v1/chat/completions",
-        axum::routing::post(
-            move |body: axum::Json<serde_json::Value>| async move {
-                handler_calls.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(body.0["temperature"], json!(0));
-                axum::Json(json!({
-                    "choices": [{
-                        "message": {"content": format!(
-                            "Analyzing the request intent.
-{{\"category\":\"{category}\",\"reason\":\"test evidence\"}}"
-                        )}
-                    }]
-                }))
-            },
-        ),
+        axum::routing::post(move |body: axum::Json<serde_json::Value>| async move {
+            handler_calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(body.0["temperature"], json!(0));
+            assert_eq!(body.0["store"], json!(false));
+            let user = body.0["user"].as_str().expect("per-call user").to_string();
+            assert!(
+                user.starts_with("moderation-judge-"),
+                "judge user must isolate the call: {user}"
+            );
+            {
+                let mut seen = handler_users.lock().expect("seen users");
+                assert!(
+                    !seen.contains(&user),
+                    "judge user must be unique per call: {user}"
+                );
+                seen.push(user);
+            }
+            let messages = body.0["messages"].as_array().expect("messages");
+            assert_eq!(messages.len(), 2);
+            assert!(body.0.get("conversation_id").is_none());
+            assert!(body.0.get("previous_response_id").is_none());
+            assert!(body.0.get("session_id").is_none());
+            axum::Json(json!({
+                "choices": [{
+                    "message": {"content": format!(
+                        "Analyzing the request intent.
+            {{\"category\":\"{category}\",\"reason\":\"test evidence\"}}"
+                    )}
+                }]
+            }))
+        }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -50,7 +70,10 @@ async fn configure_judge(ctx: &TestContext, base_url: &str, enabled: bool) {
 }
 
 fn upstream_call_count(ctx: &TestContext) -> usize {
-    ctx.captured_bodies.lock().expect("captured bodies lock").len()
+    ctx.captured_bodies
+        .lock()
+        .expect("captured bodies lock")
+        .len()
 }
 
 /// CF-31: with the judge disabled the firewall is inert — keyword matches are
@@ -99,7 +122,9 @@ async fn porn_verdict_blocks_and_records_blocked_event() {
     assert_eq!(error["error"]["type"], json!("content_policy_violation"));
     assert_eq!(
         error["error"]["message"],
-        json!("触发网站风控违禁词，无法调用模型：内容命中网关内容防火墙规则[关键词：badword]，已被拦截。请修改内容后重试。")
+        json!(
+            "触发网站风控违禁词，无法调用模型：内容命中网关内容防火墙规则[关键词：badword]，已被拦截。请修改内容后重试。"
+        )
     );
     assert_eq!(upstream_call_count(&ctx), 0);
     assert_eq!(judge_calls.load(Ordering::SeqCst), 1);
@@ -132,7 +157,8 @@ async fn policy_discussion_with_keyword_hit_is_allowed_and_marked() {
     let (judge_url, _calls) = start_judge("benign").await;
     configure_judge(&ctx, &judge_url, true).await;
 
-    let rules_text = "群管理准则：广告/诈骗→撤回+禁言；色情/违法→撤回+踢（管理员先请示群主）；不确定→先观察。";
+    let rules_text =
+        "群管理准则：广告/诈骗→撤回+禁言；色情/违法→撤回+踢（管理员先请示群主）；不确定→先观察。";
     let (status, _body) = json_post(
         &ctx,
         "/v1/chat/completions",
@@ -262,8 +288,11 @@ async fn bypass_token_skips_firewall_without_judge_call() {
 #[tokio::test]
 async fn uncertain_verdict_allows_and_marks_instead_of_blocking() {
     let ctx = setup().await;
-    configure_firewall(&ctx, true, "BadWord
-").await;
+    configure_firewall(
+        &ctx, true, "BadWord
+",
+    )
+    .await;
     let (judge_url, _calls) = start_judge("uncertain").await;
     configure_judge(&ctx, &judge_url, true).await;
 
@@ -305,7 +334,11 @@ async fn stats_report_blocked_and_marked_separately() {
     let (judge_url, _calls) = start_judge("benign").await;
     configure_judge(&ctx, &judge_url, true).await;
 
-    for content in ["mention badword once", "mention ALPHA twice", "totally clean"] {
+    for content in [
+        "mention badword once",
+        "mention ALPHA twice",
+        "totally clean",
+    ] {
         let (status, _body) = json_post(
             &ctx,
             "/v1/chat/completions",
@@ -348,7 +381,12 @@ async fn dashboard_apis_expose_judge_status_action_and_admin_guard() {
     let cookie = {
         ctx.state
             .user_store
-            .create_user("fw_admin", "test-password", monoize::users::UserRole::Admin, None)
+            .create_user(
+                "fw_admin",
+                "test-password",
+                monoize::users::UserRole::Admin,
+                None,
+            )
             .await
             .expect("create admin user");
         dashboard_session_cookie(&ctx, "fw_admin", "test-password").await
@@ -383,7 +421,12 @@ async fn dashboard_apis_expose_judge_status_action_and_admin_guard() {
 
     ctx.state
         .user_store
-        .create_user("fw_plain", "test-password", monoize::users::UserRole::User, None)
+        .create_user(
+            "fw_plain",
+            "test-password",
+            monoize::users::UserRole::User,
+            None,
+        )
         .await
         .expect("create plain user");
     let plain_cookie = dashboard_session_cookie(&ctx, "fw_plain", "test-password").await;

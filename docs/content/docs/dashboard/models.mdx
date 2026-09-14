@@ -30,6 +30,10 @@ Billing uses:
 Each rate record stores a price and a price currency. A rate you enter by hand is priced in
 `CNY / 1M tokens` by default. A rate imported from Models.dev keeps `USD`.
 
+On the Billing Profiles tab, edit a model to set an off-peak price and an optional peak price.
+The peak price applies only on Monday through Friday, `09:00–12:00` and `14:00–18:00` Beijing
+time (UTC+08:00). Leave the peak field empty to always bill at the off-peak price.
+
 Monoize converts a `CNY` price with the current CNY/USD exchange-rate snapshot and
 accumulates charges in nano-dollars in each user's ledger. If a model uses a `CNY` price and
 no exchange-rate snapshot is available, requests for that model fail with

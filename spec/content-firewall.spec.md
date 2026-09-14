@@ -36,11 +36,18 @@ trigger (CF-30); they MUST NOT cause a rejection by themselves.
 
 CF-3. The built-in default keyword list is ordered by weight: NSFW/CSAM
 terms first (the enforcement priority), political terms after. The exact
-terms live in `DEFAULT_BLOCKED_WORDS` (`src/content_firewall.rs`); the list
-contains NSFW slang and variants (`色图`, `瑟瑟`, `开车`, `成人小说`, `本子`,
-`萝莉`, `nsfw`, `r18`, `hentai`, …), zero-tolerance child terms, and
-political terms (`颠覆国家政权`, `煽动分裂`, `恐怖主义`, …). Administrators
+terms live in `DEFAULT_BLOCKED_WORDS` (`src/content_firewall.rs`). The list
+MUST contain only high-precision stems: explicit sexual nouns (`色情`,
+`色图`, `黄片`, `成人小说`, `裸聊`, `nsfw`, `hentai`, `r18`, …),
+zero-tolerance child-sexual-abuse terms, and political terms
+(`颠覆国家政权`, `煽动分裂`, `恐怖主义`, …). It MUST NOT contain
+single-character CJK stems (`淫`, `骚`) or everyday homographs whose
+common non-sexual reading would send ordinary chat to the judge
+(`开车`, `本子`, `调教`, `露骨`, `萝莉`, `正太`). Administrators
 extend or narrow the list through the settings page at any time.
+A process start MUST replace a stored `moderation_blocked_words` value
+that still equals a previous built-in default with the current
+`DEFAULT_BLOCKED_WORDS`; an operator-edited list MUST be left unchanged.
 
 CF-4. Term canonicalization: split the raw value on `\n`, trim leading and
 trailing Unicode whitespace from each line, drop empty lines, lowercase each
@@ -224,11 +231,16 @@ scanned string. A request with no keyword match is forwarded directly with no
 judge call, no added latency, and no event row. The keyword list therefore
 determines the judge's coverage; the judge alone decides rejections.
 
-CF-28. When invoked, the firewall sends one judge request: an
+CF-28. When invoked, the firewall sends one isolated judge request: an
 OpenAI-compatible `POST {moderation_judge_base_url}/chat/completions` (a
 `/v1` suffix on the base URL is stripped before appending
 `/chat/completions`) with `model = moderation_judge_model`,
-`temperature = 0`, and `max_tokens = 512`. The system prompt instructs the
+`temperature = 0`, `max_tokens = 512`, `store = false`, and a unique
+per-call `user` field of the form `moderation-judge-{uuid}`. The body
+MUST contain exactly two messages (`system` then `user`) and MUST NOT
+include `conversation_id`, `previous_response_id`, `session_id`, or any
+other field that would attach the call to a prior judge turn. The system
+prompt instructs the
 judge to analyze what the text is trying to accomplish before answering,
 to end its reply with exactly one JSON object, and to classify the request
 into exactly one category of `{"category": "porn" | "political" | "benign" |
@@ -241,7 +253,9 @@ education, law-enforcement, academic, technical, and moderation-policy
 discussion that merely mentions or prohibits these topics, and agent or
 tool system prompts and defensive security policy text; `uncertain` is the
 mandatory answer whenever the judge cannot decide, so that a borderline
-text is never forced into a blocking category. The `reason` field must
+text is never forced into a blocking category. A keyword hit is a hint
+only: the judge MUST NOT treat the presence of a listed term as sufficient
+evidence of `porn` or `political`. The `reason` field must
 state the concrete evidence for the verdict, written in Simplified
 Chinese. The user message contains the
 keyword matches (CF-5) followed by the CF-7..CF-12 scanned strings joined

@@ -1089,18 +1089,24 @@ function BillingRatesTab() {
                 <Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="token" />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">{t("modelMetadata.billingRates.unitPrice", "Nano-unit / Unit")}</Label>
+                <Label className="text-xs">{t("modelMetadata.billingRates.unitPrice", "Off-peak nano-unit / unit")}</Label>
                 <Input value={form.unitPriceNano} onChange={(e) => setForm({ ...form, unitPriceNano: e.target.value })} placeholder="1000" />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">
-                  {t("modelMetadata.billingRates.peakPrice", "Peak Price (optional)")}
+                  {t("modelMetadata.billingRates.peakPrice", "Peak nano-unit / unit (optional)")}
                 </Label>
                 <Input
                   value={form.peakUnitPriceNano}
                   onChange={(e) => setForm({ ...form, peakUnitPriceNano: e.target.value })}
-                  placeholder={t("modelMetadata.billingRates.peakPricePlaceholder", "empty = off-peak price always")}
+                  placeholder={t("modelMetadata.billingRates.peakPricePlaceholder", "empty = always bill at off-peak")}
                 />
+                <p className="text-[11px] leading-4 text-muted-foreground">
+                  {t(
+                    "modelMetadata.billingRates.peakPriceHelp",
+                    "Peak applies Mon–Fri 09:00–12:00 and 14:00–18:00 Beijing time. Leave empty to always use the off-peak price."
+                  )}
+                </p>
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">{t("modelMetadata.billingRates.unitPriceCurrency", "Price Currency")}</Label>
