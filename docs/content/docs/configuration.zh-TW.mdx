@@ -75,3 +75,20 @@ Monoize 支援一個可寫主節點加多個唯讀副本，共享同一個 Postg
 | `MONOIZE_REPLICA_METERING_SPOOL_DIR` | `./data/replica-metering-spool` | 持久化增量暫存目錄 |
 
 容錯移轉是手動操作：將副本的角色改為主節點並重啟程序。
+
+## 指標與告警
+
+`GET /metrics` 回傳 Prometheus 文字格式。主節點和副本節點都要求 `admin` 角色的儀表板工作階段。用 `Authorization: Bearer <token>` 或儀表板工作階段 Cookie 提供工作階段權杖。沒有有效管理員工作階段的請求會回傳錯誤，不提供任何指標資料。
+
+請從能夠存取儀表板工作階段的網路路徑抓取該端點，或使用持有管理員權杖的監控代理。不要把該端點暴露到公開網際網路。
+
+以下兩個計數器反映其他方式無法察覺的狀態。兩者都應設定告警。
+
+| 指標 | 含義 | 告警條件 |
+| --- | --- | --- |
+| `monoize_channel_health_saturated_total` | 僅因通道健康表已滿而將某個通道判定為不可用 | `rate(monoize_channel_health_saturated_total[5m]) > 0` |
+| `monoize_last_used_buffer_dropped_total` | 因緩衝區已滿而丟棄某個新 API Key 的 `last_used_at` 中繼資料 | `rate(monoize_last_used_buffer_dropped_total[5m]) > 0` |
+
+第一個計數器表示：通道已啟用且健康，但某些模型沒有可用上游。請調高 `MONOIZE_CHANNEL_HEALTH_MAX_ENTRIES`。第二個計數器表示：部分 Key 的 `last_used_at` 顯示已過期。它不影響計費。請調高 `MONOIZE_LAST_USED_BUFFER_ENTRIES`。
+
+每個計數器在每段飽和事件中還會輸出一行 `warn` 記錄。持續飽和只記錄一次，不會逐筆記錄。

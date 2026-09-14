@@ -75,3 +75,21 @@ Monoize can run as one writable primary plus read-only replicas that share one P
 | `MONOIZE_REPLICA_METERING_SPOOL_DIR` | `./data/replica-metering-spool` | Durable delta spool directory |
 
 Failover is manual: promote a replica by switching its role and restarting the process.
+
+## Metrics and alerts
+
+`GET /metrics` returns Prometheus text format. It requires a dashboard session whose user has the `admin` role, on primary and replica nodes alike. Send the session token as `Authorization: Bearer <token>` or as the dashboard session cookie. A request without a valid admin session returns an error and no metric data.
+
+Scrape the endpoint from a network path that can reach the dashboard session, or from a monitoring agent that holds an admin token. Do not expose it to the public internet.
+
+Two counters report conditions that are otherwise invisible. Alert on both.
+
+| Metric | Meaning | Alert condition |
+| --- | --- | --- |
+| `monoize_channel_health_saturated_total` | A Channel was treated as ineligible only because the Channel-health map was full | `rate(monoize_channel_health_saturated_total[5m]) > 0` |
+| `monoize_last_used_buffer_dropped_total` | A new API key's `last_used_at` metadata was dropped because the buffer was full | `rate(monoize_last_used_buffer_dropped_total[5m]) > 0` |
+
+The first counter means some models have no eligible upstream even though the Channels are enabled and healthy. Raise `MONOIZE_CHANNEL_HEALTH_MAX_ENTRIES`. The second counter means `last_used_at` display is stale for some keys. It does not affect billing. Raise `MONOIZE_LAST_USED_BUFFER_ENTRIES`.
+
+Each counter also emits one `warn` log line per saturation episode. A sustained episode logs once, not once per event.
+

@@ -75,3 +75,20 @@ Monoize は、1 つの書き込み可能なプライマリと複数の読み取�
 | `MONOIZE_REPLICA_METERING_SPOOL_DIR` | `./data/replica-metering-spool` | 永続化差分スプールディレクトリ |
 
 フェイルオーバーは手動です。レプリカのロールを切り替えてプロセスを再起動します。
+
+## メトリクスとアラート
+
+`GET /metrics` は Prometheus テキスト形式を返します。プライマリノードとレプリカノードの両方で、`admin` ロールのダッシュボードセッションが必要です。セッショントークンは `Authorization: Bearer <token>` またはダッシュボードセッション Cookie で渡します。有効な管理者セッションがないリクエストはエラーを返し、メトリクスデータを返しません。
+
+ダッシュボードセッションに到達できるネットワーク経路からこのエンドポイントを収集するか、管理者トークンを保持する監視エージェントから収集してください。このエンドポイントをインターネットへ公開しないでください。
+
+次の 2 つのカウンタは、他の方法では見えない状態を報告します。両方にアラートを設定してください。
+
+| メトリクス | 意味 | アラート条件 |
+| --- | --- | --- |
+| `monoize_channel_health_saturated_total` | チャネル健全性マップが満杯のためだけに、あるチャネルが利用不可と判定された | `rate(monoize_channel_health_saturated_total[5m]) > 0` |
+| `monoize_last_used_buffer_dropped_total` | バッファが満杯のため、新しい API キーの `last_used_at` メタデータが破棄された | `rate(monoize_last_used_buffer_dropped_total[5m]) > 0` |
+
+1 つ目のカウンタは、チャネルが有効かつ健全であるのに一部のモデルに利用可能な上流がないことを意味します。`MONOIZE_CHANNEL_HEALTH_MAX_ENTRIES` を大きくしてください。2 つ目のカウンタは、一部のキーで `last_used_at` の表示が古いことを意味します。課金には影響しません。`MONOIZE_LAST_USED_BUFFER_ENTRIES` を大きくしてください。
+
+各カウンタは飽和エピソードごとに 1 行の `warn` ログも出力します。飽和が続く場合、ログは 1 回だけ出力されます。
