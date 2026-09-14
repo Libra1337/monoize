@@ -20,6 +20,19 @@ use std::time::Duration;
 /// tests that bind a mock upstream to loopback can create Channels. The override only
 /// relaxes the private/loopback address classification (CP-INV-16); scheme and host
 /// requirements are still enforced.
+/// True when the operator has explicitly permitted private upstream addresses.
+/// Both the create-time Channel check and the per-dispatch address guard read
+/// this single decision so the two cannot drift apart.
+pub fn private_upstream_addresses_allowed() -> bool {
+    let allowed = std::env::var("MONOIZE_ALLOW_PRIVATE_UPSTREAM")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+        || ALLOW_PRIVATE_UPSTREAM_OVERRIDE.load(Ordering::Relaxed);
+    #[cfg(test)]
+    let allowed = allowed || TEST_ALLOW_PRIVATE_UPSTREAM.with(|cell| cell.get());
+    allowed
+}
+
 pub static ALLOW_PRIVATE_UPSTREAM_OVERRIDE: AtomicBool = AtomicBool::new(false);
 
 /// Disable CP-INV-16 private/loopback address rejection for the lifetime of the
@@ -2481,13 +2494,7 @@ fn validate_channel_base_url(base_url: &str) -> Result<(), String> {
         .host_str()
         .ok_or_else(|| "channel base_url must include a host".to_string())?;
 
-    let allow_private = std::env::var("MONOIZE_ALLOW_PRIVATE_UPSTREAM")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-        || ALLOW_PRIVATE_UPSTREAM_OVERRIDE.load(Ordering::Relaxed);
-    #[cfg(test)]
-    let allow_private = allow_private || TEST_ALLOW_PRIVATE_UPSTREAM.with(|cell| cell.get());
-    if allow_private {
+    if private_upstream_addresses_allowed() {
         return Ok(());
     }
 
@@ -2539,7 +2546,7 @@ fn validate_channel_base_url(base_url: &str) -> Result<(), String> {
 /// True for loopback, link-local, unspecified, multicast, documentation, and the
 /// private IPv4 (RFC 1918) / unique-local IPv6 (RFC 4193) ranges. All are
 /// non-globally-routable destinations a relay must not be pointed at.
-fn is_private_or_local_ip(address: IpAddr) -> bool {
+pub fn is_private_or_local_ip(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(v4) => {
             let octets = v4.octets();

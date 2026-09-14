@@ -80,6 +80,87 @@ pub struct UpstreamErrorInfo {
     pub message: Option<String>,
 }
 
+/// CP-INV-16a: create-time validation cannot bind a hostname to the address it
+/// will reach later, so a Channel whose DNS record changes after creation could
+/// still direct Monoize at a private address. Every dispatch re-resolves its
+/// target host and rejects a private, loopback, link-local, or reserved result.
+/// The decision is cached per origin for a short window, which keeps a hot
+/// Channel from paying a resolver round trip on every request while bounding how
+/// long a stale decision can outlive a DNS change.
+const ADDRESS_GUARD_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+const ADDRESS_GUARD_CACHE_MAX_ENTRIES: usize = 4096;
+
+static ADDRESS_GUARD_CACHE: std::sync::OnceLock<
+    dashmap::DashMap<String, (std::time::Instant, Result<(), String>)>,
+> = std::sync::OnceLock::new();
+
+fn address_guard_cache() -> &'static dashmap::DashMap<String, (std::time::Instant, Result<(), String>)>
+{
+    ADDRESS_GUARD_CACHE.get_or_init(dashmap::DashMap::new)
+}
+
+/// Guard one dispatch target. A literal IP is classified directly; a hostname is
+/// resolved on the blocking pool because `ToSocketAddrs` blocks. Unresolvable
+/// names pass here and fail later as ordinary upstream network errors, which
+/// keeps DNS outages from being reported as a policy rejection.
+async fn guard_upstream_address(url: &str) -> Result<(), String> {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return Ok(());
+    };
+    let scheme = parsed.scheme().to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return Ok(());
+    }
+    let Some(host) = parsed.host_str().map(str::to_string) else {
+        return Ok(());
+    };
+    if crate::monoize_routing::private_upstream_addresses_allowed() {
+        return Ok(());
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return if crate::monoize_routing::is_private_or_local_ip(ip) {
+            Err(private_address_message(ip))
+        } else {
+            Ok(())
+        };
+    }
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let key = format!("{host}:{port}");
+    if let Some(entry) = address_guard_cache().get(&key)
+        && entry.value().0.elapsed() < ADDRESS_GUARD_CACHE_TTL
+    {
+        return entry.value().1.clone();
+    }
+    let decision = tokio::task::spawn_blocking(move || resolve_and_classify(&host, port))
+        .await
+        .unwrap_or(Ok(()));
+    let cache = address_guard_cache();
+    if cache.len() >= ADDRESS_GUARD_CACHE_MAX_ENTRIES {
+        cache.clear();
+    }
+    cache.insert(key, (std::time::Instant::now(), decision.clone()));
+    decision
+}
+
+fn resolve_and_classify(host: &str, port: u16) -> Result<(), String> {
+    use std::net::ToSocketAddrs;
+    let Ok(addresses) = (host, port).to_socket_addrs() else {
+        return Ok(());
+    };
+    for address in addresses.take(8) {
+        if crate::monoize_routing::is_private_or_local_ip(address.ip()) {
+            return Err(private_address_message(address.ip()));
+        }
+    }
+    Ok(())
+}
+
+fn private_address_message(address: std::net::IpAddr) -> String {
+    format!(
+        "upstream host resolves to a loopback, link-local, private, or reserved address ({address})"
+    )
+}
+
 pub async fn call_upstream(
     client: &reqwest::Client,
     provider: &ProviderConfig,
@@ -195,6 +276,9 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
         )
     })?;
     let url = join_url(base, path);
+    guard_upstream_address(&url)
+        .await
+        .map_err(|message| UpstreamCallError::new(UpstreamErrorKind::Http, None, message))?;
     let mut req = client
         .post(url)
         .timeout(std::time::Duration::from_millis(timeout_ms))
@@ -257,6 +341,9 @@ pub async fn call_upstream_multipart_with_timeout_and_headers(
         )
     })?;
     let url = join_url(base, path);
+    guard_upstream_address(&url)
+        .await
+        .map_err(|message| UpstreamCallError::new(UpstreamErrorKind::Http, None, message))?;
     let mut req = client
         .post(url)
         .timeout(std::time::Duration::from_millis(timeout_ms))
@@ -405,5 +492,37 @@ mod tests {
         );
         assert_eq!(fallback.code.as_deref(), Some("529"));
         assert_eq!(fallback.error_type.as_deref(), Some("upstream_error"));
+    }
+
+    #[tokio::test]
+    async fn guard_rejects_a_literal_loopback_dispatch_target() {
+        let denied = guard_upstream_address("http://127.0.0.1:9999/v1/responses").await;
+        assert!(denied.is_err(), "loopback literal must be rejected");
+
+        let reserved = guard_upstream_address("http://10.1.2.3/v1/responses").await;
+        assert!(reserved.is_err(), "RFC 1918 literal must be rejected");
+    }
+
+    #[tokio::test]
+    async fn guard_allows_a_public_literal_dispatch_target() {
+        assert!(
+            guard_upstream_address("https://203.0.113.1/v1/responses")
+                .await
+                .is_err(),
+            "documentation range is not publicly routable"
+        );
+        assert!(
+            guard_upstream_address("https://1.1.1.1/v1/responses")
+                .await
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn unresolvable_host_passes_the_guard() {
+        assert!(
+            resolve_and_classify("host.invalid", 443).is_ok(),
+            "DNS failure must not be reported as a policy rejection"
+        );
     }
 }
