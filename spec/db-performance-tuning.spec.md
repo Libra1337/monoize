@@ -220,17 +220,31 @@ DPT-BC9. `update_user` MUST invalidate the balance cache only when `balance_nano
 
 DPT-BC10. After a balance mutation commits and its same-process invalidation completes, later cache reads MUST NOT return a value read before that invalidation. The TTL remains 30 seconds for changes made outside this process.
 
+### 5.6 UsageReadCache
+
+DPT-UR1. `UsageReadCache` MUST cache persisted balance lookups for the read-only balance surfaces `GET /api/codex/usage` and `GET /user/balance`. The TTL MUST be 3 seconds.
+
+DPT-UR2. `UsageReadCache` MUST NOT be used by any path that admits or rejects a request, and MUST NOT be used for spending, quota, or settlement decisions. Those paths MUST read the balance directly. A balance returned by `UsageReadCache` is display-only and MAY be up to 3 seconds stale.
+
+DPT-UR3. Concurrent lookups for the same user MUST collapse into at most one in-flight database read. A lookup that arrives while another lookup for the same user is in flight MUST wait for that read and MUST use its result.
+
+DPT-UR4. Errors MUST NOT be cached. A failed database read MUST NOT be replayed to later lookups within the TTL window.
+
+DPT-UR5. Entry capacity MUST be bounded. At capacity, insertion MUST clear existing entries before publishing the new entry.
+
+
 DPT-BC11. `BalanceCache` MUST provide a background eviction task that periodically removes expired entries using `retain`.
 
 ## 6. UserStore Integration
 
 ### 6.1 Construction
 
-DPT-US1. `UserStore::new(db)` MUST construct all four subsystems:
+DPT-US1. `UserStore::new(db)` MUST construct all five subsystems:
 - `LastUsedBatcher::new()`
 - `RequestLogBatcher::new(128)`
 - `ApiKeyCache::new(Duration::from_secs(60))`
 - `BalanceCache::new(Duration::from_secs(30))`
+- `UsageReadCache::new()`
 
 ### 6.2 Lifecycle
 

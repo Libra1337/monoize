@@ -601,6 +601,7 @@ pub struct UserStore {
     pub(crate) request_log_batcher: crate::db_cache::RequestLogBatcher,
     pub(crate) api_key_cache: crate::db_cache::ApiKeyCache,
     pub(crate) balance_cache: crate::db_cache::BalanceCache,
+    pub(crate) usage_read_cache: crate::db_cache::UsageReadCache,
     pub(crate) registration_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub(crate) api_key_creation_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
 }

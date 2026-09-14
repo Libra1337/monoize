@@ -1705,6 +1705,95 @@ impl ApiKeyCache {
 // BalanceCache: caches user balance lookups, invalidated on charge/adjust
 // ---------------------------------------------------------------------------
 
+/// DPT-UR1: a short-lived cache for read-only balance surfaces that clients poll
+/// on a fixed interval (`/api/codex/usage`, `/user/balance`). These endpoints do
+/// not gate spending, and every spending decision reads the balance through
+/// `ensure_user_can_spend`, which stays uncached. A bounded staleness window is
+/// therefore safe here and removes a database read per poll.
+///
+/// The window is deliberately much shorter than `BalanceCache`'s 30 seconds:
+/// these responses are shown to end users as a current balance, not used to
+/// admit a request.
+const USAGE_READ_CACHE_TTL: Duration = Duration::from_secs(3);
+const USAGE_READ_CACHE_MAX_ENTRIES: usize = 10_000;
+
+#[derive(Debug, Clone)]
+struct UsageReadEntry {
+    value: Result<Option<UserBalance>, String>,
+    cached_at: Instant,
+}
+
+/// Caches read-only balance responses for `USAGE_READ_CACHE_TTL`. A single
+/// per-key in-flight lock collapses concurrent polls for the same user into one
+/// database read, so a client polling in parallel cannot multiply the load.
+#[derive(Debug, Clone)]
+pub struct UsageReadCache {
+    cache: Arc<DashMap<String, UsageReadEntry>>,
+    inflight: Arc<DashMap<String, Arc<Mutex<()>>>>,
+}
+
+impl Default for UsageReadCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UsageReadCache {
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(DashMap::new()),
+            inflight: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Return the cached value when it is fresh, otherwise run `load` once while
+    /// holding the per-key lock. The lock is released before the result is
+    /// returned, so a slow `load` blocks only callers for the same key.
+    pub async fn get_or_load<F, Fut>(&self, key: &str, load: F) -> Result<Option<UserBalance>, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Option<UserBalance>, String>>,
+    {
+        if let Some(value) = self.fresh(key) {
+            return value;
+        }
+        let gate = self
+            .inflight
+            .entry(key.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
+        let _guard = gate.lock().await;
+        if let Some(value) = self.fresh(key) {
+            return value;
+        }
+        let value = load().await;
+        // Errors are not cached: a transient database failure must not keep
+        // failing for the whole window.
+        if value.is_ok() {
+            if self.cache.len() >= USAGE_READ_CACHE_MAX_ENTRIES {
+                self.cache.clear();
+            }
+            self.cache.insert(
+                key.to_string(),
+                UsageReadEntry {
+                    value: value.clone(),
+                    cached_at: Instant::now(),
+                },
+            );
+        }
+        self.inflight.remove(key);
+        value
+    }
+
+    fn fresh(&self, key: &str) -> Option<Result<Option<UserBalance>, String>> {
+        let entry = self.cache.get(key)?;
+        if entry.cached_at.elapsed() > USAGE_READ_CACHE_TTL {
+            return None;
+        }
+        Some(entry.value.clone())
+    }
+}
+
 #[derive(Clone, Debug)]
 struct CachedBalanceEntry {
     balance: UserBalance,
@@ -2937,5 +3026,53 @@ mod tests {
         assert_eq!(shipped.len(), 1);
         assert_eq!(shipped[0].id, "disk-only");
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn usage_read_cache_serves_one_read_for_concurrent_polls() {
+        let cache = UsageReadCache::new();
+        let calls = Arc::new(AtomicU64::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let cache = cache.clone();
+            let calls = calls.clone();
+            handles.push(tokio::spawn(async move {
+                cache
+                    .get_or_load("user-1", || {
+                        let calls = calls.clone();
+                        async move {
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                            Ok(None)
+                        }
+                    })
+                    .await
+            }));
+        }
+        for handle in handles {
+            handle.await.expect("task").expect("load");
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "concurrent polls for one user must collapse into a single read"
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_read_cache_does_not_cache_errors() {
+        let cache = UsageReadCache::new();
+        let first = cache
+            .get_or_load("user-2", || async { Err("db down".to_string()) })
+            .await;
+        assert!(first.is_err());
+
+        let second = cache
+            .get_or_load("user-2", || async { Ok(None) })
+            .await;
+        assert!(
+            second.is_ok(),
+            "a transient failure must not be replayed for the whole window"
+        );
     }
 }

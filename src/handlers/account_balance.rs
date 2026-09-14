@@ -51,9 +51,11 @@ async fn effective_balance(
         })?;
         (balance, false, api_key_id)
     } else {
+        // DPT-UR1: this endpoint reports a balance for display only. Spending is
+        // admitted by `ensure_user_can_spend`, which reads the balance directly.
         let balance = state
             .user_store
-            .get_user_balance_uncached(authenticated_user_id)
+            .get_user_balance_for_usage_read(authenticated_user_id)
             .await
             .map_err(internal_error)?
             .ok_or_else(|| unauthorized("user not found"))?;

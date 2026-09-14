@@ -379,6 +379,7 @@ impl UserStore {
             ),
             api_key_cache: crate::db_cache::ApiKeyCache::new(Duration::from_secs(60)),
             balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(30)),
+            usage_read_cache: crate::db_cache::UsageReadCache::new(),
             registration_lock: Arc::new(tokio::sync::Mutex::new(())),
             api_key_creation_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
@@ -3309,6 +3310,18 @@ impl UserStore {
         user_id: &str,
     ) -> Result<Option<UserBalance>, String> {
         self.load_user_balance(user_id).await
+    }
+
+    /// DPT-UR1: persisted balance for read-only balance surfaces, served from a
+    /// 3-second cache with concurrent polls for one user collapsed into a single
+    /// database read. Spending decisions never use this path.
+    pub async fn get_user_balance_for_usage_read(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<UserBalance>, String> {
+        self.usage_read_cache
+            .get_or_load(user_id, || self.load_user_balance(user_id))
+            .await
     }
 
     pub async fn ensure_user_can_spend(&self, user_id: &str) -> Result<(), BillingError> {
