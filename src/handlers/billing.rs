@@ -15,6 +15,8 @@ pub(super) struct BillingRateResolution {
     /// FX snapshot captured when the rates were loaded, used to express a CNY-basis rate in
     /// the nano-USD unit every balance is denominated in. `None` when no snapshot exists.
     pub(super) cny_per_usd: Option<Decimal>,
+    /// MB-R14: the once-per-request peak-window determination.
+    pub(super) is_peak: bool,
 }
 
 /// MB-C1a: converts one line-item charge into nano-USD.
@@ -51,6 +53,48 @@ pub(super) fn charge_in_usd(
     cny_per_usd: Option<Decimal>,
 ) -> Result<i128, String> {
     nano_charge_to_usd(charge, rate.is_cny_basis(), cny_per_usd, &rate.id)
+}
+
+/// MB-C1b/MB-R14: the per-request pricing context carried beside the rate rows.
+/// The FX snapshot and the peak-window determination are each made exactly once
+/// per request so every line item of one request bills on the same basis.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BillingPricingContext {
+    pub(super) cny_per_usd: Option<Decimal>,
+    pub(super) is_peak: bool,
+}
+
+/// MB-R14: Beijing time (UTC+08:00, no daylight saving) Monday-Friday with
+/// `09:00 <= time < 12:00` or `14:00 <= time < 18:00` is peak; everything
+/// else is off-peak.
+pub(super) fn is_beijing_peak_window(now_utc: chrono::DateTime<chrono::Utc>) -> bool {
+    use chrono::{Datelike, FixedOffset, Timelike};
+    let beijing = now_utc.with_timezone(&FixedOffset::east_opt(8 * 3600).expect("UTC+8 is valid"));
+    let weekday = beijing.weekday();
+    let weekday_peak = matches!(
+        weekday,
+        chrono::Weekday::Mon
+            | chrono::Weekday::Tue
+            | chrono::Weekday::Wed
+            | chrono::Weekday::Thu
+            | chrono::Weekday::Fri
+    );
+    let minute_of_day = beijing.hour() * 60 + beijing.minute();
+    weekday_peak
+        && ((540..720).contains(&minute_of_day) || (840..1080).contains(&minute_of_day))
+}
+
+/// MB-R15: the unit price the row bills at under the resolution's window.
+fn effective_rate_price_nano(
+    rate: &DbBillingRateRecord,
+    is_peak: bool,
+) -> Result<i128, String> {
+    if is_peak
+        && let Some(peak) = rate.peak_unit_price_nano()?
+    {
+        return Ok(peak);
+    }
+    rate.unit_price_nano()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -185,7 +229,8 @@ pub(super) fn plan_maximum_charge_nano(
                     }
             })
             .map(|rate| {
-                let charge = i128::from(tokens).checked_mul(rate.unit_price_nano().ok()?)?;
+                let unit_price = effective_rate_price_nano(rate, resolution.is_peak).ok()?;
+                let charge = i128::from(tokens).checked_mul(unit_price)?;
                 charge_in_usd(charge, rate, resolution.cny_per_usd).ok()
             })
             .collect::<Option<Vec<_>>>()?
@@ -652,6 +697,11 @@ pub(super) async fn build_billing_rate_resolution_snapshot(
         .ok()
         .and_then(|snapshot| Decimal::from_str(&snapshot.cny_per_usd).ok())
         .filter(|rate| rate.is_sign_positive() && !rate.is_zero());
+    // MB-R14: determined once per request, at the same moment as the FX snapshot.
+    let pricing = BillingPricingContext {
+        cny_per_usd,
+        is_peak: is_beijing_peak_window(chrono::Utc::now()),
+    };
     let resolutions = pairs
         .into_iter()
         .map(|(model, provider_type, pricing_profile)| {
@@ -660,7 +710,7 @@ pub(super) async fn build_billing_rate_resolution_snapshot(
                 &model,
                 &provider_type,
                 &pricing_profile,
-                cny_per_usd,
+                &pricing,
             );
             ((model, provider_type, pricing_profile), resolution)
         })
@@ -676,7 +726,7 @@ fn resolve_billing_rate_matrix_from_snapshot(
     model: &str,
     provider_type: &str,
     pricing_profile: &str,
-    cny_per_usd: Option<Decimal>,
+    pricing: &BillingPricingContext,
 ) -> Option<BillingRateResolution> {
     let profile_rates = candidate_rates
         .iter()
@@ -697,7 +747,8 @@ fn resolve_billing_rate_matrix_from_snapshot(
         pricing_profile: pricing_profile.to_string(),
         pricing_model: model.to_string(),
         rates: profile_rates,
-        cny_per_usd,
+        cny_per_usd: pricing.cny_per_usd,
+        is_peak: pricing.is_peak,
     })
 }
 
@@ -710,6 +761,16 @@ pub(super) fn billing_rate_matrix_allows_request(
         if unit_price < 0 || unit_price.to_string() != rate.unit_price_nano {
             return Err(format!(
                 "non-canonical or negative unit_price_nano for billing rate {}",
+                rate.id
+            ));
+        }
+        // MB-R15: a malformed peak price makes the matrix incomplete exactly like a
+        // malformed unit_price_nano does.
+        if let Some(peak) = rate.peak_unit_price_nano()?
+            && peak < 0
+        {
+            return Err(format!(
+                "negative peak_unit_price_nano for billing rate {}",
                 rate.id
             ));
         }
@@ -816,6 +877,7 @@ pub(crate) fn billing_rates_form_complete_matrix(rates: &[DbBillingRateRecord]) 
         // keeps the MB-R9a gate from reporting a correctly configured CNY matrix as
         // incomplete just because the FX snapshot is not in scope here.
         cny_per_usd: Some(Decimal::ONE),
+        is_peak: false,
     };
     billing_rate_matrix_allows_request(&resolution, &[]).is_ok_and(|complete| complete)
 }
@@ -1072,7 +1134,7 @@ fn add_token_line(
     context_tier: Option<&str>,
     service_tier: Option<&str>,
     cache_ttl: Option<&str>,
-    cny_per_usd: Option<Decimal>,
+    pricing: &BillingPricingContext,
 ) -> Result<i128, String> {
     add_token_line_for_usage_classes(
         line_items,
@@ -1083,7 +1145,7 @@ fn add_token_line(
         context_tier,
         service_tier,
         cache_ttl,
-        cny_per_usd,
+        &pricing,
     )
 }
 
@@ -1096,7 +1158,7 @@ fn add_token_line_for_usage_classes(
     context_tier: Option<&str>,
     service_tier: Option<&str>,
     cache_ttl: Option<&str>,
-    cny_per_usd: Option<Decimal>,
+    pricing: &BillingPricingContext,
 ) -> Result<i128, String> {
     if quantity == 0 {
         return Ok(0);
@@ -1116,17 +1178,23 @@ fn add_token_line_for_usage_classes(
             usage_classes.join("|"), modality, context_tier, service_tier, cache_ttl
         )
     })?;
-    let unit_price = rate.unit_price_nano()?;
+    let unit_price = effective_rate_price_nano(rate, pricing.is_peak)?;
+    let pricing_window = if pricing.is_peak && rate.peak_unit_price_nano().ok().flatten().is_some() {
+        "peak"
+    } else {
+        "off_peak"
+    };
     let charge = i128::from(quantity)
         .checked_mul(unit_price)
         .ok_or_else(|| "token charge overflow".to_string())?;
-    let charge = charge_in_usd(charge, rate, cny_per_usd)?;
+    let charge = charge_in_usd(charge, rate, pricing.cny_per_usd)?;
     line_items.push(json!({
         "rate_id": rate.id,
         "usage_class": rate.usage_class,
         "unit": rate.unit,
         "unit_price_nano": unit_price.to_string(),
         "unit_price_currency": rate.unit_price_currency,
+        "pricing_window": pricing_window,
         "quantity": quantity,
         "charge_nano": charge.to_string(),
         "modality": modality,
@@ -1145,7 +1213,7 @@ fn add_modality_token_lines(
     fallback_quantity: u64,
     context_tier: Option<&str>,
     service_tier: Option<&str>,
-    cny_per_usd: Option<Decimal>,
+    pricing: &BillingPricingContext,
 ) -> Result<i128, String> {
     if !has_matching_modality_rates(rates, usage_classes, context_tier, service_tier, None) {
         return add_token_line_for_usage_classes(
@@ -1157,7 +1225,7 @@ fn add_modality_token_lines(
             context_tier,
             service_tier,
             None,
-            cny_per_usd,
+            &pricing,
         );
     }
     // Zero tokens need no modality breakdown — charge is 0 regardless of rates.
@@ -1174,7 +1242,7 @@ fn add_modality_token_lines(
             context_tier,
             service_tier,
             None,
-            cny_per_usd,
+            &pricing,
         );
     };
     validate_modality_sum(usage_classes[0], breakdown, fallback_quantity)?;
@@ -1196,7 +1264,7 @@ fn add_modality_token_lines(
                 context_tier,
                 service_tier,
                 None,
-                cny_per_usd,
+                &pricing,
             )?)
             .ok_or_else(|| "token charge overflow".to_string())?;
     }
@@ -1210,7 +1278,7 @@ fn add_cache_read_lines(
     quantity: u64,
     context_tier: Option<&str>,
     service_tier: Option<&str>,
-    cny_per_usd: Option<Decimal>,
+    pricing: &BillingPricingContext,
 ) -> Result<i128, String> {
     let usage_classes = ["cache_read", "input_cached"];
     if breakdown.is_some()
@@ -1224,7 +1292,7 @@ fn add_cache_read_lines(
             quantity,
             context_tier,
             service_tier,
-            cny_per_usd,
+            &pricing,
         );
     }
     if find_rate_for_usage_classes(
@@ -1247,7 +1315,7 @@ fn add_cache_read_lines(
             context_tier,
             service_tier,
             None,
-            cny_per_usd,
+            &pricing,
         );
     }
     add_token_line(
@@ -1259,7 +1327,7 @@ fn add_cache_read_lines(
         context_tier,
         service_tier,
         None,
-        cny_per_usd,
+        &pricing,
     )
 }
 
@@ -1271,7 +1339,7 @@ fn add_cache_write_line(
     context_tier: Option<&str>,
     service_tier: Option<&str>,
     cache_ttl: &str,
-    cny_per_usd: Option<Decimal>,
+    pricing: &BillingPricingContext,
 ) -> Result<i128, String> {
     if find_rate(
         rates,
@@ -1293,7 +1361,7 @@ fn add_cache_write_line(
             context_tier,
             service_tier,
             Some(cache_ttl),
-            cny_per_usd,
+            &pricing,
         );
     }
     add_token_line(
@@ -1305,7 +1373,7 @@ fn add_cache_write_line(
         context_tier,
         service_tier,
         None,
-        cny_per_usd,
+        pricing,
     )
 }
 
@@ -1384,7 +1452,7 @@ fn add_meter_lines(
     requested_usage_classes: &[String],
     context_tier: Option<&str>,
     service_tier: Option<&str>,
-    cny_per_usd: Option<Decimal>,
+    pricing: &BillingPricingContext,
 ) -> Result<i128, String> {
     let mut total = 0i128;
     let mut selected_usage_classes = HashSet::new();
@@ -1440,17 +1508,25 @@ fn add_meter_lines(
         {
             quantity = quantity.max(minimum);
         }
-        let unit_price = rate.unit_price_nano()?;
+        let unit_price = effective_rate_price_nano(rate, pricing.is_peak)?;
+        let pricing_window = if pricing.is_peak
+            && rate.peak_unit_price_nano().ok().flatten().is_some()
+        {
+            "peak"
+        } else {
+            "off_peak"
+        };
         let charge = i128::from(quantity)
             .checked_mul(unit_price)
             .ok_or_else(|| "meter charge overflow".to_string())?;
-        let charge = charge_in_usd(charge, rate, cny_per_usd)?;
+        let charge = charge_in_usd(charge, rate, pricing.cny_per_usd)?;
         line_items.push(json!({
             "rate_id": rate.id,
             "usage_class": rate.usage_class,
             "unit": rate.unit,
             "unit_price_nano": unit_price.to_string(),
             "unit_price_currency": rate.unit_price_currency,
+            "pricing_window": pricing_window,
             "quantity": quantity,
             "charge_nano": charge.to_string(),
             "authoritative": authoritative.is_some(),
@@ -1519,9 +1595,13 @@ pub(super) fn calculate_rate_matrix_charge_components(
 ) -> Result<MatrixChargeComponents, String> {
     let input_details = usage.input_details.as_ref();
     let output_details = usage.output_details.as_ref();
-    // One FX snapshot for the whole request, so every line item of one charge converts at the
-    // same rate no matter how long the request ran.
-    let cny_per_usd = resolution.cny_per_usd;
+    // One FX snapshot and one peak-window determination for the whole request (MB-C1b,
+    // MB-R14), so every line item of one charge bills on the same basis no matter how long
+    // the request ran.
+    let pricing = BillingPricingContext {
+        cny_per_usd: resolution.cny_per_usd,
+        is_peak: resolution.is_peak,
+    };
     let context_tier = determine_context_tier(usage, &resolution.rates)?;
     let service_tier = response_service_tier
         .map(str::trim)
@@ -1599,7 +1679,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
             uncached_tokens,
             context_tier_ref,
             service_tier_ref,
-            cny_per_usd,
+            &pricing,
         )?)
         .ok_or_else(|| "token charge overflow".to_string())?;
     token_total = token_total
@@ -1610,7 +1690,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
             cached_tokens,
             context_tier_ref,
             service_tier_ref,
-            cny_per_usd,
+            &pricing,
         )?)
         .ok_or_else(|| "token charge overflow".to_string())?;
 
@@ -1675,7 +1755,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
                 context_tier_ref,
                 service_tier_ref,
                 None,
-                cny_per_usd,
+                &pricing,
             )?)
             .ok_or_else(|| "token charge overflow".to_string())?;
     } else {
@@ -1688,7 +1768,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
                 context_tier_ref,
                 service_tier_ref,
                 "5m",
-                cny_per_usd,
+                &pricing,
             )?)
             .ok_or_else(|| "token charge overflow".to_string())?;
         token_total = token_total
@@ -1700,7 +1780,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
                 context_tier_ref,
                 service_tier_ref,
                 "1h",
-                cny_per_usd,
+                &pricing,
             )?)
             .ok_or_else(|| "token charge overflow".to_string())?;
     }
@@ -1713,7 +1793,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
             non_reasoning_output_tokens,
             context_tier_ref,
             service_tier_ref,
-            cny_per_usd,
+            &pricing,
         )?)
         .ok_or_else(|| "token charge overflow".to_string())?;
     token_total = token_total
@@ -1726,7 +1806,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
             context_tier_ref,
             service_tier_ref,
             None,
-            cny_per_usd,
+            &pricing,
         )?)
         .ok_or_else(|| "token charge overflow".to_string())?;
 
@@ -1739,7 +1819,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
         requested_usage_classes,
         context_tier_ref,
         service_tier_ref,
-        cny_per_usd,
+        &pricing,
     )?;
     let base_charge = token_total
         .checked_add(meter_total)
@@ -2169,4 +2249,168 @@ pub(super) fn substitute_zero_usage_if_allowed(
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod peak_pricing_tests {
+    use super::*;
+    use crate::billing_rate_store::RATE_CURRENCY_USD;
+    use chrono::TimeZone;
+
+    fn peak_rate() -> DbBillingRateRecord {
+        DbBillingRateRecord {
+            id: "peak-test-rate".to_string(),
+            source: "manual".to_string(),
+            pricing_profile: "default".to_string(),
+            model_pattern: None,
+            provider_type: None,
+            rate_kind: "token".to_string(),
+            usage_class: "output".to_string(),
+            unit: "token".to_string(),
+            unit_price_nano: "1000".to_string(),
+            unit_price_currency: RATE_CURRENCY_USD.to_string(),
+            peak_unit_price_nano: Some("2000".to_string()),
+            context_tier: None,
+            service_tier: None,
+            modality: None,
+            cache_ttl: None,
+            match_json: serde_json::json!({}),
+            priority: 0,
+            enabled: true,
+            raw_json: serde_json::json!({}),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn beijing_time(weekday_chrono_day: u32, hour: u32, minute: u32) -> chrono::DateTime<chrono::Utc> {
+        // 2026-09-14 is a Monday; the weekday advances one day per `weekday_chrono_day`.
+        chrono::Utc.with_ymd_and_hms(2026, 9, 14 + weekday_chrono_day, hour, minute, 0)
+            .single()
+            .expect("valid test timestamp")
+    }
+
+    /// MB-R14: window edges and the UTC+8 conversion.
+    #[test]
+    fn beijing_peak_window_boundaries() {
+        // Monday 09:00 Beijing (01:00 UTC) through 11:59 is peak.
+        assert!(is_beijing_peak_window(beijing_time(0, 1, 0)));
+        assert!(is_beijing_peak_window(beijing_time(0, 3, 59)));
+        // 12:00-13:59 lunch break is off-peak.
+        assert!(!is_beijing_peak_window(beijing_time(0, 4, 0)));
+        assert!(!is_beijing_peak_window(beijing_time(0, 5, 59)));
+        // 14:00-17:59 afternoon is peak; 18:00 sharp is off-peak.
+        assert!(is_beijing_peak_window(beijing_time(0, 6, 0)));
+        assert!(is_beijing_peak_window(beijing_time(0, 9, 59)));
+        assert!(!is_beijing_peak_window(beijing_time(0, 10, 0)));
+        // Weekend is always off-peak, even inside the weekday hours.
+        assert!(!is_beijing_peak_window(beijing_time(5, 1, 0)));
+        assert!(!is_beijing_peak_window(beijing_time(6, 6, 0)));
+        // Friday afternoon is the last peak of the week.
+        assert!(is_beijing_peak_window(beijing_time(4, 6, 0)));
+    }
+
+    /// MB-R15/MB-C1d: the peak price applies only when the window is peak AND
+    /// the row carries one; the line item records which window billed.
+    #[test]
+    fn token_line_uses_effective_price_and_records_the_window() {
+        let rate = peak_rate();
+        let mut line_items = Vec::new();
+        let charge = add_token_line_for_usage_classes(
+            &mut line_items,
+            std::slice::from_ref(&rate),
+            &["output"],
+            10,
+            None,
+            None,
+            None,
+            None,
+            &BillingPricingContext {
+                cny_per_usd: None,
+                is_peak: true,
+            },
+        )
+        .expect("peak charge");
+        assert_eq!(charge, 10 * 2000);
+        assert_eq!(line_items[0]["unit_price_nano"], serde_json::json!("2000"));
+        assert_eq!(line_items[0]["pricing_window"], serde_json::json!("peak"));
+
+        let mut line_items = Vec::new();
+        add_token_line_for_usage_classes(
+            &mut line_items,
+            std::slice::from_ref(&rate),
+            &["output"],
+            10,
+            None,
+            None,
+            None,
+            None,
+            &BillingPricingContext {
+                cny_per_usd: None,
+                is_peak: false,
+            },
+        )
+        .expect("off-peak charge");
+        assert_eq!(line_items[0]["unit_price_nano"], serde_json::json!("1000"));
+        assert_eq!(line_items[0]["pricing_window"], serde_json::json!("off_peak"));
+    }
+
+    /// MB-D3g: a row without a peak price bills at `unit_price_nano` even in the
+    /// peak window.
+    #[test]
+    fn peak_window_without_peak_price_falls_back_to_unit_price() {
+        let mut rate = peak_rate();
+        rate.peak_unit_price_nano = None;
+        let mut line_items = Vec::new();
+        add_token_line_for_usage_classes(
+            &mut line_items,
+            std::slice::from_ref(&rate),
+            &["output"],
+            10,
+            None,
+            None,
+            None,
+            None,
+            &BillingPricingContext {
+                cny_per_usd: None,
+                is_peak: true,
+            },
+        )
+        .expect("fallback charge");
+        assert_eq!(line_items[0]["unit_price_nano"], serde_json::json!("1000"));
+        assert_eq!(line_items[0]["pricing_window"], serde_json::json!("off_peak"));
+    }
+
+    /// MB-R15: the hold maximum uses the effective price of the window.
+    #[test]
+    fn plan_maximum_uses_the_peak_price() {
+        let mut input_rate = peak_rate();
+        input_rate.usage_class = "input_uncached".to_string();
+        let resolution = BillingRateResolution {
+            pricing_profile: "default".to_string(),
+            pricing_model: "test-model".to_string(),
+            rates: vec![input_rate, peak_rate()],
+            cny_per_usd: None,
+            is_peak: true,
+        };
+        let maximum =
+            plan_maximum_charge_nano(&resolution, 100, Some(100), &[], Multiplier::ONE)
+                .expect("maximum");
+        // Both hold legs price 100 tokens at the 2000 peak nano price.
+        assert_eq!(maximum, 100 * 2000 + 100 * 2000);
+
+        // The same matrix off-peak holds against the 1000 base price.
+        let off_peak_resolution = BillingRateResolution {
+            is_peak: false,
+            ..resolution
+        };
+        let maximum = plan_maximum_charge_nano(
+            &off_peak_resolution,
+            100,
+            Some(100),
+            &[],
+            Multiplier::ONE,
+        )
+        .expect("maximum");
+        assert_eq!(maximum, 100 * 1000 + 100 * 1000);
+    }
 }

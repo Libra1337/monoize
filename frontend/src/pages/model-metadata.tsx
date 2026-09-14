@@ -806,6 +806,7 @@ interface BillingRateFormData {
   unit: string;
   unitPriceNano: string;
   unitPriceCurrency: RateCurrency;
+  peakUnitPriceNano: string;
   contextTier: string;
   serviceTier: string;
   modality: string;
@@ -828,6 +829,7 @@ const emptyBillingRateForm: BillingRateFormData = {
   unitPriceNano: "",
   // UI23: a new low-level rate defaults to the same currency as the price form.
   unitPriceCurrency: "CNY",
+  peakUnitPriceNano: "",
   contextTier: "",
   serviceTier: "",
   modality: "",
@@ -859,6 +861,7 @@ function billingRateToForm(rate: BillingRateRecord): BillingRateFormData {
     unit: rate.unit,
     unitPriceNano: rate.unit_price_nano,
     unitPriceCurrency: rate.unit_price_currency,
+    peakUnitPriceNano: rate.peak_unit_price_nano ?? "",
     contextTier: rate.context_tier ?? "",
     serviceTier: rate.service_tier ?? "",
     modality: rate.modality ?? "",
@@ -886,6 +889,10 @@ function formToBillingRateInput(form: BillingRateFormData): UpsertBillingRateInp
   if (!/^(?:0|[1-9]\d*)$/.test(form.unitPriceNano.trim())) {
     throw new Error("unit price must be a non-negative integer nano-unit string");
   }
+  const peakUnitPriceNano = form.peakUnitPriceNano.trim();
+  if (peakUnitPriceNano && !/^(?:0|[1-9]\d*)$/.test(peakUnitPriceNano)) {
+    throw new Error("peak price must be a non-negative integer nano-unit string");
+  }
   const priority = Number(form.priority || "0");
   if (!Number.isInteger(priority)) throw new Error("priority must be an integer");
   return {
@@ -898,6 +905,8 @@ function formToBillingRateInput(form: BillingRateFormData): UpsertBillingRateInp
     unit: form.unit.trim(),
     unit_price_nano: form.unitPriceNano.trim(),
     unit_price_currency: form.unitPriceCurrency,
+    // MB-A8: an empty field clears the peak price; a filled one sets it.
+    peak_unit_price_nano: peakUnitPriceNano === "" ? null : peakUnitPriceNano,
     context_tier: nullableText(form.contextTier),
     service_tier: nullableText(form.serviceTier),
     modality: nullableText(form.modality),
@@ -1084,6 +1093,16 @@ function BillingRatesTab() {
                 <Input value={form.unitPriceNano} onChange={(e) => setForm({ ...form, unitPriceNano: e.target.value })} placeholder="1000" />
               </div>
               <div className="space-y-1">
+                <Label className="text-xs">
+                  {t("modelMetadata.billingRates.peakPrice", "Peak Price (optional)")}
+                </Label>
+                <Input
+                  value={form.peakUnitPriceNano}
+                  onChange={(e) => setForm({ ...form, peakUnitPriceNano: e.target.value })}
+                  placeholder={t("modelMetadata.billingRates.peakPricePlaceholder", "empty = off-peak price always")}
+                />
+              </div>
+              <div className="space-y-1">
                 <Label className="text-xs">{t("modelMetadata.billingRates.unitPriceCurrency", "Price Currency")}</Label>
                 <Select value={form.unitPriceCurrency} onValueChange={(value) => setForm({ ...form, unitPriceCurrency: value as RateCurrency })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -1237,7 +1256,9 @@ function BillingRatesTab() {
                 {rate.rate_kind}:{rate.usage_class}
               </VirtualTableCell>
               <VirtualTableCell className="font-mono text-xs" onClick={() => openEdit(rate)}>
-                {rate.unit_price_nano} {rate.unit_price_currency} / {rate.unit}
+                {rate.peak_unit_price_nano
+                  ? `${rate.unit_price_nano} / ${rate.peak_unit_price_nano} ${rate.unit_price_currency} / ${rate.unit}`
+                  : `${rate.unit_price_nano} ${rate.unit_price_currency} / ${rate.unit}`}
               </VirtualTableCell>
               <VirtualTableCell className="font-mono text-xs" onClick={() => openEdit(rate)}>
                 {[rate.context_tier, rate.service_tier, rate.modality, rate.cache_ttl].filter(Boolean).join(" / ") || "-"}

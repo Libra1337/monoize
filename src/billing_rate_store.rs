@@ -29,6 +29,9 @@ pub struct DbBillingRateRecord {
     pub unit_price_nano: String,
     /// Currency the price is denominated in: `USD` or `CNY` (PP-CUR-1).
     pub unit_price_currency: String,
+    /// Optional peak-window price (MB-D3g); NULL/None means the row always
+    /// bills at `unit_price_nano`.
+    pub peak_unit_price_nano: Option<String>,
     pub context_tier: Option<String>,
     pub service_tier: Option<String>,
     pub modality: Option<String>,
@@ -45,6 +48,18 @@ impl DbBillingRateRecord {
         self.unit_price_nano
             .parse::<i128>()
             .map_err(|_| format!("invalid unit_price_nano for {}", self.id))
+    }
+
+    /// MB-R15: the price the row bills at during the peak window. `None` when
+    /// the row has no peak price and bills at `unit_price_nano` everywhere.
+    pub fn peak_unit_price_nano(&self) -> Result<Option<i128>, String> {
+        self.peak_unit_price_nano
+            .as_deref()
+            .map(|raw| {
+                raw.parse::<i128>()
+                    .map_err(|_| format!("invalid peak_unit_price_nano for {}", self.id))
+            })
+            .transpose()
     }
 
     /// True when the price is quoted in the account's settlement currency rather than USD.
@@ -77,6 +92,7 @@ pub struct UpsertBillingRateInput {
     pub unit: Option<String>,
     pub unit_price_nano: Option<String>,
     pub unit_price_currency: Option<String>,
+    pub peak_unit_price_nano: Option<Option<String>>,
     pub context_tier: Option<Option<String>>,
     pub service_tier: Option<Option<String>>,
     pub modality: Option<Option<String>>,
@@ -157,7 +173,7 @@ impl BillingRateStore {
             .read()
             .query_all(self.db.stmt(
                 "SELECT id, source, pricing_profile, model_pattern, provider_type, rate_kind,
-                        usage_class, unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                        usage_class, unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier, service_tier,
                         modality, cache_ttl, match_json, priority, enabled, raw_json, updated_at
                  FROM billing_rate_records
                  ORDER BY pricing_profile ASC, priority DESC, id ASC",
@@ -179,7 +195,7 @@ impl BillingRateStore {
             .read()
             .query_all(self.db.stmt(
                 "SELECT id, source, pricing_profile, model_pattern, provider_type, rate_kind,
-                        usage_class, unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                        usage_class, unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier, service_tier,
                         modality, cache_ttl, match_json, priority, enabled, raw_json, updated_at
                  FROM billing_rate_records
                  WHERE pricing_profile = $1
@@ -237,7 +253,7 @@ impl BillingRateStore {
             .read()
             .query_all(self.db.stmt(
                 "SELECT id, source, pricing_profile, model_pattern, provider_type, rate_kind,
-                        usage_class, unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                        usage_class, unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier, service_tier,
                         modality, cache_ttl, match_json, priority, enabled, raw_json, updated_at
                  FROM billing_rate_records
                  WHERE enabled = 1
@@ -294,7 +310,7 @@ impl BillingRateStore {
                 .query_all(self.db.stmt(
                     &format!(
                         "SELECT id, source, pricing_profile, model_pattern, provider_type, rate_kind,
-                                usage_class, unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                                usage_class, unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier, service_tier,
                                 modality, cache_ttl, match_json, priority, enabled, raw_json, updated_at
                          FROM billing_rate_records
                          WHERE enabled = 1
@@ -365,7 +381,7 @@ impl BillingRateStore {
                     .query_all(self.db.stmt(
                         &format!(
                             "SELECT id, source, pricing_profile, model_pattern, provider_type, rate_kind,
-                                    usage_class, unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                                    usage_class, unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier, service_tier,
                                     modality, cache_ttl, match_json, priority, enabled, raw_json, updated_at
                              FROM billing_rate_records
                              WHERE enabled = 1
@@ -420,7 +436,7 @@ impl BillingRateStore {
             .query_one(self.db.stmt(
                 &format!(
                     "SELECT id, source, pricing_profile, model_pattern, provider_type, rate_kind,
-                            usage_class, unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                            usage_class, unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier, service_tier,
                             modality, cache_ttl, match_json, priority, enabled, raw_json, updated_at
                      FROM billing_rate_records WHERE id = $1{lock_suffix}"
                 ),
@@ -476,6 +492,30 @@ impl BillingRateStore {
             ));
         }
 
+        // MB-A8: omitted keeps the stored value, null or empty clears to NULL, and a
+        // present non-empty string must be a canonical non-negative integer (MB-D3g).
+        let peak_unit_price_nano = match &input.peak_unit_price_nano {
+            None => existing.as_ref().and_then(|r| r.peak_unit_price_nano.clone()),
+            Some(None) => None,
+            Some(Some(raw)) => {
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    None
+                } else {
+                    let parsed = raw.parse::<i128>().map_err(|_| {
+                        "peak_unit_price_nano must be an integer string".to_string()
+                    })?;
+                    if parsed < 0 || parsed.to_string() != raw {
+                        return Err(
+                            "peak_unit_price_nano must be a canonical non-negative integer string"
+                                .to_string(),
+                        );
+                    }
+                    Some(raw.to_string())
+                }
+            }
+        };
+
         let model_pattern = input
             .model_pattern
             .unwrap_or_else(|| existing.as_ref().and_then(|r| r.model_pattern.clone()));
@@ -517,9 +557,10 @@ impl BillingRateStore {
         txn.execute(self.db.stmt(
                 "INSERT INTO billing_rate_records
                  (id, source, pricing_profile, model_pattern, provider_type, rate_kind, usage_class,
-                  unit, unit_price_nano, unit_price_currency, context_tier, service_tier, modality, cache_ttl,
+                  unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier,
+                  service_tier, modality, cache_ttl,
                   match_json, priority, enabled, raw_json, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
                  ON CONFLICT(id) DO UPDATE SET
                    source = excluded.source,
                    pricing_profile = excluded.pricing_profile,
@@ -530,6 +571,7 @@ impl BillingRateStore {
                    unit = excluded.unit,
                    unit_price_nano = excluded.unit_price_nano,
                    unit_price_currency = excluded.unit_price_currency,
+                   peak_unit_price_nano = excluded.peak_unit_price_nano,
                    context_tier = excluded.context_tier,
                    service_tier = excluded.service_tier,
                    modality = excluded.modality,
@@ -550,6 +592,7 @@ impl BillingRateStore {
                     unit.into(),
                     unit_price_nano.into(),
                     unit_price_currency.into(),
+                    peak_unit_price_nano.into(),
                     context_tier.into(),
                     service_tier.into(),
                     modality.into(),
@@ -622,7 +665,7 @@ impl BillingRateStore {
         let rows = txn
             .query_all(self.db.stmt(
                 "SELECT id, model_pattern, provider_type, rate_kind, usage_class, unit,
-                        unit_price_nano, unit_price_currency, context_tier, service_tier,
+                        unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier, service_tier,
                         modality, cache_ttl, match_json, priority, enabled, raw_json
                  FROM billing_rate_records WHERE pricing_profile = $1 ORDER BY id ASC",
                 vec![source_profile.into()],
@@ -642,11 +685,11 @@ impl BillingRateStore {
             txn.execute(self.db.stmt(
                 "INSERT INTO billing_rate_records
                  (id, source, pricing_profile, model_pattern, provider_type, rate_kind,
-                  usage_class, unit, unit_price_nano, unit_price_currency, context_tier,
+                  usage_class, unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier,
                   service_tier, modality, cache_ttl, match_json, priority, enabled, raw_json,
                   updated_at)
                  SELECT $1, 'manual', $2, model_pattern, provider_type, rate_kind, usage_class,
-                        unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                        unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier, service_tier,
                         modality, cache_ttl, match_json, priority, enabled, raw_json, $4
                  FROM billing_rate_records WHERE id = $3",
                 vec![
@@ -671,7 +714,7 @@ impl BillingRateStore {
             .read()
             .query_one(self.db.stmt(
                 "SELECT id, source, pricing_profile, model_pattern, provider_type, rate_kind,
-                        usage_class, unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                        usage_class, unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier, service_tier,
                         modality, cache_ttl, match_json, priority, enabled, raw_json, updated_at
                  FROM billing_rate_records
                  WHERE id = $1",
@@ -757,7 +800,7 @@ impl BillingRateStore {
 
         const CATALOG_SYNC_CHUNK_SIZE: usize = 23;
         for chunk in writes.chunks(CATALOG_SYNC_CHUNK_SIZE) {
-            let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 18);
+            let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 19);
             let mut rows = Vec::with_capacity(chunk.len());
             for rate in chunk {
                 let start = values.len() + 1;
@@ -771,6 +814,8 @@ impl BillingRateStore {
                     rate.unit.clone().into(),
                     rate.unit_price_nano_usd.clone().into(),
                     RATE_CURRENCY_USD.into(),
+                    // MB-D3g: catalog rows carry no peak price.
+                    Option::<String>::None.into(),
                     rate.context_tier.clone().into(),
                     rate.service_tier.clone().into(),
                     rate.modality.clone().into(),
@@ -782,14 +827,14 @@ impl BillingRateStore {
                     fetched_at.clone().into(),
                 ]);
                 let mut placeholders = vec![format!("${start}"), "'catalog'".to_string()];
-                placeholders.extend((start + 1..start + 18).map(|index| format!("${index}")));
+                placeholders.extend((start + 1..start + 19).map(|index| format!("${index}")));
                 rows.push(format!("({})", placeholders.join(", ")));
             }
             txn.execute(self.db.stmt(
                 &format!(
                     "INSERT INTO billing_rate_records
                      (id, source, pricing_profile, model_pattern, provider_type, rate_kind,
-                      usage_class, unit, unit_price_nano, unit_price_currency, context_tier, service_tier,
+                      usage_class, unit, unit_price_nano, unit_price_currency, peak_unit_price_nano, context_tier, service_tier,
                       modality, cache_ttl, match_json, priority, enabled, raw_json, updated_at)
                      VALUES {}",
                     rows.join(", ")
@@ -896,6 +941,9 @@ fn decode_billing_rate_row(row: &sea_orm::QueryResult) -> Result<DbBillingRateRe
         provider_type: row
             .try_get("", "provider_type")
             .map_err(|e| e.to_string())?,
+        peak_unit_price_nano: row
+            .try_get("", "peak_unit_price_nano")
+            .map_err(|e| e.to_string())?,
         rate_kind: row.try_get("", "rate_kind").map_err(|e| e.to_string())?,
         usage_class: row.try_get("", "usage_class").map_err(|e| e.to_string())?,
         unit: row.try_get("", "unit").map_err(|e| e.to_string())?,
@@ -951,6 +999,7 @@ mod tests {
                     unit: Some("token".to_string()),
                     unit_price_nano: Some(price.to_string()),
                     unit_price_currency: Some("CNY".to_string()),
+                    peak_unit_price_nano: None,
                     priority: Some(7),
                     enabled: Some(true),
                     provider_type: None,
@@ -1163,6 +1212,7 @@ mod tests {
                     unit: Some("token".to_string()),
                     unit_price_nano: Some("1".to_string()),
                     unit_price_currency: None,
+                    peak_unit_price_nano: None,
                     context_tier: None,
                     service_tier: None,
                     modality: None,

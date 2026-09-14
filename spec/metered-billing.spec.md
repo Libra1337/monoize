@@ -42,6 +42,7 @@ MB-D2. `billing_rate_records` MUST contain these columns:
 - `unit: TEXT`
 - `unit_price_nano: TEXT`
 - `unit_price_currency: TEXT`
+- `peak_unit_price_nano: TEXT NULL`
 - `context_tier: TEXT NULL`
 - `service_tier: TEXT NULL`
 - `modality: TEXT NULL`
@@ -57,6 +58,15 @@ MB-D3. `unit_price_nano` MUST be an integer string denominated in nano-units of 
 MB-D3a. `unit_price_nano` MUST be non-negative and representable as `i128`. Create, update, sync, and metadata-mirror paths MUST reject a negative or malformed rate before persistence.
 
 MB-D3b. `unit_price_currency` MUST be exactly `USD` or `CNY`. The database MUST enforce this domain with a `CHECK` constraint. A create or update path MUST reject any other value with `400 invalid_request`.
+
+MB-D3g. `peak_unit_price_nano` is the optional high-demand price of the row. When it is
+non-null it MUST obey the MB-D3a canonical non-negative `i128` rule and MUST be
+denominated in the same `unit_price_currency` per the same one `unit` as
+`unit_price_nano`. A NULL `peak_unit_price_nano` means the row has no peak price
+and always bills at `unit_price_nano`. Create and update paths MUST reject a
+negative or malformed non-null value with `400 invalid_request`, and MUST treat
+an empty string as NULL. Catalog sync and metadata-mirror rows copy the value
+unchanged when their source carries one and store NULL otherwise.
 
 MB-D3c. Write-path currency defaults are:
 
@@ -232,6 +242,26 @@ MB-M7. Pass-through streaming MUST retain the decoded terminal URP output nodes 
 
 ## 6. Charge Formula
 
+MB-R14. Peak window: a request is in the peak window if and only if its
+billing-rate resolution snapshot was built while the wall clock, converted to
+Beijing time (UTC+08:00, no daylight saving), falls on a Monday through Friday
+and within either `09:00 <= time < 12:00` or `14:00 <= time < 18:00`. Every
+other instant is the off-peak window. The determination is made exactly once
+per request, when the `BillingRateResolution` snapshot is built (MB-P8), and
+MUST be carried on the resolution so that preflight holds and settlement use
+the same determination. A snapshot rebuilt lazily at settlement time re-evaluates
+the predicate at rebuild time.
+
+MB-R15. Effective unit price: when the resolution's peak-window determination
+is true and the applied rate row has a non-null `peak_unit_price_nano`, every
+charge computation for that row MUST use `peak_unit_price_nano` as the unit
+price; otherwise it MUST use `unit_price_nano`. Rate selection (MB-R1, MB-R2)
+is unchanged: the peak window never changes which row is applied, only the
+price read from the applied row. The preflight matrix validation (MB-R9) MUST
+also verify a non-null `peak_unit_price_nano` obeys the MB-D3a canonical
+non-negative rule; a malformed value makes the matrix incomplete exactly as a
+malformed `unit_price_nano` does.
+
 MB-C1. Base charge is:
 
 ```text
@@ -257,6 +287,14 @@ The division MUST be applied to the product, not to `unit_price_nano`. Dividing 
 MB-C1b. `cny_per_usd` is the value of one exchange-rate snapshot read at most once per forwarding request, before pricing any attempt. Every line item of one request MUST use that single value, so the same snapshot applies no matter how long the request ran. If the snapshot is absent or its `cny_per_usd` is not a positive decimal, a CNY-basis line item MUST fail with a billing error and MUST NOT be charged at its USD magnitude.
 
 MB-C1c. A reserved maximum charge under a hold MUST be computed as the maximum over per-rate charges already normalized to nano-USD by MB-C1a. It MUST NOT be computed as the maximum over raw `unit_price_nano` values, because a CNY-basis price and a USD-basis price are not comparable before normalization.
+
+MB-C1d. Peak charge: when MB-R15 selects `peak_unit_price_nano` for an applied
+row, the MB-C1a formulas apply unchanged with `peak_unit_price_nano` in place
+of `unit_price_nano`. Each line item billed at the peak price MUST record
+`pricing_window: "peak"`, and each line item billed at the off-peak price MUST
+record `pricing_window: "off_peak"`, in addition to the MB-C4a fields, which
+record the price actually applied so the breakdown stays recomputable without
+reading `billing_rate_records`.
 
 MB-C2. Final charge is:
 
@@ -285,6 +323,14 @@ MB-C4a. Each token and meter line item in `billing_breakdown_json` MUST record `
 MB-C5. A billable non-stream response or buffered synthetic stream without normalized usage MUST be rejected before delivery when the selected Channel has `allow_missing_usage = false`. A pass-through stream without terminal normalized usage MUST settle from an estimate whose input quantity is `ceil(serialized_upstream_request_utf8_bytes / 4)` and whose output quantity is `ceil(decoded_visible_output_utf8_bytes / 4)` when the selected Channel has `allow_missing_usage = false`; the resulting billing snapshot MUST contain `estimated = true`. When the selected Channel has `allow_missing_usage = true`, each of these missing-usage cases MUST instead settle with normalized input and output token quantities of zero and a total charge of zero. Present upstream usage MUST always take precedence over this Channel flag.
 
 MB-C6. Once pass-through stream bytes have been delivered, a settlement error MUST NOT be converted into a successful zero-charge snapshot. Monoize MUST finalize the request log as an explicit billing failure containing the billing error code. The server MUST NOT claim that an error response was delivered downstream after the terminal stream event has already been sent.
+
+MB-A8. The billing-rate partial upsert MUST accept `peak_unit_price_nano` with
+dual-Option semantics matching MB-A2b: omitted keeps the stored value, an
+explicit null (or an empty string) clears it to NULL, and a present non-empty
+string MUST pass the MB-D3g canonical non-negative rule before persistence.
+The response MUST always include the effective `peak_unit_price_nano` (null
+when unset). `MB-A7b` profile copy MUST preserve the stored
+`peak_unit_price_nano` of each source row.
 
 ## 7. Dashboard APIs
 
@@ -330,7 +376,7 @@ that is already billing traffic. It also makes a repeated call fail rather than 
 
 MB-A7b. Each copied row MUST take a new globally unique `id` derived from the target profile
 and the source row id, MUST set `source` to `manual`, and MUST otherwise preserve every
-field of the source row, including `unit_price_nano`, `unit_price_currency`, `priority`, and
+field of the source row, including `unit_price_nano`, `peak_unit_price_nano`, `unit_price_currency`, `priority`, and
 `enabled`.
 
 `source = manual` and an id outside the `model_metadata:` namespace are both required for the

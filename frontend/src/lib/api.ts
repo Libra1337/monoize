@@ -712,6 +712,7 @@ export interface BillingRateRecord {
   unit: string;
   unit_price_nano: string;
   unit_price_currency: RateCurrency;
+  peak_unit_price_nano: string | null;
   context_tier?: string | null;
   service_tier?: string | null;
   modality?: string | null;
@@ -738,6 +739,8 @@ export interface UpsertBillingRateInput {
   unit?: string;
   unit_price_nano?: string;
   unit_price_currency?: RateCurrency;
+  /** MB-A8: undefined keeps the stored value, null clears the peak price. */
+  peak_unit_price_nano?: string | null;
   context_tier?: string | null;
   service_tier?: string | null;
   modality?: string | null;

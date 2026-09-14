@@ -1264,6 +1264,7 @@ export async function upsertBillingRateOptimistic(
     // MB-A2c: mirrors the server default for a newly created rate, so the optimistic row
     // shows the same currency the server will persist.
     unit_price_currency: input.unit_price_currency ?? "CNY",
+    peak_unit_price_nano: input.peak_unit_price_nano ?? null,
     context_tier: input.context_tier ?? null,
     service_tier: input.service_tier ?? null,
     modality: input.modality ?? null,

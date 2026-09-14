@@ -1195,6 +1195,7 @@ mod tests {
             unit: "token".to_string(),
             unit_price_nano: "1".to_string(),
             unit_price_currency: crate::billing_rate_store::RATE_CURRENCY_USD.to_string(),
+            peak_unit_price_nano: None,
             context_tier: None,
             service_tier: None,
             modality: None,

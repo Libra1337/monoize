@@ -24,7 +24,7 @@ const CATEGORIES: [&str; 4] = [
     CATEGORY_UNCERTAIN,
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verdict {
     pub category: &'static str,
     pub reason: String,

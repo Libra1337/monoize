@@ -53,6 +53,7 @@ fn test_rate(
         unit: "token".to_string(),
         unit_price_nano: unit_price.to_string(),
         unit_price_currency: crate::billing_rate_store::RATE_CURRENCY_USD.to_string(),
+        peak_unit_price_nano: None,
         context_tier: context_tier.map(str::to_string),
         service_tier: None,
         modality: modality.map(str::to_string),
@@ -83,6 +84,7 @@ fn test_meter_rate(
         unit: unit.to_string(),
         unit_price_nano: unit_price.to_string(),
         unit_price_currency: crate::billing_rate_store::RATE_CURRENCY_USD.to_string(),
+        peak_unit_price_nano: None,
         context_tier: None,
         service_tier: None,
         modality: None,
@@ -140,6 +142,7 @@ fn cny_charges_convert_after_multiplication_not_before() {
 
 fn test_resolution(rates: Vec<DbBillingRateRecord>) -> BillingRateResolution {
     BillingRateResolution {
+        is_peak: false,
         pricing_profile: "test".to_string(),
         pricing_model: "test-model".to_string(),
         rates,

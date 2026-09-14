@@ -83,6 +83,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260915_000078_firewall_events::Migration),
             Box::new(m20260915_000079_firewall_event_action::Migration),
             Box::new(m20260915_000080_firewall_event_reason::Migration),
+            Box::new(m20260915_000081_billing_rate_peak_price::Migration),
         ]
     }
 }
@@ -295,6 +296,7 @@ mod m20260914_000077_request_log_usage_breakdown_slim;
 mod m20260915_000078_firewall_events;
 mod m20260915_000079_firewall_event_action;
 mod m20260915_000080_firewall_event_reason;
+mod m20260915_000081_billing_rate_peak_price;
 
 #[cfg(test)]
 mod tests {

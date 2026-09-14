@@ -1893,6 +1893,7 @@ mod active_probe_billing_tests {
             unit: "token".to_string(),
             unit_price_nano: unit_price_nano.to_string(),
             unit_price_currency: crate::billing_rate_store::RATE_CURRENCY_USD.to_string(),
+            peak_unit_price_nano: None,
             context_tier: None,
             service_tier: None,
             modality: modality.map(str::to_string),

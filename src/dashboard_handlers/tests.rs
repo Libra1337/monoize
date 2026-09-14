@@ -86,6 +86,7 @@ fn dashboard_rate(id: &str, usage_class: &str, context_tier: Option<&str>) -> Db
         unit: "token".to_string(),
         unit_price_nano: "1".to_string(),
         unit_price_currency: crate::billing_rate_store::RATE_CURRENCY_USD.to_string(),
+        peak_unit_price_nano: None,
         context_tier: context_tier.map(str::to_string),
         service_tier: None,
         modality: None,

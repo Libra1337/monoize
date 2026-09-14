@@ -25,6 +25,8 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub unit_price_currency: String,
     #[sea_orm(column_type = "Text")]
+    pub peak_unit_price_nano: Option<String>,
+    #[sea_orm(column_type = "Text")]
     pub context_tier: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub service_tier: Option<String>,
