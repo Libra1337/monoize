@@ -1530,16 +1530,29 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 let created_at = created.unwrap_or_else(now_ts);
                 // SAN-11 / SAN-CFG5: decoder-origin error text may embed
                 // upstream URLs; masking is gated by the runtime setting.
+                // SAN-11a: quota-classified errors collapse to the fixed
+                // generic text and drop the replayed upstream error object.
+                let quota = crate::error_sanitize::stream_error_is_quota(
+                    code.as_deref(),
+                    &message,
+                    extra_body.get("error"),
+                );
+                let sanitized = if quota {
+                    crate::error_sanitize::GENERIC_QUOTA_TEXT.to_string()
+                } else {
+                    crate::error_sanitize::maybe_mask_sensitive_text(
+                        &message,
+                        mask_sensitive_info,
+                    )
+                };
+                let empty = HashMap::new();
                 let failed_response = response_failed_payload(
                     &response_id,
                     created_at,
                     logical_model,
                     code.as_deref(),
-                    &crate::error_sanitize::maybe_mask_sensitive_text(
-                        &message,
-                        mask_sensitive_info,
-                    ),
-                    &extra_body,
+                    &sanitized,
+                    if quota { &empty } else { &extra_body },
                 );
                 send_responses_event(
                     &tx,

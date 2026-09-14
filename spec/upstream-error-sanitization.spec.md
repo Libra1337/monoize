@@ -27,6 +27,29 @@ SAN-D1. `MASK(text)` is a pure function on strings. It applies the following fou
 
 SAN-D2. `DETAIL_LIMIT = 2048`. `TRUNC(text)` equals `text` when `text` contains at most `DETAIL_LIMIT` Unicode scalar values; otherwise it equals the first `DETAIL_LIMIT` scalar values of `text` followed by the literal suffix `... (truncated)`.
 
+SAN-D2a. `QUOTA(error)` is a predicate over the combined text of an upstream error's
+`message`, `code`, `type`, and `param` string fields, lowercased and matched on word
+boundaries. It holds when any of these exact signals appears:
+`insufficient_quota`, `quota_exceeded`, `quota exceeded`, `rate_limit_exceeded`,
+`rate limit exceeded`, `rate_limit_error`, `too_many_requests`, `429_resource_exhausted`,
+`resource_exhausted`, `daily_quota`, `hourly_quota`, `5 hour quota`, `5-hour quota`,
+`per_hour_quota`, `monthly_quota`, `usage_limit_reached`, `usage limit reached`,
+`usage_limit_exceeded`, `billing_limit_reached`, `billing_hard_limit_reached`,
+`current_quota`, `over quota`, `exceeded your current quota`, `org_monthly_spend_limit`,
+`spend_limit_reached`, `credits_exhausted`, `credit_balance_too_low`. `QUOTA` is
+model-agnostic and protocol-agnostic: it applies to every upstream provider type and every
+downstream protocol. `GENERIC_QUOTA_TEXT` is the fixed string
+`upstream provider quota exceeded; please retry later or contact the operator`.
+The downstream-facing error `message` for any error where `QUOTA` holds MUST be exactly
+`GENERIC_QUOTA_TEXT` (when `monoize_mask_sensitive_info = true`). Numbers inside the raw
+text, window sizes (`5 hour`), account identifiers, and provider-specific wording MUST NOT
+appear downstream. `internal_message` and every persisted request-log field keep the raw
+`TRUNC`-bounded detail unchanged (SAN-2 tier), and the server tracing log keeps the
+unbounded raw detail (SAN-3). When `monoize_mask_sensitive_info = false`, `QUOTA` still
+applies: quota wording is replaced by `TRUNC(raw message)` under the same SAN-CFG5
+deviation style used for other messages, because the quota text is itself the sensitive
+surface (window sizes, plan tiers, operator account state), not merely a URL or key.
+
 SAN-D3. Every `UpstreamCallError` carries a `source` classification with exactly these values:
 
 - `transport`: the upstream HTTP request could not be sent or its response body could not be read (connection, TLS, DNS, timeout, and body-read failures).
@@ -47,9 +70,20 @@ SAN-1. When a failed upstream attempt is converted to an `AppError` (`upstream_e
 
 SAN-2. The same `AppError` MUST set `internal_message` to `upstream status {STATUS}: ` followed by `TRUNC(raw message)`. `MASK` MUST NOT be applied to `internal_message`; it is the admin-tier detail and its read-time disclosure is governed by section 8.
 
+SAN-2a. When `QUOTA` holds for the upstream error, the client-facing `message` produced by
+SAN-1 MUST be replaced by `GENERIC_QUOTA_TEXT` regardless of `err.source`, and the
+`upstream_code`/`upstream_type`/`upstream_param` diagnostic fields keep their raw values
+unchanged (SAN-12). The exhausted-routing composition (SAN-6/SAN-7) MUST apply `QUOTA` to
+the last recorded attempt's `client_error` before composing the downstream message, so the
+`Last error:` tail of an all-attempts-failed message is `GENERIC_QUOTA_TEXT` when the last
+attempt was a quota failure.
+
 SAN-3. Before the conversion in SAN-1, the raw unmasked detail (including transport error text with the full upstream URL and the raw unparsed error body) MUST be written to the server log (tracing, `warn` level) without truncation. The raw unmasked detail MUST NOT appear in any downstream response body or mid-stream frame. Persisted request-log fields carry the `TRUNC`-bounded raw detail per SAN-2, SAN-5, SAN-9, and SAN-10; disclosure of those fields to dashboard viewers is governed by section 8. Request-capture dump files (`request-capture-dumps.spec.md`) are server-local operator artifacts and are exempt.
 
 SAN-4. When a 2xx upstream response embeds a Chat Completions error object (`embedded_chat_completion_error_to_app`), the resulting `AppError.message` MUST be `MASK` of the embedded message, and `AppError.internal_message` MUST be `TRUNC` of the raw embedded message.
+
+SAN-4a. When `QUOTA` holds for the embedded error object, `AppError.message` MUST be
+`GENERIC_QUOTA_TEXT` instead of the SAN-4 masked form.
 
 ## 3. Attempt recording
 
@@ -92,6 +126,14 @@ SAN-10. Each `tried_providers_json` entry's `error` field MUST equal the attempt
 ## 6. Mid-stream error frames
 
 SAN-11. When a downstream stream encoder renders a `UrpStreamEvent::Error` into a downstream frame (Chat Completions terminal error `data:` frame, Anthropic Messages `error` event, or Responses `response.failed` payload), the rendered `message` string MUST be `MASK(event message)`. This rule covers decoder-origin mid-stream failures whose text never passes through SAN-1.
+
+SAN-11a. When `QUOTA` holds for the mid-stream error (evaluated over the same message,
+code, and extra-body `error` object fields), the rendered downstream `message` MUST be
+`GENERIC_QUOTA_TEXT`, and the rendered frame MUST NOT replay the original upstream error
+object: any nested `error` object carried in `extra_body` is dropped for the client frame
+(because it contains the raw quota text), while the persisted request-log terminal error
+keeps the raw `TRUNC`-bounded message unchanged. Like SAN-11, this rule is
+protocol-agnostic and applies to every model.
 
 ## 7. Diagnostic fields
 

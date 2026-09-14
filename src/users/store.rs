@@ -2139,7 +2139,7 @@ impl UserStore {
                         a.transforms, a.model_redirects, a.reasoning_envelope_enabled,
                         a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role
                  FROM api_keys a JOIN users u ON u.id = a.user_id
-                 WHERE a.user_id = $1 ORDER BY a.created_at DESC",
+                 WHERE a.user_id = $1 AND a.org_id IS NULL ORDER BY a.created_at DESC",
                 vec![user_id.into()],
             ))
             .await
@@ -2157,7 +2157,7 @@ impl UserStore {
             .db
             .read()
             .query_one(self.db.stmt(
-                "SELECT COUNT(*) AS cnt FROM api_keys WHERE user_id = $1",
+                "SELECT COUNT(*) AS cnt FROM api_keys WHERE user_id = $1 AND org_id IS NULL",
                 vec![user_id.into()],
             ))
             .await

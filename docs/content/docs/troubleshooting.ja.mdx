@@ -55,6 +55,10 @@ description: 認証・ルーティング・課金・ストリーミングの一�
 
 一部のクライアントは SSE フレーム長を制限します。処理する Provider に `stream_split_sse_frames` 変換を追加します。[ストリーム: 長大 SSE フレームの分割](/ja/docs/transforms/stream_split_sse_frames)を参照してください。
 
+### 長い推論フェーズの後にクライアントが転送デコードエラーを報告する
+
+エラー文は `Transport error: error decoding response body` です。Monoize はすべての SSE レスポンスに `Cache-Control: no-cache` と `X-Accel-Buffering: no` を送信します。それでも `text/event-stream` をバッファまたは圧縮するリバースプロキシはストリームを切り捨てる可能性があります。Monoize の location でプロキシバッファリングを無効にします。nginx では `proxy_buffering off` を設定します。プロキシがイベントストリームを gzip していないことを確認します。
+
 ### 上流がストリーミングを必須とする
 
 `stream_force` 変換を追加して、上流へ `stream: true` を強制します。クライアントが非ストリーミングを要求した場合でも、Monoize はクライアントに非ストリーミングのレスポンスを返します。

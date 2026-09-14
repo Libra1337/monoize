@@ -55,6 +55,10 @@ description: 解决认证、路由、计费和流式传输的常见错误。
 
 某些客户端限制 SSE 帧长度。在服务的 Provider 上添加 `stream_split_sse_frames` 变换。参见[流式：拆分超长 SSE 帧](/zh/docs/transforms/stream_split_sse_frames)。
 
+### 客户端在长思考阶段后报告传输解码错误
+
+错误文本为 `Transport error: error decoding response body`。Monoize 在每个 SSE 响应上发送 `Cache-Control: no-cache` 和 `X-Accel-Buffering: no`。仍然缓冲或压缩 `text/event-stream` 的反向代理可能截断流。为 Monoize 的 location 禁用代理缓冲。在 nginx 中设置 `proxy_buffering off`。确认代理不会 gzip 该事件流。
+
 ### 上游要求流式请求
 
 添加 `stream_force` 变换，强制向上游发送 `stream: true`。客户端请求非流式时，Monoize 仍然向客户端返回非流式响应。

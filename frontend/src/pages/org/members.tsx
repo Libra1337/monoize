@@ -56,7 +56,28 @@ export function OrgMembers() {
 
   return (
     <PageWrapper className="space-y-4">
-      <h1 className="text-xl font-semibold">{t("org.navMembers")}</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">{t("org.navMembers")}</h1>
+        {!isOwner && (
+          <Button
+            variant="outline"
+            className="text-destructive"
+            onClick={async () => {
+              if (!orgId || !window.confirm(t("org.leaveConfirm"))) return;
+              try {
+                await api.leaveOrg(orgId);
+                toast.success(t("org.left"));
+                await reloadOrgs();
+                window.location.href = "/org";
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : t("common.error"));
+              }
+            }}
+          >
+            {t("org.leave")}
+          </Button>
+        )}
+      </div>
       <Card className="rounded-2xl">
         <CardContent className="p-0">
           <table className="w-full text-sm">

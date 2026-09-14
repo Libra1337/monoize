@@ -3214,6 +3214,43 @@ fn tried_provider_client_error_keeps_raw_text_when_masking_disabled() {
     );
 }
 
+// SAN-2a: when the last attempt was a quota failure, the exhausted-routing
+// downstream message composes the fixed generic quota text instead of the
+// upstream wording, even with masking disabled.
+#[test]
+fn exhausted_error_replaces_quota_wording_in_last_attempt() {
+    let attempt = affinity_test_attempt(
+        "provider-quota",
+        "channel-quota",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    let app_err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::TOO_MANY_REQUESTS),
+            "You have exceeded your 5 hour quota; resets 2026-09-15T21:00:00Z".to_string(),
+        ),
+        false,
+    );
+    let tried = vec![TriedProvider::from_app_error(
+        1,
+        &attempt,
+        &app_err,
+        Some(10),
+        false,
+    )];
+
+    let err = build_exhausted_upstream_error("glm-5.3", &tried);
+    assert!(
+        err.message.contains(crate::error_sanitize::GENERIC_QUOTA_TEXT),
+        "{}",
+        err.message
+    );
+    assert!(!err.message.contains("5 hour"), "{}", err.message);
+    assert!(!err.message.contains("resets 2026"), "{}", err.message);
+}
+
 #[test]
 fn channel_origin_key_groups_same_host_independent_of_path_and_case() {
     assert_eq!(

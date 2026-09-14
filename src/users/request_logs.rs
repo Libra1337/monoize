@@ -355,11 +355,10 @@ fn analytics_model_bucket_sql(
         (_, false) => "",
     };
     // The org and group scopes bind after the optional user and key scopes.
+    // ORG-23: org aggregates read the durable log attribution (rl.user_id = org id),
+    // not a live join on api_keys.org_id, so leave/delete never rewrites history.
     let org_filter = if org_scoped {
-        format!(
-            " AND rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = ${})",
-            6 + user_scoped as usize + api_key_scoped as usize
-        )
+        format!(" AND rl.user_id = ${}", 6 + user_scoped as usize + api_key_scoped as usize)
     } else {
         String::new()
     };
@@ -2004,7 +2003,7 @@ impl UserStore {
     }
 
     /// Org-space log listing (orgs.spec.md ORG-24): every request-log row whose
-    /// api key belongs to the org, regardless of which member owns the key.
+    /// user is the org wallet, i.e. rows durably attributed to the org at write time.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_request_logs_by_org(
         &self,
@@ -2035,8 +2034,7 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         let mut count_sql =
-            "SELECT COUNT(*) as cnt FROM request_logs rl WHERE rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = $1)"
-                .to_string();
+            "SELECT COUNT(*) as cnt FROM request_logs rl WHERE rl.user_id = $1".to_string();
         let mut count_values: Vec<SeaValue> = vec![org_id.into()];
         let mut count_idx = 2usize;
         append_request_log_filters(
@@ -2062,7 +2060,7 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         let mut sum_sql = format!(
-            "{} FROM request_logs rl WHERE rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = $1)",
+            "{} FROM request_logs rl WHERE rl.user_id = $1",
             charge_aggregate_select(is_postgres)
         );
         let mut sum_values: Vec<SeaValue> = vec![org_id.into()];
@@ -2106,7 +2104,7 @@ impl UserStore {
                LEFT JOIN users u ON u.id = rl.user_id
                LEFT JOIN api_keys ak ON ak.id = rl.api_key_id
                LEFT JOIN monoize_providers p ON p.id = rl.provider_id
-               WHERE rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = $1)"#
+               WHERE rl.user_id = $1"#
             .to_string();
         let mut rows_values: Vec<SeaValue> = vec![org_id.into()];
         let mut rows_idx = 2usize;
@@ -2335,9 +2333,7 @@ impl UserStore {
             prov_idx += 1;
         }
         if let Some(oid) = org_id {
-            prov_sql.push_str(&format!(
-                " AND rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = ${prov_idx})"
-            ));
+            prov_sql.push_str(&format!(" AND rl.user_id = ${prov_idx}"));
             prov_values.push(oid.into());
             prov_idx += 1;
         }
@@ -2427,9 +2423,7 @@ impl UserStore {
             today_idx += 1;
         }
         if let Some(oid) = org_id {
-            today_sql.push_str(&format!(
-                " AND rl.api_key_id IN (SELECT id FROM api_keys WHERE org_id = ${today_idx})"
-            ));
+            today_sql.push_str(&format!(" AND rl.user_id = ${today_idx}"));
             today_values.push(oid.into());
             today_idx += 1;
         }

@@ -11,6 +11,7 @@ import {
   Lock,
   Plus,
   Settings2,
+  Trash2,
   UserCheck,
   UserX,
 } from "lucide-react";
@@ -280,6 +281,25 @@ export function OrgKeys() {
                   <Button variant="outline" size="sm" onClick={() => openSharing(key)}>
                     <Settings2 className="mr-1 h-3.5 w-3.5" />
                     {t("org.permTitle")}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t("org.deleteKey")}
+                    title={t("org.deleteKey")}
+                    className="text-destructive"
+                    onClick={async () => {
+                      if (!orgId || !window.confirm(t("org.deleteKeyConfirm"))) return;
+                      try {
+                        await api.deleteOrgKey(orgId, key.id);
+                        toast.success(t("org.keyDeleted"));
+                        await keys.mutate();
+                      } catch (error) {
+                        toast.error(error instanceof Error ? error.message : t("common.error"));
+                      }
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
               </CardContent>

@@ -416,6 +416,28 @@ fn api_stream_keep_alive() -> KeepAlive {
         .text("heartbeat")
 }
 
+/// STR3c.2: reverse proxies must not buffer or compress `text/event-stream`.
+/// A buffered stream surfaces client-side as a truncated body after a long
+/// reasoning phase ("error decoding response body"), because the terminal
+/// frame is never flushed.
+fn sse_response<S, E>(stream: S, keep_alive: KeepAlive) -> axum::response::Response
+where
+    S: futures_util::Stream<Item = Result<axum::response::sse::Event, E>> + Send + 'static,
+    E: Into<axum::BoxError> + Send + Sync + 'static,
+{
+    let mut response = Sse::new(stream).keep_alive(keep_alive).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    headers.insert(
+        "x-accel-buffering",
+        axum::http::HeaderValue::from_static("no"),
+    );
+    response
+}
+
 struct DownstreamGone(std::sync::Arc<AdmittedRequestTaskState>);
 
 impl Drop for DownstreamGone {
@@ -626,9 +648,7 @@ pub async fn create_response(
             ),
             downstream_gone,
         );
-        return Ok(Sse::new(stream)
-            .keep_alive(api_stream_keep_alive())
-            .into_response());
+        return Ok(sse_response(stream, api_stream_keep_alive()));
     }
 
     let session_id = extract_client_session_id(&headers);
@@ -708,9 +728,7 @@ pub async fn create_chat_completions(
             ),
             downstream_gone,
         );
-        return Ok(Sse::new(stream)
-            .keep_alive(api_stream_keep_alive())
-            .into_response());
+        return Ok(sse_response(stream, api_stream_keep_alive()));
     }
     let session_id = extract_client_session_id(&headers);
     let task_state = std::sync::Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));
@@ -801,9 +819,7 @@ async fn create_messages_inner(
             ),
             downstream_gone,
         );
-        return Ok(Sse::new(stream)
-            .keep_alive(messages_stream_keep_alive())
-            .into_response());
+        return Ok(sse_response(stream, messages_stream_keep_alive()));
     }
     let session_id = extract_client_session_id(&headers);
     let task_state = std::sync::Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));

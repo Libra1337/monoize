@@ -1062,13 +1062,28 @@ pub(crate) async fn encode_urp_stream_as_chat(
             } => {
                 // SAN-11 / SAN-CFG5: decoder-origin error text may embed
                 // upstream URLs; masking is gated by the runtime setting.
-                let message =
-                    crate::error_sanitize::maybe_mask_sensitive_text(&message, mask_sensitive_info);
-                let payload = chat_error_payload(
-                    extra_body.get(CHAT_ERROR_EVENT_EXTRA_KEY),
+                // SAN-11a: quota-classified errors collapse to the fixed
+                // generic text and drop the replayed upstream error object.
+                let quota = crate::error_sanitize::stream_error_is_quota(
                     code.as_deref(),
                     &message,
-                    &extra_body,
+                    extra_body.get("error"),
+                );
+                let message = if quota {
+                    crate::error_sanitize::GENERIC_QUOTA_TEXT.to_string()
+                } else {
+                    crate::error_sanitize::maybe_mask_sensitive_text(&message, mask_sensitive_info)
+                };
+                let empty = HashMap::new();
+                let payload = chat_error_payload(
+                    if quota {
+                        None
+                    } else {
+                        extra_body.get(CHAT_ERROR_EVENT_EXTRA_KEY)
+                    },
+                    code.as_deref(),
+                    &message,
+                    if quota { &empty } else { &extra_body },
                 );
                 send_plain_sse_data(&tx, payload.to_string()).await?;
                 send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
@@ -1640,6 +1655,72 @@ mod tests {
         let unmasked = collect_chat_error_frame_text(false).await;
         assert!(unmasked.contains("api.cloudflare.com"), "{unmasked}");
         assert!(unmasked.contains("abc123"), "{unmasked}");
+    }
+
+    // SAN-11a: quota-classified mid-stream errors collapse to the fixed
+    // generic text, drop the replayed upstream error object, and do so even
+    // when masking is disabled. Applies to every model, not a vendor subset.
+    #[tokio::test]
+    async fn chat_stream_quota_error_frame_uses_generic_text_and_drops_replay() {
+        async fn collect_quota_error_frame(mask_sensitive_info: bool) -> String {
+            let (event_tx, event_rx) = mpsc::channel(8);
+            let (sse_tx, mut sse_rx) = mpsc::channel(8);
+
+            event_tx
+                .send(UrpStreamEvent::Error {
+                    code: Some("upstream_chat_error".to_string()),
+                    message: "upstream status 429: 5 hour quota exceeded for org_8831"
+                        .to_string(),
+                    extra_body: HashMap::from([
+                        (
+                            CHAT_ERROR_EVENT_EXTRA_KEY.to_string(),
+                            json!({
+                                "id": "chatcmpl_quota",
+                                "error": {
+                                    "message":
+                                        "You have exceeded your 5 hour quota; resets 2026-09-15T21:00:00Z",
+                                    "code": "quota_exceeded",
+                                    "type": "rate_limit_error"
+                                }
+                            }),
+                        ),
+                        (
+                            "error".to_string(),
+                            json!({
+                                "message":
+                                    "You have exceeded your 5 hour quota; resets 2026-09-15T21:00:00Z",
+                                "code": "quota_exceeded",
+                                "type": "rate_limit_error"
+                            }),
+                        ),
+                    ]),
+                })
+                .await
+                .expect("error event");
+            drop(event_tx);
+
+            encode_urp_stream_as_chat(event_rx, sse_tx, "glm-5.3", None, mask_sensitive_info)
+                .await
+                .expect("encode stream");
+
+            let mut text = String::new();
+            while let Some(event) = sse_rx.recv().await {
+                text.push_str(&format!("{event:?}"));
+            }
+            text
+        }
+
+        for mask_sensitive_info in [true, false] {
+            let frame = collect_quota_error_frame(mask_sensitive_info).await;
+            assert!(
+                frame.contains(crate::error_sanitize::GENERIC_QUOTA_TEXT),
+                "{frame}"
+            );
+            assert!(!frame.contains("5 hour"), "{frame}");
+            assert!(!frame.contains("quota exceeded for org"), "{frame}");
+            assert!(!frame.contains("resets 2026"), "{frame}");
+            assert!(!frame.contains("chatcmpl_quota"), "{frame}");
+        }
     }
 
     #[tokio::test]

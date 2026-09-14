@@ -2,8 +2,8 @@
 //!
 //! An org is a `users` row with `is_org = 1` (the wallet) plus metadata and membership
 //! rows. Creating one needs only the enterprise account class (admin-granted); the wallet
-//! starts at zero and is funded by owner deposits. Keys always belong to and bill their
-//! human owner; sharing only controls who may see the key material inside the space.
+//! starts at zero and is funded by owner deposits. Org keys are owned by and bill the
+//! org wallet; sharing only controls who may see the key material inside the space.
 
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::get_current_user;
@@ -923,7 +923,7 @@ pub struct DistributeRequest {
     pub amount_nano_usd: String,
 }
 
-/// ORG-14: keys are owned and billed by the caller; sharing only exposes the material.
+/// ORG-14: the key is owned by and bills the org wallet; sharing only exposes the material.
 pub async fn create_org_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -972,7 +972,7 @@ pub async fn create_org_key(
     };
     let (api_key, plaintext) = state
         .user_store
-        .create_api_key_extended(&user.id, input, false)
+        .create_api_key_extended(&org_id, input, false)
         .await
         .map_err(|e| bad_request(&e))?;
     state
@@ -981,11 +981,12 @@ pub async fn create_org_key(
         .await
         .execute(Statement::from_sql_and_values(
             backend,
-            "UPDATE api_keys SET org_id = $2, org_share_mode = $3 WHERE id = $1",
+            "UPDATE api_keys SET org_id = $2, org_share_mode = $3, created_by = $4 WHERE id = $1",
             [
                 api_key.id.clone().into(),
                 org_id.into(),
                 effective_mode.clone().into(),
+                user.id.clone().into(),
             ],
         ))
         .await
@@ -1029,8 +1030,10 @@ pub async fn list_org_keys(
     let mine = read
         .query_all(Statement::from_sql_and_values(
             backend,
-            "SELECT id, name, key, key_prefix, org_share_mode, model_limits_enabled, model_limits, created_at
-             FROM api_keys WHERE org_id = $1 AND user_id = $2 ORDER BY created_at DESC",
+            "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled, k.model_limits, k.created_at,
+                    u.username AS owner_username
+             FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+             WHERE k.org_id = $1 AND k.created_by = $2 ORDER BY k.created_at DESC",
             [org_id.clone().into(), user.id.clone().into()],
         ))
         .await
@@ -1041,8 +1044,8 @@ pub async fn list_org_keys(
             "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled,
                     k.model_limits, u.username AS owner_username
              FROM api_keys k
-             JOIN users u ON u.id = k.user_id
-             WHERE k.org_id = $1 AND k.user_id != $2 AND (
+             JOIN users u ON u.id = k.created_by
+             WHERE k.org_id = $1 AND k.created_by != $2 AND (
                     k.org_share_mode = 'public'
                     OR (k.org_share_mode = 'allow'
                         AND EXISTS (SELECT 1 FROM org_key_shares s
@@ -1139,7 +1142,7 @@ pub async fn update_key_sharing(
     let key = tx
         .query_one(Statement::from_sql_and_values(
             backend,
-            "SELECT id FROM api_keys WHERE id = $1 AND user_id = $2 AND org_id = $3",
+            "SELECT id FROM api_keys WHERE id = $1 AND created_by = $2 AND org_id = $3",
             [key_id.clone().into(), user.id.clone().into(), org_id.clone().into()],
         ))
         .await
@@ -1228,7 +1231,8 @@ pub async fn org_ledger(
         .collect::<Vec<_>>())))
 }
 
-/// ORG-17: removal also un-shares the member's keys in this space.
+/// ORG-17: removal deletes membership and share rows. Org keys stay owned by the org
+/// (ORG-4), so nothing is migrated to the removed member and org analytics are unchanged.
 pub async fn remove_org_member(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1267,14 +1271,83 @@ pub async fn remove_org_member(
     ))
     .await
     .map_err(storage)?;
+    tx.commit().await.map_err(storage)?;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// ORG-17a: a non-owner member leaves the space. Same semantics as ORG-17 removal
+/// of the caller: membership and share rows go, org keys stay with the org.
+pub async fn leave_org(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(org_id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let backend = state.db_pool.read().get_database_backend();
+    let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
+    let role = member_role(&tx, backend, &org_id, &user.id)
+        .await?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
+    if role == "owner" {
+        return Err(bad_request("the owner cannot leave; delete the organization instead"));
+    }
     tx.execute(Statement::from_sql_and_values(
         backend,
-        "UPDATE api_keys SET org_id = NULL, org_share_mode = NULL
-         WHERE user_id = $1 AND org_id = $2",
-        [member_id.clone().into(), org_id.clone().into()],
+        "DELETE FROM org_members WHERE org_id = $1 AND user_id = $2",
+        [org_id.clone().into(), user.id.clone().into()],
     ))
     .await
     .map_err(storage)?;
+    tx.execute(Statement::from_sql_and_values(
+        backend,
+        "DELETE FROM org_key_shares WHERE member_user_id = $1 AND api_key_id IN
+            (SELECT id FROM api_keys WHERE org_id = $2)",
+        [user.id.clone().into(), org_id.clone().into()],
+    ))
+    .await
+    .map_err(storage)?;
+    tx.commit().await.map_err(storage)?;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// ORG-17b: delete one org key. The creator or the owner may delete; the org's
+/// request-log history for the key is preserved.
+pub async fn delete_org_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((org_id, key_id)): Path<(String, String)>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let backend = state.db_pool.read().get_database_backend();
+    let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
+    let role = member_role(&tx, backend, &org_id, &user.id)
+        .await?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
+    let key = tx
+        .query_one(Statement::from_sql_and_values(
+            backend,
+            "SELECT created_by FROM api_keys WHERE id = $1 AND org_id = $2",
+            [key_id.clone().into(), org_id.clone().into()],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "key not found"))?;
+    let created_by: Option<String> = key.try_get("", "created_by").map_err(storage)?;
+    if role != "owner" && created_by.as_deref() != Some(user.id.as_str()) {
+        return Err(forbidden("only the key creator or the owner can delete an org key"));
+    }
+    tx.execute(Statement::from_sql_and_values(
+        backend,
+        "DELETE FROM org_key_shares WHERE api_key_id = $1",
+        [key_id.clone().into()],
+    ))
+    .await
+    .map_err(storage)?;
+    state
+        .user_store
+        .delete_api_key(&key_id)
+        .await
+        .map_err(|e| bad_request(&e))?;
     tx.commit().await.map_err(storage)?;
     Ok(Json(json!({ "success": true })))
 }
@@ -1380,8 +1453,8 @@ pub async fn org_request_logs(
 }
 
 /// ORG-27: delete a space. Owner or admin. The remaining wallet balance refunds
-/// to the owner, keys revert to plain personal keys, and every org row is
-/// removed in one transaction. Ledger history stays.
+/// to the owner, org keys are deleted, and every org row is removed in one
+/// transaction. Ledger and request-log history stay.
 pub async fn delete_org(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1479,7 +1552,7 @@ pub async fn delete_org(
         .await?;
     }
 
-    // Shares must go before the keys lose their org_id.
+    // Shares must go before the keys are deleted.
     tx.execute(Statement::from_sql_and_values(
         backend,
         "DELETE FROM org_key_shares WHERE api_key_id IN
@@ -1490,7 +1563,7 @@ pub async fn delete_org(
     .map_err(storage)?;
     tx.execute(Statement::from_sql_and_values(
         backend,
-        "UPDATE api_keys SET org_id = NULL, org_share_mode = NULL WHERE org_id = $1",
+        "DELETE FROM api_keys WHERE org_id = $1",
         [org_id.clone().into()],
     ))
     .await

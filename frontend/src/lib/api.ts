@@ -1689,6 +1689,14 @@ class ApiClient {
     return this.request(`/orgs/${orgId}/members/${memberUserId}`, { method: "DELETE" });
   }
 
+  async leaveOrg(orgId: string) {
+    return this.request(`/orgs/${orgId}/leave`, { method: "DELETE" });
+  }
+
+  async deleteOrgKey(orgId: string, keyId: string) {
+    return this.request(`/orgs/${orgId}/keys/${keyId}`, { method: "DELETE" });
+  }
+
   async deleteOrg(orgId: string) {
     return this.request(`/orgs/${orgId}`, { method: "DELETE" });
   }

@@ -1326,11 +1326,20 @@ fn embedded_chat_completion_error_to_app(error: &Value, mask_sensitive_info: boo
     // SAN-4: the embedded message is upstream-controlled free text — the
     // client sees the masked form while the raw text stays admin-readable
     // via `internal_message`. SAN-CFG5 item 1: masking off disables `MASK`.
-    AppError::new(
-        StatusCode::BAD_GATEWAY,
-        "upstream_chat_error",
-        crate::error_sanitize::maybe_mask_sensitive_text(message, mask_sensitive_info),
-    )
+    // SAN-4a: quota-classified embedded errors collapse to the fixed
+    // generic text regardless of the masking switch.
+    let quota = crate::error_sanitize::error_value_is_quota(
+        Some(message),
+        upstream_code.as_deref(),
+        upstream_type.as_deref(),
+        upstream_param.as_deref(),
+    );
+    let client_message = if quota {
+        crate::error_sanitize::GENERIC_QUOTA_TEXT.to_string()
+    } else {
+        crate::error_sanitize::maybe_mask_sensitive_text(message, mask_sensitive_info)
+    };
+    AppError::new(StatusCode::BAD_GATEWAY, "upstream_chat_error", client_message)
     .with_internal_message(crate::error_sanitize::truncate_error_detail(message))
     .with_type("server_error")
     .with_upstream_error(

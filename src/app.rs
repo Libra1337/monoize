@@ -2726,6 +2726,14 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             axum::routing::delete(crate::dashboard_handlers::remove_org_member),
         )
         .route(
+            "/dashboard/orgs/{org_id}/leave",
+            axum::routing::delete(crate::dashboard_handlers::leave_org),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/keys/{key_id}",
+            axum::routing::delete(crate::dashboard_handlers::delete_org_key),
+        )
+        .route(
             "/dashboard/admin/orgs",
             get(crate::dashboard_handlers::admin_list_orgs),
         )

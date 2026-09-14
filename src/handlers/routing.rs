@@ -1200,13 +1200,18 @@ fn messages_body_uses_files_api(value: &serde_json::Value) -> bool {
 
 /// SAN-6: the downstream exhausted-routing message carries only the model and
 /// the last attempt's client-facing error text — no attempt counts, no
-/// provider/channel identity, no upstream URLs.
+/// provider/channel identity, no upstream URLs. SAN-2a: quota wording in the
+/// last attempt's text collapses to the fixed generic text regardless of the
+/// masking switch; every other text passes through unchanged so SAN-CFG5
+/// still holds when masking is disabled.
 pub(super) fn build_exhausted_error_message(model: &str, tried: &[TriedProvider]) -> String {
     if tried.is_empty() {
         return format!("No available upstream provider for model: {model}");
     }
     let last_error = &tried[tried.len() - 1].client_error;
-    format!("All upstream attempts failed for model: {model}. Last error: {last_error}")
+    let sanitized_last_error =
+        crate::error_sanitize::sanitize_quota_error_text(last_error, false);
+    format!("All upstream attempts failed for model: {model}. Last error: {sanitized_last_error}")
 }
 
 /// SAN-7: the operator-facing internal detail keeps the attempt count and the
@@ -1681,27 +1686,41 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
     // SAN-3: the raw unmasked upstream detail (transport text with the full
     // upstream URL, raw unparsed error bodies) exists in the server log only.
     tracing::warn!(status = %status, upstream_error = %err.message, "upstream request failed");
+    // SAN-2a: a quota-classified error collapses to the fixed generic text
+    // before the per-source SAN-1 rules run.
+    let quota = crate::error_sanitize::error_value_is_quota(
+        Some(&err.message),
+        err.code.as_deref(),
+        err.error_type.as_deref(),
+        err.param.as_deref(),
+    );
     // SAN-1 when masking is enabled; SAN-CFG5 items 1-4 when the admin
     // disabled `monoize_mask_sensitive_info`.
-    let client_message = match err.source {
-        upstream::UpstreamErrorSource::Transport if mask_sensitive_info => {
-            "failed to request upstream".to_string()
-        }
-        upstream::UpstreamErrorSource::UnparsedBody if mask_sensitive_info => {
-            format!("upstream status {status}")
-        }
-        upstream::UpstreamErrorSource::EmptyBody => format!("upstream status {status}"),
-        upstream::UpstreamErrorSource::Transport | upstream::UpstreamErrorSource::UnparsedBody => {
-            format!(
-                "upstream status {status}: {}",
-                crate::error_sanitize::truncate_error_detail(&err.message)
-            )
-        }
-        upstream::UpstreamErrorSource::StructuredBody | upstream::UpstreamErrorSource::Internal => {
-            format!(
-                "upstream status {status}: {}",
-                crate::error_sanitize::maybe_mask_sensitive_text(&err.message, mask_sensitive_info)
-            )
+    let client_message = if quota {
+        crate::error_sanitize::GENERIC_QUOTA_TEXT.to_string()
+    } else {
+        match err.source {
+            upstream::UpstreamErrorSource::Transport if mask_sensitive_info => {
+                "failed to request upstream".to_string()
+            }
+            upstream::UpstreamErrorSource::UnparsedBody if mask_sensitive_info => {
+                format!("upstream status {status}")
+            }
+            upstream::UpstreamErrorSource::EmptyBody => format!("upstream status {status}"),
+            upstream::UpstreamErrorSource::Transport
+            | upstream::UpstreamErrorSource::UnparsedBody => {
+                format!(
+                    "upstream status {status}: {}",
+                    crate::error_sanitize::truncate_error_detail(&err.message)
+                )
+            }
+            upstream::UpstreamErrorSource::StructuredBody
+            | upstream::UpstreamErrorSource::Internal => {
+                format!(
+                    "upstream status {status}: {}",
+                    crate::error_sanitize::maybe_mask_sensitive_text(&err.message, mask_sensitive_info)
+                )
+            }
         }
     };
     // SAN-2: unmasked, TRUNC-bounded detail for request-log persistence.

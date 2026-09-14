@@ -1876,13 +1876,26 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 .await?;
                 // SAN-11 / SAN-CFG5: decoder-origin error text may embed
                 // upstream URLs; masking is gated by the runtime setting.
-                let error = messages_error_payload(
+                // SAN-11a: quota-classified errors collapse to the fixed
+                // generic text and drop the replayed upstream error object.
+                let quota = crate::error_sanitize::stream_error_is_quota(
                     code.as_deref(),
-                    &crate::error_sanitize::maybe_mask_sensitive_text(
+                    &message,
+                    extra_body.get("error"),
+                );
+                let sanitized = if quota {
+                    crate::error_sanitize::GENERIC_QUOTA_TEXT.to_string()
+                } else {
+                    crate::error_sanitize::maybe_mask_sensitive_text(
                         &message,
                         mask_sensitive_info,
-                    ),
-                    &extra_body,
+                    )
+                };
+                let empty = HashMap::new();
+                let error = messages_error_payload(
+                    code.as_deref(),
+                    &sanitized,
+                    if quota { &empty } else { &extra_body },
                 );
                 send_named_messages_event(&tx, error).await?;
                 return Ok(());
@@ -2013,6 +2026,48 @@ mod provider_item_wire_tests {
             Node::ProviderItem { body, .. } if body == native_body
         ));
         assert_eq!(delta["_monoize_delta"], json!("drop"));
+    }
+
+    // SAN-11a: quota-classified Messages error events collapse to the fixed
+    // generic text and drop the nested upstream error object, for every model
+    // and regardless of the masking switch. Exercised through the full
+    // encoder so the frame the client receives is the assertion surface.
+    #[tokio::test]
+    async fn messages_stream_quota_error_uses_generic_text() {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (sse_tx, mut sse_rx) = mpsc::channel(8);
+
+        event_tx
+            .send(UrpStreamEvent::Error {
+                code: Some("overloaded_error".to_string()),
+                message: "upstream status 429: exceeded your current quota of tokens".to_string(),
+                extra_body: HashMap::from([(
+                    "error".to_string(),
+                    json!({
+                        "type": "rate_limit_error",
+                        "message": "You have exceeded your current quota; resets 2026-09-15T21:00:00Z"
+                    }),
+                )]),
+            })
+            .await
+            .expect("error event");
+        drop(event_tx);
+
+        encode_urp_stream_as_messages(event_rx, sse_tx, "glm-5.3", None, false)
+            .await
+            .expect("encode messages stream");
+
+        let mut text = String::new();
+        while let Some(event) = sse_rx.recv().await {
+            text.push_str(&format!("{event:?}"));
+        }
+        assert!(
+            text.contains(crate::error_sanitize::GENERIC_QUOTA_TEXT),
+            "{text}"
+        );
+        assert!(!text.contains("current quota"), "{text}");
+        assert!(!text.contains("resets 2026"), "{text}");
+        assert!(!text.contains("rate_limit_error"), "{text}");
     }
 
     #[test]

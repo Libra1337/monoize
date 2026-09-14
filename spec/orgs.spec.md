@@ -25,13 +25,19 @@ in preference to the emoji), `invite_token` (unique, 32-char random), `invite_ex
 ORG-3. `org_members`: `(org_id, user_id)` PK, `role` ∈ `owner` | `member`, `joined_at`.
 Exactly one member row with `role = owner` per org.
 
-ORG-4. `api_keys.org_id` (NULL = ordinary key) names the space a key is shared into.
+ORG-4. `api_keys.org_id` (NULL = personal key) marks a key as an org key. An org key
+is owned by the org wallet row: `api_keys.user_id = org_id` and
+`api_keys.created_by` = the member who created it. An org key authenticates as the
+org wallet user, is billed to the org wallet, and every request-log row it produces
+carries `request_logs.user_id = org_id`. A personal key (`org_id IS NULL`) is owned
+by and bills its human `user_id`. Usage never crosses scopes: org-key usage is
+invisible to every member's personal analytics, logs, and wallet, and personal-key
+usage is invisible to the org.
 `api_keys.org_share_mode` is `private`, `public`, `allow`, or `deny`. `org_key_shares
 (api_key_id, member_user_id)` holds the member list whose meaning follows the mode: for
-`allow` the listed members may use the key and nobody else; for `deny` every member except
-the listed ones may use it. Keys always belong to and bill their `user_id` owner, carry the
-ordinary API-key `model_limits` restriction, and sharing changes only visibility of the key
-material inside the space.
+`allow` the listed members may see the key and nobody else; for `deny` every member except
+the listed ones may see it. Org keys carry the ordinary API-key `model_limits`
+restriction; sharing changes only visibility of the key material inside the space.
 
 ## 2. Creation
 
@@ -82,9 +88,10 @@ counterparty in `meta_json` and row locks taken org-wallet-first.
 ## 5. Keys and sharing
 
 ORG-14. `POST /api/dashboard/orgs/{org_id}/keys {name, share_mode?, model_limits?}` creates
-an ordinary API key owned by the caller, billed to the caller's personal wallet, tagged
-with the org id. The owner's default `share_mode` is `public`; a member's default is
-`private`. `model_limits` maps to the ordinary API-key model restriction.
+an org key owned by the org wallet row (`api_keys.user_id = org_id`,
+`api_keys.created_by` = the caller) and billed to the org wallet. The owner's default
+`share_mode` is `public`; a member's default is `private`. `model_limits` maps to the
+ordinary API-key model restriction. `api_keys.org_id` equals the org id.
 
 ORG-15. `GET /api/dashboard/orgs/{org_id}/keys` returns (a) the caller's keys in the space
 with their sharing state and FULL key material and (b) keys usable by the caller (mode
@@ -99,8 +106,20 @@ ORG-16. `PUT /api/dashboard/orgs/{org_id}/keys/{key_id}/sharing {mode:
 `allow`/`deny` MUST list only current members; otherwise `400 invalid_request`.
 
 ORG-17. Removing a member (`DELETE /api/dashboard/orgs/{org_id}/members/{user_id}`,
-owner only, cannot remove the owner) deletes their membership and share rows and makes
-their keys in that space private again.
+owner only, cannot remove the owner) deletes their membership and share rows. Org keys
+stay owned by the org: keys the member created (`created_by = member`) remain org keys
+that keep working and keep billing the org wallet. Historical request-log rows written
+while the member belonged to the org remain attributed to the org (`request_logs.user_id
+= org_id`), so org analytics and logs are unchanged by removal.
+
+ORG-17a. `DELETE /api/dashboard/orgs/{org_id}/leave` lets a non-owner member leave the
+space. It behaves exactly like ORG-17 removal of the caller: membership and share rows
+are deleted, org keys are untouched, and no balance moves. The owner cannot leave
+(400 `invalid_request`).
+
+ORG-17b. `DELETE /api/dashboard/orgs/{org_id}/keys/{key_id}` deletes one org key
+(`created_by = caller`, or the owner for any key). The org's historical request-log
+rows for that key are preserved and keep their org attribution.
 
 ## 6. Surfaces
 
@@ -141,16 +160,23 @@ ORG-22. `GET /api/dashboard/orgs/{org_id}/ledger` (any member) returns the org w
 ORG-23. `GET /api/dashboard/orgs/{org_id}/analytics?buckets={1..48}&range_hours={1..720}`
 (any member) returns exactly the response shape of `GET /api/dashboard/analytics`, where
 every aggregate (bucketed model cost/calls/tokens, provider calls, today and range totals)
-is computed over request-log rows whose `api_key_id` belongs to a key with
-`api_keys.org_id = {org_id}`. Rows of members' private keys (org_id NULL) are excluded.
+is computed over request-log rows with `rl.user_id = {org_id}`. Rows of members' personal
+keys never appear. Org analytics are computed from the durable log attribution, not from a
+live join on `api_keys.org_id`, so removing members or deleting keys does not rewrite
+history.
 
 ORG-24. `GET /api/dashboard/orgs/{org_id}/request-logs` (any member) accepts the same
 query parameters as `GET /api/dashboard/request-logs` (`limit` 1..200, `offset`, `model`,
 `status`, `api_key_id`, `search`, `time_from`, `time_to`; `username` is ignored) and
 returns the same response shape (`data`, `total`, `total_charge_nano_usd`, `limit`,
-`offset`) over the same org-key row set. Non-admin callers get masked error detail under
-the same `mask_sensitive_info` setting as the personal log list. A non-member caller
-receives `404 not_found` for both endpoints.
+`offset`) over request-log rows with `rl.user_id = {org_id}`. Non-admin callers get
+masked error detail under the same `mask_sensitive_info` setting as the personal log
+list. A non-member caller receives `404 not_found` for both endpoints.
+
+ORG-24a. Personal dashboards exclude org usage. `GET /api/dashboard/analytics`,
+`GET /api/dashboard/request-logs`, and the personal key list exclude every row and key
+whose `api_keys.org_id` is not NULL, so org-key usage never appears in a member's
+personal usage, logs, or token list.
 
 ORG-25. `/org/{org_id}` navigation offers Overview, Usage Analysis, Cache Hit Rate, Logs,
 Members, Keys, Wallet; the three analytics/logs pages are the workspace pages bound to the
@@ -175,9 +201,9 @@ invite card shows the same warning.
 ORG-27. `DELETE /api/dashboard/orgs/{org_id}` (owner or admin) removes the space
 atomically: the remaining wallet balance refunds to the owner (ledger kinds
 `org_delete_refund` / `org_delete_receive`), `org_key_shares` rows are deleted,
-the org's keys revert to personal keys (`org_id`/`org_share_mode` cleared),
+the org's keys are deleted (`WHERE org_id = {org_id}`),
 `org_members`, the `orgs` row, and the `is_org = 1` wallet user row are deleted.
-`billing_ledger` history is preserved.
+`billing_ledger` and `request_logs` history is preserved.
 
 ## 11. Admin console
 

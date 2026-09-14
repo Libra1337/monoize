@@ -54,6 +54,115 @@ pub fn maybe_mask_sensitive_text(text: &str, mask_sensitive_info: bool) -> Strin
     }
 }
 
+/// SAN-D2a `GENERIC_QUOTA_TEXT`: the only quota-related wording a downstream
+/// client may see. Window sizes, plan tiers, and account identifiers in the
+/// raw upstream text never cross this boundary.
+pub const GENERIC_QUOTA_TEXT: &str =
+    "upstream provider quota exceeded; please retry later or contact the operator";
+
+/// SAN-D2a quota signals, matched on word boundaries over lowercased text.
+const QUOTA_SIGNALS: &[&str] = &[
+    "insufficient_quota",
+    "quota_exceeded",
+    "quota exceeded",
+    "rate_limit_exceeded",
+    "rate limit exceeded",
+    "rate_limit_error",
+    "too_many_requests",
+    "429_resource_exhausted",
+    "resource_exhausted",
+    "daily_quota",
+    "hourly_quota",
+    "5 hour quota",
+    "5-hour quota",
+    "per_hour_quota",
+    "monthly_quota",
+    "usage_limit_reached",
+    "usage limit reached",
+    "usage_limit_exceeded",
+    "billing_limit_reached",
+    "billing_hard_limit_reached",
+    "current_quota",
+    "over quota",
+    "exceeded your current quota",
+    "org_monthly_spend_limit",
+    "spend_limit_reached",
+    "credits_exhausted",
+    "credit_balance_too_low",
+];
+
+fn text_has_quota_signal(text: &str) -> bool {
+    let lowered = text.to_lowercase();
+    QUOTA_SIGNALS.iter().any(|signal| {
+        let signal = signal.to_lowercase();
+        match signal.find(['_', ' ', '-']) {
+            // Multi-word signals already carry separators that word-boundary
+            // matching would reject (`5 hour quota`); match them as substrings.
+            Some(_) => lowered.contains(&signal),
+            None => {
+                let bytes = lowered.as_bytes();
+                let start = match lowered.find(signal.as_str()) {
+                    Some(start) => start,
+                    None => return false,
+                };
+                let end = start + signal.len();
+                let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+                let after_ok = end == bytes.len() || !bytes[end].is_ascii_alphanumeric();
+                before_ok && after_ok
+            }
+        }
+    })
+}
+
+/// SAN-D2a `QUOTA` predicate over the free-text and enumerated fields of one
+/// upstream error surface (message, code, type, param — any may be absent).
+pub fn error_value_is_quota(message: Option<&str>, code: Option<&str>, error_type: Option<&str>, param: Option<&str>) -> bool {
+    [message, code, error_type, param]
+        .into_iter()
+        .flatten()
+        .any(|field| text_has_quota_signal(field))
+}
+
+/// SAN-2a/SAN-4a/SAN-11a: the client-facing text for an upstream error whose
+/// `QUOTA` classification holds. Quota wording is replaced even when
+/// `mask_sensitive_info` is disabled because the quota text itself is the
+/// sensitive surface (window sizes, plan tiers, operator account state).
+pub fn sanitize_quota_error_text(raw: &str, mask_sensitive_info: bool) -> String {
+    if text_has_quota_signal(raw) {
+        GENERIC_QUOTA_TEXT.to_string()
+    } else if mask_sensitive_info {
+        mask_sensitive_text(raw)
+    } else {
+        raw.to_string()
+    }
+}
+
+/// SAN-11a `QUOTA` predicate for one mid-stream `UrpStreamEvent::Error`: the
+/// event's own `code` and `message`, plus the nested upstream `error` object's
+/// `message`/`code`/`type`/`param` when the decoder attached one.
+pub fn stream_error_is_quota(
+    code: Option<&str>,
+    message: &str,
+    extra_body_error: Option<&serde_json::Value>,
+) -> bool {
+    if text_has_quota_signal(message) || code.is_some_and(text_has_quota_signal) {
+        return true;
+    }
+    let Some(error) = extra_body_error else {
+        return false;
+    };
+    let nested = error
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| error.as_str());
+    error_value_is_quota(
+        nested,
+        error.get("code").and_then(serde_json::Value::as_str),
+        error.get("type").and_then(serde_json::Value::as_str),
+        error.get("param").and_then(serde_json::Value::as_str),
+    )
+}
+
 /// SAN-D2 `TRUNC`: bound persisted error detail to [`ERROR_DETAIL_MAX_CHARS`]
 /// Unicode scalar values, appending a fixed truncation marker when clipped.
 pub fn truncate_error_detail(text: &str) -> String {
@@ -223,6 +332,57 @@ mod tests {
             mask_sensitive_text(input)
         );
         assert_eq!(maybe_mask_sensitive_text(input, false), input);
+    }
+
+    // SAN-D2a: the word-boundary matcher must not fire on embedded substrings
+    // that merely contain a signal as a fragment of a longer word.
+    #[test]
+    fn quota_signal_requires_word_boundary_for_single_word_signals() {
+        assert!(text_has_quota_signal(
+            "You exceeded your current quota of 5 hour requests"
+        ));
+        assert!(text_has_quota_signal("insufficient_quota"));
+        assert!(text_has_quota_signal("Error code: 429_resource_exhausted"));
+        assert!(text_has_quota_signal("5-hour quota exceeded for this org"));
+        assert!(!text_has_quota_signal("quotaless mode is active"));
+        assert!(!text_has_quota_signal("invalid request: missing field"));
+    }
+
+    // SAN-2a/SAN-11a: quota wording collapses to the fixed generic text even
+    // with masking disabled, and never leaks the window size or numbers.
+    #[test]
+    fn quota_text_is_replaced_by_generic_message_even_unmasked() {
+        let raw = "5 hour quota exceeded: you have used 87% of your 2026-09-15 window";
+        assert_eq!(sanitize_quota_error_text(raw, false), GENERIC_QUOTA_TEXT);
+        assert_eq!(sanitize_quota_error_text(raw, true), GENERIC_QUOTA_TEXT);
+        let not_quota = "context length exceeded: 200000 tokens";
+        assert_eq!(sanitize_quota_error_text(not_quota, false), not_quota);
+        assert_eq!(
+            sanitize_quota_error_text(not_quota, true),
+            mask_sensitive_text(not_quota)
+        );
+    }
+
+    #[test]
+    fn quota_predicate_covers_code_and_type_fields() {
+        assert!(error_value_is_quota(
+            Some("request failed"),
+            Some("quota_exceeded"),
+            None,
+            None
+        ));
+        assert!(error_value_is_quota(
+            None,
+            None,
+            Some("rate_limit_error"),
+            None
+        ));
+        assert!(!error_value_is_quota(
+            Some("invalid_api_key"),
+            Some("authentication_error"),
+            None,
+            None
+        ));
     }
 
     #[test]

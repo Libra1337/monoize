@@ -55,6 +55,10 @@ Monoize never switches upstreams after the first response byte. A stream that di
 
 Some clients limit SSE frame length. Add the `stream_split_sse_frames` transform to the serving Provider. See [Stream: split oversized SSE frames](/en/docs/transforms/stream_split_sse_frames).
 
+### A client reports a transport decode error after a long reasoning phase
+
+The error text is `Transport error: error decoding response body`. Monoize sends `Cache-Control: no-cache` and `X-Accel-Buffering: no` on every SSE response. A reverse proxy that still buffers or compresses `text/event-stream` can truncate the stream. Disable proxy buffering for the Monoize location. In nginx, set `proxy_buffering off`. Verify the proxy does not gzip the event stream.
+
 ### The upstream requires streaming
 
 Add the `stream_force` transform to force `stream: true` toward the upstream. Monoize still returns a non-streaming response to the client when the client asked for one.

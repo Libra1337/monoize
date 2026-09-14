@@ -55,6 +55,10 @@ description: 解決認證、路由、計費和串流傳輸的常見錯誤。
 
 某些用戶端限制 SSE 幀長度。在服務的 Provider 上新增 `stream_split_sse_frames` 變換。參見[串流：拆分超長 SSE 幀](/zh-TW/docs/transforms/stream_split_sse_frames)。
 
+### 用戶端在長思考階段後回報傳輸解碼錯誤
+
+錯誤文字為 `Transport error: error decoding response body`。Monoize 在每個 SSE 回應上傳送 `Cache-Control: no-cache` 和 `X-Accel-Buffering: no`。仍然緩衝或壓縮 `text/event-stream` 的反向代理可能截斷串流。為 Monoize 的 location 停用代理緩衝。在 nginx 中設定 `proxy_buffering off`。確認代理不會 gzip 該事件串流。
+
 ### 上游要求串流請求
 
 新增 `stream_force` 變換，強制向上游發送 `stream: true`。用戶端請求非串流時，Monoize 仍然向用戶端返回非串流回應。
