@@ -772,7 +772,10 @@ impl AdminOrderOperations {
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<BuyerQueryResult, AdminOrderOperationError> {
         if order.contract_version != 2 || order.payment_state != PaymentState::Unpaid {
-            return Ok(BuyerQueryResult { order, provider_contacted: false });
+            return Ok(BuyerQueryResult {
+                order,
+                provider_contacted: false,
+            });
         }
         let orders = PaymentOrderStore::new(self.db.clone());
         let attempt = orders
@@ -786,35 +789,59 @@ impl AdminOrderOperations {
             })
             .next_back();
         let Some(attempt) = attempt else {
-            return Ok(BuyerQueryResult { order, provider_contacted: false });
+            return Ok(BuyerQueryResult {
+                order,
+                provider_contacted: false,
+            });
         };
         if !channel_supports_payment_query(&self.db, &attempt.channel_id).await? {
-            return Ok(BuyerQueryResult { order, provider_contacted: false });
+            return Ok(BuyerQueryResult {
+                order,
+                provider_contacted: false,
+            });
         }
         // SB-P-Q2: the claim is conditional on the stored timestamp, so concurrent callers
         // cannot both pass the interval check and contact the provider twice.
         if !claim_buyer_query_slot(&self.db, &attempt.id, now).await? {
-            return Ok(BuyerQueryResult { order, provider_contacted: false });
+            return Ok(BuyerQueryResult {
+                order,
+                provider_contacted: false,
+            });
         }
 
         let outcome = match self.query.query_attempt_with_context(&attempt.id).await {
             Ok(outcome) => outcome,
             // A provider that is unreachable or rejects the query must not fail the buyer's
             // poll; the callback path remains authoritative and will still settle the order.
-            Err(_) => return Ok(BuyerQueryResult { order, provider_contacted: true }),
+            Err(_) => {
+                return Ok(BuyerQueryResult {
+                    order,
+                    provider_contacted: true,
+                });
+            }
         };
         if outcome.order_id != order.id {
-            return Ok(BuyerQueryResult { order, provider_contacted: true });
+            return Ok(BuyerQueryResult {
+                order,
+                provider_contacted: true,
+            });
         }
-        if let ProviderPaymentState::Paid { provider_transaction_id } = &outcome.state {
-            self.project_paid_query(&outcome, provider_transaction_id).await?;
+        if let ProviderPaymentState::Paid {
+            provider_transaction_id,
+        } = &outcome.state
+        {
+            self.project_paid_query(&outcome, provider_transaction_id)
+                .await?;
         }
         let order = orders
             .get_order_admin(&order.id)
             .await
             .map_err(map_order_error)?
             .ok_or(AdminOrderOperationError::NotFound)?;
-        Ok(BuyerQueryResult { order, provider_contacted: true })
+        Ok(BuyerQueryResult {
+            order,
+            provider_contacted: true,
+        })
     }
 }
 

@@ -178,14 +178,26 @@ mod tests {
         assert_eq!(
             observed,
             vec![
-                ("catalog-1".to_string(), "15000".to_string(), "USD".to_string()),
-                ("manual-1".to_string(), "9000".to_string(), "CNY".to_string()),
+                (
+                    "catalog-1".to_string(),
+                    "15000".to_string(),
+                    "USD".to_string()
+                ),
+                (
+                    "manual-1".to_string(),
+                    "9000".to_string(),
+                    "CNY".to_string()
+                ),
                 (
                     "model_metadata:gpt-5:output".to_string(),
                     "60000".to_string(),
                     "USD".to_string()
                 ),
-                ("models-1".to_string(), "3000".to_string(), "USD".to_string()),
+                (
+                    "models-1".to_string(),
+                    "3000".to_string(),
+                    "USD".to_string()
+                ),
             ]
         );
     }
@@ -265,7 +277,11 @@ mod tests {
                 "SELECT id, unit_price_nano, unit_price_currency FROM billing_rate_records"
             )
             .await,
-            vec![("manual-1".to_string(), "9000".to_string(), "CNY".to_string())]
+            vec![(
+                "manual-1".to_string(),
+                "9000".to_string(),
+                "CNY".to_string()
+            )]
         );
     }
 }

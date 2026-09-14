@@ -61,10 +61,7 @@ fn top_twenty_rank<'a>(
         .map(|position| position + 1)
 }
 
-fn compare_usage_rank(
-    left: (i128, i64, &str),
-    right: (i128, i64, &str),
-) -> std::cmp::Ordering {
+fn compare_usage_rank(left: (i128, i64, &str), right: (i128, i64, &str)) -> std::cmp::Ordering {
     right
         .0
         .cmp(&left.0)
@@ -74,12 +71,8 @@ fn compare_usage_rank(
 
 pub(crate) fn sort_usage_models(rows: &mut [crate::users::UserModelUsageRankingRow]) {
     rows.sort_by(|left, right| {
-        let left_tokens = left
-            .input_tokens
-            .saturating_add(left.output_tokens);
-        let right_tokens = right
-            .input_tokens
-            .saturating_add(right.output_tokens);
+        let left_tokens = left.input_tokens.saturating_add(left.output_tokens);
+        let right_tokens = right.input_tokens.saturating_add(right.output_tokens);
         right_tokens
             .cmp(&left_tokens)
             .then_with(|| right.call_count.cmp(&left.call_count))
@@ -496,12 +489,8 @@ async fn build_usage_ranking(
         user.models.push(row);
     }
     users.sort_by(|left, right| {
-        let left_tokens = left
-            .input_tokens
-            .saturating_add(left.output_tokens);
-        let right_tokens = right
-            .input_tokens
-            .saturating_add(right.output_tokens);
+        let left_tokens = left.input_tokens.saturating_add(left.output_tokens);
+        let right_tokens = right.input_tokens.saturating_add(right.output_tokens);
         compare_usage_rank(
             (left_tokens, left.call_count, &left.user_id),
             (right_tokens, right.call_count, &right.user_id),
@@ -642,7 +631,10 @@ mod tests {
         use std::cmp::Ordering;
 
         assert_eq!(
-            compare_usage_rank((591_083_254, 2_395, "first"), (744_622_503, 1_486, "second")),
+            compare_usage_rank(
+                (591_083_254, 2_395, "first"),
+                (744_622_503, 1_486, "second")
+            ),
             Ordering::Greater
         );
         assert_eq!(

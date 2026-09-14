@@ -13,7 +13,7 @@ use super::models::{
     StoreChannelReadinessView, StoreComplianceView, StoreMerchantCapabilitiesView,
     StoreMerchantCapability, StorePaymentCompliance, StorePrivacyRecord, StorePrivacyRecordsView,
 };
-use super::money::{parse_minor, Currency};
+use super::money::{Currency, parse_minor};
 use super::store::StoreBillingError;
 use crate::db::DbPool;
 
@@ -1529,7 +1529,7 @@ fn storage(error: impl ToString) -> StoreBillingError {
 
 #[cfg(test)]
 mod tests {
-    use super::{required_capabilities, requires_evidence_attestations, REQUIRED_CAPABILITIES};
+    use super::{REQUIRED_CAPABILITIES, required_capabilities, requires_evidence_attestations};
 
     /// SB-C-37: a Channel must only prove the capabilities its protocol can perform. EPay's
     /// availability is decided by the readiness profile alone, so it requires no capability
@@ -1567,8 +1567,8 @@ mod tests {
     }
 
     use super::{
-        evaluate_snapshot_channel, GovernanceSnapshot, RawChannel, RawCredential, RawReadiness,
-        CURRENT_STORE_PAYMENT_TERMS_VERSION,
+        CURRENT_STORE_PAYMENT_TERMS_VERSION, GovernanceSnapshot, RawChannel, RawCredential,
+        RawReadiness, evaluate_snapshot_channel,
     };
     use chrono::Utc;
     use std::collections::BTreeMap;
@@ -1688,11 +1688,15 @@ mod tests {
             !result.unavailable_reasons.is_empty(),
             "a Stripe Channel missing its capabilities and attestations must be unavailable"
         );
-        assert!(result
-            .unavailable_reasons
-            .contains(&"capability_payment_query_missing".to_string()));
-        assert!(result
-            .unavailable_reasons
-            .contains(&"privacy_gate_pending".to_string()));
+        assert!(
+            result
+                .unavailable_reasons
+                .contains(&"capability_payment_query_missing".to_string())
+        );
+        assert!(
+            result
+                .unavailable_reasons
+                .contains(&"privacy_gate_pending".to_string())
+        );
     }
 }

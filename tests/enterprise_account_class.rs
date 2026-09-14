@@ -630,7 +630,10 @@ async fn migration_071_admits_private_without_losing_rows_or_indexes() {
 
     // The cascading children must still be there. This is the assertion that fails when the
     // migration drops and recreates `users` instead of editing its schema in place.
-    for (table, id) in [("sessions", "survivor-session"), ("api_keys", "survivor-key")] {
+    for (table, id) in [
+        ("sessions", "survivor-session"),
+        ("api_keys", "survivor-key"),
+    ] {
         let count = db
             .query_one(Statement::from_string(
                 DbBackend::Sqlite,

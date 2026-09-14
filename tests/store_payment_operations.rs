@@ -1212,8 +1212,14 @@ async fn a_buyer_query_contacts_the_provider_at_most_once_per_interval() {
         .expect("fixture order");
     let now = chrono::Utc::now();
 
-    let first = operations.query_for_buyer(order.clone(), now).await.unwrap();
-    assert!(first.provider_contacted, "the first query must reach the provider");
+    let first = operations
+        .query_for_buyer(order.clone(), now)
+        .await
+        .unwrap();
+    assert!(
+        first.provider_contacted,
+        "the first query must reach the provider"
+    );
     assert_eq!(calls.lock().unwrap().len(), 1);
 
     // A poll two seconds later is inside the interval and must be served locally.
@@ -1221,8 +1227,15 @@ async fn a_buyer_query_contacts_the_provider_at_most_once_per_interval() {
         .query_for_buyer(order.clone(), now + chrono::Duration::seconds(2))
         .await
         .unwrap();
-    assert!(!second.provider_contacted, "a query inside the interval must not reach the provider");
-    assert_eq!(calls.lock().unwrap().len(), 1, "the provider must not be contacted twice");
+    assert!(
+        !second.provider_contacted,
+        "a query inside the interval must not reach the provider"
+    );
+    assert_eq!(
+        calls.lock().unwrap().len(),
+        1,
+        "the provider must not be contacted twice"
+    );
 
     // Past the interval the next poll is allowed through again.
     let third = operations
@@ -1314,7 +1327,10 @@ async fn a_buyer_query_skips_a_channel_without_the_capability() {
         .unwrap()
         .expect("fixture order");
 
-    let result = operations.query_for_buyer(order, chrono::Utc::now()).await.unwrap();
+    let result = operations
+        .query_for_buyer(order, chrono::Utc::now())
+        .await
+        .unwrap();
     assert!(!result.provider_contacted);
     assert!(calls.lock().unwrap().is_empty());
     assert_eq!(result.order.payment_state, PaymentState::Unpaid);

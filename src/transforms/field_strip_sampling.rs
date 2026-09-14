@@ -243,8 +243,13 @@ mod tests {
         assert_eq!(req.user, None);
         run(&mut req, config).await;
         assert_eq!(
-            (req.temperature, req.top_p, req.max_output_tokens, req.parallel_tool_calls,
-             req.user.clone()),
+            (
+                req.temperature,
+                req.top_p,
+                req.max_output_tokens,
+                req.parallel_tool_calls,
+                req.user.clone()
+            ),
             (None, None, None, None, None)
         );
         // Fields outside the list must survive both applications.
@@ -256,7 +261,11 @@ mod tests {
     async fn an_absent_field_is_not_an_error() {
         let mut req = request();
         req.temperature = None;
-        run(&mut req, json!({"fields": ["temperature", "stop", "verbosity"]})).await;
+        run(
+            &mut req,
+            json!({"fields": ["temperature", "stop", "verbosity"]}),
+        )
+        .await;
         assert_eq!(req.temperature, None);
         assert_eq!(req.stop, None);
         assert_eq!(req.verbosity, None);
@@ -266,8 +275,16 @@ mod tests {
     fn rejects_an_empty_or_unknown_field_list() {
         let transform = FieldStripSamplingTransform;
         assert!(transform.parse_config(json!({"fields": []})).is_err());
-        assert!(transform.parse_config(json!({"fields": ["model"]})).is_err());
-        assert!(transform.parse_config(json!({"fields": ["input"]})).is_err());
+        assert!(
+            transform
+                .parse_config(json!({"fields": ["model"]}))
+                .is_err()
+        );
+        assert!(
+            transform
+                .parse_config(json!({"fields": ["input"]}))
+                .is_err()
+        );
         assert!(transform.parse_config(json!({})).is_err());
         assert!(
             transform

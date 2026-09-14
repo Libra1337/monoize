@@ -1277,6 +1277,8 @@ PG3. For streaming requests, Monoize MUST call:
 
 - `POST /<version>/models/{upstream_model}:streamGenerateContent?alt=sse`
 
+PG3a. When constructing the Gemini request path, Monoize MUST percent-encode `{upstream_model}` as a single URL path segment. A literal leading `models/` prefix in the model key is structural and MUST remain an unencoded prefix; the remainder of the key MUST still be encoded as a single segment. Characters in the path-segment encode set (`%`, `/`, `?`, `#`, space, and the reserved/control set) MUST be percent-encoded so the model key cannot open a new path segment or introduce a query string or fragment. The `:streamGenerateContent?alt=sse` and `:generateContent` verb suffixes MUST NOT be encoded.
+
 PG4. Monoize MUST encode URP v2 requests to Gemini native request fields:
 
 - `contents[]` for conversation turns;

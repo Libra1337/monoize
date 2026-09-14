@@ -26,7 +26,7 @@ DPT-LU1. `LastUsedBatcher` MUST hold a `DashMap<String, DateTime<Utc>>` keyed by
 
 DPT-LU2. When `record(api_key_id, timestamp)` is called for an existing entry, the buffer MUST retain the later of the existing and supplied timestamps. A failed flush MUST reinsert the failed timestamp without replacing a newer concurrently recorded timestamp.
 
-DPT-LU2a. The distinct-key capacity MUST be configurable. The default is `10000`, selected by `MONOIZE_LAST_USED_BUFFER_ENTRIES`. When the buffer is full, an update to an existing key remains accepted and a previously unseen key MAY be omitted with a warning because `last_used_at` is non-billing metadata.
+DPT-LU2a. The distinct-key capacity MUST be configurable. The default is `10000`, selected by `MONOIZE_LAST_USED_BUFFER_ENTRIES`. When the buffer is full, an update to an existing key remains accepted and a previously unseen key MAY be omitted because `last_used_at` is non-billing metadata. Every omission MUST increment the counter `monoize_last_used_buffer_dropped_total` by one. The first omission in a saturation episode MUST also emit one `warn`-level log record carrying the capacity, and a later omission MUST emit a new warning only after a `record` call observes the buffer below capacity. A buffer that never drains MUST NOT emit more than one warning.
 
 ### 2.2 Flush
 

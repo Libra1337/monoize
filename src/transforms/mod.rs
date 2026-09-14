@@ -77,8 +77,14 @@ fn default_enabled() -> bool {
 /// (including already-canonical IDs and unknown IDs) is returned unchanged.
 pub const HISTORICAL_TRANSFORM_ID_MAP: &[(&str, &str)] = &[
     ("append_empty_user_message", "prompt_append_empty_user"),
-    ("assistant_markdown_images_to_output", "image_markdown_to_output"),
-    ("assistant_output_images_to_markdown", "image_output_to_markdown"),
+    (
+        "assistant_markdown_images_to_output",
+        "image_markdown_to_output",
+    ),
+    (
+        "assistant_output_images_to_markdown",
+        "image_output_to_markdown",
+    ),
     ("auto_cache_openai", "cache_openai_prompt"),
     ("auto_cache_openai_prompt", "cache_openai_prompt"),
     ("auto_cache_openai_prompt_key", "cache_openai_prompt"),
@@ -98,7 +104,10 @@ pub const HISTORICAL_TRANSFORM_ID_MAP: &[(&str, &str)] = &[
     ("merge_consecutive_roles", "role_merge_consecutive"),
     ("openai_prompt_cache", "cache_openai_prompt"),
     ("override_max_tokens", "field_override_max_tokens"),
-    ("plaintext_reasoning_to_summary", "reasoning_content_to_summary"),
+    (
+        "plaintext_reasoning_to_summary",
+        "reasoning_content_to_summary",
+    ),
     ("reasoning_content_delta", "reasoning_inject_content_field"),
     (
         "remove_anthropic_billing_header",
@@ -125,7 +134,10 @@ pub const HISTORICAL_TRANSFORM_ID_MAP: &[(&str, &str)] = &[
     ),
     ("strip_encrypted_reasoning", "reasoning_strip_encrypted"),
     ("strip_input_reasoning", "reasoning_strip_input"),
-    ("strip_orphaned_tool_use", "prompt_strip_orphaned_tool_calls"),
+    (
+        "strip_orphaned_tool_use",
+        "prompt_strip_orphaned_tool_calls",
+    ),
     ("strip_reasoning", "reasoning_strip_output"),
     ("system_to_developer_role", "role_system_to_developer"),
     ("think_xml_to_reasoning", "reasoning_from_think_xml"),

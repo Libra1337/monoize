@@ -5586,6 +5586,9 @@ async fn setup_with_unknown_fields() -> TestContext {
 }
 
 async fn setup() -> TestContext {
+    // Every mock upstream in this harness listens on loopback; relax only the
+    // private/loopback address classification (CP-INV-16) so Channels can target it.
+    monoize::monoize_routing::set_allow_private_upstream_override(true);
     setup_with_unknown_fields().await
 }
 

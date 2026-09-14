@@ -1,6 +1,32 @@
 use super::*;
 use crate::settings::BUILTIN_REASONING_EFFORT_SUFFIXES;
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use std::sync::atomic::Ordering;
+
+/// Characters that MAY appear unencoded inside a URL path segment. Everything else is
+/// percent-encoded so a model key can never inject `?`, `#`, `/`, whitespace, or
+/// percent-escapes into an upstream URL. `:` and `/` stay reserved only where they are
+/// structural (the Gemini verb and the Replicate owner/name split) and are encoded
+/// everywhere else by `encode_path_segment`.
+const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'/')
+    .add(b'\\')
+    .add(b'^')
+    .add(b'|');
+
+fn encode_path_segment(segment: &str) -> String {
+    utf8_percent_encode(segment, PATH_SEGMENT_ENCODE_SET).to_string()
+}
 
 pub(crate) fn now_ts() -> i64 {
     chrono::Utc::now().timestamp()
@@ -78,21 +104,37 @@ pub(super) fn upstream_path_for_model(
 ) -> String {
     match provider_type {
         ProviderType::Gemini => {
+            // Gemini accepts a name like `models/gemini-2.5-pro`, where the slash is
+            // structural. A single leading `models/` prefix is preserved; any other
+            // `/` inside the key is treated as data and percent-encoded so it cannot
+            // escape the `/v1beta/models/` base path.
             let model = model.trim();
-            if stream {
-                format!("/v1beta/models/{model}:streamGenerateContent?alt=sse")
+            let encoded = if let Some(name) = model.strip_prefix("models/") {
+                format!("models/{}", encode_path_segment(name))
             } else {
-                format!("/v1beta/models/{model}:generateContent")
+                encode_path_segment(model)
+            };
+            if stream {
+                format!("/v1beta/models/{encoded}:streamGenerateContent?alt=sse")
+            } else {
+                format!("/v1beta/models/{encoded}:generateContent")
             }
         }
         ProviderType::Replicate => {
             let model = model.trim();
             if let Some(stripped) = model.strip_prefix("deployment:") {
-                format!("/v1/deployments/{stripped}/predictions")
+                // The owner and name are independent path segments; the slash between
+                // them is structural and preserved.
+                let encoded = stripped
+                    .split('/')
+                    .map(encode_path_segment)
+                    .collect::<Vec<_>>()
+                    .join("/");
+                format!("/v1/deployments/{encoded}/predictions")
             } else if model.contains(':') {
                 "/v1/predictions".to_string()
             } else {
-                format!("/v1/models/{model}/predictions")
+                format!("/v1/models/{}/predictions", encode_path_segment(model))
             }
         }
         _ => upstream_path(provider_type).to_string(),
@@ -877,6 +919,10 @@ pub(super) async fn filter_eligible_channels(
     let now = now_ts();
     let health = state.channel_health.lock().await;
     let mut out = Vec::new();
+    let health_limit = crate::monoize_routing::channel_health_max_entries();
+    if health.len() < health_limit {
+        crate::monoize_routing::reset_channel_health_saturation_warning();
+    }
     for channel in channels {
         if !channel.enabled {
             continue;
@@ -887,6 +933,7 @@ pub(super) async fn filter_eligible_channels(
         }
         let key = health_key(&channel.id, model);
         if crate::monoize_routing::missing_channel_health_is_saturated(&health, &key) {
+            crate::monoize_routing::note_channel_health_saturation(health_limit);
             continue;
         }
         let channel_health = health
@@ -921,6 +968,9 @@ pub(super) async fn is_attempt_channel_healthy(state: &AppState, attempt: &Monoi
     let health = state.channel_health.lock().await;
     let key = health_key(&attempt.channel_id, attempt_health_model(attempt));
     if crate::monoize_routing::missing_channel_health_is_saturated(&health, &key) {
+        crate::monoize_routing::note_channel_health_saturation(
+            crate::monoize_routing::channel_health_max_entries(),
+        );
         return false;
     }
     health
@@ -1209,8 +1259,7 @@ pub(super) fn build_exhausted_error_message(model: &str, tried: &[TriedProvider]
         return format!("No available upstream provider for model: {model}");
     }
     let last_error = &tried[tried.len() - 1].client_error;
-    let sanitized_last_error =
-        crate::error_sanitize::sanitize_quota_error_text(last_error, false);
+    let sanitized_last_error = crate::error_sanitize::sanitize_quota_error_text(last_error, false);
     format!("All upstream attempts failed for model: {model}. Last error: {sanitized_last_error}")
 }
 
@@ -1642,6 +1691,9 @@ async fn apply_retryable_failure_to_channel(
     }
     let key = health_key(channel_id, attempt_health_model(attempt));
     if !crate::monoize_routing::prepare_channel_health_insert(&mut health, &key) {
+        crate::monoize_routing::note_channel_health_saturation(
+            crate::monoize_routing::channel_health_max_entries(),
+        );
         return;
     }
     let entry = health
@@ -1718,7 +1770,10 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
             | upstream::UpstreamErrorSource::Internal => {
                 format!(
                     "upstream status {status}: {}",
-                    crate::error_sanitize::maybe_mask_sensitive_text(&err.message, mask_sensitive_info)
+                    crate::error_sanitize::maybe_mask_sensitive_text(
+                        &err.message,
+                        mask_sensitive_info
+                    )
                 )
             }
         }

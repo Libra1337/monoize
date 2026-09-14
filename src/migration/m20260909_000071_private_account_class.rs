@@ -137,7 +137,15 @@ async fn rebuild_sqlite_table<C: ConnectionTrait>(
     table: &str,
     columns: &[&str],
 ) -> Result<(), DbErr> {
-    replace_sqlite_check(tx, backend, table, columns, TWO_CLASS_CHECK, THREE_CLASS_CHECK).await
+    replace_sqlite_check(
+        tx,
+        backend,
+        table,
+        columns,
+        TWO_CLASS_CHECK,
+        THREE_CLASS_CHECK,
+    )
+    .await
 }
 
 async fn narrow_sqlite_table<C: ConnectionTrait>(
@@ -146,7 +154,15 @@ async fn narrow_sqlite_table<C: ConnectionTrait>(
     table: &str,
     columns: &[&str],
 ) -> Result<(), DbErr> {
-    replace_sqlite_check(tx, backend, table, columns, THREE_CLASS_CHECK, TWO_CLASS_CHECK).await
+    replace_sqlite_check(
+        tx,
+        backend,
+        table,
+        columns,
+        THREE_CLASS_CHECK,
+        TWO_CLASS_CHECK,
+    )
+    .await
 }
 
 /// Rewrites one table's account-class `CHECK` text in place.

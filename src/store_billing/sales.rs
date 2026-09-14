@@ -161,9 +161,7 @@ pub fn normalize_code(input: &str) -> Option<String> {
         .map(|character| character.to_ascii_uppercase())
         .collect();
     if normalized.len() != CODE_LENGTH
-        || !normalized
-            .bytes()
-            .all(|byte| CODE_ALPHABET.contains(&byte))
+        || !normalized.bytes().all(|byte| CODE_ALPHABET.contains(&byte))
     {
         return None;
     }
@@ -198,7 +196,10 @@ mod tests {
         let at_the_cap = compute_amounts(base, 500, 500).expect("5% concession");
         assert_eq!(at_the_cap.payment_minor, 9_500);
         assert_eq!(at_the_cap.commission_minor, 0);
-        assert_eq!(at_the_cap.payment_minor - at_the_cap.commission_minor, 9_500);
+        assert_eq!(
+            at_the_cap.payment_minor - at_the_cap.commission_minor,
+            9_500
+        );
 
         // The buyer always receives the face value; only the payable shrinks.
         for amounts in [without, with_one_percent, at_the_cap] {
@@ -219,7 +220,10 @@ mod tests {
         // Without a concession the same order earns the full base rate: 5 * 5% = 0.25 CNY.
         let no_concession = compute_amounts(500, 500, 0).expect("5 CNY, no concession");
         assert_eq!(no_concession.commission_minor, 25);
-        assert_eq!(no_concession.payment_minor - no_concession.commission_minor, 475);
+        assert_eq!(
+            no_concession.payment_minor - no_concession.commission_minor,
+            475
+        );
     }
 
     /// SC-1.2: the bound follows the configured rate, not a hardcoded 500.
@@ -275,7 +279,10 @@ mod tests {
     #[test]
     fn a_zero_or_negative_face_value_is_rejected() {
         assert_eq!(compute_amounts(0, 500, 0), Err(SalesError::InvalidAmount));
-        assert_eq!(compute_amounts(-100, 500, 0), Err(SalesError::InvalidAmount));
+        assert_eq!(
+            compute_amounts(-100, 500, 0),
+            Err(SalesError::InvalidAmount)
+        );
     }
 
     /// SC-4.3: a claimed order carries no code, so the agent earns the full base rate.

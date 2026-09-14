@@ -358,7 +358,10 @@ fn analytics_model_bucket_sql(
     // ORG-23: org aggregates read the durable log attribution (rl.user_id = org id),
     // not a live join on api_keys.org_id, so leave/delete never rewrites history.
     let org_filter = if org_scoped {
-        format!(" AND rl.user_id = ${}", 6 + user_scoped as usize + api_key_scoped as usize)
+        format!(
+            " AND rl.user_id = ${}",
+            6 + user_scoped as usize + api_key_scoped as usize
+        )
     } else {
         String::new()
     };
@@ -416,11 +419,11 @@ fn decode_token_aggregate(row: &sea_orm::QueryResult, column: &str) -> Result<i1
 mod tests {
     use super::{
         AnalyticsBucketing, analytics_bucket_expr, analytics_model_bucket_sql,
-        analytics_month_index,
-        append_request_log_filters, ascii_folded_like_pattern, charge_aggregate_select,
-        decode_charge_aggregate, decode_token_aggregate, enrich_tried_providers_names,
-        escape_like_literal, request_log_model_filter_max_terms_from_raw,
-        tried_providers_need_name_enrichment, validate_request_log_model_filter_with_limit,
+        analytics_month_index, append_request_log_filters, ascii_folded_like_pattern,
+        charge_aggregate_select, decode_charge_aggregate, decode_token_aggregate,
+        enrich_tried_providers_names, escape_like_literal,
+        request_log_model_filter_max_terms_from_raw, tried_providers_need_name_enrichment,
+        validate_request_log_model_filter_with_limit,
     };
     use crate::db::DbPool;
     use sea_orm::{ConnectionTrait, TransactionTrait, Value as SeaValue};
@@ -511,10 +514,7 @@ mod tests {
                     assert!(sql.contains(&exclusion), "{sql}");
                     // The exclusion must sit in WHERE, before grouping, so it removes rows
                     // rather than filtering already-aggregated buckets.
-                    assert!(
-                        sql.find(&exclusion) < sql.find(" GROUP BY "),
-                        "{sql}"
-                    );
+                    assert!(sql.find(&exclusion) < sql.find(" GROUP BY "), "{sql}");
                 }
             }
         }
@@ -740,8 +740,14 @@ mod tests {
         );
         assert_eq!(last_month - first_month, 3);
 
-        let sql =
-            analytics_model_bucket_sql(true, true, false, false, false, AnalyticsBucketing::CalendarMonths);
+        let sql = analytics_model_bucket_sql(
+            true,
+            true,
+            false,
+            false,
+            false,
+            AnalyticsBucketing::CalendarMonths,
+        );
         let rows = db
             .read()
             .query_all(db.stmt(
@@ -883,7 +889,14 @@ mod tests {
             .await
             .unwrap();
 
-        let sql = analytics_model_bucket_sql(true, true, false, false, false, AnalyticsBucketing::EqualIntervals);
+        let sql = analytics_model_bucket_sql(
+            true,
+            true,
+            false,
+            false,
+            false,
+            AnalyticsBucketing::EqualIntervals,
+        );
         assert!(sql.contains(
             "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')"
         ));
@@ -1293,7 +1306,14 @@ mod tests {
         }
         let analytics_rows = txn
             .query_all(db.stmt(
-                &analytics_model_bucket_sql(false, true, false, false, false, AnalyticsBucketing::EqualIntervals),
+                &analytics_model_bucket_sql(
+                    false,
+                    true,
+                    false,
+                    false,
+                    false,
+                    AnalyticsBucketing::EqualIntervals,
+                ),
                 vec![
                     1_704_067_199_000_i64.into(),
                     2_i64.into(),

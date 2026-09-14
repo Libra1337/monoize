@@ -1,11 +1,11 @@
 use super::*;
 use crate::billing_rate_store::DbBillingRateRecord;
-use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive;
-use std::str::FromStr as _;
 #[cfg(test)]
 use crate::model_registry_store::ModelPricing;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use sha2::Digest as _;
+use std::str::FromStr as _;
 
 #[derive(Debug, Clone)]
 pub(super) struct BillingRateResolution {
@@ -80,18 +80,12 @@ pub(super) fn is_beijing_peak_window(now_utc: chrono::DateTime<chrono::Utc>) -> 
             | chrono::Weekday::Fri
     );
     let minute_of_day = beijing.hour() * 60 + beijing.minute();
-    weekday_peak
-        && ((540..720).contains(&minute_of_day) || (840..1080).contains(&minute_of_day))
+    weekday_peak && ((540..720).contains(&minute_of_day) || (840..1080).contains(&minute_of_day))
 }
 
 /// MB-R15: the unit price the row bills at under the resolution's window.
-fn effective_rate_price_nano(
-    rate: &DbBillingRateRecord,
-    is_peak: bool,
-) -> Result<i128, String> {
-    if is_peak
-        && let Some(peak) = rate.peak_unit_price_nano()?
-    {
+fn effective_rate_price_nano(rate: &DbBillingRateRecord, is_peak: bool) -> Result<i128, String> {
+    if is_peak && let Some(peak) = rate.peak_unit_price_nano()? {
         return Ok(peak);
     }
     rate.unit_price_nano()
@@ -1179,7 +1173,8 @@ fn add_token_line_for_usage_classes(
         )
     })?;
     let unit_price = effective_rate_price_nano(rate, pricing.is_peak)?;
-    let pricing_window = if pricing.is_peak && rate.peak_unit_price_nano().ok().flatten().is_some() {
+    let pricing_window = if pricing.is_peak && rate.peak_unit_price_nano().ok().flatten().is_some()
+    {
         "peak"
     } else {
         "off_peak"
@@ -1509,13 +1504,12 @@ fn add_meter_lines(
             quantity = quantity.max(minimum);
         }
         let unit_price = effective_rate_price_nano(rate, pricing.is_peak)?;
-        let pricing_window = if pricing.is_peak
-            && rate.peak_unit_price_nano().ok().flatten().is_some()
-        {
-            "peak"
-        } else {
-            "off_peak"
-        };
+        let pricing_window =
+            if pricing.is_peak && rate.peak_unit_price_nano().ok().flatten().is_some() {
+                "peak"
+            } else {
+                "off_peak"
+            };
         let charge = i128::from(quantity)
             .checked_mul(unit_price)
             .ok_or_else(|| "meter charge overflow".to_string())?;
@@ -2282,9 +2276,14 @@ mod peak_pricing_tests {
         }
     }
 
-    fn beijing_time(weekday_chrono_day: u32, hour: u32, minute: u32) -> chrono::DateTime<chrono::Utc> {
+    fn beijing_time(
+        weekday_chrono_day: u32,
+        hour: u32,
+        minute: u32,
+    ) -> chrono::DateTime<chrono::Utc> {
         // 2026-09-14 is a Monday; the weekday advances one day per `weekday_chrono_day`.
-        chrono::Utc.with_ymd_and_hms(2026, 9, 14 + weekday_chrono_day, hour, minute, 0)
+        chrono::Utc
+            .with_ymd_and_hms(2026, 9, 14 + weekday_chrono_day, hour, minute, 0)
             .single()
             .expect("valid test timestamp")
     }
@@ -2351,7 +2350,10 @@ mod peak_pricing_tests {
         )
         .expect("off-peak charge");
         assert_eq!(line_items[0]["unit_price_nano"], serde_json::json!("1000"));
-        assert_eq!(line_items[0]["pricing_window"], serde_json::json!("off_peak"));
+        assert_eq!(
+            line_items[0]["pricing_window"],
+            serde_json::json!("off_peak")
+        );
     }
 
     /// MB-D3g: a row without a peak price bills at `unit_price_nano` even in the
@@ -2377,7 +2379,10 @@ mod peak_pricing_tests {
         )
         .expect("fallback charge");
         assert_eq!(line_items[0]["unit_price_nano"], serde_json::json!("1000"));
-        assert_eq!(line_items[0]["pricing_window"], serde_json::json!("off_peak"));
+        assert_eq!(
+            line_items[0]["pricing_window"],
+            serde_json::json!("off_peak")
+        );
     }
 
     /// MB-R15: the hold maximum uses the effective price of the window.
@@ -2392,9 +2397,8 @@ mod peak_pricing_tests {
             cny_per_usd: None,
             is_peak: true,
         };
-        let maximum =
-            plan_maximum_charge_nano(&resolution, 100, Some(100), &[], Multiplier::ONE)
-                .expect("maximum");
+        let maximum = plan_maximum_charge_nano(&resolution, 100, Some(100), &[], Multiplier::ONE)
+            .expect("maximum");
         // Both hold legs price 100 tokens at the 2000 peak nano price.
         assert_eq!(maximum, 100 * 2000 + 100 * 2000);
 
@@ -2403,14 +2407,9 @@ mod peak_pricing_tests {
             is_peak: false,
             ..resolution
         };
-        let maximum = plan_maximum_charge_nano(
-            &off_peak_resolution,
-            100,
-            Some(100),
-            &[],
-            Multiplier::ONE,
-        )
-        .expect("maximum");
+        let maximum =
+            plan_maximum_charge_nano(&off_peak_resolution, 100, Some(100), &[], Multiplier::ONE)
+                .expect("maximum");
         assert_eq!(maximum, 100 * 1000 + 100 * 1000);
     }
 }

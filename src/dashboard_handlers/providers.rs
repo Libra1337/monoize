@@ -8,8 +8,8 @@ use crate::monoize_routing::{
     CreateWholesaleProviderInput, MonoizeChannel, MonoizeModelEntry, MonoizeProvider,
     ReorderProvidersInput, UpdateMonoizeProviderInput, effective_model_multiplier,
 };
-use crate::users::AccountClass;
 use crate::settings::normalize_pricing_model_key;
+use crate::users::AccountClass;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -821,7 +821,9 @@ async fn validate_pricing_profiles(
             .monoize_store
             .pricing_profile_account_classes(&requested, exclude_provider_id)
             .await
-            .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
+            .map_err(|error| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+            })?
             .into_iter()
             .filter(|(_, other)| *other != account_class && *other != AccountClass::Agent)
             .map(|(profile, _)| profile)
@@ -1023,9 +1025,7 @@ pub async fn create_wholesale_provider(
         .get_provider(&body.source_provider_id)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
-        .ok_or_else(|| {
-            AppError::new(StatusCode::NOT_FOUND, "not_found", "provider not found")
-        })?;
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "provider not found"))?;
     let source_class = provider_account_class(&state, &source.group_id).await?;
     validate_wholesale_source_class(source_class)?;
 
@@ -1041,7 +1041,9 @@ pub async fn create_wholesale_provider(
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
-                format!("model_multipliers names a model the source provider does not offer: {model}"),
+                format!(
+                    "model_multipliers names a model the source provider does not offer: {model}"
+                ),
             ));
         }
     }
@@ -1647,11 +1649,11 @@ fn extract_model_ids(
 mod tests {
     use super::*;
     use crate::app::{RuntimeConfig, load_state_with_runtime};
+    use crate::exact_decimal::Multiplier;
     use crate::monoize_routing::{
         CreateMonoizeChannelInput, CreateMonoizeProviderInput, MonoizeModelEntry,
         MonoizeProviderType,
     };
-    use crate::exact_decimal::Multiplier;
     use crate::users::UserRole;
     use axum::Json;
     use axum::extract::State;
@@ -1910,11 +1912,14 @@ mod tests {
             .create_session(&admin.id, 7)
             .await
             .expect("session created");
+        // The model-list server binds to loopback, so SSRF validation would reject it.
+        crate::monoize_routing::test_set_allow_private_upstream(true);
         let provider = state
             .monoize_store
             .create_provider(test_provider_input(base_url.clone()))
             .await
             .expect("provider created");
+        crate::monoize_routing::test_set_allow_private_upstream(false);
         let channel_id = provider.channel.id.clone();
 
         let mut headers = HeaderMap::new();
@@ -2056,15 +2061,14 @@ mod tests {
 
         // A Profile already reachable from the standard class is rejected for an Enterprise
         // Provider, even though the Profile name itself is registered.
-        let conflict =
-            validate_pricing_profiles(
-                &state,
-                reached_pricing_profiles(Some("openai"), None),
-                AccountClass::Enterprise,
-                None,
-            )
-                .await
-                .expect_err("shared Profile must be rejected");
+        let conflict = validate_pricing_profiles(
+            &state,
+            reached_pricing_profiles(Some("openai"), None),
+            AccountClass::Enterprise,
+            None,
+        )
+        .await
+        .expect_err("shared Profile must be rejected");
         assert_eq!(conflict.status, StatusCode::CONFLICT);
 
         // A model-level override is checked with the same rule.
@@ -2099,8 +2103,8 @@ mod tests {
             AccountClass::Standard,
             None,
         )
-            .await
-            .expect("same-class reuse is allowed");
+        .await
+        .expect("same-class reuse is allowed");
 
         // An Enterprise Provider with its own Profile is accepted and then reserves that name
         // against the standard class.
@@ -2228,30 +2232,31 @@ mod tests {
                 .expect("rate creates");
         }
 
-        let create = |name: &str, group_id: &str, profile: Option<&str>, override_profile: Option<&str>| {
-            let model = match override_profile {
-                Some(value) => json!({
-                    "redirect": null,
-                    "pricing_profile_mode": "override",
-                    "pricing_profile_override": value
-                }),
-                None => json!({ "redirect": null }),
+        let create =
+            |name: &str, group_id: &str, profile: Option<&str>, override_profile: Option<&str>| {
+                let model = match override_profile {
+                    Some(value) => json!({
+                        "redirect": null,
+                        "pricing_profile_mode": "override",
+                        "pricing_profile_override": value
+                    }),
+                    None => json!({ "redirect": null }),
+                };
+                serde_json::from_value::<CreateMonoizeProviderInput>(json!({
+                    "name": name,
+                    "confirm_public_exposure": true,
+                    "group_id": group_id,
+                    "pricing_profile": profile,
+                    "channel": {
+                        "name": format!("{name}-channel"),
+                        "provider_type": "responses",
+                        "base_url": "https://example.com",
+                        "api_key": "secret",
+                        "models": { "gpt-shared": model }
+                    }
+                }))
+                .expect("Provider input decodes")
             };
-            serde_json::from_value::<CreateMonoizeProviderInput>(json!({
-                "name": name,
-                "confirm_public_exposure": true,
-                "group_id": group_id,
-                "pricing_profile": profile,
-                "channel": {
-                    "name": format!("{name}-channel"),
-                    "provider_type": "responses",
-                    "base_url": "https://example.com",
-                    "api_key": "secret",
-                    "models": { "gpt-shared": model }
-                }
-            }))
-            .expect("Provider input decodes")
-        };
 
         // Each Profile is reached by two standard Providers, so moving one still leaves the
         // Profile reachable from the standard class.
@@ -2351,24 +2356,26 @@ mod tests {
 
         let source = state
             .monoize_store
-            .create_provider(serde_json::from_value::<CreateMonoizeProviderInput>(json!({
-                "name": "source-provider",
-                "confirm_public_exposure": true,
-                "group_id": standard_group.id,
-                "pricing_profile": "openai",
-                "multiplier": "2",
-                "channel": {
-                    "name": "source-channel",
-                    "provider_type": "responses",
-                    "base_url": "https://example.com",
-                    "api_key": "secret",
-                    "models": {
-                        "gpt-shared": { "redirect": null },
-                        "gpt-override": { "redirect": null, "multiplier_override": "3" }
+            .create_provider(
+                serde_json::from_value::<CreateMonoizeProviderInput>(json!({
+                    "name": "source-provider",
+                    "confirm_public_exposure": true,
+                    "group_id": standard_group.id,
+                    "pricing_profile": "openai",
+                    "multiplier": "2",
+                    "channel": {
+                        "name": "source-channel",
+                        "provider_type": "responses",
+                        "base_url": "https://example.com",
+                        "api_key": "secret",
+                        "models": {
+                            "gpt-shared": { "redirect": null },
+                            "gpt-override": { "redirect": null, "multiplier_override": "3" }
+                        }
                     }
-                }
-            }))
-            .expect("source input decodes"))
+                }))
+                .expect("source input decodes"),
+            )
             .await
             .expect("source Provider creates");
 
@@ -2504,7 +2511,10 @@ mod tests {
         };
         let standard_provider = state
             .monoize_store
-            .create_provider(provider_input("standard-provider", standard_group.id.clone()))
+            .create_provider(provider_input(
+                "standard-provider",
+                standard_group.id.clone(),
+            ))
             .await
             .expect("standard Provider creates");
 

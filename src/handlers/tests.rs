@@ -3243,7 +3243,8 @@ fn exhausted_error_replaces_quota_wording_in_last_attempt() {
 
     let err = build_exhausted_upstream_error("glm-5.3", &tried);
     assert!(
-        err.message.contains(crate::error_sanitize::GENERIC_QUOTA_TEXT),
+        err.message
+            .contains(crate::error_sanitize::GENERIC_QUOTA_TEXT),
         "{}",
         err.message
     );
@@ -3266,6 +3267,61 @@ fn channel_origin_key_groups_same_host_independent_of_path_and_case() {
         routing::channel_origin_key("https://codex.ciii.club")
     );
     assert!(routing::channel_origin_key("not a url").is_none());
+}
+
+#[test]
+fn upstream_path_for_model_percent_encodes_injected_segments() {
+    use crate::config::ProviderType;
+
+    // Gemini: the `models/` prefix is structural, the name itself is a single
+    // segment, so a `/` inside the name must not open a new path segment.
+    assert_eq!(
+        routing::upstream_path_for_model(
+            ProviderType::Gemini,
+            "models/gemini-2.5-pro",
+            false
+        ),
+        "/v1beta/models/models/gemini-2.5-pro:generateContent"
+    );
+    assert_eq!(
+        routing::upstream_path_for_model(
+            ProviderType::Gemini,
+            "gemini-2.5-pro/extra?x=1#f",
+            true
+        ),
+        "/v1beta/models/gemini-2.5-pro%2Fextra%3Fx=1%23f:streamGenerateContent?alt=sse"
+    );
+
+    // Replicate plain model: encode as a single segment, so a `/` inside the key
+    // cannot open a new path segment. (A `:` routes to the version-qualified
+    // `/v1/predictions` form instead, so use a colon-free key here.)
+    assert_eq!(
+        routing::upstream_path_for_model(
+            ProviderType::Replicate,
+            "owner/na me?k=v",
+            false
+        ),
+        "/v1/models/owner%2Fna%20me%3Fk=v/predictions"
+    );
+
+    // Replicate deployment: owner and name stay independent segments, only the
+    // owner/name contents are encoded.
+    assert_eq!(
+        routing::upstream_path_for_model(
+            ProviderType::Replicate,
+            "deployment:owner/name",
+            false
+        ),
+        "/v1/deployments/owner/name/predictions"
+    );
+    assert_eq!(
+        routing::upstream_path_for_model(
+            ProviderType::Replicate,
+            "deployment:owner/na me#1",
+            false
+        ),
+        "/v1/deployments/owner/na%20me%231/predictions"
+    );
 }
 
 #[test]
@@ -4775,7 +4831,7 @@ fn usage_breakdown_persists_only_normalized_members() {
 async fn spawn_porn_judge_server() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
     use axum::extract::State;
     use axum::routing::post;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
 
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&calls);

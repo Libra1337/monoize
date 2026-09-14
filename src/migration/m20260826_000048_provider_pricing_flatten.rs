@@ -1793,6 +1793,7 @@ fn canonical_decimal_check(column: &str, backend: DbBackend) -> String {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn target_provider_ddl() -> Vec<String> {
     vec![
         "CREATE TABLE monoize_provider_models (...)".to_string(),

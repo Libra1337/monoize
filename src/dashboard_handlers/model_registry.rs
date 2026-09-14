@@ -271,9 +271,7 @@ pub async fn list_marketplace_models(
 
     let metadata = state
         .model_registry_store
-        .list_marketplace_model_metadata_for_models(
-            &group_models.into_iter().collect::<Vec<_>>(),
-        )
+        .list_marketplace_model_metadata_for_models(&group_models.into_iter().collect::<Vec<_>>())
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 

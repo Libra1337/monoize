@@ -8,10 +8,10 @@ mod captcha;
 mod firewall;
 mod groups;
 mod model_registry;
-mod providers;
 mod orgs;
-mod sales;
+mod providers;
 mod request_captures;
+mod sales;
 pub(crate) mod session_helpers;
 mod settings;
 mod store_billing;
@@ -39,7 +39,6 @@ pub use auth::{
     UserBillingPlanResponse, UserResponse, change_password, get_me, login, logout, register,
     update_me, user_response_from_store,
 };
-pub use firewall::{FirewallEventsQuery, get_firewall_stats, list_firewall_events};
 pub use billing_plans::{
     BillingPlanResponse, CreateBillingPlanRequest, UpdateBillingPlanRequest, create_billing_plan,
     delete_billing_plan, list_billing_plans, reset_billing_plan, update_billing_plan,
@@ -51,8 +50,10 @@ pub use billing_rates::{
     sync_billing_rates_catalog, update_pricing_profile_patterns, upsert_billing_rate,
 };
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
-pub use groups::{list_group_grants, DashboardGroupsResponse, create_group, delete_group, grant_user_group, list_dashboard_groups,
-    reorder_groups, revoke_user_group, update_group,
+pub use firewall::{FirewallEventsQuery, get_firewall_stats, list_firewall_events};
+pub use groups::{
+    DashboardGroupsResponse, create_group, delete_group, grant_user_group, list_dashboard_groups,
+    list_group_grants, reorder_groups, revoke_user_group, update_group,
 };
 pub use model_registry::{
     create_model, delete_model, delete_model_metadata, get_model, get_model_metadata,
@@ -62,27 +63,25 @@ pub use model_registry::{
 pub(crate) use providers::provider_dashboard_rate_matrix_is_complete;
 pub use request_captures::{RequestCaptureQuery, get_request_capture};
 
+pub use orgs::{
+    admin_list_orgs, admin_update_org, create_org, create_org_key, delete_org, delete_org_key,
+    deposit_to_org, distribute_from_org, invite_preview, join_org, leave_org, list_my_orgs,
+    list_org_keys, org_analytics, org_detail, org_ledger, org_request_logs, regenerate_invite,
+    remove_org_member, update_key_sharing,
+};
 pub use providers::{
     FetchChannelModelsRequest, TestChannelRequest, create_provider, create_wholesale_provider,
     delete_provider, fetch_channel_models, fetch_provider_models, get_provider,
-    get_provider_presets, get_transform_registry, list_providers, reorder_providers,
-    test_channel, update_provider,
-};
-pub use orgs::{
-    admin_list_orgs, admin_update_org, create_org, create_org_key, delete_org,
-    delete_org_key, deposit_to_org, distribute_from_org, invite_preview, join_org,
-    leave_org, list_my_orgs, list_org_keys, org_analytics, org_detail, org_ledger,
-    org_request_logs, regenerate_invite, remove_org_member, update_key_sharing,
+    get_provider_presets, get_transform_registry, list_providers, reorder_providers, test_channel,
+    update_provider,
 };
 
 pub use sales::{
-    create_sales_agent_admin, create_sales_claim, create_sales_claim_admin,
-    cancel_sales_withdrawal, create_sales_withdrawal,
-    decide_sales_withdrawal_admin, get_sales_overview, get_sales_settings_admin,
-    list_sales_agents_admin, list_sales_entries, list_sales_entries_admin,
-    list_sales_withdrawals,
-    list_sales_withdrawals_admin, update_own_sales_discount, update_sales_agent_admin,
-    update_sales_settings_admin,
+    cancel_sales_withdrawal, create_sales_agent_admin, create_sales_claim,
+    create_sales_claim_admin, create_sales_withdrawal, decide_sales_withdrawal_admin,
+    get_sales_overview, get_sales_settings_admin, list_sales_agents_admin, list_sales_entries,
+    list_sales_entries_admin, list_sales_withdrawals, list_sales_withdrawals_admin,
+    update_own_sales_discount, update_sales_agent_admin, update_sales_settings_admin,
 };
 pub use settings::{
     UpdateSettingsRequest, get_config_overview, get_dashboard_stats, get_public_settings,
@@ -98,18 +97,17 @@ pub use store_billing::{
     export_store_redemption_codes_admin, generate_store_redemption_codes_admin, get_store_catalog,
     get_store_channel_readiness_admin, get_store_entitlement, get_store_exchange_rate,
     get_store_order, get_store_order_admin, get_store_payment_availability_admin,
-    query_store_order_payment,
     get_store_payment_compliance_admin, get_store_payment_icon, get_store_primary_status_admin,
     get_store_refund_admin, get_store_retention_admin, get_store_settings_admin,
     list_all_store_orders_admin, list_store_orders, list_store_payment_capabilities_admin,
     list_store_payment_channels_admin, list_store_privacy_records_admin, list_store_products_admin,
     list_store_redemption_codes_admin, list_wallet_ledger, put_store_channel_readiness_admin,
     put_store_epay_method_admin, put_store_payment_capability_admin, query_store_order_admin,
-    query_store_refund_admin, redeem_store_code, replace_store_payment_credential_admin,
-    reprocess_store_provider_event_admin, reveal_store_redemption_codes_admin,
-    revoke_store_redemption_code_admin, run_store_retention_admin,
-    update_store_payment_channel_admin, update_store_product_admin, update_store_settings_admin,
-    upload_store_payment_icon_admin,
+    query_store_order_payment, query_store_refund_admin, redeem_store_code,
+    replace_store_payment_credential_admin, reprocess_store_provider_event_admin,
+    reveal_store_redemption_codes_admin, revoke_store_redemption_code_admin,
+    run_store_retention_admin, update_store_payment_channel_admin, update_store_product_admin,
+    update_store_settings_admin, upload_store_payment_icon_admin,
 };
 pub use users::{
     CreateUserRequest, UpdateAccountClassRequest, UpdateUserRequest, create_user, delete_user,

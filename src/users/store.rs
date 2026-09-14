@@ -3,13 +3,11 @@ use std::collections::HashMap;
 use super::utils::parse_nano_usd;
 use super::{
     AccountClass, AdminUpdateUserInput, ApiKey, ApiKeyChannelBinding, ApiKeyModelBinding,
-    BillingError,
-    BillingErrorKind, BillingLedgerEntry, CreateApiKeyInput, CreateApiKeyWithLimitError,
-    ModelRedirectRule, RESERVED_INTERNAL_USER_PREFIX, RegisterUserError, RequestCaptureMode,
-    Session, UpdateApiKeyInput, User, UserBalance, UserRole, UserStore,
-    canonicalize_channel_bindings, canonicalize_group_ids, canonicalize_model_bindings,
-    compile_model_redirects,
-    validate_model_redirects,
+    BillingError, BillingErrorKind, BillingLedgerEntry, CreateApiKeyInput,
+    CreateApiKeyWithLimitError, ModelRedirectRule, RESERVED_INTERNAL_USER_PREFIX,
+    RegisterUserError, RequestCaptureMode, Session, UpdateApiKeyInput, User, UserBalance, UserRole,
+    UserStore, canonicalize_channel_bindings, canonicalize_group_ids, canonicalize_model_bindings,
+    compile_model_redirects, validate_model_redirects,
 };
 use crate::transforms::{
     TransformRuleConfig, canonical_transform_id, canonicalize_transform_rule,
@@ -635,26 +633,27 @@ impl UserStore {
         let id = uuid::Uuid::new_v4().to_string();
         let password_hash = Self::hash_password_async(password).await?;
         let now = Utc::now();
-        let (group_id, account_class) = match group_id.map(str::trim).filter(|value| !value.is_empty()) {
-            Some(value) => {
-                // The account class follows the chosen Group, so the row never
-                // carries the cross-class binding the old guard refused.
-                let group = self
-                    .get_group_by_id(value)
-                    .await?
-                    .ok_or_else(|| format!("unknown group id: {value}"))?;
-                (value.to_string(), group.account_class)
-            }
-            None => {
-                let default = self.default_group_id().await?;
-                let class = self
-                    .get_group_by_id(&default)
-                    .await?
-                    .map(|group| group.account_class)
-                    .unwrap_or(AccountClass::Standard);
-                (default, class)
-            }
-        };
+        let (group_id, account_class) =
+            match group_id.map(str::trim).filter(|value| !value.is_empty()) {
+                Some(value) => {
+                    // The account class follows the chosen Group, so the row never
+                    // carries the cross-class binding the old guard refused.
+                    let group = self
+                        .get_group_by_id(value)
+                        .await?
+                        .ok_or_else(|| format!("unknown group id: {value}"))?;
+                    (value.to_string(), group.account_class)
+                }
+                None => {
+                    let default = self.default_group_id().await?;
+                    let class = self
+                        .get_group_by_id(&default)
+                        .await?
+                        .map(|group| group.account_class)
+                        .unwrap_or(AccountClass::Standard);
+                    (default, class)
+                }
+            };
 
         self.db.write().await
             .execute(self.db.stmt(
@@ -736,11 +735,7 @@ impl UserStore {
         username: &str,
         password: &str,
     ) -> Result<User, String> {
-        if self
-            .get_user_by_username(username)
-            .await?
-            .is_some()
-        {
+        if self.get_user_by_username(username).await?.is_some() {
             return Err("username_exists".to_string());
         }
         let id = uuid::Uuid::new_v4().to_string();
@@ -848,7 +843,11 @@ impl UserStore {
         }
         let write = self.db.write().await;
         let tx = write.begin().await.map_err(|e| e.to_string())?;
-        let lock_suffix = if self.db.is_postgres() { " FOR UPDATE" } else { "" };
+        let lock_suffix = if self.db.is_postgres() {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
         let parent_row = tx
             .query_one(self.db.stmt(
                 &format!("SELECT balance_nano_usd FROM users WHERE id = $1{lock_suffix}"),
@@ -890,20 +889,42 @@ impl UserStore {
 
         tx.execute(self.db.stmt(
             "UPDATE users SET balance_nano_usd = $2, updated_at = $3 WHERE id = $1",
-            vec![parent_user_id.into(), parent_after.to_string().into(), now.clone().into()],
+            vec![
+                parent_user_id.into(),
+                parent_after.to_string().into(),
+                now.clone().into(),
+            ],
         ))
         .await
         .map_err(|e| e.to_string())?;
         tx.execute(self.db.stmt(
             "UPDATE users SET balance_nano_usd = $2, updated_at = $3 WHERE id = $1",
-            vec![sub_user_id.into(), sub_after.to_string().into(), now.clone().into()],
+            vec![
+                sub_user_id.into(),
+                sub_after.to_string().into(),
+                now.clone().into(),
+            ],
         ))
         .await
         .map_err(|e| e.to_string())?;
 
         for (user_id, delta, balance_after, kind, counterparty_field, counterparty_id) in [
-            (parent_user_id, -amount_nano, parent_after, "sub_account_grant", "to_user_id", sub_user_id),
-            (sub_user_id, amount_nano, sub_after, "sub_account_receive", "from_user_id", parent_user_id),
+            (
+                parent_user_id,
+                -amount_nano,
+                parent_after,
+                "sub_account_grant",
+                "to_user_id",
+                sub_user_id,
+            ),
+            (
+                sub_user_id,
+                amount_nano,
+                sub_after,
+                "sub_account_receive",
+                "from_user_id",
+                parent_user_id,
+            ),
         ] {
             let entry_id = uuid::Uuid::new_v4().to_string();
             tx.execute(self.db.stmt(
@@ -3721,8 +3742,7 @@ mod tests {
         parse_session_cleanup_interval_secs, sanitize_api_key_transforms, serialize_group_ids_json,
         validate_api_key_transforms,
     };
-    use std::collections::HashMap;
-use crate::db::DbPool;
+    use crate::db::DbPool;
     use crate::migration::Migrator;
     use crate::transforms::{Phase, TransformRuleConfig};
     use crate::users::{

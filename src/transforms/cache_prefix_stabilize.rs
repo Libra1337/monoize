@@ -282,7 +282,8 @@ fn extract_volatile_lines(
             .find(|(open, _)| trimmed.starts_with(open))
             .map(|(_, close)| *close);
         if let Some(close) = opened {
-            let end = (index..lines.len()).find(|candidate| lines[*candidate].trim().ends_with(close));
+            let end =
+                (index..lines.len()).find(|candidate| lines[*candidate].trim().ends_with(close));
             if let Some(end) = end {
                 for position in index..=end {
                     volatile_span[position] = true;
@@ -445,7 +446,10 @@ mod tests {
     #[tokio::test]
     async fn strips_when_configured_and_drops_a_node_that_becomes_empty() {
         let mut req = request(vec![
-            Node::text(OrdinaryRole::System, "<user_info>\nWorkspace Path: /w\n</user_info>"),
+            Node::text(
+                OrdinaryRole::System,
+                "<user_info>\nWorkspace Path: /w\n</user_info>",
+            ),
             Node::text(OrdinaryRole::System, "Stable instructions."),
             Node::text(OrdinaryRole::User, "hi"),
         ]);
@@ -464,8 +468,14 @@ mod tests {
     #[tokio::test]
     async fn collects_across_prefix_nodes_and_appends_a_trailing_user_node_in_order() {
         let mut req = request(vec![
-            Node::text(OrdinaryRole::System, "First.\nx-anthropic-billing-header: cch=a1;"),
-            Node::text(OrdinaryRole::Developer, "<timestamp>\nnow\n</timestamp>\nSecond."),
+            Node::text(
+                OrdinaryRole::System,
+                "First.\nx-anthropic-billing-header: cch=a1;",
+            ),
+            Node::text(
+                OrdinaryRole::Developer,
+                "<timestamp>\nnow\n</timestamp>\nSecond.",
+            ),
             Node::text(OrdinaryRole::User, "go"),
         ]);
         run(&mut req, json!({}), Some(ProviderType::ChatCompletion)).await;
@@ -587,8 +597,7 @@ mod tests {
     }
 
     fn encoded_chat_prefix(req: &UrpRequest) -> String {
-        crate::urp::encode::openai_chat::encode_request(req, "probe")["messages"]
-            .to_string()
+        crate::urp::encode::openai_chat::encode_request(req, "probe")["messages"].to_string()
     }
 
     fn common_prefix_len(left: &str, right: &str) -> usize {
@@ -637,8 +646,7 @@ mod tests {
                 Some(OrdinaryRole::User)
             );
         }
-        let rewritten_bodies: Vec<String> =
-            rewritten.iter().map(encoded_chat_prefix).collect();
+        let rewritten_bodies: Vec<String> = rewritten.iter().map(encoded_chat_prefix).collect();
         let original_bodies: Vec<String> = growing_agent_turns(&clocks)
             .iter()
             .map(encoded_chat_prefix)

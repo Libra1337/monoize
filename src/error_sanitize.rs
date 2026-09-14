@@ -116,7 +116,12 @@ fn text_has_quota_signal(text: &str) -> bool {
 
 /// SAN-D2a `QUOTA` predicate over the free-text and enumerated fields of one
 /// upstream error surface (message, code, type, param — any may be absent).
-pub fn error_value_is_quota(message: Option<&str>, code: Option<&str>, error_type: Option<&str>, param: Option<&str>) -> bool {
+pub fn error_value_is_quota(
+    message: Option<&str>,
+    code: Option<&str>,
+    error_type: Option<&str>,
+    param: Option<&str>,
+) -> bool {
     [message, code, error_type, param]
         .into_iter()
         .flatten()

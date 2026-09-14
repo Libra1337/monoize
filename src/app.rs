@@ -1974,9 +1974,7 @@ mod active_probe_billing_tests {
             .is_none()
         );
 
-        let fx = "7.1"
-            .parse::<rust_decimal::Decimal>()
-            .expect("rate parses");
+        let fx = "7.1".parse::<rust_decimal::Decimal>().expect("rate parses");
         let resolved = resolve_active_probe_rates_for_model(
             &candidate_rates,
             "test-model",
@@ -2105,8 +2103,9 @@ pub(crate) fn runtime_config_from_settings(
     runtime.affinity_failback_delay_seconds =
         settings_snapshot.monoize_affinity_failback_delay_seconds;
     runtime.moderation_enabled = settings_snapshot.moderation_enabled;
-    runtime.content_firewall =
-        crate::content_firewall::ContentFirewall::compile(&settings_snapshot.moderation_blocked_words);
+    runtime.content_firewall = crate::content_firewall::ContentFirewall::compile(
+        &settings_snapshot.moderation_blocked_words,
+    );
     runtime.moderation_judge = crate::moderation_judge::JudgeConfig {
         enabled: settings_snapshot.moderation_judge_enabled,
         base_url: settings_snapshot.moderation_judge_base_url.clone(),

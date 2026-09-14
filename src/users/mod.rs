@@ -991,17 +991,19 @@ mod tests {
         .expect("canonicalizes");
         assert_eq!(bindings[0].model, "gpt-4o");
         assert_eq!(bindings[0].group_id, "g-1");
-        assert!(canonicalize_model_bindings(&[
-            ApiKeyModelBinding {
-                model: "gpt-4o".to_string(),
-                group_id: "g-1".to_string(),
-            },
-            ApiKeyModelBinding {
-                model: "gpt-4o".to_string(),
-                group_id: "g-2".to_string(),
-            },
-        ])
-        .is_err());
+        assert!(
+            canonicalize_model_bindings(&[
+                ApiKeyModelBinding {
+                    model: "gpt-4o".to_string(),
+                    group_id: "g-1".to_string(),
+                },
+                ApiKeyModelBinding {
+                    model: "gpt-4o".to_string(),
+                    group_id: "g-2".to_string(),
+                },
+            ])
+            .is_err()
+        );
     }
 
     #[test]

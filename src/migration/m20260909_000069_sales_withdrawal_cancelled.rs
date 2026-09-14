@@ -29,7 +29,7 @@ impl MigrationTrait for Migration {
                          decided_by TEXT,
                          decision_note TEXT
                      )"
-                        .to_string(),
+                    .to_string(),
                 ))
                 .await?;
                 tx.execute(Statement::from_string(
@@ -100,7 +100,7 @@ impl MigrationTrait for Migration {
                          decided_by TEXT,
                          decision_note TEXT
                      )"
-                        .to_string(),
+                    .to_string(),
                 ))
                 .await?;
                 for statement in [
@@ -204,7 +204,11 @@ mod tests {
             ))
             .await
             .expect("query");
-        assert_eq!(rows.len(), 2, "the pre-existing row must survive the rebuild");
+        assert_eq!(
+            rows.len(),
+            2,
+            "the pre-existing row must survive the rebuild"
+        );
     }
 
     #[tokio::test]

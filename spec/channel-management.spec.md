@@ -196,6 +196,8 @@ CP-INV-15. Every non-null `extra_headers` value MUST satisfy all of the followin
 
 CP-INV-15a. On persist, the server MUST trim keys and serialize the map as JSON with keys sorted ascending by byte order. An entry whose trimmed key is empty MUST cause rejection under CP-INV-15. Values MUST NOT be trimmed.
 
+CP-INV-16. Every non-empty `base_url` MUST be an absolute URL with scheme `http` or `https`. Any other scheme, an unparsable URL, or a URL without a host MUST be rejected with HTTP 400 code `invalid_request`. Additionally, unless the process is started with `MONOIZE_ALLOW_PRIVATE_UPSTREAM=1`, the URL host MUST NOT resolve to a loopback, link-local, unspecified, multicast, broadcast, documentation, RFC 1918 (10/8, 172.16/12, 192.168/16), CGNAT (100.64/10), or RFC 4193 unique-local (fc00::/7) address. A literal IP address is checked directly; a hostname is resolved at validation time and rejected if any resolved address is in one of those ranges. An unresolvable hostname MUST NOT be rejected for address classification (the upstream call fails on its own later). `localhost` is classified by resolution like any other hostname, so a `localhost` URL that resolves to a loopback address is rejected under the same private/loopback rule unless the override flag is set.
+
 CM-AFF-0. A **direct Cloudflare Workers AI Channel** has a `base_url` that satisfies all of these conditions:
 1. The URL parses successfully.
 2. The URL scheme is `https`.

@@ -1,8 +1,8 @@
 use crate::db::DbPool;
 use crate::model_registry::{ModelCapabilities, ModelRecord};
 use chrono::{DateTime, Utc};
-use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use sea_orm::{ConnectionTrait, DatabaseTransaction, TransactionTrait};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -1129,9 +1129,7 @@ fn row_to_model_metadata(row: &sea_orm::QueryResult) -> Result<DbModelMetadataRe
 
 /// Builds the record without `raw_json` (left as `Value::Null`, which serializes as absent).
 /// Used by list queries that do not select the column.
-fn row_to_model_metadata_slim(
-    row: &sea_orm::QueryResult,
-) -> Result<DbModelMetadataRecord, String> {
+fn row_to_model_metadata_slim(row: &sea_orm::QueryResult) -> Result<DbModelMetadataRecord, String> {
     let updated_at_str: String = row.try_get("", "updated_at").map_err(|e| e.to_string())?;
     let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
         .map_err(|e| e.to_string())?
@@ -1553,8 +1551,8 @@ pub fn normalize_model_id(raw: &str, provider_hint: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cost_per_1m_to_nano_string, deserialize_nullable_field, models_dev_variant_for_dashboard,
-        ModelRegistryStore, UpsertModelMetadataInput,
+        ModelRegistryStore, UpsertModelMetadataInput, cost_per_1m_to_nano_string,
+        deserialize_nullable_field, models_dev_variant_for_dashboard,
     };
     use crate::db::DbPool;
     use crate::migration::Migrator;

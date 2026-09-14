@@ -11,8 +11,38 @@ use sea_orm::{ConnectionTrait, QueryResult, Value as SeaValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+/// Process-wide override for `MONOIZE_ALLOW_PRIVATE_UPSTREAM`, exposed so integration
+/// tests that bind a mock upstream to loopback can create Channels. The override only
+/// relaxes the private/loopback address classification (CP-INV-16); scheme and host
+/// requirements are still enforced.
+pub static ALLOW_PRIVATE_UPSTREAM_OVERRIDE: AtomicBool = AtomicBool::new(false);
+
+/// Disable CP-INV-16 private/loopback address rejection for the lifetime of the
+/// process. Intended for tests whose mock upstream listens on a loopback address.
+pub fn set_allow_private_upstream_override(allow: bool) {
+    ALLOW_PRIVATE_UPSTREAM_OVERRIDE.store(allow, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override for `MONOIZE_ALLOW_PRIVATE_UPSTREAM`, kept thread-local so
+    /// tests that bind a mock upstream to loopback can create Channels without racing
+    /// the process-global environment. Production code never touches this.
+    static TEST_ALLOW_PRIVATE_UPSTREAM: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_allow_private_upstream(allow: bool) {
+    TEST_ALLOW_PRIVATE_UPSTREAM.with(|cell| cell.set(allow));
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -610,6 +640,26 @@ fn missing_channel_health_is_saturated_with_limit(
     limit: usize,
 ) -> bool {
     !health.contains_key(key) && health.len() >= limit
+}
+
+/// HSK-7a: capacity saturation makes a Channel ineligible without any other visible signal,
+/// so the condition is published as a metric on every observation and as a single warning
+/// per saturation episode. The warning resets once the map drops below capacity, which
+/// keeps a permanently full map from flooding the log.
+static CHANNEL_HEALTH_SATURATION_WARNED: AtomicBool = AtomicBool::new(false);
+
+pub fn note_channel_health_saturation(limit: usize) {
+    metrics::counter!("monoize_channel_health_saturated_total").increment(1);
+    if !CHANNEL_HEALTH_SATURATION_WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            limit,
+            "channel health map is at capacity; every unkeyed channel is treated as ineligible until an entry slot frees up"
+        );
+    }
+}
+
+pub fn reset_channel_health_saturation_warning() {
+    CHANNEL_HEALTH_SATURATION_WARNED.store(false, Ordering::Relaxed);
 }
 
 impl ChannelHealthState {
@@ -2412,6 +2462,108 @@ fn canonicalize_models(
     Ok(out)
 }
 
+/// CP-INV-16: a channel `base_url` MUST be an absolute `http` or `https` URL whose
+/// host resolves (or, for a literal IP, maps) only to globally routable addresses.
+/// Loopback, link-local, unspecified, multicast, and RFC 1918 / ULA ranges are
+/// rejected unless `MONOIZE_ALLOW_PRIVATE_UPSTREAM=1` is set. The check exists to stop
+/// a misconfigured Channel from turning the gateway into a request forwarder into the
+/// machine's own network (SSRF).
+fn validate_channel_base_url(base_url: &str) -> Result<(), String> {
+    let trimmed = base_url.trim();
+    let parsed = reqwest::Url::parse(trimmed).map_err(|_| {
+        "channel base_url must be an absolute URL with scheme http or https".to_string()
+    })?;
+    let scheme = parsed.scheme().to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return Err("channel base_url must use scheme http or https".to_string());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "channel base_url must include a host".to_string())?;
+
+    let allow_private = std::env::var("MONOIZE_ALLOW_PRIVATE_UPSTREAM")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+        || ALLOW_PRIVATE_UPSTREAM_OVERRIDE.load(Ordering::Relaxed);
+    #[cfg(test)]
+    let allow_private = allow_private || TEST_ALLOW_PRIVATE_UPSTREAM.with(|cell| cell.get());
+    if allow_private {
+        return Ok(());
+    }
+
+    // A literal IP is checked directly; a hostname is resolved so a private address
+    // hidden behind a name (including a DNS rebind target) is caught at write time.
+    let addresses: Vec<IpAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
+        vec![ip]
+    } else {
+        // The host may carry an explicit port; `ToSocketAddrs` requires a service.
+        let port = parsed.port().unwrap_or_else(|| {
+            if scheme == "https" {
+                443
+            } else {
+                80
+            }
+        });
+        let mut resolved = Vec::new();
+        match (host, port).to_socket_addrs() {
+            Ok(iter) => {
+                for addr in iter {
+                    resolved.push(addr.ip());
+                    if resolved.len() >= 8 {
+                        break;
+                    }
+                }
+            }
+            Err(_) => {
+                // Unresolvable names never reach a private network; the upstream call
+                // will fail on its own. Validation must not reject on DNS failure here.
+                return Ok(());
+            }
+        }
+        resolved
+    };
+
+    if addresses.is_empty() {
+        return Ok(());
+    }
+    for address in addresses {
+        if is_private_or_local_ip(address) {
+            return Err(format!(
+                "channel base_url must not target a loopback, link-local, private, or reserved address (got {address})"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// True for loopback, link-local, unspecified, multicast, documentation, and the
+/// private IPv4 (RFC 1918) / unique-local IPv6 (RFC 4193) ranges. All are
+/// non-globally-routable destinations a relay must not be pointed at.
+fn is_private_or_local_ip(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || octets[0] == 10
+                || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+                || (octets[0] == 192 && octets[1] == 168)
+                || octets[0] == 100 && (64..=127).contains(&octets[1]) // CGNAT 100.64/10
+                || octets[0] == 0
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 ULA
+        }
+    }
+}
+
 fn canonical_model_name(value: &str) -> Result<String, String> {
     let model = value.trim_matches(char::is_whitespace);
     let bytes = model.as_bytes();
@@ -2498,6 +2650,7 @@ fn validate_channel(
     if c.base_url.trim().is_empty() {
         return Err("channel base_url must not be empty".to_string());
     }
+    validate_channel_base_url(&c.base_url)?;
     if require_api_key {
         let key = c.api_key.as_deref().unwrap_or("");
         if key.trim().is_empty() {
@@ -3166,6 +3319,18 @@ mod tests {
         assert_eq!(health.len(), 2);
     }
 
+    #[test]
+    fn saturation_warning_rearms_only_after_the_map_drains() {
+        reset_channel_health_saturation_warning();
+        note_channel_health_saturation(2);
+        assert!(CHANNEL_HEALTH_SATURATION_WARNED.load(Ordering::Relaxed));
+        reset_channel_health_saturation_warning();
+        assert!(!CHANNEL_HEALTH_SATURATION_WARNED.load(Ordering::Relaxed));
+        note_channel_health_saturation(2);
+        assert!(CHANNEL_HEALTH_SATURATION_WARNED.load(Ordering::Relaxed));
+        reset_channel_health_saturation_warning();
+    }
+
     #[tokio::test]
     async fn transform_id_migration_crosses_keyset_batch_boundary_and_marks_completion() {
         let db = DbPool::connect("sqlite::memory:")
@@ -3658,6 +3823,47 @@ mod tests {
             .map(|index| (format!("X-H{index}"), "v".to_string()))
             .collect();
         assert!(validate_channel_extra_headers("ch", &too_many).is_err());
+    }
+
+    #[test]
+    fn channel_base_url_validation_rejects_local_and_non_http_targets() {
+        for base in [
+            "https://127.0.0.1/v1",
+            "http://127.0.0.1:8080/v1",
+            "http://[::1]/v1",
+            "https://10.0.0.5/v1",
+            "https://172.16.3.4/v1",
+            "https://172.31.3.4/v1",
+            "https://192.168.1.10/v1",
+            "https://169.254.169.254/latest/meta-data",
+            "https://100.100.100.100/v1",
+            "https://[fc00::1]/v1",
+            "https://[fd12:3456::1]/v1",
+            "ftp://example.com",
+            "file:///etc/passwd",
+            "https://0.0.0.0/v1",
+            "https://255.255.255.255/v1",
+        ] {
+            assert!(
+                validate_channel_base_url(base).is_err(),
+                "base_url {base} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn channel_base_url_validation_accepts_public_literal_ips() {
+        for base in [
+            "https://8.8.8.8/v1",
+            "https://1.1.1.1/v1",
+            "https://151.101.1.140/v1",
+            "https://[2606:4700::1111]/v1",
+        ] {
+            assert!(
+                validate_channel_base_url(base).is_ok(),
+                "base_url {base} must be accepted"
+            );
+        }
     }
 
     #[test]

@@ -4,7 +4,10 @@
 use crate::db::DbPool;
 use crate::entity::firewall_events;
 use chrono::Utc;
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, Statement,
+};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -66,9 +69,12 @@ pub async fn record_event(db: &DbPool, event: NewFirewallEvent) -> Result<(), St
         "DELETE FROM firewall_events WHERE id NOT IN \
          (SELECT id FROM firewall_events ORDER BY created_at_unix_ms DESC LIMIT {RETAINED_ROW_CAP})"
     );
-    ConnectionTrait::execute(&*_write_guard, Statement::from_string(db.backend(), trim_sql))
-        .await
-        .map_err(|e| e.to_string())?;
+    ConnectionTrait::execute(
+        &*_write_guard,
+        Statement::from_string(db.backend(), trim_sql),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 

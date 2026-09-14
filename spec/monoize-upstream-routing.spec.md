@@ -393,6 +393,8 @@ HSK-6. `MONOIZE_CHANNEL_HEALTH_MAX_ENTRIES` MUST configure the positive process-
 
 HSK-7. A health update MUST NOT increase the map beyond HSK-6. At capacity, a new key MUST NOT be inserted or evict an existing key. Every missing health key MUST be treated as ineligible until an entry slot becomes available. Capacity checks MUST be constant-time and MUST NOT scan the health map.
 
+HSK-7a. Every rejection caused by capacity — an eligibility evaluation that treats a missing key as ineligible, or a health update that declines to insert a key — MUST increment the counter `monoize_channel_health_saturated_total` by one. The first such rejection in a saturation episode MUST also emit one `warn`-level log record carrying the configured limit. The episode MUST end, and a later rejection MUST emit a new warning, once an eligibility evaluation observes `health.len() < HSK-6`. A saturated map that never drains MUST NOT emit more than one warning.
+
 ### 6.2 Passive
 
 - `failure_count_threshold` default `3`

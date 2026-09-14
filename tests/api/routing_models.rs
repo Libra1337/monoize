@@ -915,7 +915,10 @@ async fn duplicate_model_name_across_groups_requires_model_binding() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     let value: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(value["error"]["code"].as_str(), Some("model_selection_required"));
+    assert_eq!(
+        value["error"]["code"].as_str(),
+        Some("model_selection_required")
+    );
     assert_eq!(
         value["error"]["message"].as_str(),
         Some("未选择具体模型，请先选择模型。")
@@ -1084,7 +1087,11 @@ async fn unknown_model_returns_not_found() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let v: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["error"]["code"].as_str(), Some("model_not_found"), "{body}");
+    assert_eq!(
+        v["error"]["code"].as_str(),
+        Some("model_not_found"),
+        "{body}"
+    );
     assert_eq!(
         v["error"]["message"].as_str(),
         Some("Model not found: nonexistent-model-xyz"),

@@ -45,7 +45,12 @@ pub async fn get_firewall_stats(
         .map_err(events_error)?;
     // CF-24: the page shows a banner while the judge is inert, because the
     // firewall then blocks nothing.
-    let judge_active = state.monoize_runtime.read().await.moderation_judge.is_active();
+    let judge_active = state
+        .monoize_runtime
+        .read()
+        .await
+        .moderation_judge
+        .is_active();
     Ok(Json(json!({
         "total": stats.total,
         "marked": stats.marked,
@@ -78,14 +83,10 @@ pub async fn list_firewall_events(
         since_ms: query.since_ms,
         until_ms: query.until_ms,
     };
-    let (rows, total) = crate::firewall_events::list_events(
-        &state.db_pool,
-        &filter,
-        limit as u64,
-        offset as u64,
-    )
-    .await
-    .map_err(events_error)?;
+    let (rows, total) =
+        crate::firewall_events::list_events(&state.db_pool, &filter, limit as u64, offset as u64)
+            .await
+            .map_err(events_error)?;
     let data: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|row| {

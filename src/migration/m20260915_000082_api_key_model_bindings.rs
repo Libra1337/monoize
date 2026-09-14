@@ -13,8 +13,7 @@ impl MigrationTrait for Migration {
         let tx = manager.get_connection().begin().await?;
         tx.execute(Statement::from_string(
             backend,
-            "ALTER TABLE api_keys ADD COLUMN model_bindings TEXT NOT NULL DEFAULT '[]'"
-                .to_string(),
+            "ALTER TABLE api_keys ADD COLUMN model_bindings TEXT NOT NULL DEFAULT '[]'".to_string(),
         ))
         .await?;
         tx.commit().await

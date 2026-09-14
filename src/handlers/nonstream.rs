@@ -1339,7 +1339,11 @@ fn embedded_chat_completion_error_to_app(error: &Value, mask_sensitive_info: boo
     } else {
         crate::error_sanitize::maybe_mask_sensitive_text(message, mask_sensitive_info)
     };
-    AppError::new(StatusCode::BAD_GATEWAY, "upstream_chat_error", client_message)
+    AppError::new(
+        StatusCode::BAD_GATEWAY,
+        "upstream_chat_error",
+        client_message,
+    )
     .with_internal_message(crate::error_sanitize::truncate_error_detail(message))
     .with_type("server_error")
     .with_upstream_error(

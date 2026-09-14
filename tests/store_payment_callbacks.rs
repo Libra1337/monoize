@@ -171,10 +171,7 @@ async fn setup_with_sales(
                          created_at, updated_at)
                      VALUES ('callback-agent', $1, $2, '0', 1,
                              '2026-08-27T00:00:00Z', '2026-08-27T00:00:00Z')",
-                    vec![
-                        applied.code.clone().into(),
-                        applied.discount_bp.into(),
-                    ],
+                    vec![applied.code.clone().into(), applied.discount_bp.into()],
                 ))
                 .await
                 .expect("insert sales agent");
@@ -543,14 +540,13 @@ async fn projection_rejects_a_second_null_provider_candidate_created_after_looku
 /// dropped column between them credited nothing while every test still passed.
 #[tokio::test]
 async fn a_paid_coded_order_credits_the_agent() {
-    let (db, order_id, order_number, attempt_id) = setup_with_sales(Some(
-        monoize::store_billing::order::AppliedSalesCode {
+    let (db, order_id, order_number, attempt_id) =
+        setup_with_sales(Some(monoize::store_billing::order::AppliedSalesCode {
             code: "CBACK234".to_string(),
             discount_bp: 100,
             commission_rate_bp: 500,
-        },
-    ))
-    .await;
+        }))
+        .await;
 
     // The provider charges the discounted amount, so that is what the callback carries.
     let applied = PaymentCallbackStore::new(db.clone())
@@ -600,7 +596,10 @@ async fn a_paid_coded_order_credits_the_agent() {
         .unwrap()
         .try_get::<String>("", "commission_balance_fen")
         .unwrap();
-    assert_eq!(balance, "40", "the entry must also move the agent's balance");
+    assert_eq!(
+        balance, "40",
+        "the entry must also move the agent's balance"
+    );
 }
 
 /// An uncoded order must leave the ledger empty, so accrual cannot credit an unrelated agent.

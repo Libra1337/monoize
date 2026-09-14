@@ -261,7 +261,11 @@ impl SalesStore {
             "INSERT INTO system_settings (key, value, updated_at) VALUES ($1, $2, $3)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value,
                                             updated_at = excluded.updated_at",
-            vec![COMMISSION_RATE_KEY.into(), rate_bp.to_string().into(), now.into()],
+            vec![
+                COMMISSION_RATE_KEY.into(),
+                rate_bp.to_string().into(),
+                now.into(),
+            ],
         ))
         .await
         .map_err(storage)?;
@@ -750,27 +754,55 @@ impl SalesStore {
         agent_user_id: &str,
         now: DateTime<Utc>,
     ) -> Result<(), SalesStoreError> {
+        // SC-4.7: at most 10 attempts per minute, and a burst of 5 failures within a
+        // 15-minute span imposes a 30-minute cooldown from the newest failure. The cooldown is
+        // anchored to the newest failure (not the oldest) so a burst spread over the full
+        // 15 minutes is still blocked for its full 30 minutes.
+        let fifth = CLAIM_FAILURES_BEFORE_COOLDOWN - 1;
+        let sql = format!(
+            "SELECT
+                 SUM(CASE WHEN attempted_at >= $2 THEN 1 ELSE 0 END) AS recent,
+                 (SELECT attempted_at FROM sales_claim_attempts
+                  WHERE agent_user_id = $1 AND succeeded = 0
+                  ORDER BY attempted_at DESC LIMIT 1 OFFSET {fifth}) AS fifth_failure_at,
+                 (SELECT attempted_at FROM sales_claim_attempts
+                  WHERE agent_user_id = $1 AND succeeded = 0
+                  ORDER BY attempted_at DESC LIMIT 1) AS newest_failure_at
+             FROM sales_claim_attempts WHERE agent_user_id = $1",
+        );
         let row = self
             .db
             .read()
             .query_one(self.db.stmt(
-                "SELECT
-                     SUM(CASE WHEN attempted_at >= $2 THEN 1 ELSE 0 END) AS recent,
-                     SUM(CASE WHEN attempted_at >= $3 AND succeeded = 0 THEN 1 ELSE 0 END)
-                         AS failures
-                 FROM sales_claim_attempts WHERE agent_user_id = $1",
+                &sql,
                 vec![
                     agent_user_id.into(),
                     timestamp(now - Duration::minutes(1)).into(),
-                    timestamp(now - Duration::minutes(CLAIM_FAILURE_WINDOW_MINUTES)).into(),
                 ],
             ))
             .await
             .map_err(storage)?;
         let Some(row) = row else { return Ok(()) };
         let recent: i64 = row.try_get("", "recent").unwrap_or(0);
-        let failures: i64 = row.try_get("", "failures").unwrap_or(0);
-        if recent >= CLAIM_ATTEMPTS_PER_MINUTE || failures >= CLAIM_FAILURES_BEFORE_COOLDOWN {
+        if recent >= CLAIM_ATTEMPTS_PER_MINUTE {
+            return Err(SalesStoreError::ClaimRateLimited);
+        }
+        let fifth_failure_at: Option<String> = row.try_get("", "fifth_failure_at").ok().flatten();
+        let newest_failure_at: Option<String> = row.try_get("", "newest_failure_at").ok().flatten();
+        let (Some(fifth), Some(newest)) = (fifth_failure_at, newest_failure_at) else {
+            return Ok(());
+        };
+        let (Ok(fifth), Ok(newest)) = (
+            DateTime::parse_from_rfc3339(&fifth).map(|t| t.with_timezone(&Utc)),
+            DateTime::parse_from_rfc3339(&newest).map(|t| t.with_timezone(&Utc)),
+        ) else {
+            return Ok(());
+        };
+        let span = newest.signed_duration_since(fifth);
+        let since_newest = now.signed_duration_since(newest);
+        if span <= Duration::minutes(CLAIM_FAILURE_WINDOW_MINUTES)
+            && since_newest < Duration::minutes(CLAIM_COOLDOWN_MINUTES)
+        {
             return Err(SalesStoreError::ClaimRateLimited);
         }
         Ok(())
@@ -853,8 +885,7 @@ impl SalesStore {
         ))
         .await
         .map_err(storage)?;
-        set_agent_balance(&self.db, &*tx, agent_user_id, balance - amount_minor, now)
-            .await?;
+        set_agent_balance(&self.db, &*tx, agent_user_id, balance - amount_minor, now).await?;
         tx.commit().await.map_err(storage)?;
 
         Ok(SalesWithdrawal {
@@ -921,8 +952,7 @@ impl SalesStore {
                 .map_err(storage)?
                 .ok_or(SalesStoreError::NotAgent)?;
             let balance = parse_signed_minor(&row_string(&agent, "commission_balance_fen")?)?;
-            set_agent_balance(&self.db, &*tx, &agent_user_id, balance + amount_minor, now)
-                .await?;
+            set_agent_balance(&self.db, &*tx, &agent_user_id, balance + amount_minor, now).await?;
         }
         tx.commit().await.map_err(storage)?;
 
@@ -1421,7 +1451,10 @@ mod tests {
         })
         .to_string();
         assert_eq!(face_value_minor(&quote), Err(SalesStoreError::InvalidInput));
-        assert_eq!(face_value_minor("not json"), Err(SalesStoreError::InvalidInput));
+        assert_eq!(
+            face_value_minor("not json"),
+            Err(SalesStoreError::InvalidInput)
+        );
     }
 
     #[test]
@@ -1441,7 +1474,10 @@ mod tests {
         assert_eq!(parse_signed_minor("0"), Ok(0));
         assert_eq!(parse_signed_minor("500"), Ok(500));
         assert_eq!(parse_signed_minor("-0"), Err(SalesStoreError::InvalidInput));
-        assert_eq!(parse_signed_minor("--5"), Err(SalesStoreError::InvalidInput));
+        assert_eq!(
+            parse_signed_minor("--5"),
+            Err(SalesStoreError::InvalidInput)
+        );
         assert_eq!(parse_signed_minor("+5"), Err(SalesStoreError::InvalidInput));
     }
 
@@ -1458,9 +1494,48 @@ mod tests {
 
         // A smaller face value is refused rather than accruing zero, so an agent never makes
         // a sale that credits nothing.
+        assert_eq!(compute_amounts(99, 500, 0), Err(SalesError::AmountTooSmall));
+    }
+
+    /// SC-4.7: a burst of 5 failures spread across the full 15-minute window must still be
+    /// blocked for 30 minutes from the newest failure — not released as soon as the oldest
+    /// failure ages out of the trailing window.
+    #[tokio::test]
+    async fn a_burst_of_five_failures_cools_down_for_thirty_minutes_from_the_newest() {
+        let (store, agent_id) = store_with_agent(&[]).await;
+        let now = Utc::now();
+        // The newest failure is 16 minutes old, so a naive trailing-15-minute count sees fewer
+        // than 5 failures; the span across all five is 14 minutes, so the burst still triggers.
+        let offsets_minutes = [30, 27, 24, 21, 16];
+        for offset in offsets_minutes {
+            store
+                .db
+                .write()
+                .await
+                .execute(store.db.stmt(
+                    "INSERT INTO sales_claim_attempts (id, agent_user_id, succeeded, attempted_at)
+                     VALUES ($1, $2, 0, $3)",
+                    vec![
+                        Uuid::new_v4().to_string().into(),
+                        agent_id.clone().into(),
+                        timestamp(now - Duration::minutes(offset)).into(),
+                    ],
+                ))
+                .await
+                .expect("insert failure");
+        }
+
+        // 16 minutes after the newest failure the cooldown is still active.
         assert_eq!(
-            compute_amounts(99, 500, 0),
-            Err(SalesError::AmountTooSmall)
+            store.check_claim_rate(&agent_id, now).await,
+            Err(SalesStoreError::ClaimRateLimited),
+        );
+        // 30 minutes after the newest failure the cooldown has expired.
+        assert_eq!(
+            store
+                .check_claim_rate(&agent_id, now + Duration::minutes(14))
+                .await,
+            Ok(()),
         );
     }
 }

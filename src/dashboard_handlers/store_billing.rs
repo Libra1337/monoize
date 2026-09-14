@@ -908,9 +908,7 @@ pub async fn list_store_orders(
 }
 
 /// Maps a code-resolution failure onto the SC-2.2 surface.
-fn map_sales_code_error(
-    error: crate::store_billing::sales_store::SalesStoreError,
-) -> AppError {
+fn map_sales_code_error(error: crate::store_billing::sales_store::SalesStoreError) -> AppError {
     use crate::store_billing::sales_store::SalesStoreError;
     match error {
         SalesStoreError::CodeInvalid => AppError::new(
@@ -949,12 +947,11 @@ pub async fn create_store_order(
         .filter(|code| !code.is_empty())
     {
         Some(code) => {
-            let resolved = crate::store_billing::sales_store::SalesStore::new(
-                state.db_pool.clone(),
-            )
-            .resolve_code(code)
-            .await
-            .map_err(map_sales_code_error)?;
+            let resolved =
+                crate::store_billing::sales_store::SalesStore::new(state.db_pool.clone())
+                    .resolve_code(code)
+                    .await
+                    .map_err(map_sales_code_error)?;
             if resolved.agent_user_id == user.id {
                 return Err(AppError::new(
                     StatusCode::BAD_REQUEST,
@@ -1739,13 +1736,14 @@ pub async fn list_all_store_orders_admin(
         .map(|order| {
             let username = username_by_id.get(&order.user_id).cloned();
             let mut value = serde_json::to_value(&order).map_err(|e| {
-                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e.to_string())
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    e.to_string(),
+                )
             })?;
             if let Some(object) = value.as_object_mut() {
-                object.insert(
-                    "username".to_string(),
-                    username.unwrap_or_default().into(),
-                );
+                object.insert("username".to_string(), username.unwrap_or_default().into());
             }
             Ok(value)
         })

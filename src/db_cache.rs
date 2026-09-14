@@ -20,6 +20,10 @@ pub struct LastUsedBatcher {
     capacity: usize,
     record_lock: Arc<std::sync::Mutex<()>>,
     flush_chunk_entries: usize,
+    /// Set while the buffer is full so the drop counter is always published but the
+    /// explanatory warning is emitted once per saturation episode instead of once per
+    /// dropped key, which would otherwise flood the log under sustained load.
+    saturation_warned: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for LastUsedBatcher {
@@ -49,6 +53,7 @@ impl LastUsedBatcher {
             capacity: capacity.max(1),
             record_lock: Arc::new(std::sync::Mutex::new(())),
             flush_chunk_entries: flush_chunk_entries.clamp(1, 400),
+            saturation_warned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -64,12 +69,20 @@ impl LastUsedBatcher {
             return;
         }
         if self.buffer.len() >= self.capacity {
-            tracing::warn!(
-                capacity = self.capacity,
-                "last_used buffer is full; omitting new key metadata"
-            );
+            metrics::counter!("monoize_last_used_buffer_dropped_total").increment(1);
+            if !self
+                .saturation_warned
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                tracing::warn!(
+                    capacity = self.capacity,
+                    "last_used buffer is full; omitting new key metadata until the next flush drains it"
+                );
+            }
             return;
         }
+        self.saturation_warned
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         self.buffer.insert(api_key_id, now);
     }
 

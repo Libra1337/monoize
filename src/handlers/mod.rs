@@ -2,9 +2,9 @@ mod account_balance;
 mod billing;
 pub(crate) use billing::{billing_rates_form_complete_matrix, nano_charge_to_usd};
 mod compact;
-mod legacy_completions;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
+mod legacy_completions;
 mod nonstream;
 #[cfg(test)]
 pub(crate) use nonstream::strip_orphaned_tool_calls;
@@ -172,7 +172,9 @@ async fn ensure_content_allowed(
         let first_term = keyword_hits.first().cloned().unwrap_or_default();
         let text = scanned
             .iter()
-            .find(|text| !first_term.is_empty() && text.to_lowercase().contains(first_term.as_str()))
+            .find(|text| {
+                !first_term.is_empty() && text.to_lowercase().contains(first_term.as_str())
+            })
             .copied()
             .unwrap_or_default();
         tracing::info!(
@@ -250,7 +252,10 @@ async fn persist_firewall_event(
             term: term.to_string(),
             content: crate::firewall_events::content_of(text),
             action,
-            reason: reason.chars().take(crate::moderation_judge::REASON_MAX_CHARS).collect(),
+            reason: reason
+                .chars()
+                .take(crate::moderation_judge::REASON_MAX_CHARS)
+                .collect(),
         },
     )
     .await
@@ -267,7 +272,9 @@ fn urp_request_texts(req: &urp::UrpRequest) -> Vec<&str> {
             urp::Node::Text { content, .. } | urp::Node::Refusal { content, .. } => {
                 texts.push(content.as_str());
             }
-            urp::Node::Reasoning { content, summary, .. } => {
+            urp::Node::Reasoning {
+                content, summary, ..
+            } => {
                 if let Some(content) = content {
                     texts.push(content.as_str());
                 }
@@ -540,7 +547,15 @@ pub async fn create_response(
     let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
-    ensure_content_allowed(&state, &headers, &auth, "responses", &req.model, &urp_request_texts(&req)).await?;
+    ensure_content_allowed(
+        &state,
+        &headers,
+        &auth,
+        "responses",
+        &req.model,
+        &urp_request_texts(&req),
+    )
+    .await?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
@@ -633,7 +648,15 @@ pub async fn create_chat_completions(
     let mut req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
-    ensure_content_allowed(&state, &headers, &auth, "chat_completions", &req.model, &urp_request_texts(&req)).await?;
+    ensure_content_allowed(
+        &state,
+        &headers,
+        &auth,
+        "chat_completions",
+        &req.model,
+        &urp_request_texts(&req),
+    )
+    .await?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
@@ -724,7 +747,15 @@ async fn create_messages_inner(
     let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
-    ensure_content_allowed(&state, &headers, &auth, "messages", &req.model, &urp_request_texts(&req)).await?;
+    ensure_content_allowed(
+        &state,
+        &headers,
+        &auth,
+        "messages",
+        &req.model,
+        &urp_request_texts(&req),
+    )
+    .await?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {

@@ -91,6 +91,8 @@ In practice, streaming uses the **buffered fallback** path: the handler calls th
 
 The `stream` parameter is unused; the path is the same regardless.
 
+When interpolating a model key into a Replicate path, Monoize MUST percent-encode each model-derived path segment independently. For `deployment:{owner}/{name}`, the `/` between `{owner}` and `{name}` is structural and MUST remain literal; `{owner}` and `{name}` MUST each be encoded as a single segment. For the plain-model form, the whole model key MUST be encoded as a single segment, so a `/`, `?`, `#`, `%`, space, or reserved character inside the key cannot open a new path segment or introduce a query string or fragment.
+
 ## 5. Extra Headers
 
 `provider_extra_headers(ProviderType::Replicate)` returns `[("prefer", "wait=60")]`. This makes Replicate block the HTTP response until the prediction completes (up to 60 seconds), enabling synchronous request/response flow through the URP pipeline.

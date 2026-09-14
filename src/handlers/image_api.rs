@@ -182,7 +182,15 @@ pub async fn create_image_edit(
     };
 
     ensure_model_allowed(&auth, &model)?;
-    ensure_content_allowed(&state, &headers, &auth, "images_generations", &model, &[&prompt]).await?;
+    ensure_content_allowed(
+        &state,
+        &headers,
+        &auth,
+        "images_generations",
+        &model,
+        &[&prompt],
+    )
+    .await?;
 
     let max_multiplier_val = {
         let ceiling = auth.max_multiplier;

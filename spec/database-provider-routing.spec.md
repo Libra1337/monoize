@@ -238,6 +238,8 @@ R-H-12. `MONOIZE_CHANNEL_HEALTH_MAX_ENTRIES` MUST configure the positive process
 
 R-H-13. The process-local Channel health map MUST NOT exceed its configured entry limit. At capacity, a new health key MUST NOT be inserted or evict an existing key. Every missing health key MUST be treated as ineligible until an entry slot becomes available. Capacity checks MUST be constant-time and MUST NOT scan the health map.
 
+R-H-13a. Every rejection caused by capacity — an eligibility evaluation that treats a missing key as ineligible, or a health update that declines to insert a key — MUST increment the counter `monoize_channel_health_saturated_total` by one. The first such rejection in a saturation episode MUST also emit one `warn`-level log record carrying the configured limit. The episode MUST end, and a later rejection MUST emit a new warning, once an eligibility evaluation observes the map below its configured limit. A saturated map that never drains MUST NOT emit more than one warning.
+
 R-H-14. Active-probe evaluation of a Channel with per-model circuit breaking MUST derive health keys from that Channel's configured model set. It MUST perform point lookups for those keys and MUST NOT scan the complete Channel health map.
 
 R-H-15. `MONOIZE_CHANNEL_PASSIVE_FAILURE_SAMPLE_MAX_ENTRIES` MUST configure the positive process-local maximum passive-failure threshold per health-state entry. An unset, empty, zero, negative, invalid, or overflowing value MUST use `1024`. The effective threshold MUST equal the smaller of this limit and the resolved Channel threshold and MUST be at least `1`.

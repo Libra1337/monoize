@@ -5,10 +5,10 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::crypto::{EncryptedSecret, PaymentKeyRing};
-use super::sales_store::SalesStoreError;
 use super::money::{
     Currency, ExchangeRateRational, cny_fen_to_nano_usd, parse_minor, quoted_received_to_nano_usd,
 };
+use super::sales_store::SalesStoreError;
 use crate::db::DbPool;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1192,11 +1192,9 @@ async fn accrue_sales_commission<C: ConnectionTrait>(
         return Ok(());
     }
     let discount_bp: i64 = row.try_get("", "sales_discount_bp").unwrap_or(0);
-    let base_minor = crate::store_billing::sales_store::face_value_minor(&row_string(
-        &row,
-        "quote_json",
-    )?)
-    .map_err(|error| CallbackStoreError::Storage(error.to_string()))?;
+    let base_minor =
+        crate::store_billing::sales_store::face_value_minor(&row_string(&row, "quote_json")?)
+            .map_err(|error| CallbackStoreError::Storage(error.to_string()))?;
 
     let agent = conn
         .query_one(db.stmt(

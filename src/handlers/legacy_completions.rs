@@ -10,11 +10,11 @@
 //! sixty match sites untouched. The cost is re-encoding the SSE stream, which is acceptable
 //! for an endpoint that exists for compatibility.
 
+use axum::Json;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::response::Response;
 use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
 
@@ -236,7 +236,10 @@ mod tests {
             "temperature": 0.7
         }))
         .expect("translates");
-        assert_eq!(chat["messages"], json!([{ "role": "user", "content": "Hello" }]));
+        assert_eq!(
+            chat["messages"],
+            json!([{ "role": "user", "content": "Hello" }])
+        );
         assert!(chat.get("prompt").is_none(), "prompt must not be forwarded");
         // LC3: every other field is forwarded untouched.
         assert_eq!(chat["model"], json!("m"));
@@ -254,7 +257,12 @@ mod tests {
     /// output for a prompt the caller did not send.
     #[test]
     fn batched_and_tokenized_prompts_are_refused() {
-        for prompt in [json!(["a", "b"]), json!([[1, 2]]), json!([1, 2, 3]), json!(7)] {
+        for prompt in [
+            json!(["a", "b"]),
+            json!([[1, 2]]),
+            json!([1, 2, 3]),
+            json!(7),
+        ] {
             let error = to_chat_request(json!({ "model": "m", "prompt": prompt }))
                 .expect_err("must be refused");
             assert_eq!(error.status, StatusCode::BAD_REQUEST);
@@ -312,7 +320,10 @@ mod tests {
         );
         let out = rewrite_sse_chunk(chunk);
         assert!(out.starts_with("data: "), "{out}");
-        assert!(out.ends_with("\n\n"), "the blank line must survive: {out:?}");
+        assert!(
+            out.ends_with("\n\n"),
+            "the blank line must survive: {out:?}"
+        );
         let payload: Value =
             serde_json::from_str(out.trim_start_matches("data: ").trim()).expect("JSON");
         assert_eq!(payload["object"], json!("text_completion"));

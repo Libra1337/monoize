@@ -291,9 +291,7 @@ fn analytics_user_scope(
 ) -> Result<AnalyticsUserScope, &'static str> {
     match scope {
         Some("self") => Ok(AnalyticsUserScope::SelfUser(user_id.to_string())),
-        Some("group") if can_manage_users => Ok(AnalyticsUserScope::Group(
-            group_id.to_string(),
-        )),
+        Some("group") if can_manage_users => Ok(AnalyticsUserScope::Group(group_id.to_string())),
         Some(_) => Err("scope must equal self or group"),
         None if can_manage_users => Ok(AnalyticsUserScope::All),
         None => Ok(AnalyticsUserScope::SelfUser(user_id.to_string())),
@@ -315,11 +313,13 @@ mod dashboard_analytics_tests {
         group_id: &str,
         raw: Option<&str>,
     ) -> Result<(Option<String>, Option<String>), &'static str> {
-        Ok(match analytics_user_scope(can_manage_users, user_id, group_id, raw)? {
-            AnalyticsUserScope::SelfUser(id) => (Some(id), None),
-            AnalyticsUserScope::Group(id) => (None, Some(id)),
-            AnalyticsUserScope::All => (None, None),
-        })
+        Ok(
+            match analytics_user_scope(can_manage_users, user_id, group_id, raw)? {
+                AnalyticsUserScope::SelfUser(id) => (Some(id), None),
+                AnalyticsUserScope::Group(id) => (None, Some(id)),
+                AnalyticsUserScope::All => (None, None),
+            },
+        )
     }
 
     #[test]
@@ -380,9 +380,7 @@ pub async fn get_dashboard_analytics(
             &user.group_id,
             query.scope.as_deref(),
         )
-        .map_err(|message| {
-            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
-        })?;
+        .map_err(|message| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message))?;
         match resolved {
             AnalyticsUserScope::SelfUser(id) => (Some(id), None),
             AnalyticsUserScope::Group(id) => (None, Some(id)),
@@ -406,7 +404,12 @@ pub async fn get_dashboard_analytics(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     Ok(Json(render_analytics_json(
-        &raw, buckets, range_hours, now, &time_from, &time_to,
+        &raw,
+        buckets,
+        range_hours,
+        now,
+        &time_from,
+        &time_to,
     )?))
 }
 
@@ -436,8 +439,7 @@ pub async fn get_cache_hit_rate_by_users(
         ));
     }
     let range_hours = query.range_hours.clamp(1, 720);
-    let time_from_unix_ms = (Utc::now() - chrono::Duration::hours(range_hours))
-        .timestamp_millis();
+    let time_from_unix_ms = (Utc::now() - chrono::Duration::hours(range_hours)).timestamp_millis();
     let rows = state
         .user_store
         .get_cache_hit_rate_by_users(time_from_unix_ms)

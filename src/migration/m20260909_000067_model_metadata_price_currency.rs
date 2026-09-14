@@ -96,7 +96,9 @@ impl MigrationTrait for Migration {
 #[cfg(test)]
 mod tests {
     use super::Migration;
-    use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement, TryGetable};
+    use sea_orm::{
+        ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement, TryGetable,
+    };
     use sea_orm_migration::prelude::*;
 
     async fn database_before_067() -> DatabaseConnection {
@@ -189,10 +191,28 @@ mod tests {
         seed_metadata(&db, "kimi-k3", "manual", "20000").await;
         seed_metadata(&db, "gpt-4o", "models_dev", "2500").await;
         // Migration 066 left every mirror as USD, which is the state this one corrects.
-        seed_rate(&db, "model_metadata:kimi-k3:input_uncached", "manual", "USD").await;
-        seed_rate(&db, "model_metadata:gpt-4o:input_uncached", "models_dev", "USD").await;
+        seed_rate(
+            &db,
+            "model_metadata:kimi-k3:input_uncached",
+            "manual",
+            "USD",
+        )
+        .await;
+        seed_rate(
+            &db,
+            "model_metadata:gpt-4o:input_uncached",
+            "models_dev",
+            "USD",
+        )
+        .await;
         // A mirror whose metadata row no longer exists must keep its stored value.
-        seed_rate(&db, "model_metadata:removed:input_uncached", "manual", "USD").await;
+        seed_rate(
+            &db,
+            "model_metadata:removed:input_uncached",
+            "manual",
+            "USD",
+        )
+        .await;
         // A rate outside the mirror namespace must not be touched at all.
         seed_rate(&db, "manual:openai:gpt-6:input_uncached", "manual", "CNY").await;
 
@@ -205,7 +225,11 @@ mod tests {
             metadata_currencies(&db).await,
             vec![
                 ("gpt-4o".to_string(), "2500".to_string(), "USD".to_string()),
-                ("kimi-k3".to_string(), "20000".to_string(), "CNY".to_string()),
+                (
+                    "kimi-k3".to_string(),
+                    "20000".to_string(),
+                    "CNY".to_string()
+                ),
             ]
         );
         assert_eq!(
@@ -257,7 +281,13 @@ mod tests {
     async fn revert_restores_the_post_066_state() {
         let db = database_before_067().await;
         seed_metadata(&db, "kimi-k3", "manual", "20000").await;
-        seed_rate(&db, "model_metadata:kimi-k3:input_uncached", "manual", "USD").await;
+        seed_rate(
+            &db,
+            "model_metadata:kimi-k3:input_uncached",
+            "manual",
+            "USD",
+        )
+        .await;
 
         let manager = SchemaManager::new(&db);
         Migration.up(&manager).await.expect("apply 067");

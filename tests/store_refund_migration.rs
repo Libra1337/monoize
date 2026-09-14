@@ -22,7 +22,9 @@ async fn migration_055_preserves_grants_adds_refund_scope_and_recreates_indexes(
     Migrator::up(&db, None).await.unwrap();
     Migrator::down(
         &db,
-        Some(rollback_steps_through("m20260828_000055_store_refund_reauth")),
+        Some(rollback_steps_through(
+            "m20260828_000055_store_refund_reauth",
+        )),
     )
     .await
     .unwrap();

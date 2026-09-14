@@ -495,7 +495,9 @@ impl BillingRateStore {
         // MB-A8: omitted keeps the stored value, null or empty clears to NULL, and a
         // present non-empty string must be a canonical non-negative integer (MB-D3g).
         let peak_unit_price_nano = match &input.peak_unit_price_nano {
-            None => existing.as_ref().and_then(|r| r.peak_unit_price_nano.clone()),
+            None => existing
+                .as_ref()
+                .and_then(|r| r.peak_unit_price_nano.clone()),
             Some(None) => None,
             Some(Some(raw)) => {
                 let raw = raw.trim();
@@ -982,9 +984,7 @@ mod tests {
         let db = DbPool::connect("sqlite::memory:").await.expect("connect");
         {
             let write = db.write().await;
-            Migrator::up(&*write, None)
-                .await
-                .expect("migrate");
+            Migrator::up(&*write, None).await.expect("migrate");
         }
         let store = BillingRateStore::new(db).await.expect("store");
         store
@@ -1022,7 +1022,10 @@ mod tests {
     async fn copying_a_profile_preserves_prices_and_detaches_from_sync() {
         let store = store_with_rate("DeepSeek", "catalog:deepseek:input", "1234").await;
 
-        let copied = store.copy_profile("DeepSeek", "deepseek-std").await.unwrap();
+        let copied = store
+            .copy_profile("DeepSeek", "deepseek-std")
+            .await
+            .unwrap();
         assert_eq!(copied, 1);
 
         let rows = store.list_billing_rates().await.unwrap();
@@ -1058,7 +1061,10 @@ mod tests {
     #[tokio::test]
     async fn copying_refuses_a_target_that_already_has_rates() {
         let store = store_with_rate("DeepSeek", "catalog:deepseek:input", "1234").await;
-        store.copy_profile("DeepSeek", "deepseek-std").await.unwrap();
+        store
+            .copy_profile("DeepSeek", "deepseek-std")
+            .await
+            .unwrap();
 
         assert_eq!(
             store.copy_profile("DeepSeek", "deepseek-std").await,

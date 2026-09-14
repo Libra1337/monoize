@@ -1173,7 +1173,10 @@ mod tests {
     fn whole_yuan_callback_amount_matches_the_stored_order() {
         assert_eq!(parse_yuan_as_fen("1000"), Some(100_000));
         assert_eq!(format_fen_as_yuan(100_000), "1000.00");
-        assert_eq!(parse_yuan_as_fen(&format_fen_as_yuan(100_000)), Some(100_000));
+        assert_eq!(
+            parse_yuan_as_fen(&format_fen_as_yuan(100_000)),
+            Some(100_000)
+        );
     }
 
     #[test]

@@ -574,7 +574,8 @@ async fn legacy_completions_translates_to_chat_and_back() {
 
     let upstream = last_captured_body(&ctx, "chat");
     assert_eq!(
-        upstream["messages"][0]["content"], json!("legacy-prompt-marker"),
+        upstream["messages"][0]["content"],
+        json!("legacy-prompt-marker"),
         "the prompt must reach upstream as a chat message: {upstream}"
     );
     assert!(
@@ -610,9 +611,15 @@ async fn legacy_completions_streams_text_frames() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{response}");
-    assert!(response.contains("\"object\":\"text_completion\""), "{response}");
+    assert!(
+        response.contains("\"object\":\"text_completion\""),
+        "{response}"
+    );
     assert!(response.contains("\"text\""), "{response}");
-    assert!(!response.contains("\"delta\""), "no chat delta may leak: {response}");
+    assert!(
+        !response.contains("\"delta\""),
+        "no chat delta may leak: {response}"
+    );
     assert!(response.contains("data: [DONE]"), "{response}");
 }
 
@@ -740,7 +747,8 @@ async fn prefix_stabilize_moves_the_agent_env_block_behind_the_conversation() {
         other => panic!("unexpected last content {other}"),
     };
     assert!(
-        last_text.contains("<env>\nWorking directory: /workspace\nToday's date: 2026-09-10\n</env>"),
+        last_text
+            .contains("<env>\nWorking directory: /workspace\nToday's date: 2026-09-10\n</env>"),
         "the volatile block must arrive after the conversation: {upstream}"
     );
     assert!(
@@ -817,8 +825,16 @@ async fn prefix_stabilize_leaves_user_content_containing_the_delimiters_alone() 
     assert_eq!(status, StatusCode::OK, "{response}");
 
     let upstream = last_captured_body(&ctx, "chat");
-    assert_eq!(upstream["messages"][0]["content"], json!("Stable instructions."), "{upstream}");
-    assert_eq!(upstream["messages"][1]["content"], json!(user_text), "{upstream}");
+    assert_eq!(
+        upstream["messages"][0]["content"],
+        json!("Stable instructions."),
+        "{upstream}"
+    );
+    assert_eq!(
+        upstream["messages"][1]["content"],
+        json!(user_text),
+        "{upstream}"
+    );
 }
 
 /// ACPS-6: an Anthropic upstream caches at a whole-node breakpoint, so the transform must not

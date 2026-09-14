@@ -15,12 +15,17 @@ macro_rules! string_enum {
         }
 
         impl $name {
+            // These conversions are generated uniformly for every enum in the family; a given
+            // enum is used as either a plain value or a string-typed column, so it may exercise
+            // only one of the two.
+            #[allow(dead_code)]
             pub(crate) const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $value),+
                 }
             }
 
+            #[allow(dead_code)]
             pub(crate) fn from_str(value: &str) -> Option<Self> {
                 match value {
                     $($value => Some(Self::$variant),)+

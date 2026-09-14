@@ -179,10 +179,7 @@ async fn billing_rates_crud_catalog_sync_and_profile_patterns_api() {
         .find(|rate| rate["id"] == catalog_rate_id)
         .expect("manual edit of catalog row remains");
     assert_eq!(preserved_catalog_edit["source"], json!("manual"));
-    assert_eq!(
-        preserved_catalog_edit["unit_price_nano"],
-        json!("12345")
-    );
+    assert_eq!(preserved_catalog_edit["unit_price_nano"], json!("12345"));
 
     let patterns = json!({
         "patterns": [
@@ -291,13 +288,8 @@ async fn billing_rate_profiles_endpoint_and_profile_filtered_list() {
     assert!(rows[0]["match_json"].is_object());
     assert!(rows[0]["raw_json"].is_object());
 
-    let (status, unfiltered) = json_request(
-        &ctx,
-        Method::GET,
-        "/api/dashboard/billing-rates",
-        None,
-    )
-    .await;
+    let (status, unfiltered) =
+        json_request(&ctx, Method::GET, "/api/dashboard/billing-rates", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(unfiltered.as_array().unwrap().len(), 4);
 }
@@ -318,13 +310,8 @@ async fn model_metadata_list_omits_raw_json_and_detail_returns_it() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let (status, list) = json_request(
-        &ctx,
-        Method::GET,
-        "/api/dashboard/model-metadata",
-        None,
-    )
-    .await;
+    let (status, list) =
+        json_request(&ctx, Method::GET, "/api/dashboard/model-metadata", None).await;
     assert_eq!(status, StatusCode::OK);
     let records = list.as_array().unwrap();
     assert_eq!(records.len(), 1);

@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
-use sea_orm::{ConnectionTrait, DatabaseTransaction, DbBackend, Statement, TransactionTrait, Value};
+use sea_orm::{
+    ConnectionTrait, DatabaseTransaction, DbBackend, Statement, TransactionTrait, Value,
+};
 use sea_orm_migration::prelude::*;
 use uuid::Uuid;
 

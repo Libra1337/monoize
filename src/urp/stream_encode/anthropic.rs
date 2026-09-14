@@ -1886,10 +1886,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 let sanitized = if quota {
                     crate::error_sanitize::GENERIC_QUOTA_TEXT.to_string()
                 } else {
-                    crate::error_sanitize::maybe_mask_sensitive_text(
-                        &message,
-                        mask_sensitive_info,
-                    )
+                    crate::error_sanitize::maybe_mask_sensitive_text(&message, mask_sensitive_info)
                 };
                 let empty = HashMap::new();
                 let error = messages_error_payload(

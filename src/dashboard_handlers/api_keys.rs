@@ -4,15 +4,14 @@ use crate::error::{AppError, AppResult};
 use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
 use crate::users::{
-    canonicalize_channel_bindings, canonicalize_model_bindings, format_nano_to_usd, parse_nano_usd,
     AnalyticsBucketing, ApiKeyChannelBinding, ApiKeyModelBinding, CreateApiKeyInput,
-    CreateApiKeyWithLimitError, ModelRedirectRule,
-    RequestCaptureMode, UpdateApiKeyInput,
+    CreateApiKeyWithLimitError, ModelRedirectRule, RequestCaptureMode, UpdateApiKeyInput,
+    canonicalize_channel_bindings, canonicalize_model_bindings, format_nano_to_usd, parse_nano_usd,
 };
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -1252,11 +1251,11 @@ pub async fn transfer_to_sub_account(
 #[cfg(test)]
 mod tests {
     use super::{
-        add_months, align_down_to_day, align_down_to_hour, align_down_to_month,
-        analytics_bucket_plan, current_channel_conflicts, months_between, AnalyticsBucketPlan,
-        AnalyticsBucketUnit,
+        AnalyticsBucketPlan, AnalyticsBucketUnit, add_months, align_down_to_day,
+        align_down_to_hour, align_down_to_month, analytics_bucket_plan, current_channel_conflicts,
+        months_between,
     };
-    use crate::app::{load_state_with_runtime, RuntimeConfig};
+    use crate::app::{RuntimeConfig, load_state_with_runtime};
     use crate::billing_rate_store::UpsertBillingRateInput;
     use crate::monoize_routing::CreateMonoizeProviderInput;
     use crate::users::CreateGroupInput;
@@ -1422,8 +1421,8 @@ mod tests {
                                 usage_class: Some(usage_class.to_string()),
                                 unit: Some("token".to_string()),
                                 unit_price_nano: Some("1".to_string()),
-                        unit_price_currency: None,
-                        peak_unit_price_nano: None,
+                                unit_price_currency: None,
+                                peak_unit_price_nano: None,
                                 context_tier: Some(None),
                                 service_tier: Some(None),
                                 modality: Some(None),

@@ -459,7 +459,10 @@ async fn an_order_without_a_code_stores_no_code() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(row.try_get::<Option<String>>("", "sales_code").unwrap(), None);
+    assert_eq!(
+        row.try_get::<Option<String>>("", "sales_code").unwrap(),
+        None
+    );
 }
 
 #[tokio::test]

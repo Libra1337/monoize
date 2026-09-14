@@ -411,7 +411,7 @@ async fn dashboard_apis_expose_judge_status_action_and_admin_guard() {
     assert_eq!(events["data"][0]["term"], json!("badword"));
     assert_eq!(events["data"][0]["username"], json!("tenant-1"));
 
-    let (status, events) = dashboard_get_with_cookie(
+    let (_status, events) = dashboard_get_with_cookie(
         &ctx,
         "/api/dashboard/firewall/events?action=blocked",
         &cookie,

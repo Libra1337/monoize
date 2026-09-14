@@ -30,7 +30,9 @@ const INVITE_CODE_ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
 fn generate_invite_code() -> String {
     let uuid = uuid::Uuid::new_v4();
     (0..6)
-        .map(|i| INVITE_CODE_ALPHABET[(uuid.as_bytes()[i] as usize) % INVITE_CODE_ALPHABET.len()] as char)
+        .map(|i| {
+            INVITE_CODE_ALPHABET[(uuid.as_bytes()[i] as usize) % INVITE_CODE_ALPHABET.len()] as char
+        })
         .collect()
 }
 
@@ -64,7 +66,11 @@ async fn membership_allowed(state: &AppState, user: &crate::users::User) -> AppR
 }
 
 fn storage(error: impl std::fmt::Display) -> AppError {
-    AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string())
+    AppError::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal_error",
+        error.to_string(),
+    )
 }
 
 fn bad_request(message: &str) -> AppError {
@@ -76,7 +82,11 @@ fn forbidden(message: &str) -> AppError {
 }
 
 fn invite_invalid() -> AppError {
-    AppError::new(StatusCode::NOT_FOUND, "invite_invalid", "invite link is invalid")
+    AppError::new(
+        StatusCode::NOT_FOUND,
+        "invite_invalid",
+        "invite link is invalid",
+    )
 }
 
 fn parse_expiry(raw: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -122,7 +132,9 @@ async fn creation_eligible(state: &AppState, user: &crate::users::User) -> AppRe
         return Err(forbidden("sub-accounts cannot create organizations"));
     }
     if user.account_class != crate::users::AccountClass::Enterprise {
-        return Err(forbidden("only enterprise accounts can create organizations"));
+        return Err(forbidden(
+            "only enterprise accounts can create organizations",
+        ));
     }
     let sales = crate::store_billing::sales_store::SalesStore::new(state.db_pool.clone())
         .list_agents()
@@ -131,7 +143,9 @@ async fn creation_eligible(state: &AppState, user: &crate::users::User) -> AppRe
         .iter()
         .any(|agent| agent.user_id == user.id);
     if sales {
-        return Err(forbidden("sales agent accounts cannot create organizations"));
+        return Err(forbidden(
+            "sales agent accounts cannot create organizations",
+        ));
     }
     Ok(())
 }
@@ -221,7 +235,11 @@ async fn move_wallet_balance(
     }
     let backend = state.db_pool.read().get_database_backend();
     let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
-    let lock_suffix = if state.db_pool.is_postgres() { " FOR UPDATE" } else { "" };
+    let lock_suffix = if state.db_pool.is_postgres() {
+        " FOR UPDATE"
+    } else {
+        ""
+    };
 
     let read_balance = |user_id: &str| {
         Statement::from_string(
@@ -251,11 +269,13 @@ async fn move_wallet_balance(
         .parse()
         .map_err(|_| bad_request("invalid persisted balance"))?;
 
-    let from_after = from_balance
-        .checked_sub(amount_nano)
-        .ok_or_else(|| {
-            AppError::new(StatusCode::BAD_REQUEST, "insufficient_balance", "wallet balance is insufficient")
-        })?;
+    let from_after = from_balance.checked_sub(amount_nano).ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            "insufficient_balance",
+            "wallet balance is insufficient",
+        )
+    })?;
     if from_after < 0 {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
@@ -272,7 +292,11 @@ async fn move_wallet_balance(
         tx.execute(Statement::from_sql_and_values(
             backend,
             "UPDATE users SET balance_nano_usd = $2, updated_at = $3 WHERE id = $1",
-            [user_id.into(), balance.to_string().into(), now.clone().into()],
+            [
+                user_id.into(),
+                balance.to_string().into(),
+                now.clone().into(),
+            ],
         ))
         .await
         .map_err(storage)?;
@@ -351,7 +375,9 @@ pub async fn create_org(
         return Err(bad_request("display_name must be 1..64 characters"));
     }
     if !expiry_is_valid(&body.invite_expiry) {
-        return Err(bad_request("invite_expiry must be one of 24h, 3d, 7d, 30d, never"));
+        return Err(bad_request(
+            "invite_expiry must be one of 24h, 3d, 7d, 30d, never",
+        ));
     }
     let avatar_emoji = body.avatar_emoji.unwrap_or_else(|| "🏢".to_string());
     if avatar_emoji.is_empty() || avatar_emoji.len() > 8 {
@@ -415,7 +441,8 @@ pub async fn create_org(
         ))
         .await
         .map_err(storage)?;
-    drop(read);
+    // `read` borrows the read pool; the query above has already awaited and returned an owned
+    // row, so no explicit drop is needed before taking the write lock.
     let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
     let (group_id, org_class) = match group {
         Some(row) => (
@@ -465,7 +492,11 @@ pub async fn create_org(
     tx.execute(Statement::from_sql_and_values(
         backend,
         "INSERT INTO org_members (org_id, user_id, role, joined_at) VALUES ($1, $2, 'owner', $3)",
-        [org_id.clone().into(), user.id.clone().into(), now.clone().into()],
+        [
+            org_id.clone().into(),
+            user.id.clone().into(),
+            now.clone().into(),
+        ],
     ))
     .await
     .map_err(storage)?;
@@ -531,15 +562,26 @@ pub async fn list_my_orgs(
                 role: row.try_get("", "my_role").map_err(storage)?,
                 member_count: row.try_get("", "member_count").map_err(storage)?,
                 balance_nano_usd: row.try_get("", "balance_nano_usd").map_err(storage)?,
-                invite_token: owner.then(|| row.try_get("", "invite_token").map_err(storage)).transpose()?,
-                invite_code: owner.then(|| row.try_get::<Option<String>>("", "invite_code").map_err(storage)).transpose()?
+                invite_token: owner
+                    .then(|| row.try_get("", "invite_token").map_err(storage))
+                    .transpose()?,
+                invite_code: owner
+                    .then(|| {
+                        row.try_get::<Option<String>>("", "invite_code")
+                            .map_err(storage)
+                    })
+                    .transpose()?
                     .flatten(),
                 max_members: limit_or_default(
-                    row.try_get::<Option<i64>>("", "max_members").map_err(storage)?,
+                    row.try_get::<Option<i64>>("", "max_members")
+                        .map_err(storage)?,
                     MAX_ORG_MEMBERS,
                 ),
                 invite_expires_at: owner
-                    .then(|| row.try_get::<Option<String>>("", "invite_expires_at").map_err(storage))
+                    .then(|| {
+                        row.try_get::<Option<String>>("", "invite_expires_at")
+                            .map_err(storage)
+                    })
                     .transpose()?
                     .flatten(),
             })
@@ -700,7 +742,8 @@ pub async fn invite_preview(
     // itself; only accepting is blocked.
     let member_count: i64 = row.try_get("", "member_count").map_err(storage)?;
     let max_members = limit_or_default(
-        row.try_get::<Option<i64>>("", "max_members").map_err(storage)?,
+        row.try_get::<Option<i64>>("", "max_members")
+            .map_err(storage)?,
         MAX_ORG_MEMBERS,
     );
     Ok(Json(json!({
@@ -745,7 +788,10 @@ pub async fn join_org(
     {
         return Err(invite_invalid());
     }
-    if member_role(&tx, backend, &org_id, &user.id).await?.is_some() {
+    if member_role(&tx, backend, &org_id, &user.id)
+        .await?
+        .is_some()
+    {
         return Err(AppError::new(
             StatusCode::CONFLICT,
             "org_already_member",
@@ -753,7 +799,8 @@ pub async fn join_org(
         ));
     }
     let max_members = limit_or_default(
-        org.try_get::<Option<i64>>("", "max_members").map_err(storage)?,
+        org.try_get::<Option<i64>>("", "max_members")
+            .map_err(storage)?,
         MAX_ORG_MEMBERS,
     );
     if org_member_count(&tx, backend, &org_id).await? >= max_members {
@@ -766,7 +813,11 @@ pub async fn join_org(
     tx.execute(Statement::from_sql_and_values(
         backend,
         "INSERT INTO org_members (org_id, user_id, role, joined_at) VALUES ($1, $2, 'member', $3)",
-        [org_id.clone().into(), user.id.into(), Utc::now().to_rfc3339().into()],
+        [
+            org_id.clone().into(),
+            user.id.into(),
+            Utc::now().to_rfc3339().into(),
+        ],
     ))
     .await
     .map_err(storage)?;
@@ -788,7 +839,9 @@ pub async fn regenerate_invite(
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
     if !expiry_is_valid(&body.invite_expiry) {
-        return Err(bad_request("invite_expiry must be one of 24h, 3d, 7d, 30d, never"));
+        return Err(bad_request(
+            "invite_expiry must be one of 24h, 3d, 7d, 30d, never",
+        ));
     }
     let backend = state.db_pool.read().get_database_backend();
     let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
@@ -895,7 +948,9 @@ pub async fn distribute_from_org(
         .await?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
     if role != "owner" {
-        return Err(forbidden("only the owner can distribute the organization wallet"));
+        return Err(forbidden(
+            "only the owner can distribute the organization wallet",
+        ));
     }
     let member_role_value = member_role(&*read, backend, &org_id, &body.member_user_id)
         .await?
@@ -947,7 +1002,7 @@ pub async fn create_org_key(
         Some(other) => {
             return Err(bad_request(&format!(
                 "share_mode must be private, public, allow, or deny: {other}"
-            )))
+            )));
         }
     };
 
@@ -993,9 +1048,11 @@ pub async fn create_org_key(
         .map_err(storage)?;
     Ok((
         StatusCode::CREATED,
-        Json(json!({ "id": api_key.id, "name": api_key.name, "key": plaintext,
+        Json(
+            json!({ "id": api_key.id, "name": api_key.name, "key": plaintext,
                      "share_mode": effective_mode, "owner_username": user.username,
-                     "model_limits_enabled": !body.model_limits.is_empty() })),
+                     "model_limits_enabled": !body.model_limits.is_empty() }),
+        ),
     ))
 }
 
@@ -1082,7 +1139,9 @@ pub async fn list_org_keys(
             .map_err(storage)?;
         for row in share_rows {
             let key_id = row.try_get::<String>("", "api_key_id").map_err(storage)?;
-            let member_id = row.try_get::<String>("", "member_user_id").map_err(storage)?;
+            let member_id = row
+                .try_get::<String>("", "member_user_id")
+                .map_err(storage)?;
             shared_by_key.entry(key_id).or_default().push(member_id);
         }
     }
@@ -1143,7 +1202,11 @@ pub async fn update_key_sharing(
         .query_one(Statement::from_sql_and_values(
             backend,
             "SELECT id FROM api_keys WHERE id = $1 AND created_by = $2 AND org_id = $3",
-            [key_id.clone().into(), user.id.clone().into(), org_id.clone().into()],
+            [
+                key_id.clone().into(),
+                user.id.clone().into(),
+                org_id.clone().into(),
+            ],
         ))
         .await
         .map_err(storage)?
@@ -1153,7 +1216,11 @@ pub async fn update_key_sharing(
     let mode = match body.mode.as_str() {
         "private" => None,
         "public" | "allow" | "deny" => Some(body.mode.clone()),
-        other => return Err(bad_request(&format!("mode must be private, public, allow, or deny: {other}"))),
+        other => {
+            return Err(bad_request(&format!(
+                "mode must be private, public, allow, or deny: {other}"
+            )));
+        }
     };
     tx.execute(Statement::from_sql_and_values(
         backend,
@@ -1164,14 +1231,21 @@ pub async fn update_key_sharing(
     .map_err(storage)?;
     if mode.as_deref() == Some("allow") || mode.as_deref() == Some("deny") {
         for member_id in &body.member_ids {
-            if member_role(&tx, backend, &org_id, member_id).await?.is_none() {
+            if member_role(&tx, backend, &org_id, member_id)
+                .await?
+                .is_none()
+            {
                 return Err(bad_request("member_ids contains a non-member"));
             }
             tx.execute(Statement::from_sql_and_values(
                 backend,
                 "INSERT INTO org_key_shares (api_key_id, member_user_id, created_at)
                  VALUES ($1, $2, $3)",
-                [key_id.clone().into(), member_id.clone().into(), Utc::now().to_rfc3339().into()],
+                [
+                    key_id.clone().into(),
+                    member_id.clone().into(),
+                    Utc::now().to_rfc3339().into(),
+                ],
             ))
             .await
             .map_err(storage)?;
@@ -1217,18 +1291,19 @@ pub async fn org_ledger(
         ))
         .await
         .map_err(storage)?;
-    Ok(Json(json!(rows
-        .iter()
-        .map(|row| json!({
-            "id": row.try_get::<String>("", "id").unwrap_or_default(),
-            "kind": row.try_get::<String>("", "kind").unwrap_or_default(),
-            "delta_nano_usd": row.try_get::<String>("", "delta_nano_usd").unwrap_or_default(),
-            "balance_after_nano_usd": row
-                .try_get::<String>("", "balance_after_nano_usd")
-                .unwrap_or_default(),
-            "created_at": row.try_get::<String>("", "created_at").unwrap_or_default(),
-        }))
-        .collect::<Vec<_>>())))
+    Ok(Json(json!(
+        rows.iter()
+            .map(|row| json!({
+                "id": row.try_get::<String>("", "id").unwrap_or_default(),
+                "kind": row.try_get::<String>("", "kind").unwrap_or_default(),
+                "delta_nano_usd": row.try_get::<String>("", "delta_nano_usd").unwrap_or_default(),
+                "balance_after_nano_usd": row
+                    .try_get::<String>("", "balance_after_nano_usd")
+                    .unwrap_or_default(),
+                "created_at": row.try_get::<String>("", "created_at").unwrap_or_default(),
+            }))
+            .collect::<Vec<_>>()
+    )))
 }
 
 /// ORG-17: removal deletes membership and share rows. Org keys stay owned by the org
@@ -1289,7 +1364,9 @@ pub async fn leave_org(
         .await?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
     if role == "owner" {
-        return Err(bad_request("the owner cannot leave; delete the organization instead"));
+        return Err(bad_request(
+            "the owner cannot leave; delete the organization instead",
+        ));
     }
     tx.execute(Statement::from_sql_and_values(
         backend,
@@ -1334,7 +1411,9 @@ pub async fn delete_org_key(
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "key not found"))?;
     let created_by: Option<String> = key.try_get("", "created_by").map_err(storage)?;
     if role != "owner" && created_by.as_deref() != Some(user.id.as_str()) {
-        return Err(forbidden("only the key creator or the owner can delete an org key"));
+        return Err(forbidden(
+            "only the key creator or the owner can delete an org key",
+        ));
     }
     tx.execute(Statement::from_sql_and_values(
         backend,
@@ -1475,7 +1554,9 @@ pub async fn delete_org(
     let owner_user_id: String = org.try_get("", "owner_user_id").map_err(storage)?;
     let is_owner = owner_user_id == user.id;
     if !is_owner && !user.role.can_manage_users() {
-        return Err(forbidden("only the owner or an admin can delete an organization"));
+        return Err(forbidden(
+            "only the owner or an admin can delete an organization",
+        ));
     }
 
     let wallet = tx
@@ -1515,7 +1596,11 @@ pub async fn delete_org(
         tx.execute(Statement::from_sql_and_values(
             backend,
             "UPDATE users SET balance_nano_usd = $2, updated_at = $3 WHERE id = $1",
-            [owner_user_id.clone().into(), owner_after.to_string().into(), now.clone().into()],
+            [
+                owner_user_id.clone().into(),
+                owner_after.to_string().into(),
+                now.clone().into(),
+            ],
         ))
         .await
         .map_err(storage)?;
@@ -1700,7 +1785,11 @@ pub async fn admin_update_org(
         tx.execute(Statement::from_sql_and_values(
             backend,
             "UPDATE orgs SET max_members = $2, updated_at = $3 WHERE id = $1",
-            [org_id.clone().into(), max_members.into(), now.clone().into()],
+            [
+                org_id.clone().into(),
+                max_members.into(),
+                now.clone().into(),
+            ],
         ))
         .await
         .map_err(storage)?;

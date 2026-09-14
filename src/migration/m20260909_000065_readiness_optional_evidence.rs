@@ -1,6 +1,6 @@
 use sea_orm::{ConnectionTrait, DbBackend, Statement, TransactionTrait, TryGetable};
-use sea_orm_migration::prelude::*;
 use sea_orm_migration::SchemaManagerConnection;
+use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -268,7 +268,7 @@ fn quote_identifier(identifier: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{digest_check, readiness_table_sql, Migration};
+    use super::{Migration, digest_check, readiness_table_sql};
     use sea_orm::{
         ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement, TryGetable,
     };

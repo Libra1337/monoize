@@ -26,8 +26,15 @@ impl MigrationTrait for Migration {
                         vec!["from_account_class", "to_account_class"],
                     ),
                 ] {
-                    replace_sqlite_check(&tx, backend, table, &columns, THREE_CLASS_CHECK, FOUR_CLASS_CHECK)
-                        .await?;
+                    replace_sqlite_check(
+                        &tx,
+                        backend,
+                        table,
+                        &columns,
+                        THREE_CLASS_CHECK,
+                        FOUR_CLASS_CHECK,
+                    )
+                    .await?;
                 }
             }
             _ => {

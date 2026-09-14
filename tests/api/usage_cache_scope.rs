@@ -4,8 +4,8 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use monoize::app::{RuntimeConfig, build_app, load_state_with_runtime};
 use monoize::users::{AccountClass, User, UserRole};
-use serde_json::{Value, json};
 use sea_orm::ConnectionTrait;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 /// UA-25 / DH-16 / DH-17a / UA-42: role-scoped analytics and the per-user cache endpoint.
@@ -64,7 +64,17 @@ async fn analytics_group_scope_and_per_user_cache_follow_roles() {
         .id;
     state
         .user_store
-        .update_user(&super_admin.id, None, None, None, None, None, None, None, Some(&other_group))
+        .update_user(
+            &super_admin.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&other_group),
+        )
         .await
         .expect("super admin moved into the island group");
     for user in [&admin, &member] {
@@ -125,9 +135,21 @@ async fn analytics_group_scope_and_per_user_cache_follow_roles() {
             .expect("seed request log row");
     }
 
-    let admin_session = state.user_store.create_session(&admin.id, 7).await.expect("admin session");
-    let member_session = state.user_store.create_session(&member.id, 7).await.expect("member session");
-    let root_session = state.user_store.create_session(&super_admin.id, 7).await.expect("root session");
+    let admin_session = state
+        .user_store
+        .create_session(&admin.id, 7)
+        .await
+        .expect("admin session");
+    let member_session = state
+        .user_store
+        .create_session(&member.id, 7)
+        .await
+        .expect("member session");
+    let root_session = state
+        .user_store
+        .create_session(&super_admin.id, 7)
+        .await
+        .expect("root session");
     let admin_auth = format!("Bearer {}", admin_session.token);
     let member_auth = format!("Bearer {}", member_session.token);
     let root_auth = format!("Bearer {}", root_session.token);

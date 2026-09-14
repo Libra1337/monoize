@@ -43,9 +43,8 @@ struct CachedPublicStatusSnapshot {
 /// The document lists Group names of one class only, so a single shared slot would serve one
 /// class the other's catalogue for the life of the entry. Keying by class is what keeps the
 /// snapshot from crossing the isolation boundary MM-ENT5 defines.
-static PUBLIC_STATUS_SNAPSHOT: OnceLock<
-    tokio::sync::Mutex<Vec<CachedPublicStatusSnapshot>>,
-> = OnceLock::new();
+static PUBLIC_STATUS_SNAPSHOT: OnceLock<tokio::sync::Mutex<Vec<CachedPublicStatusSnapshot>>> =
+    OnceLock::new();
 
 fn snapshot(revision: u64) -> Snapshot {
     let storage = SNAPSHOT.get_or_init(|| Mutex::new(None));
@@ -693,7 +692,6 @@ pub async fn list_marketplace(
         .as_deref()
         .map(marketplace_group_filter)
         .transpose()?;
-    let account_class = viewer_account_class(&state, &headers).await;
     let coin_rate = coin_rate_per_usd(&state).await;
     let groups = visible_groups_for_viewer(&state, &headers)
         .await
@@ -845,7 +843,6 @@ pub async fn marketplace_offers(
     if !(1..=50).contains(&limit) {
         return Err(invalid("limit must be between 1 and 50"));
     }
-    let account_class = viewer_account_class(&state, &headers).await;
     let coin_rate = coin_rate_per_usd(&state).await;
     let groups = visible_groups_for_viewer(&state, &headers)
         .await
@@ -1171,8 +1168,7 @@ pub async fn public_status(
     };
     let bytes = serde_json::to_vec(&response).map_err(status_source_error)?;
     cache.retain(|entry| {
-        entry.account_class != account_class
-            && entry.created_at.elapsed() < Duration::from_secs(15)
+        entry.account_class != account_class && entry.created_at.elapsed() < Duration::from_secs(15)
     });
     cache.push(CachedPublicStatusSnapshot {
         source_id,
@@ -1524,13 +1520,17 @@ mod tests {
                     .await
                     .expect("body reads")
                     .to_bytes();
-                let json: serde_json::Value =
-                    serde_json::from_slice(&body).expect("body is JSON");
+                let json: serde_json::Value = serde_json::from_slice(&body).expect("body is JSON");
                 json["items"]
                     .as_array()
                     .expect("items is an array")
                     .iter()
-                    .map(|item| item["model"].as_str().expect("model is a string").to_string())
+                    .map(|item| {
+                        item["model"]
+                            .as_str()
+                            .expect("model is a string")
+                            .to_string()
+                    })
                     .collect::<Vec<_>>()
             }
         };
@@ -1569,7 +1569,6 @@ mod tests {
         );
     }
 
-
     /// PST-P10a: the 15 second status snapshot must not be shared across account classes.
     ///
     /// The document names Groups of one class only. A cache keyed without the class hands
@@ -1600,8 +1599,16 @@ mod tests {
             .expect("enterprise group creates");
 
         for (group_id, label, model) in [
-            (standard_group_id.clone(), "StatusStandard", "status-standard-model"),
-            (enterprise_group.id.clone(), "StatusEnterprise", "status-enterprise-model"),
+            (
+                standard_group_id.clone(),
+                "StatusStandard",
+                "status-standard-model",
+            ),
+            (
+                enterprise_group.id.clone(),
+                "StatusEnterprise",
+                "status-enterprise-model",
+            ),
         ] {
             state
                 .monoize_store
@@ -1660,8 +1667,7 @@ mod tests {
                     .await
                     .expect("body reads")
                     .to_bytes();
-                let json: serde_json::Value =
-                    serde_json::from_slice(&body).expect("body is JSON");
+                let json: serde_json::Value = serde_json::from_slice(&body).expect("body is JSON");
                 json["groups"]
                     .as_array()
                     .expect("groups is an array")
@@ -1703,7 +1709,9 @@ mod tests {
             vec!["Enterprise Status Group".to_string()]
         );
         assert!(
-            !group_names(HeaderMap::new()).await.contains(&"Enterprise Status Group".to_string()),
+            !group_names(HeaderMap::new())
+                .await
+                .contains(&"Enterprise Status Group".to_string()),
             "the cached Enterprise document must not be served to an anonymous viewer"
         );
     }
