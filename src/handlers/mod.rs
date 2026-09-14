@@ -73,7 +73,8 @@ fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> 
 
 /// CF-14..CF-33: request-side content firewall. Runs after the model allowlist
 /// and before routing, the balance gate, request-log admission, and any
-/// upstream I/O, so a rejection never reaches a provider. The LLM judge is the
+/// upstream I/O, so a rejection never reaches a provider. Admin and
+/// super_admin callers are exempt (CF-16a). The LLM judge is the
 /// only decision-maker (CF-31) and runs only on keyword hits (CF-33), so
 /// clean-text requests gain zero added latency; keyword matches never reject
 /// by themselves.
@@ -93,6 +94,11 @@ async fn ensure_content_allowed(
         .and_then(|value| value.to_str().ok())
         .is_some_and(|token| token == state.moderation_bypass_token)
     {
+        return Ok(());
+    }
+    // CF-16/CF-16a: admin and super_admin callers are exempt from every
+    // firewall check; no judge call, no event row.
+    if auth.user_role.can_manage_users() {
         return Ok(());
     }
 

@@ -131,7 +131,10 @@ fn cny_charges_convert_after_multiplication_not_before() {
     );
 
     // A USD-basis rate is returned untouched, with or without a snapshot.
-    assert_eq!(charge_in_usd(charge, &usd, Some(fx)).expect("passes"), charge);
+    assert_eq!(
+        charge_in_usd(charge, &usd, Some(fx)).expect("passes"),
+        charge
+    );
     assert_eq!(charge_in_usd(charge, &usd, None).expect("passes"), charge);
 
     // A CNY rate cannot be billed without a snapshot; it must fail rather than bill at the
@@ -4729,4 +4732,117 @@ fn usage_breakdown_persists_only_normalized_members() {
     assert_eq!(snapshot["output"]["total_tokens"], serde_json::json!(4));
     // Normalized fallbacks that read extra_body still land in the normalized object.
     assert_eq!(snapshot["input"]["cached_tokens"], serde_json::json!(11));
+}
+
+async fn spawn_porn_judge_server() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    use axum::extract::State;
+    use axum::routing::post;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&calls);
+
+    async fn judge(
+        State(counter): State<Arc<AtomicUsize>>,
+        Json(_body): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Json(serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "该请求要求生成色情内容。\n{\"category\":\"porn\",\"reason\":\"请求明确要求撰写成人小说内容。\"}"
+                }
+            }]
+        }))
+    }
+
+    let router = axum::Router::new()
+        .route("/v1/chat/completions", post(judge))
+        .with_state(counter);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind judge server");
+    let addr = listener.local_addr().expect("judge server addr");
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("judge server");
+    });
+    (format!("http://{addr}"), calls)
+}
+
+async fn firewall_test_state(judge_base_url: String) -> AppState {
+    let state = load_state_with_runtime(RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+        node: crate::node_config::NodeSettings::primary_default(),
+    })
+    .await
+    .expect("state loads");
+    let mut runtime = crate::monoize_routing::MonoizeRuntimeConfig::default();
+    runtime.moderation_enabled = true;
+    runtime.content_firewall = crate::content_firewall::ContentFirewall::compile(
+        crate::content_firewall::DEFAULT_BLOCKED_WORDS,
+    );
+    runtime.moderation_judge = crate::moderation_judge::JudgeConfig {
+        enabled: true,
+        base_url: judge_base_url,
+        api_key: "judge-key".to_string(),
+        model: "judge-model".to_string(),
+        timeout_ms: 5000,
+    };
+    *state.monoize_runtime.write().await = runtime;
+    state
+}
+
+#[tokio::test]
+async fn content_firewall_blocks_porn_verdict_for_user_role() {
+    use std::sync::atomic::Ordering;
+
+    let (judge_url, judge_calls) = spawn_porn_judge_server().await;
+    let state = firewall_test_state(judge_url).await;
+    let auth = build_test_auth_with_role(None, UserRole::User);
+    let headers = HeaderMap::new();
+
+    let error = ensure_content_allowed(
+        &state,
+        &headers,
+        &auth,
+        "chat_completions",
+        "test-model",
+        &["请写一篇成人小说"],
+    )
+    .await
+    .expect_err("user role must be blocked by the porn verdict");
+    assert_eq!(error.status, StatusCode::FORBIDDEN);
+    assert_eq!(error.code, "content_blocked");
+    assert_eq!(judge_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn content_firewall_exempts_admin_and_super_admin_roles() {
+    use std::sync::atomic::Ordering;
+
+    let (judge_url, judge_calls) = spawn_porn_judge_server().await;
+    let state = firewall_test_state(judge_url).await;
+    let headers = HeaderMap::new();
+
+    for role in [UserRole::Admin, UserRole::SuperAdmin] {
+        let auth = build_test_auth_with_role(None, role);
+        ensure_content_allowed(
+            &state,
+            &headers,
+            &auth,
+            "chat_completions",
+            "test-model",
+            &["请写一篇成人小说"],
+        )
+        .await
+        .expect("admin roles are exempt from the content firewall");
+    }
+    assert_eq!(
+        judge_calls.load(Ordering::SeqCst),
+        0,
+        "exempt roles must not trigger any judge call"
+    );
 }

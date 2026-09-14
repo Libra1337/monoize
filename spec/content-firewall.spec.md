@@ -13,7 +13,7 @@
   never blocks by itself. This replaces pure keyword blocking, which could not
   distinguish "text prohibiting pornography" from "pornography".
 - Non-goals: image/audio byte scanning, output-side (response) moderation,
-  per-caller exemptions.
+  per-caller configuration of exemptions.
 
 ## 1. Settings
 
@@ -112,11 +112,20 @@ Anthropic error envelope by the existing handler wrapper. On the responses
 WebSocket the same fields are delivered through the existing WebSocket error
 event path.
 
-CF-16. No caller-facing bypass exists. The firewall applies to every
-authenticated caller (API keys, dashboard sessions, playground, internal
-sources) regardless of role, including administrators. The only exemption is
-the judge-loop guard CF-29, which external callers cannot forge. No request
-field can disable or weaken the check.
+CF-16. The firewall applies to every authenticated caller except the
+exemptions in this clause. Exemptions: (a) the judge-loop guard CF-29, which
+external callers cannot forge; (b) the caller whose authenticated `user_role`
+is `admin` or `super_admin` (CF-16a) — every check of CF-33 is skipped, so
+the exempted caller produces no judge call and no event row for any request.
+No request field can disable or weaken the check for a non-exempt caller.
+
+CF-16a. Role exemption source of truth: the `user_role` field of the
+authenticated `AuthResult` (set from the user row at token validation for
+API keys and from the session user for internal sources such as the
+playground). The role exemption is a pure read of that field; it performs no
+database lookup, uses no request header, and applies uniformly across all
+endpoints of CF-7..CF-12. A role change takes effect on requests
+authenticated after the change is persisted.
 
 CF-17. Each rejection emits exactly one `tracing::warn` record containing the
 authenticated user id (when present), the API key id (when present), and the
