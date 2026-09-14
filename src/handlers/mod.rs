@@ -135,53 +135,6 @@ async fn ensure_content_allowed(
         return Ok(());
     }
 
-    // CF-34/CF-35: a session window holds at most one judge call per 30
-    // minutes. The turn that opens (or re-opens after a lapse) the window is
-    // always judged; later turns inside a live window are spot-checked with
-    // the sampler and otherwise only marked.
-    let session_key = moderation_session_key(auth, endpoint, model);
-    let window = Duration::from_secs(30 * 60);
-    let now = Instant::now();
-    let window_alive = state
-        .moderation_session_windows
-        .get(&session_key)
-        .is_some_and(|entry| now.duration_since(*entry.value()) <= window);
-    let should_judge = !window_alive
-        || (state.moderation_judge_sampler.read().expect("sampler lock"))();
-    if !should_judge {
-        let term = keyword_hits.join("、");
-        let first_term = keyword_hits.first().cloned().unwrap_or_default();
-        let text = scanned
-            .iter()
-            .find(|text| !first_term.is_empty() && text.to_lowercase().contains(first_term.as_str()))
-            .copied()
-            .unwrap_or_default();
-        tracing::info!(
-            user_id = ?auth.user_id,
-            api_key_id = ?auth.api_key_id,
-            term,
-            "content firewall marked request without judge call: session already judged"
-        );
-        persist_firewall_event(
-            state,
-            auth,
-            endpoint,
-            model,
-            crate::firewall_events::ACTION_MARKED,
-            &term,
-            text,
-            "session already judged",
-        )
-        .await;
-        return Ok(());
-    }
-    // Reserve or refresh the window before judging so a concurrent
-    // same-session request cannot also call the judge. A judge failure
-    // removes a reservation this request created (CF-31).
-    state
-        .moderation_session_windows
-        .insert(session_key.clone(), now);
-
     let user_message = crate::moderation_judge::build_user_message(&keyword_hits, scanned);
     let verdict = crate::moderation_judge::call_judge(crate::moderation_judge::JudgeCall {
         http: &state.http,
@@ -195,12 +148,7 @@ async fn ensure_content_allowed(
     let verdict = match verdict {
         Ok(verdict) => verdict,
         Err(judge_error) => {
-            // CF-31: a judge failure never blocks, even with keyword hits, and
-            // does not open a session window: drop the reservation this
-            // request made so the next same-session turn is selected again.
-            state
-                .moderation_session_windows
-                .remove_if(&session_key, |_, started| *started == now);
+            // CF-31: a judge failure never blocks, even with keyword hits.
             tracing::warn!(
                 user_id = ?auth.user_id,
                 api_key_id = ?auth.api_key_id,
@@ -277,23 +225,6 @@ async fn ensure_content_allowed(
         ),
     )
     .with_type("content_policy_violation"))
-}
-
-/// CF-34: the session key groups a conversation's turns. The API key plus
-/// username identifies the caller's conversation stream; when either is
-/// absent the endpoint and model keep sessions from different surfaces
-/// apart.
-fn moderation_session_key(
-    auth: &crate::auth::AuthResult,
-    endpoint: &str,
-    model: &str,
-) -> String {
-    match (auth.api_key_id.as_deref(), auth.username.as_deref()) {
-        (Some(api_key_id), Some(username)) => format!("{api_key_id}|{username}"),
-        (Some(api_key_id), None) => format!("{api_key_id}|{endpoint}|{model}"),
-        (None, Some(username)) => format!("{username}|{endpoint}|{model}"),
-        (None, None) => format!("{endpoint}|{model}"),
-    }
 }
 
 /// CF-22: a persistence failure never changes the enforcement outcome.

@@ -211,14 +211,6 @@ pub struct AppState {
     /// CF-29: process-local judge-loop guard token. Judge requests carry it so
     /// firewall checks skip their own traffic; external callers cannot forge it.
     pub moderation_bypass_token: String,
-    /// CF-34: process-local judge session windows. Key: session key; value:
-    /// instant of the last judge selection for that key. A key is judged at
-    /// most once per 30-minute window so an agent conversation re-sending a
-    /// keyword-bearing history every turn does not call the judge every turn.
-    pub moderation_session_windows: Arc<DashMap<String, std::time::Instant>>,
-    /// CF-35: judge sampling decider for turns after a session window's judged
-    /// turn. Returns true to judge. Swappable so tests force either outcome.
-    pub moderation_judge_sampler: Arc<std::sync::RwLock<Box<dyn Fn() -> bool + Send + Sync>>>,
     pub model_registry_store: ModelRegistryStore,
     pub billing_rate_store: BillingRateStore,
     pub store_billing: StoreBillingStore,
@@ -1129,10 +1121,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         routing_config_revision,
         settings_update_lock,
         moderation_bypass_token: uuid::Uuid::new_v4().to_string(),
-        moderation_session_windows: Arc::new(DashMap::new()),
-        moderation_judge_sampler: Arc::new(std::sync::RwLock::new(Box::new(
-            default_moderation_judge_sampler,
-        ))),
         model_registry_store,
         billing_rate_store,
         store_billing,
@@ -1150,13 +1138,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         request_capture,
         trusted_proxies,
     })
-}
-
-/// CF-35: default sampler — roughly one in ten requests is selected for
-/// judging. Fresh OS entropy per draw; no process-shared sequence.
-fn default_moderation_judge_sampler() -> bool {
-    use rand_core::RngCore;
-    rand_core::OsRng.next_u32() < u32::MAX / 10
 }
 
 fn payment_public_origin_from_raw(raw: Option<&str>) -> Result<Option<url::Url>, String> {

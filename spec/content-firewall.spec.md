@@ -226,31 +226,13 @@ configuration changes only through the CF-19 settings category.
 
 CF-33. Judge invocation gate: the judge is invoked if and only if
 `moderation_enabled` and `moderation_judge_enabled` are true, the judge is
-fully configured (CF-28), the keyword matcher (CF-5) matched at least one
-scanned string, and the request is selected for judging under CF-34/CF-35.
-A request with no keyword match is forwarded directly with no judge call, no
-added latency, and no event row. The keyword list therefore determines the
-judge's coverage; the judge alone decides rejections.
-
-CF-34. Session mark-once: the **session key** of a request is the pair
-`(api_key_id, username)` when both are present, otherwise
-`(api_key_id, endpoint, model)` when `api_key_id` is present, otherwise
-`(username, endpoint, model)`, otherwise `(endpoint, model)`. The turn that
-opens a session window — no live window, or a window lapsed past exactly 30
-minutes — is always judged. After that turn, later requests from the same
-session key are selected for judging with probability exactly 1 in 10
-(CF-35); a not-selected request is `marked` (CF-30) with reason
-`session already judged` and consumes no judge call. An agent conversation
-that re-sends its keyword-bearing history every turn therefore triggers one
-guaranteed judge call plus roughly one per ten turns. The session window
-state is process-local memory and is never persisted.
-
-CF-35. Sampling: selection draws fresh OS entropy per attempt. The opening
-turn of a session window is always selected: a fresh session with a keyword
-hit is judged before any not-selected skip can occur, so sampling never
-shields the opening turn of a new conversation. A judge failure (CF-31)
-does not open a session window: the reservation the failed turn made is
-removed so the next same-session turn is selected again.
+fully configured (CF-28), and the keyword matcher (CF-5) matched at least one
+scanned string. A request with no keyword match is forwarded directly with no
+judge call, no added latency, and no event row. Every request with a keyword
+hit is judged: there is no session window, sampling, or other mechanism that
+skips or defers the judge call for a keyword-bearing request. The keyword
+list therefore determines the judge's coverage; the judge alone decides
+rejections.
 
 CF-28. When invoked, the firewall sends one isolated judge request: an
 OpenAI-compatible `POST {moderation_judge_base_url}/chat/completions` (a
@@ -297,12 +279,11 @@ incoming request bearing this exact header value, so judge traffic routed
 back through the gateway cannot recurse. The token is process-local memory
 only and is never persisted, logged, or exposed.
 
-CF-30. Marked requests: when the judge verdict is `benign` or `uncertain`,
-or when the request was not selected for judging (CF-34/CF-35), the request
-is forwarded normally and exactly one `firewall_events` row with
-`action = 'marked'` is persisted (CF-20, CF-21). A judged mark carries the
-judge's `reason`; a not-selected mark carries the reason
-`session already judged`.
+CF-30. Marked requests: when the judge verdict is `benign` or `uncertain`
+(which by CF-33 implies at least one keyword match), the request is
+forwarded normally and exactly one `firewall_events` row with
+`action = 'marked'` is persisted (CF-20, CF-21), carrying the judge's
+`reason`.
 
 CF-31. Fail-open: if `moderation_enabled` is false, the judge is not enabled
 or not fully configured, or a judge failure occurs (CF-28a), the firewall
@@ -310,9 +291,7 @@ allows the request. A judge failure on a keyword hit is allowed with a
 `tracing::warn` record and no event row. Only `porn` and `political`
 verdicts reject; `benign` and `uncertain` always allow. The keyword list
 therefore never blocks by itself; the judge is the only decision-maker for
-rejections. A judge failure does not open a session window: the reservation
-the failed turn made is removed so the next same-session turn is selected
-again under CF-34/CF-35.
+rejections.
 
 CF-32. Judge rejections and marked requests use the judge category and the
 first keyword hit respectively as the event `term` and reason, per CF-21 and
