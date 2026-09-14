@@ -1017,6 +1017,7 @@ mod tests {
             model_redirects: Vec::new(),
             effective_groups: None,
             channel_bindings: Vec::new(),
+            model_bindings: Vec::new(),
             model_limits_enabled: false,
             model_limits: Vec::new(),
             ip_whitelist: Vec::new(),

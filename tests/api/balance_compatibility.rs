@@ -147,6 +147,7 @@ async fn sub_account_key_reports_its_balance_instead_of_unlimited_owner_balance(
                 ip_whitelist: Vec::new(),
                 group_ids: Vec::new(),
                 channel_bindings: Vec::new(),
+                model_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),

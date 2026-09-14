@@ -563,6 +563,7 @@ async fn models_list_respects_api_key_model_limits() {
 
                 group_ids: Vec::new(),
                 channel_bindings: Vec::new(),
+                model_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -628,6 +629,7 @@ async fn models_list_model_limits_disabled_shows_all() {
 
                 group_ids: Vec::new(),
                 channel_bindings: Vec::new(),
+                model_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -689,6 +691,7 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
 
                 group_ids: Vec::new(),
                 channel_bindings: Vec::new(),
+                model_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
                 model_redirects: Vec::new(),
@@ -747,6 +750,7 @@ async fn forwarding_applies_api_key_model_redirects_before_model_limits_and_rout
                 ip_whitelist: vec![],
                 group_ids: Vec::new(),
                 channel_bindings: Vec::new(),
+                model_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
                 model_redirects: vec![monoize::users::ModelRedirectRule {
@@ -843,6 +847,7 @@ async fn image_generation_applies_api_key_model_redirects_before_model_limits() 
                 ip_whitelist: vec![],
                 group_ids: Vec::new(),
                 channel_bindings: Vec::new(),
+                model_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
                 model_redirects: vec![monoize::users::ModelRedirectRule {
@@ -879,6 +884,54 @@ async fn image_generation_applies_api_key_model_redirects_before_model_limits() 
 }
 
 #[tokio::test]
+async fn duplicate_model_name_across_groups_requires_model_binding() {
+    let ctx = setup().await;
+    let model = "gpt-shared-across-groups";
+    seed_test_model_pricing(&ctx.state, &[model]).await;
+    let first = create_test_provider_in_new_group(
+        &ctx.state,
+        "shared-model-first",
+        monoize::monoize_routing::MonoizeProviderType::Responses,
+        model,
+        "http://127.0.0.1:1",
+        "first-key",
+    )
+    .await;
+    let _second = create_test_provider_in_new_group(
+        &ctx.state,
+        "shared-model-second",
+        monoize::monoize_routing::MonoizeProviderType::Responses,
+        model,
+        "http://127.0.0.1:1",
+        "second-key",
+    )
+    .await;
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({"model": model, "input": "pick a group"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let value: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["error"]["code"].as_str(), Some("model_selection_required"));
+    assert_eq!(
+        value["error"]["message"].as_str(),
+        Some("未选择具体模型，请先选择模型。")
+    );
+
+    bind_test_api_key_model(&ctx, model, &first.group_id).await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({"model": model, "input": "pick a group"}),
+    )
+    .await;
+    assert_ne!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
 async fn nonstream_http_client_error_fails_forward_without_same_channel_retry() {
     let ctx = setup().await;
     let model = "gpt-http-client-error-fail-forward";
@@ -906,6 +959,7 @@ async fn nonstream_http_client_error_fails_forward_without_same_channel_retry() 
     )
     .await;
     set_test_provider_retry_and_priority(&ctx.state, &second.id, 0, -99).await;
+    bind_test_api_key_model(&ctx, model, &second.group_id).await;
 
     let (status, body) = json_post(
         &ctx,
@@ -917,8 +971,8 @@ async fn nonstream_http_client_error_fails_forward_without_same_channel_retry() 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         first_hits.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "401 must skip same-Channel retries"
+        0,
+        "a model binding must pin the selected Group and skip the other Group"
     );
     assert_eq!(second_bodies.lock().unwrap().len(), 1);
 }
@@ -951,6 +1005,7 @@ async fn nonstream_invalid_upstream_response_fails_forward_without_same_channel_
     )
     .await;
     set_test_provider_retry_and_priority(&ctx.state, &second.id, 0, -99).await;
+    bind_test_api_key_model(&ctx, model, &second.group_id).await;
 
     let (status, body) = json_post(
         &ctx,
@@ -962,8 +1017,8 @@ async fn nonstream_invalid_upstream_response_fails_forward_without_same_channel_
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         first_hits.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "response-decoding failures must skip same-Channel retries"
+        0,
+        "a model binding must pin the selected Group and skip the other Group"
     );
     assert_eq!(second_bodies.lock().unwrap().len(), 1);
 }
@@ -996,6 +1051,7 @@ async fn streaming_http_client_error_fails_forward_before_first_downstream_byte(
     )
     .await;
     set_test_provider_retry_and_priority(&ctx.state, &second.id, 0, -99).await;
+    bind_test_api_key_model(&ctx, model, &second.group_id).await;
 
     let (status, body) = json_post(
         &ctx,
@@ -1008,8 +1064,8 @@ async fn streaming_http_client_error_fails_forward_before_first_downstream_byte(
     assert!(body.contains("response.completed"), "{body}");
     assert_eq!(
         first_hits.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "403 must skip same-Channel retries"
+        0,
+        "a model binding must pin the selected Group and skip the other Group"
     );
     assert_eq!(second_bodies.lock().unwrap().len(), 1);
 }

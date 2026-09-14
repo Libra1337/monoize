@@ -31,7 +31,8 @@ pub use api_keys::{
     ApiKeyCreatedResponse, ApiKeyResponse, BatchDeleteApiKeysRequest, CreateApiKeyRequest,
     TransferToSubAccountRequest, UpdateApiKeyRequest, batch_delete_api_keys, create_api_key,
     delete_api_key, get_api_key, get_api_key_analytics, get_apikey_presets,
-    list_api_key_channel_conflicts, list_my_api_keys, transfer_to_sub_account, update_api_key,
+    list_api_key_channel_conflicts, list_api_key_model_conflicts, list_my_api_keys,
+    transfer_to_sub_account, update_api_key,
 };
 pub use auth::{
     AuthResponse, ChangePasswordRequest, LoginRequest, RegisterRequest, UpdateMeRequest,

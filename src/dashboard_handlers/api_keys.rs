@@ -4,8 +4,9 @@ use crate::error::{AppError, AppResult};
 use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
 use crate::users::{
-    canonicalize_channel_bindings, format_nano_to_usd, parse_nano_usd, AnalyticsBucketing,
-    ApiKeyChannelBinding, CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule,
+    canonicalize_channel_bindings, canonicalize_model_bindings, format_nano_to_usd, parse_nano_usd,
+    AnalyticsBucketing, ApiKeyChannelBinding, ApiKeyModelBinding, CreateApiKeyInput,
+    CreateApiKeyWithLimitError, ModelRedirectRule,
     RequestCaptureMode, UpdateApiKeyInput,
 };
 use axum::extract::{Path, Query, State};
@@ -91,6 +92,8 @@ pub struct CreateApiKeyRequest {
     #[serde(default)]
     pub channel_bindings: Vec<ApiKeyChannelBinding>,
     #[serde(default)]
+    pub model_bindings: Vec<ApiKeyModelBinding>,
+    #[serde(default)]
     pub max_multiplier: Option<Multiplier>,
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
@@ -124,6 +127,7 @@ pub struct ApiKeyResponse {
     pub ip_whitelist: Vec<String>,
     pub group_ids: Vec<String>,
     pub channel_bindings: Vec<ApiKeyChannelBinding>,
+    pub model_bindings: Vec<ApiKeyModelBinding>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<ModelRedirectRule>,
@@ -147,6 +151,7 @@ pub struct ApiKeyCreatedResponse {
     pub ip_whitelist: Vec<String>,
     pub group_ids: Vec<String>,
     pub channel_bindings: Vec<ApiKeyChannelBinding>,
+    pub model_bindings: Vec<ApiKeyModelBinding>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<ModelRedirectRule>,
@@ -165,6 +170,7 @@ pub struct UpdateApiKeyRequest {
     pub ip_whitelist: Option<Vec<String>>,
     pub group_ids: Option<Vec<String>>,
     pub channel_bindings: Option<Vec<ApiKeyChannelBinding>>,
+    pub model_bindings: Option<Vec<ApiKeyModelBinding>>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
@@ -308,6 +314,149 @@ pub async fn list_api_key_channel_conflicts(
     Ok(Json(conflicts))
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiKeyModelOptionResponse {
+    pub group_id: String,
+    pub group_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiKeyModelConflictResponse {
+    pub model: String,
+    pub options: Vec<ApiKeyModelOptionResponse>,
+}
+
+async fn current_model_conflicts(
+    state: &AppState,
+    account_class: crate::users::AccountClass,
+) -> Result<Vec<ApiKeyModelConflictResponse>, String> {
+    let group_names = state
+        .user_store
+        .list_groups()
+        .await?
+        .into_iter()
+        .filter(|group| group.account_class == account_class)
+        .map(|group| (group.id, group.name))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let providers = state.monoize_store.list_providers().await?;
+    let mut by_model =
+        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    for provider in providers {
+        if !provider.enabled || !provider.channel.enabled {
+            continue;
+        }
+        if !group_names.contains_key(&provider.group_id) {
+            continue;
+        }
+        let unpriced_models = super::providers::provider_pricing_warnings(state, &provider)
+            .await
+            .map_err(|error| error.message)?
+            .into_iter()
+            .map(|warning| warning.logical_model)
+            .collect::<std::collections::BTreeSet<_>>();
+        for model in provider.channel.models.keys() {
+            if unpriced_models.contains(model) {
+                continue;
+            }
+            by_model
+                .entry(model.clone())
+                .or_default()
+                .insert(provider.group_id.clone());
+        }
+    }
+    Ok(by_model
+        .into_iter()
+        .filter(|(_, groups)| groups.len() > 1)
+        .map(|(model, groups)| ApiKeyModelConflictResponse {
+            model,
+            options: groups
+                .into_iter()
+                .map(|group_id| ApiKeyModelOptionResponse {
+                    group_name: group_names
+                        .get(&group_id)
+                        .cloned()
+                        .unwrap_or_else(|| group_id.clone()),
+                    group_id,
+                })
+                .collect(),
+        })
+        .collect())
+}
+
+async fn validate_model_bindings_for_scope(
+    state: &AppState,
+    account_class: crate::users::AccountClass,
+    group_ids: &[String],
+    model_limits_enabled: bool,
+    model_limits: &[String],
+    bindings: &[ApiKeyModelBinding],
+) -> Result<(), String> {
+    let bindings = canonicalize_model_bindings(bindings)?;
+    let conflicts = current_model_conflicts(state, account_class).await?;
+    let in_scope = |conflict: &&ApiKeyModelConflictResponse| {
+        let options_in_scope = conflict.options.iter().any(|option| {
+            group_ids.is_empty() || group_ids.iter().any(|id| id == &option.group_id)
+        });
+        options_in_scope
+            && (!model_limits_enabled
+                || model_limits.is_empty()
+                || model_limits.iter().any(|model| model == &conflict.model))
+            && conflict
+                .options
+                .iter()
+                .filter(|option| {
+                    group_ids.is_empty() || group_ids.iter().any(|id| id == &option.group_id)
+                })
+                .count()
+                > 1
+    };
+    let required = conflicts.iter().filter(in_scope).collect::<Vec<_>>();
+    if bindings.len() != required.len() {
+        return Err("select one Group for every ambiguous model".to_string());
+    }
+    for conflict in required {
+        let scoped_options = conflict
+            .options
+            .iter()
+            .filter(|option| {
+                group_ids.is_empty() || group_ids.iter().any(|id| id == &option.group_id)
+            })
+            .collect::<Vec<_>>();
+        let Some(binding) = bindings
+            .iter()
+            .find(|binding| binding.model == conflict.model)
+        else {
+            return Err(format!(
+                "Group selection required for model {}",
+                conflict.model
+            ));
+        };
+        if !scoped_options
+            .iter()
+            .any(|option| option.group_id == binding.group_id)
+        {
+            return Err(format!(
+                "selected Group is unavailable for model {}",
+                conflict.model
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub async fn list_api_key_model_conflicts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let conflicts = current_model_conflicts(&state, user.account_class)
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
+    Ok(Json(conflicts))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct BatchDeleteApiKeysRequest {
     pub ids: Vec<String>,
@@ -347,6 +496,7 @@ pub async fn list_my_api_keys(
                 ip_whitelist: k.ip_whitelist,
                 group_ids: k.group_ids,
                 channel_bindings: k.channel_bindings,
+                model_bindings: k.model_bindings,
                 max_multiplier: k.max_multiplier,
                 transforms: k.transforms,
                 model_redirects: k.model_redirects,
@@ -385,6 +535,16 @@ pub async fn create_api_key(
     )
     .await
     .map_err(|error| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", error))?;
+    validate_model_bindings_for_scope(
+        &state,
+        user.account_class,
+        &body.group_ids,
+        body.model_limits_enabled,
+        &body.model_limits,
+        &body.model_bindings,
+    )
+    .await
+    .map_err(|error| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", error))?;
 
     let input = CreateApiKeyInput {
         name: body.name,
@@ -396,6 +556,7 @@ pub async fn create_api_key(
         ip_whitelist: body.ip_whitelist,
         group_ids: body.group_ids,
         channel_bindings: body.channel_bindings,
+        model_bindings: body.model_bindings,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
         model_redirects: body.model_redirects,
@@ -438,6 +599,7 @@ pub async fn create_api_key(
             ip_whitelist: api_key.ip_whitelist,
             group_ids: api_key.group_ids,
             channel_bindings: api_key.channel_bindings,
+            model_bindings: api_key.model_bindings,
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
             model_redirects: api_key.model_redirects,
@@ -509,6 +671,7 @@ pub async fn get_api_key(
             ip_whitelist: api_key.ip_whitelist,
             group_ids: api_key.group_ids,
             channel_bindings: api_key.channel_bindings,
+            model_bindings: api_key.model_bindings,
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
             model_redirects: api_key.model_redirects,
@@ -901,6 +1064,21 @@ pub async fn update_api_key(
     )
     .await
     .map_err(|error| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", error))?;
+    validate_model_bindings_for_scope(
+        &state,
+        user.account_class,
+        body.group_ids.as_deref().unwrap_or(&api_key.group_ids),
+        body.model_limits_enabled
+            .unwrap_or(api_key.model_limits_enabled),
+        body.model_limits
+            .as_deref()
+            .unwrap_or(&api_key.model_limits),
+        body.model_bindings
+            .as_deref()
+            .unwrap_or(&api_key.model_bindings),
+    )
+    .await
+    .map_err(|error| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", error))?;
 
     let input = UpdateApiKeyInput {
         name: body.name,
@@ -912,6 +1090,7 @@ pub async fn update_api_key(
         ip_whitelist: body.ip_whitelist,
         group_ids: body.group_ids,
         channel_bindings: body.channel_bindings,
+        model_bindings: body.model_bindings,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
         model_redirects: body.model_redirects,
@@ -946,6 +1125,7 @@ pub async fn update_api_key(
         ip_whitelist: updated_key.ip_whitelist,
         group_ids: updated_key.group_ids,
         channel_bindings: updated_key.channel_bindings,
+        model_bindings: updated_key.model_bindings,
         max_multiplier: updated_key.max_multiplier,
         transforms: updated_key.transforms,
         model_redirects: updated_key.model_redirects,

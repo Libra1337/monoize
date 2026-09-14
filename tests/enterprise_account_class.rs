@@ -98,6 +98,7 @@ fn sub_account_key(name: &str, balance: &str) -> CreateApiKeyInput {
         ip_whitelist: Vec::new(),
         group_ids: Vec::new(),
         channel_bindings: Vec::new(),
+        model_bindings: Vec::new(),
         max_multiplier: None,
         transforms: Vec::new(),
         model_redirects: Vec::new(),

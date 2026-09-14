@@ -5253,6 +5253,7 @@ async fn bind_test_api_key_to_provider(ctx: &TestContext, model: &str, provider_
                     model: model.to_string(),
                     channel_id: provider.channel.id,
                 }]),
+                model_bindings: None,
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: None,
@@ -5264,6 +5265,38 @@ async fn bind_test_api_key_to_provider(ctx: &TestContext, model: &str, provider_
         )
         .await
         .expect("test API Key Channel binding updates");
+}
+
+async fn bind_test_api_key_model(ctx: &TestContext, model: &str, group_id: &str) {
+    ctx.state
+        .user_store
+        .update_api_key(
+            &ctx.api_key_id,
+            monoize::users::UpdateApiKeyInput {
+                name: None,
+                enabled: None,
+                sub_account_enabled: None,
+                sub_account_balance_nano_usd: None,
+                model_limits_enabled: None,
+                model_limits: None,
+                ip_whitelist: None,
+                group_ids: None,
+                channel_bindings: None,
+                model_bindings: Some(vec![monoize::users::ApiKeyModelBinding {
+                    model: model.to_string(),
+                    group_id: group_id.to_string(),
+                }]),
+                max_multiplier: None,
+                transforms: None,
+                model_redirects: None,
+                reasoning_envelope_enabled: None,
+                request_capture_mode: None,
+                expires_at: None,
+            },
+            false,
+        )
+        .await
+        .expect("test API Key model binding updates");
 }
 
 async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&str]) {

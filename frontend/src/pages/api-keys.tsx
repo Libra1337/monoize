@@ -41,9 +41,10 @@ import {
   batchDeleteApiKeysOptimistic,
   useDashboardGroups,
   useApiKeyChannelConflicts,
+  useApiKeyModelConflicts,
   useTransformRegistry,
 } from "@/lib/swr";
-import type { ApiKey, ApiKeyChannelBinding, ApiKeyChannelConflict, ApiKeyCreated, CreateApiKeyInput, Group, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
+import type { ApiKey, ApiKeyChannelBinding, ApiKeyChannelConflict, ApiKeyCreated, ApiKeyModelBinding, ApiKeyModelConflict, CreateApiKeyInput, Group, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
 import { api as apiClient } from "@/lib/api";
 import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
@@ -290,6 +291,116 @@ function KeyGroupsSection({
   );
 }
 
+function scopedModelConflicts(
+  conflicts: ApiKeyModelConflict[],
+  groupIds: string[],
+  modelLimitsEnabled: boolean,
+  modelLimits: string[],
+) {
+  return conflicts.filter((conflict) => {
+    if (modelLimitsEnabled && modelLimits.length > 0 && !modelLimits.includes(conflict.model)) {
+      return false;
+    }
+    const options = conflict.options.filter((option) => (
+      groupIds.length === 0 || groupIds.includes(option.group_id)
+    ));
+    return options.length > 1;
+  }).map((conflict) => ({
+    ...conflict,
+    options: conflict.options.filter((option) => (
+      groupIds.length === 0 || groupIds.includes(option.group_id)
+    )),
+  }));
+}
+
+function scopedModelBindings(
+  conflicts: ApiKeyModelConflict[],
+  bindings: ApiKeyModelBinding[],
+) {
+  return conflicts.flatMap((conflict) => {
+    const binding = bindings.find((candidate) => candidate.model === conflict.model);
+    return binding && conflict.options.some((option) => option.group_id === binding.group_id)
+      ? [binding]
+      : [];
+  });
+}
+
+function unresolvedModelConflicts(
+  conflicts: ApiKeyModelConflict[],
+  bindings: ApiKeyModelBinding[],
+) {
+  return conflicts.filter((conflict) => !bindings.some((binding) => (
+    binding.model === conflict.model
+    && conflict.options.some((option) => option.group_id === binding.group_id)
+  )));
+}
+
+function ModelBindingsSection({
+  conflicts,
+  loading,
+  groupIds,
+  modelLimitsEnabled,
+  modelLimits,
+  value,
+  onChange,
+  failed,
+}: {
+  conflicts: ApiKeyModelConflict[];
+  loading: boolean;
+  groupIds: string[];
+  modelLimitsEnabled: boolean;
+  modelLimits: string[];
+  value: ApiKeyModelBinding[];
+  onChange: (next: ApiKeyModelBinding[]) => void;
+  failed: boolean;
+}) {
+  const { t } = useTranslation();
+  const scoped = scopedModelConflicts(conflicts, groupIds, modelLimitsEnabled, modelLimits);
+  if (loading) return <Skeleton className="h-24 w-full rounded-lg" />;
+  if (failed) return <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{t("apiKeys.modelSelectionLoadError")}</p>;
+  if (scoped.length === 0) return null;
+  return (
+    <div className="space-y-3 rounded-lg border p-3">
+      <div>
+        <p className="text-sm font-medium">{t("apiKeys.modelSelection")}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{t("apiKeys.modelSelectionHelp")}</p>
+      </div>
+      {scoped.map((conflict) => {
+        const selected = value.find((binding) => binding.model === conflict.model);
+        return (
+          <div key={conflict.model} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)] sm:items-center">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">{conflict.model}</p>
+              <p className="truncate text-xs text-muted-foreground">{t("apiKeys.modelSelectionConflictHint")}</p>
+            </div>
+            <Select
+              value={selected?.group_id ?? ""}
+              onValueChange={(groupId) => onChange([
+                ...value.filter((binding) => binding.model !== conflict.model),
+                { model: conflict.model, group_id: groupId },
+              ])}
+            >
+              <SelectTrigger><SelectValue placeholder={t("apiKeys.selectModelGroup")} /></SelectTrigger>
+              <SelectContent>
+                {conflict.options.map((option) => (
+                  <SelectItem key={option.group_id} value={option.group_id}>
+                    {option.group_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        );
+      })}
+      {unresolvedModelConflicts(scoped, value).length > 0 ? (
+        <p role="alert" className="text-xs text-destructive">
+          {t("apiKeys.modelSelectionRequired", { count: unresolvedModelConflicts(scoped, value).length })}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function ChannelBindingsSection({
   conflicts,
   loading,
@@ -435,6 +546,8 @@ export function ApiKeysPage() {
   const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
   const { data: channelConflicts = [], isLoading: channelConflictsLoading, error: channelConflictsError } =
     useApiKeyChannelConflicts();
+  const { data: modelConflicts = [], isLoading: modelConflictsLoading, error: modelConflictsError } =
+    useApiKeyModelConflicts();
   const canManageSystem = currentUser?.role === "admin" || currentUser?.role === "super_admin";
   const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
     useTransformRegistry({ isPaused: () => !canManageSystem });
@@ -463,6 +576,7 @@ export function ApiKeysPage() {
 
   const [newKeyGroupIds, setNewKeyGroupIds] = useState<string[]>([]);
   const [newKeyChannelBindings, setNewKeyChannelBindings] = useState<ApiKeyChannelBinding[]>([]);
+  const [newKeyModelBindings, setNewKeyModelBindings] = useState<ApiKeyModelBinding[]>([]);
   const [newKeyMaxMultiplier, setNewKeyMaxMultiplier] = useState("");
   const [newKeyTransforms, setNewKeyTransforms] = useState<TransformRuleConfig[]>([]);
   const [newKeyModelRedirects, setNewKeyModelRedirects] = useState<ModelRedirectRule[]>([]);
@@ -490,9 +604,25 @@ export function ApiKeysPage() {
     () => scopedChannelBindings(activeChannelConflicts, newKeyChannelBindings),
     [activeChannelConflicts, newKeyChannelBindings],
   );
+  const activeModelConflicts = useMemo(
+    () => scopedModelConflicts(
+      modelConflicts,
+      newKeyGroupIds,
+      newKeyModelLimitsEnabled,
+      newKeyModelList,
+    ),
+    [modelConflicts, newKeyGroupIds, newKeyModelLimitsEnabled, newKeyModelList],
+  );
+  const activeModelBindings = useMemo(
+    () => scopedModelBindings(activeModelConflicts, newKeyModelBindings),
+    [activeModelConflicts, newKeyModelBindings],
+  );
   const channelSelectionBlocked = channelConflictsLoading
     || Boolean(channelConflictsError)
     || unresolvedChannelConflicts(activeChannelConflicts, activeChannelBindings).length > 0;
+  const modelSelectionBlocked = modelConflictsLoading
+    || Boolean(modelConflictsError)
+    || unresolvedModelConflicts(activeModelConflicts, activeModelBindings).length > 0;
 
   const resetCreateForm = () => {
     setNewKeyName("");
@@ -505,6 +635,7 @@ export function ApiKeysPage() {
 
     setNewKeyGroupIds([]);
     setNewKeyChannelBindings([]);
+    setNewKeyModelBindings([]);
     setNewKeyMaxMultiplier("");
     setNewKeyTransforms([]);
     setNewKeyModelRedirects([]);
@@ -514,6 +645,12 @@ export function ApiKeysPage() {
 
   const handleCreate = async () => {
     if (!newKeyName.trim()) return;
+    if (modelSelectionBlocked) {
+      toast.error(t("apiKeys.modelSelectionRequired", {
+        count: unresolvedModelConflicts(activeModelConflicts, activeModelBindings).length,
+      }));
+      return;
+    }
     if (channelSelectionBlocked) {
       toast.error(t("apiKeys.channelSelectionRequired", {
         count: unresolvedChannelConflicts(activeChannelConflicts, activeChannelBindings).length,
@@ -553,6 +690,7 @@ export function ApiKeysPage() {
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
         group_ids: newKeyGroupIds,
         channel_bindings: activeChannelBindings,
+        model_bindings: activeModelBindings,
         max_multiplier: parseOptionalMultiplier(newKeyMaxMultiplier),
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
@@ -575,6 +713,12 @@ export function ApiKeysPage() {
 
   const handleUpdate = async () => {
     if (!editKey) return;
+    if (modelSelectionBlocked) {
+      toast.error(t("apiKeys.modelSelectionRequired", {
+        count: unresolvedModelConflicts(activeModelConflicts, activeModelBindings).length,
+      }));
+      return;
+    }
     if (channelSelectionBlocked) {
       toast.error(t("apiKeys.channelSelectionRequired", {
         count: unresolvedChannelConflicts(activeChannelConflicts, activeChannelBindings).length,
@@ -603,6 +747,7 @@ export function ApiKeysPage() {
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
         group_ids: newKeyGroupIds,
         channel_bindings: activeChannelBindings,
+        model_bindings: activeModelBindings,
         max_multiplier: parseOptionalMultiplier(newKeyMaxMultiplier),
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
@@ -689,6 +834,7 @@ export function ApiKeysPage() {
     setNewKeyIpWhitelist(key.ip_whitelist.join(", "));
     setNewKeyGroupIds(key.group_ids ?? []);
     setNewKeyChannelBindings(key.channel_bindings ?? []);
+    setNewKeyModelBindings(key.model_bindings ?? []);
     setNewKeyMaxMultiplier(key.max_multiplier != null ? String(key.max_multiplier) : "");
     setNewKeyTransforms(key.transforms ?? []);
     setNewKeyModelRedirects(key.model_redirects ?? []);
@@ -787,6 +933,16 @@ export function ApiKeysPage() {
                   ownerGroupId={currentUser?.group_id ?? null}
                   isAdmin={canManageSystem}
                   onGroupIdsChange={setNewKeyGroupIds}
+                />
+                <ModelBindingsSection
+                  conflicts={modelConflicts}
+                  loading={modelConflictsLoading}
+                  groupIds={newKeyGroupIds}
+                  modelLimitsEnabled={newKeyModelLimitsEnabled}
+                  modelLimits={newKeyModelLimits.split(",").map((model) => model.trim()).filter(Boolean)}
+                  value={newKeyModelBindings}
+                  onChange={setNewKeyModelBindings}
+                  failed={Boolean(modelConflictsError)}
                 />
                 <ChannelBindingsSection
                   conflicts={channelConflicts}
@@ -1203,6 +1359,16 @@ export function ApiKeysPage() {
               ownerGroupId={currentUser?.group_id ?? null}
               isAdmin={canManageSystem}
               onGroupIdsChange={setNewKeyGroupIds}
+            />
+            <ModelBindingsSection
+              conflicts={modelConflicts}
+              loading={modelConflictsLoading}
+              groupIds={newKeyGroupIds}
+              modelLimitsEnabled={newKeyModelLimitsEnabled}
+              modelLimits={newKeyModelLimits.split(",").map((model) => model.trim()).filter(Boolean)}
+              value={newKeyModelBindings}
+              onChange={setNewKeyModelBindings}
+              failed={Boolean(modelConflictsError)}
             />
             <ChannelBindingsSection
               conflicts={channelConflicts}

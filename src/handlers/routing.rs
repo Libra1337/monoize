@@ -345,6 +345,31 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
         ));
     }
     if auth.api_key_id.is_some() {
+        let requested_model = urp.model.as_str();
+        let groups_for_model = allowed_attempts
+            .iter()
+            .filter(|attempt| attempt.logical_model == requested_model)
+            .map(|attempt| attempt.group_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        if groups_for_model.len() > 1 {
+            let valid_binding = auth.model_bindings.iter().any(|binding| {
+                binding.model == requested_model && groups_for_model.contains(&binding.group_id)
+            });
+            if !valid_binding {
+                return Err(AppError::new(
+                    StatusCode::CONFLICT,
+                    "model_selection_required",
+                    "未选择具体模型，请先选择模型。",
+                ));
+            }
+            allowed_attempts.retain(|attempt| {
+                attempt.logical_model != requested_model
+                    || auth.model_bindings.iter().any(|binding| {
+                        binding.model == attempt.logical_model
+                            && binding.group_id == attempt.group_id
+                    })
+            });
+        }
         let mut channels_by_scope = std::collections::BTreeMap::<
             (String, String),
             std::collections::BTreeSet<String>,

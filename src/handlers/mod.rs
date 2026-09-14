@@ -1548,6 +1548,7 @@ async fn authenticate_playground_session(
         model_redirects: Vec::new(),
         effective_groups: Some(vec![group_id]),
         channel_bindings: Vec::new(),
+        model_bindings: Vec::new(),
         model_limits_enabled: false,
         model_limits: Vec::new(),
         ip_whitelist: Vec::new(),

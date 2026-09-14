@@ -449,6 +449,7 @@ async fn responses_reasoning_envelope_can_be_disabled_per_api_key() {
                 ip_whitelist: None,
                 group_ids: None,
                 channel_bindings: None,
+                model_bindings: None,
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: None,

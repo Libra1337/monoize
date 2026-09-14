@@ -27,6 +27,7 @@ fn empty_api_key_update(expires_at: Option<&str>) -> UpdateApiKeyInput {
         ip_whitelist: None,
         group_ids: None,
         channel_bindings: None,
+                model_bindings: None,
         max_multiplier: None,
         transforms: None,
         model_redirects: None,

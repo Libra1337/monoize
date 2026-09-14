@@ -144,6 +144,10 @@ order defines routing preference (`database-provider-routing.spec.md` R-GRP-2).
 AKG7. Authentication MUST attach the key's `channel_bindings` after strict storage
 decoding. Runtime Channel selection follows `api-token-management.spec.md` TM-CH-5.
 
+AKG8. Authentication MUST attach the key's `model_bindings` after strict storage
+decoding. Runtime Group selection for a colliding logical model follows
+`api-token-management.spec.md` TM-MB-5.
+
 ## 5. Error response uniformity
 
 AKE1. Authentication failures MUST NOT reveal whether a token partially matched an existing prefix.
@@ -152,7 +156,7 @@ AKE2. The number of database rows decoded for one invalid token MUST be bounded 
 
 AKE3. Authentication MUST decode the selected API-key row and owning user before publishing an authentication-cache entry. The following persisted API-key fields are required authorization-policy values:
 
-- `model_limits`, `ip_whitelist`, `transforms`, and `model_redirects` MUST decode from JSON arrays of their declared element types;
+- `model_limits`, `ip_whitelist`, `transforms`, `model_redirects`, `channel_bindings`, and `model_bindings` MUST decode from JSON arrays of their declared element types;
 - `enabled`, `sub_account_enabled`, `model_limits_enabled`, and `reasoning_envelope_enabled` MUST decode from integer `0` or integer `1` only;
 - the owning user's `enabled` value MUST decode from integer `0` or integer `1` only;
 - `request_capture_mode` MUST be absent, null, or one of `"off"`, `"capture-all"`, and `"capture-only-abnormal"`; absent or null means `"off"` as defined by `request-capture-dumps.spec.md`;

@@ -954,6 +954,7 @@ async fn sub_account_zero_balance_returns_402() {
 
                 group_ids: Vec::new(),
                 channel_bindings: Vec::new(),
+                model_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -1007,6 +1008,7 @@ async fn ip_whitelist_blocks_non_whitelisted() {
 
                 group_ids: Vec::new(),
                 channel_bindings: Vec::new(),
+                model_bindings: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),

@@ -2761,6 +2761,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             get(crate::dashboard_handlers::list_api_key_channel_conflicts),
         )
         .route(
+            "/dashboard/tokens/model-conflicts",
+            get(crate::dashboard_handlers::list_api_key_model_conflicts),
+        )
+        .route(
             "/dashboard/tokens/{key_id}",
             get(crate::dashboard_handlers::get_api_key),
         )

@@ -963,6 +963,7 @@ pub async fn create_org_key(
         ip_whitelist: body.ip_whitelist.clone(),
         group_ids: Vec::new(),
         channel_bindings: Vec::new(),
+        model_bindings: Vec::new(),
         max_multiplier: None,
         transforms: Vec::new(),
         model_redirects: Vec::new(),

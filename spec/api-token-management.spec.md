@@ -28,6 +28,7 @@ An API key row has:
 - `ip_whitelist: string[]`
 - `group_ids: string[]` (ordered group ids, see `groups-registry.spec.md`)
 - `channel_bindings: ApiKeyChannelBinding[]`
+- `model_bindings: ApiKeyModelBinding[]`
 - `max_multiplier: string?` (canonical positive base-10 decimal string)
 - `transforms: TransformRuleConfig[]`
 - `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"`
@@ -96,6 +97,50 @@ such a conflict would demand a Channel choice for a Group the caller cannot reac
 block creation of every key. The Channel options in a returned conflict belong to Groups of
 the caller's class only.
 
+### 1.4 Cross-Group model selection
+
+TM-MB-1. `ApiKeyModelBinding` has exactly `model` and `group_id` string fields. Both fields
+MUST be non-empty after trimming. `model` MUST be unique in one key. The stored JSON array
+MUST contain at most 256 bindings.
+
+TM-MB-2. A model-name conflict exists when two or more Groups of the caller's account class
+have at least one enabled Provider whose enabled embedded Channel exposes the same logical
+model with a complete billable rate matrix. Disabled Providers, disabled Channels, unpriced
+models, and Groups of another account class do not participate. A name that appears in only
+one in-scope Group is not a conflict.
+
+TM-MB-3. `GET /api/dashboard/tokens/model-conflicts` MUST return every current model-name
+conflict. Each conflict contains `model` and an ordered `options` array. Each option contains
+`group_id` and `group_name`. The endpoint MUST NOT return a Base URL, credential, internal
+header, or pricing secret.
+
+TM-MB-4. Create and update MUST require exactly one valid binding for every model-name
+conflict in the key's effective Group and model scope. `group_ids = []` includes conflicts
+from every Group of the caller's class. When model limits are enabled and non-empty, only
+listed models are in scope. A binding's `group_id` MUST be one of that conflict's options and
+MUST remain in the key's Group scope (`group_ids = []` admits every option). Missing,
+duplicate, stale, or invalid bindings MUST return HTTP `400` with code `invalid_request`.
+
+TM-MB-5. At request time, a matching binding MUST remove every attempt whose logical model
+equals the bound model and whose Group is not the bound Group. If a model-name conflict
+exists for the requested model and the key has no valid matching binding, the request MUST
+fail with HTTP `409` and code `model_selection_required`. The error message MUST be exactly
+`未选择具体模型，请先选择模型。` It MUST NOT select a Group by priority, affinity, or
+random choice.
+
+TM-MB-6. Conflict enumeration and validation MUST be scoped to the account class of the
+authenticated user, matching TM-CH-6.
+
+TM-MB-7. `model_bindings` is independent of `channel_bindings`. A key MAY carry both: the
+model binding pins the Group for a colliding name, and the Channel binding then pins the
+Channel inside that Group. A Channel binding MUST NOT substitute for a missing model
+binding.
+
+TM-MB-8. Migration `m20260915_000082_api_key_model_bindings` MUST add
+`api_keys.model_bindings TEXT NOT NULL DEFAULT '[]'`. Existing keys decode as an empty
+array and therefore fail closed under TM-MB-5 until the owner selects a Group for each
+in-scope colliding name.
+
 TM-IP-1. Every non-empty `ip_whitelist` entry on create or update MUST parse as either an exact IPv4/IPv6 address or an IPv4/IPv6 CIDR network. Any invalid entry MUST reject the mutation with HTTP `400` and code `invalid_request`.
 
 TM-IP-2. The server MUST persist exact addresses and CIDR networks in their canonical string representation. It MUST trim entries, deduplicate canonical duplicates, and preserve exact-address entries as addresses rather than converting them to host-prefix CIDRs.
@@ -104,9 +149,9 @@ TM-STORAGE-1. API-key dashboard reads and forwarding authentication MUST fail wi
 
 TM-STORAGE-2. Persisted `enabled`, `sub_account_enabled`, `model_limits_enabled`, and `reasoning_envelope_enabled` values MUST be integer `0` or integer `1`. A null value, incompatible database type, or any other integer MUST fail the read. It MUST NOT be replaced by a default value.
 
-TM-STORAGE-3. `group_ids` and `channel_bindings` MUST decode as JSON arrays of their
-declared element types. Malformed or wrongly typed values MUST fail the read and MUST NOT
-be treated as empty values.
+TM-STORAGE-3. `group_ids`, `channel_bindings`, and `model_bindings` MUST decode as JSON
+arrays of their declared element types. Malformed or wrongly typed values MUST fail the
+read and MUST NOT be treated as empty values.
 
 TM-STORAGE-4. A present, non-null `request_capture_mode` MUST equal `"off"`, `"capture-all"`, or `"capture-only-abnormal"`. Any other value or incompatible database type MUST fail the read instead of falling back to `request_capture_enabled` or `"off"`. An absent or null value retains the `"off"` compatibility behavior defined by `request-capture-dumps.spec.md` RCD-C8.
 
@@ -144,6 +189,7 @@ All endpoints in this spec require an authenticated dashboard session.
   - `ip_whitelist: string[]` (default empty)
   - `group_ids: string[]` (default empty; empty means all Groups)
   - `channel_bindings: ApiKeyChannelBinding[]` (default empty)
+  - `model_bindings: ApiKeyModelBinding[]` (default empty)
   - `max_multiplier: string?` (default null)
   - `transforms: TransformRuleConfig[]` (default empty)
   - `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"` (default `"off"`)
@@ -177,6 +223,7 @@ TM-CREATE-5. `POST /api/dashboard/tokens` MUST read only the `api_key_max_per_us
   - `ip_whitelist`
   - `group_ids`
   - `channel_bindings`
+  - `model_bindings`
   - `max_multiplier`
   - `transforms`
   - `request_capture_mode`

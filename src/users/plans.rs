@@ -1337,6 +1337,7 @@ mod tests {
                     ip_whitelist: Vec::new(),
                     group_ids: Vec::new(),
                     channel_bindings: Vec::new(),
+                    model_bindings: Vec::new(),
                     max_multiplier: None,
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),

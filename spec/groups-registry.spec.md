@@ -22,7 +22,7 @@ still serializes `is_default`, `user_selectable`, and `is_public`; `is_default` 
 `user_selectable` are read-only response fields retained for compatibility, and a client
 MUST read `is_public` to determine visibility.
 
-An API key keeps its stored `group_ids` and channel bindings when a Group becomes private.
+An API key keeps its stored `group_ids`, channel bindings, and model bindings when a Group becomes private.
 Authentication removes inaccessible Groups from the effective routing set immediately. If
 the user later receives a grant, the saved API-key selection becomes effective again without
 editing the key. An empty API-key `group_ids` list means all Groups accessible to its owner,

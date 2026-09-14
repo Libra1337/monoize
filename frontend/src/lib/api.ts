@@ -267,6 +267,19 @@ export interface BillingLedgerEntry {
   created_at: string;
 }
 
+export interface ApiKeyModelBinding {
+  model: string;
+  group_id: string;
+}
+
+export interface ApiKeyModelConflict {
+  model: string;
+  options: Array<{
+    group_id: string;
+    group_name: string;
+  }>;
+}
+
 export interface ApiKeyChannelConflict {
   group_id: string;
   group_name: string;
@@ -295,6 +308,7 @@ export interface ApiKey {
   ip_whitelist: string[];
   group_ids: string[];
   channel_bindings: ApiKeyChannelBinding[];
+  model_bindings: ApiKeyModelBinding[];
   max_multiplier?: string;
   transforms: TransformRuleConfig[];
   model_redirects: ModelRedirectRule[];
@@ -354,6 +368,7 @@ export interface CreateApiKeyInput {
   ip_whitelist?: string[];
   group_ids?: string[];
   channel_bindings?: ApiKeyChannelBinding[];
+  model_bindings?: ApiKeyModelBinding[];
   max_multiplier?: string;
   transforms?: TransformRuleConfig[];
   model_redirects?: ModelRedirectRule[];
@@ -371,6 +386,7 @@ export interface UpdateApiKeyInput {
   ip_whitelist?: string[];
   group_ids?: string[];
   channel_bindings?: ApiKeyChannelBinding[];
+  model_bindings?: ApiKeyModelBinding[];
   max_multiplier?: string;
   transforms?: TransformRuleConfig[];
   expires_at?: string;
@@ -1367,6 +1383,10 @@ class ApiClient {
 
   async listApiKeyChannelConflicts(): Promise<ApiKeyChannelConflict[]> {
     return this.request("/tokens/channel-conflicts");
+  }
+
+  async listApiKeyModelConflicts(): Promise<ApiKeyModelConflict[]> {
+    return this.request("/tokens/model-conflicts");
   }
 
   async getApiKey(id: string): Promise<ApiKey> {

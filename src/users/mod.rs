@@ -235,6 +235,8 @@ pub struct ApiKey {
     pub group_ids: Vec<String>,
     #[serde(default)]
     pub channel_bindings: Vec<ApiKeyChannelBinding>,
+    #[serde(default)]
+    pub model_bindings: Vec<ApiKeyModelBinding>,
     /// Maximum accepted multiplier for routing
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_multiplier: Option<Multiplier>,
@@ -257,6 +259,13 @@ pub struct ApiKeyChannelBinding {
     pub group_id: String,
     pub model: String,
     pub channel_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApiKeyModelBinding {
+    pub model: String,
+    pub group_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -327,6 +336,8 @@ pub struct CreateApiKeyInput {
     pub group_ids: Vec<String>,
     #[serde(default)]
     pub channel_bindings: Vec<ApiKeyChannelBinding>,
+    #[serde(default)]
+    pub model_bindings: Vec<ApiKeyModelBinding>,
     #[serde(default)]
     pub max_multiplier: Option<Multiplier>,
     #[serde(default)]
@@ -456,6 +467,37 @@ pub fn canonicalize_channel_bindings(
     Ok(canonical)
 }
 
+pub const MAX_API_KEY_MODEL_BINDINGS: usize = 256;
+
+pub fn canonicalize_model_bindings(
+    bindings: &[ApiKeyModelBinding],
+) -> Result<Vec<ApiKeyModelBinding>, String> {
+    if bindings.len() > MAX_API_KEY_MODEL_BINDINGS {
+        return Err(format!(
+            "at most {MAX_API_KEY_MODEL_BINDINGS} model bindings can be selected"
+        ));
+    }
+    let mut canonical = Vec::with_capacity(bindings.len());
+    let mut seen = std::collections::HashSet::with_capacity(bindings.len());
+    for binding in bindings {
+        let binding = ApiKeyModelBinding {
+            model: binding.model.trim().to_string(),
+            group_id: binding.group_id.trim().to_string(),
+        };
+        if binding.model.is_empty() || binding.group_id.is_empty() {
+            return Err("model binding fields must not be empty".to_string());
+        }
+        if !seen.insert(binding.model.clone()) {
+            return Err(format!(
+                "duplicate model binding for model {}",
+                binding.model
+            ));
+        }
+        canonical.push(binding);
+    }
+    Ok(canonical)
+}
+
 /// AKG5/AKG6 effective-group resolution for API-key authentication.
 ///
 /// An empty key list permits every Group. A non-empty plan list is a ceiling.
@@ -543,6 +585,7 @@ pub struct UpdateApiKeyInput {
     pub ip_whitelist: Option<Vec<String>>,
     pub group_ids: Option<Vec<String>>,
     pub channel_bindings: Option<Vec<ApiKeyChannelBinding>>,
+    pub model_bindings: Option<Vec<ApiKeyModelBinding>>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
@@ -923,13 +966,42 @@ pub use utils::{format_nano_to_usd, parse_nano_usd, parse_usd_to_nano};
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_MODEL_REDIRECT_PATTERN_BYTES, ModelRedirectRule, canonicalize_group_ids,
-        is_provider_group_eligible, provider_group_rank, resolve_effective_groups,
-        restrict_effective_groups, validate_model_redirects,
+        ApiKeyModelBinding, MAX_MODEL_REDIRECT_PATTERN_BYTES, ModelRedirectRule,
+        canonicalize_group_ids, canonicalize_model_bindings, is_provider_group_eligible,
+        provider_group_rank, resolve_effective_groups, restrict_effective_groups,
+        validate_model_redirects,
     };
 
     fn ids(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn canonicalize_model_bindings_trims_and_rejects_duplicate_models() {
+        let bindings = canonicalize_model_bindings(&[
+            ApiKeyModelBinding {
+                model: " gpt-4o ".to_string(),
+                group_id: " g-1 ".to_string(),
+            },
+            ApiKeyModelBinding {
+                model: "claude-sonnet".to_string(),
+                group_id: "g-2".to_string(),
+            },
+        ])
+        .expect("canonicalizes");
+        assert_eq!(bindings[0].model, "gpt-4o");
+        assert_eq!(bindings[0].group_id, "g-1");
+        assert!(canonicalize_model_bindings(&[
+            ApiKeyModelBinding {
+                model: "gpt-4o".to_string(),
+                group_id: "g-1".to_string(),
+            },
+            ApiKeyModelBinding {
+                model: "gpt-4o".to_string(),
+                group_id: "g-2".to_string(),
+            },
+        ])
+        .is_err());
     }
 
     #[test]

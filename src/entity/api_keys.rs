@@ -34,6 +34,8 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub channel_bindings: String,
     #[sea_orm(column_type = "Text")]
+    pub model_bindings: String,
+    #[sea_orm(column_type = "Text")]
     pub max_multiplier: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub transforms: String,

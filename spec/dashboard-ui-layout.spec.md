@@ -751,6 +751,14 @@ a Skeleton while it resolves. For every conflict in the current Group and model 
 the dialog MUST show one Channel selector with Group, model, Provider, and Channel names.
 Create and update MUST remain blocked until every displayed conflict has one selection.
 
+AK7b. The dialogs MUST load `GET /api/dashboard/tokens/model-conflicts` with SWR and show a
+Skeleton while it resolves. For every model-name conflict in the current Group and model
+scope, the dialog MUST show one Group selector labeled with the colliding model name and
+the option Group names. The section MUST be hidden when the scoped conflict list is empty.
+Create and update MUST remain blocked until every displayed model-name conflict has one
+Group selection. The helper text MUST state that a colliding model name requires an
+explicit Group choice, and that an existing key without a choice fails at request time.
+
 AK8. If `POST /api/dashboard/tokens` or `PUT /api/dashboard/tokens/{key_id}` returns a
 group validation error, the frontend MUST surface the server-provided message in a toast
 and MUST keep the dialog open with the current draft state intact.

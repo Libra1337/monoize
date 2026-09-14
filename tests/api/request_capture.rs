@@ -54,6 +54,7 @@ async fn enable_request_capture(ctx: &TestContext) {
                 ip_whitelist: None,
                 group_ids: None,
                 channel_bindings: None,
+                model_bindings: None,
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: None,

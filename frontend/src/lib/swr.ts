@@ -39,6 +39,7 @@ import type {
   UpdateGroupInput,
   UserLiveUsage,
   ApiKeyChannelConflict,
+  ApiKeyModelConflict,
   AccountClass,
   FirewallStats,
   FirewallEventsResponse,
@@ -51,6 +52,7 @@ const fetchers = {
   users: () => api.listUsers(),
   apiKeys: () => api.listApiKeys(),
   apiKeyChannelConflicts: () => api.listApiKeyChannelConflicts(),
+  apiKeyModelConflicts: () => api.listApiKeyModelConflicts(),
   stats: () => api.getStats(),
   config: () => api.getConfigOverview(),
   settings: () => api.getSettings(),
@@ -75,6 +77,7 @@ export const SWR_KEYS = {
   USERS: "/dashboard/users",
   API_KEYS: "/dashboard/tokens",
   API_KEY_CHANNEL_CONFLICTS: "/dashboard/tokens/channel-conflicts",
+  API_KEY_MODEL_CONFLICTS: "/dashboard/tokens/model-conflicts",
   STATS: "/dashboard/stats",
   CONFIG: "/dashboard/config",
   SETTINGS: "/dashboard/settings",
@@ -191,6 +194,14 @@ export function useApiKeyChannelConflicts(config?: SWRConfiguration) {
   return useSWR<ApiKeyChannelConflict[]>(
     SWR_KEYS.API_KEY_CHANNEL_CONFLICTS,
     fetchers.apiKeyChannelConflicts,
+    { ...defaultConfig, ...config },
+  );
+}
+
+export function useApiKeyModelConflicts(config?: SWRConfiguration) {
+  return useSWR<ApiKeyModelConflict[]>(
+    SWR_KEYS.API_KEY_MODEL_CONFLICTS,
+    fetchers.apiKeyModelConflicts,
     { ...defaultConfig, ...config },
   );
 }
