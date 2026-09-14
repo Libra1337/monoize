@@ -1260,7 +1260,7 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
         match item {
             urp::Node::Image { source, .. } => match source {
                 urp::ImageSource::Base64 { data, .. } => {
-                    if !seen_base64.insert(data.clone()) {
+                    if data.trim().is_empty() || !seen_base64.insert(data.clone()) {
                         continue;
                     }
                     images.push(ExtractedImage {
@@ -1270,7 +1270,7 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
                     });
                 }
                 urp::ImageSource::Url { url, .. } => {
-                    if !seen_urls.insert(url.clone()) {
+                    if url.trim().is_empty() || !seen_urls.insert(url.clone()) {
                         continue;
                     }
                     images.push(ExtractedImage {
