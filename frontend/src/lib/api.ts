@@ -1483,6 +1483,26 @@ class ApiClient {
     });
   }
 
+  async listGroupGrants(
+    groupId: string
+  ): Promise<{ group_id: string; users: { user_id: string; username: string }[] }> {
+    return this.request(`/groups/${encodeURIComponent(groupId)}/grants`);
+  }
+
+  async grantGroupAccess(userId: string, groupId: string): Promise<{ success: boolean }> {
+    return this.request(
+      `/users/${encodeURIComponent(userId)}/groups/${encodeURIComponent(groupId)}`,
+      { method: "POST" }
+    );
+  }
+
+  async revokeGroupAccess(userId: string, groupId: string): Promise<{ success: boolean }> {
+    return this.request(
+      `/users/${encodeURIComponent(userId)}/groups/${encodeURIComponent(groupId)}`,
+      { method: "DELETE" }
+    );
+  }
+
   // Providers
   async listProviders(): Promise<Provider[]> {
     return this.request("/providers");

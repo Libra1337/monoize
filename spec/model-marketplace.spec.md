@@ -346,17 +346,18 @@ MM-ENT5. The public Marketplace and public status endpoints are reachable withou
 ## 7.2 Group-Scoped Discovery
 
 MM-G1. The authenticated public Marketplace (`/api/public/marketplace` and
-`/api/public/marketplace/offers`) MUST narrow a signed-in non-Admin viewer to that viewer's
-own `group_id`: only Groups, models, offers, and prices whose Group id equals the viewer's
-`group_id` may be returned. An anonymous visitor and an Admin keep the full class catalogue
-of MM-ENT2/MM-ENT5. The public status page is not model discovery and is exempt.
+`/api/public/marketplace/offers`) MUST show a signed-in non-Admin viewer every Group of the
+viewer's account class that is visible to them: Groups with `is_public = 1`, plus Groups
+granted to the viewer through `user_group_grants`. An anonymous visitor sees the class's
+`is_public = 1` Groups only. An Admin keeps the full class catalogue of
+MM-ENT2/MM-ENT5. The public status page is not model discovery and is exempt.
 
 MM-G2. The dashboard model catalogue endpoint
 (`GET /api/dashboard/marketplace/models`) MUST return the full catalogue to an Admin. For
-every other viewer it MUST return only models served by an enabled Provider of exactly one
-Group: the optional `group_id` query parameter when that Group is accessible to the viewer
-(class match plus public or granted visibility), otherwise the viewer's own `group_id`. An
-inaccessible `group_id` MUST be rejected with HTTP `400` code `invalid_request`.
+every other viewer it MUST return only models served by an enabled Provider of a Group
+visible to the viewer (class match plus public or granted visibility), optionally narrowed
+by an accessible `group_id` query parameter. An inaccessible `group_id` MUST be rejected
+with HTTP `400` code `invalid_request`.
 
 AKG-M1 (defined in `api-key-authentication.spec.md` section 4) applies the same Group
 scoping to API-key model discovery on `/v1/models`.

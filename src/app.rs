@@ -2826,6 +2826,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
                 .delete(crate::dashboard_handlers::revoke_user_group),
         )
         .route(
+            "/dashboard/groups/{group_id}/grants",
+            get(crate::dashboard_handlers::list_group_grants),
+        )
+        .route(
             "/dashboard/providers",
             get(crate::dashboard_handlers::list_providers),
         )

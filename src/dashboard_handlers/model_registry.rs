@@ -227,8 +227,9 @@ pub async fn list_marketplace_models(
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
 
-    // MM-G2: an Admin keeps the full catalogue; every other viewer sees only the models of
-    // one Group — the optional `group_id` when it is accessible, else the viewer's own.
+    // MM-G2: an Admin keeps the full catalogue; every other viewer sees the models of
+    // all Groups visible to them (class match plus public or granted visibility),
+    // optionally narrowed by an accessible `group_id` query parameter.
     if user.role.can_manage_users() {
         let metadata = state
             .model_registry_store
@@ -238,22 +239,24 @@ pub async fn list_marketplace_models(
         return Ok(Json(metadata));
     }
 
-    let mut scope_group = user.group_id.clone();
-    if let Some(requested) = query.group_id.as_deref() {
-        let accessible = state
-            .user_store
-            .accessible_group_ids(&user.id, user.role)
-            .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-        if !accessible.iter().any(|id| id == requested) {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "group_id is not accessible",
-            ));
+    let accessible = state
+        .user_store
+        .accessible_group_ids(&user.id, user.role)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let scope_groups: Vec<String> = match query.group_id.as_deref() {
+        Some(requested) => {
+            if !accessible.iter().any(|id| id == requested) {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "group_id is not accessible",
+                ));
+            }
+            vec![requested.to_string()]
         }
-        scope_group = requested.to_string();
-    }
+        None => accessible,
+    };
 
     let candidates = state
         .monoize_store
@@ -262,7 +265,7 @@ pub async fn list_marketplace_models(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     let group_models = state
         .monoize_store
-        .available_model_names_for_groups(&candidates, &[scope_group])
+        .available_model_names_for_groups(&candidates, &scope_groups)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 

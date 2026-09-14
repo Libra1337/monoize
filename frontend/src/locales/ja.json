@@ -2186,7 +2186,18 @@
     "invalidDescription": "説明は 256 文字以内で入力してください",
     "invalidSortOrder": "並び順は整数で入力してください",
     "accountClass": "カタログ範囲",
-    "accountClassDescription": "1 つのアカウント種別内で Group を作成、表示、並べ替えます。"
+    "accountClassDescription": "1 つのアカウント種別内で Group を作成、表示、並べ替えます。",
+    "grants": {
+      "title": "許可ユーザー — {{name}}",
+      "description": "許可されたユーザーは、グループが非公開でもそのモデルを表示・利用できます。",
+      "pickUser": "ユーザーを選択…",
+      "add": "許可",
+      "empty": "許可済みユーザーはいません。",
+      "revoke": "許可を取り消す",
+      "granted": "許可しました",
+      "revoked": "許可を取り消しました",
+      "loadFailed": "許可リストの読み込みに失敗しました"
+    }
   },
   "groupPicker": {
     "selectPlaceholder": "グループを選択",

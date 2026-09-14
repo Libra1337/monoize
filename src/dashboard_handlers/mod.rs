@@ -50,8 +50,7 @@ pub use billing_rates::{
     sync_billing_rates_catalog, update_pricing_profile_patterns, upsert_billing_rate,
 };
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
-pub use groups::{
-    DashboardGroupsResponse, create_group, delete_group, grant_user_group, list_dashboard_groups,
+pub use groups::{list_group_grants, DashboardGroupsResponse, create_group, delete_group, grant_user_group, list_dashboard_groups,
     reorder_groups, revoke_user_group, update_group,
 };
 pub use model_registry::{

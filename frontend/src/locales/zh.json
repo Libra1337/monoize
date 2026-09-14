@@ -2190,7 +2190,18 @@
     "invalidDescription": "描述最多 256 个字符",
     "invalidSortOrder": "排序必须是整数",
     "accountClass": "目录范围",
-    "accountClassDescription": "在单个账户类型内创建、查看和排序 Group。"
+    "accountClassDescription": "在单个账户类型内创建、查看和排序 Group。",
+    "grants": {
+      "title": "授权用户 — {{name}}",
+      "description": "被授权的用户即使该分组为私有分组，也能看到并调用该分组内的模型。",
+      "pickUser": "选择用户…",
+      "add": "授权",
+      "empty": "暂无授权用户。",
+      "revoke": "移除授权",
+      "granted": "已授权",
+      "revoked": "已移除授权",
+      "loadFailed": "授权列表加载失败"
+    }
   },
   "groupPicker": {
     "selectPlaceholder": "选择分组",

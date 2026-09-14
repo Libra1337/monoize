@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowUp, Boxes, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Boxes, GripVertical, Pencil, Plus, Trash2, UserRoundPlus, UserX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -38,7 +45,8 @@ import {
   reorderGroupsOptimistic,
   deleteGroupOptimistic,
 } from "@/lib/swr";
-import type { AccountClass, Group } from "@/lib/api";
+import { api } from "@/lib/api";
+import type { AccountClass, Group, User } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 interface GroupFormState {
@@ -99,6 +107,11 @@ export function GroupsPage() {
   const [form, setForm] = useState<GroupFormState>(EMPTY_FORM);
   const [editTarget, setEditTarget] = useState<Group | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Group | null>(null);
+  const [grantsTarget, setGrantsTarget] = useState<Group | null>(null);
+  const [grants, setGrants] = useState<{ user_id: string; username: string }[]>([]);
+  const [grantsLoading, setGrantsLoading] = useState(false);
+  const [grantUserId, setGrantUserId] = useState("");
+  const [users, setUsers] = useState<User[]>([]);
   const [saving, setSaving] = useState(false);
   const [reordering, setReordering] = useState(false);
   const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
@@ -107,6 +120,48 @@ export function GroupsPage() {
   const openCreate = () => {
     setForm({ ...EMPTY_FORM, sort_order: String(visibleGroups.length) });
     setCreateOpen(true);
+  };
+
+  const openGrants = async (group: Group) => {
+    setGrantsTarget(group);
+    setGrantsLoading(true);
+    setGrantUserId("");
+    try {
+      const [grantsResult, usersResult] = await Promise.all([
+        api.listGroupGrants(group.id),
+        api.listUsers(),
+      ]);
+      setGrants(grantsResult.users);
+      setUsers(usersResult);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("groups.grants.loadFailed"));
+    } finally {
+      setGrantsLoading(false);
+    }
+  };
+
+  const grantAccess = async () => {
+    if (!grantsTarget || !grantUserId) return;
+    try {
+      await api.grantGroupAccess(grantUserId, grantsTarget.id);
+      const result = await api.listGroupGrants(grantsTarget.id);
+      setGrants(result.users);
+      setGrantUserId("");
+      toast.success(t("groups.grants.granted"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("groups.grants.loadFailed"));
+    }
+  };
+
+  const revokeAccess = async (userId: string) => {
+    if (!grantsTarget) return;
+    try {
+      await api.revokeGroupAccess(userId, grantsTarget.id);
+      setGrants((current) => current.filter((grant) => grant.user_id !== userId));
+      toast.success(t("groups.grants.revoked"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("groups.grants.loadFailed"));
+    }
   };
 
   const validateForm = (): { name: string; description: string; sort_order: number; confirm_public_exposure: boolean } | null => {
@@ -454,6 +509,15 @@ export function GroupsPage() {
                           variant="ghost"
                           size="icon"
                           className="size-11 touch-manipulation sm:size-9"
+                          aria-label={t("groups.grants.title")}
+                          onClick={() => void openGrants(group)}
+                        >
+                          <UserRoundPlus className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-11 touch-manipulation sm:size-9"
                           aria-label={t("common.delete")}
                           onClick={() => setDeleteTarget(group)}
                         >
@@ -517,6 +581,65 @@ export function GroupsPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Per-user grants for private Group access (groups-registry.spec.md GR-U). */}
+        <Dialog open={grantsTarget !== null} onOpenChange={(open) => !open && setGrantsTarget(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t("groups.grants.title", { name: grantsTarget?.name })}</DialogTitle>
+              <DialogDescription>{t("groups.grants.description")}</DialogDescription>
+            </DialogHeader>
+            <div className="flex items-center gap-2">
+              <Select value={grantUserId} onValueChange={setGrantUserId}>
+                <SelectTrigger className="flex-1">
+                  <SelectValue placeholder={t("groups.grants.pickUser")} />
+                </SelectTrigger>
+                <SelectContent>
+                  {users
+                    .filter((user) => !grants.some((grant) => grant.user_id === user.id))
+                    .map((user) => (
+                      <SelectItem key={user.id} value={user.id}>
+                        {user.username}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <Button onClick={() => void grantAccess()} disabled={!grantUserId}>
+                <Plus className="mr-1 h-4 w-4" />
+                {t("groups.grants.add")}
+              </Button>
+            </div>
+            {grantsLoading ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                {t("common.loading")}
+              </p>
+            ) : grants.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                {t("groups.grants.empty")}
+              </p>
+            ) : (
+              <ul className="flex max-h-64 flex-col gap-1 overflow-auto">
+                {grants.map((grant) => (
+                  <li
+                    key={grant.user_id}
+                    className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
+                  >
+                    <span className="truncate">{grant.username}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8"
+                      aria-label={t("groups.grants.revoke")}
+                      onClick={() => void revokeAccess(grant.user_id)}
+                    >
+                      <UserX className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DialogContent>
+        </Dialog>
       </motion.div>
     </PageWrapper>
   );

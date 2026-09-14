@@ -156,6 +156,26 @@ pub async fn grant_user_group(
     Ok(Json(json!({ "success": true })))
 }
 
+pub async fn list_group_grants(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+) -> AppResult<Json<Value>> {
+    require_admin(&headers, &state).await?;
+    let grants = state
+        .user_store
+        .list_group_grant_users(&group_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    Ok(Json(json!({
+        "group_id": group_id,
+        "users": grants
+            .into_iter()
+            .map(|(user_id, username)| json!({ "user_id": user_id, "username": username }))
+            .collect::<Vec<_>>(),
+    })))
+}
+
 pub async fn revoke_user_group(
     State(state): State<AppState>,
     headers: HeaderMap,

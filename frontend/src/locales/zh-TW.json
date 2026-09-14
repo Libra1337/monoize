@@ -2187,7 +2187,18 @@
     "invalidDescription": "描述最多 256 個字元",
     "invalidSortOrder": "排序必須是整數",
     "accountClass": "目錄範圍",
-    "accountClassDescription": "在單一帳戶類型內建立、檢視及排序 Group。"
+    "accountClassDescription": "在單一帳戶類型內建立、檢視及排序 Group。",
+    "grants": {
+      "title": "授權使用者 — {{name}}",
+      "description": "被授權的使用者即使該分組為私有分組，也能看到並呼叫該分組內的模型。",
+      "pickUser": "選擇使用者…",
+      "add": "授權",
+      "empty": "暫無授權使用者。",
+      "revoke": "移除授權",
+      "granted": "已授權",
+      "revoked": "已移除授權",
+      "loadFailed": "授權清單載入失敗"
+    }
   },
   "groupPicker": {
     "selectPlaceholder": "選擇群組",

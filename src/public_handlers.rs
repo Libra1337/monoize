@@ -525,10 +525,10 @@ fn groups_by_id(
     }
 }
 
-/// Groups whose offers the caller may see: every Group of the class for anonymous visitors
-/// and Admins, and only the signed-in non-admin viewer's own Group for everyone else
-/// (MM-G1). Returning the single Group keeps the account-class query as the authorization
-/// boundary while narrowing discovery to what the user can actually route to.
+/// Groups whose offers the caller may see (MM-G1): an Admin sees every Group of
+/// the class, a signed-in non-admin viewer sees the class's public Groups plus
+/// the Groups granted to them, and an anonymous visitor sees the class's public
+/// Groups only. Private-Group models stay hidden from discovery unless granted.
 async fn visible_groups_for_viewer(
     state: &AppState,
     headers: &HeaderMap,
@@ -538,12 +538,45 @@ async fn visible_groups_for_viewer(
         .as_ref()
         .map(|user| user.account_class)
         .unwrap_or_default();
-    let mut groups = groups_by_id(state, account_class).await?;
     if let Some(user) = viewer.as_ref()
-        && !user.role.can_manage_users()
-        && !user.group_id.is_empty()
+        && user.role.can_manage_users()
     {
-        groups.retain(|id, _| id == &user.group_id);
+        return groups_by_id(state, account_class).await;
+    }
+    // MB-R14-style discipline does not apply here; the viewer id comes from the
+    // session store and is a UUID, so it is bound as a parameter, never interpolated.
+    let (visibility, viewer_param): (String, Vec<sea_orm::Value>) = match viewer.as_ref() {
+        // Signed-in: public Groups of the class plus privately granted ones.
+        Some(user) => (
+            "g.is_public = 1 OR EXISTS (SELECT 1 FROM user_group_grants ug \
+             WHERE ug.user_id = $2 AND ug.group_id = g.id)"
+                .to_string(),
+            vec![user.id.clone().into()],
+        ),
+        // Anonymous: public Groups of the class only.
+        None => ("g.is_public = 1".to_string(), vec![]),
+    };
+    let mut values: Vec<sea_orm::Value> = vec![account_class.as_str().into()];
+    values.extend(viewer_param);
+    let rows = state
+        .db_pool
+        .read()
+        .query_all(state.db_pool.stmt(
+            &format!(
+                "SELECT g.id, g.public_name AS group_public_name FROM monoize_groups g \
+                 WHERE g.account_class = $1 AND ({visibility})",
+            ),
+            values,
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut groups = HashMap::new();
+    for row in rows {
+        let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
+        let name: String = row
+            .try_get("", "group_public_name")
+            .map_err(|e| e.to_string())?;
+        groups.insert(id, name);
     }
     Ok(groups)
 }

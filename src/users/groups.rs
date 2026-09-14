@@ -225,6 +225,30 @@ impl UserStore {
         Ok(())
     }
 
+    /// Users granted access to one Group, oldest grant first.
+    pub async fn list_group_grant_users(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<(String, String)>, String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT u.id, u.username FROM user_group_grants ug                  JOIN users u ON u.id = ug.user_id WHERE ug.group_id = $1                  ORDER BY ug.created_at ASC, u.id ASC",
+                vec![group_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        rows.into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get("", "id").map_err(|e| e.to_string())?,
+                    row.try_get("", "username").map_err(|e| e.to_string())?,
+                ))
+            })
+            .collect()
+    }
+
     pub async fn revoke_group_access(&self, user_id: &str, group_id: &str) -> Result<(), String> {
         self.db
             .write()

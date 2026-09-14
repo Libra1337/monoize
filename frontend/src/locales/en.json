@@ -2190,7 +2190,18 @@
     "invalidDescription": "Description must be at most 256 characters",
     "invalidSortOrder": "Sort order must be an integer",
     "accountClass": "Catalog scope",
-    "accountClassDescription": "Create, view, and reorder Groups inside one account class."
+    "accountClassDescription": "Create, view, and reorder Groups inside one account class.",
+    "grants": {
+      "title": "Granted users — {{name}}",
+      "description": "Granted users can see and route to this group's models even when the group is private.",
+      "pickUser": "Pick a user…",
+      "add": "Grant",
+      "empty": "No users granted yet.",
+      "revoke": "Revoke access",
+      "granted": "Access granted",
+      "revoked": "Access revoked",
+      "loadFailed": "Failed to load grants"
+    }
   },
   "groupPicker": {
     "selectPlaceholder": "Select a group",
