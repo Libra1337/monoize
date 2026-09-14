@@ -6,6 +6,9 @@ mod auth_validation;
 #[path = "api/balance_compatibility.rs"]
 mod balance_compatibility;
 
+#[path = "api/codex_dual_mode.rs"]
+mod codex_dual_mode;
+
 #[path = "api/routing_models.rs"]
 mod routing_models;
 
