@@ -63,10 +63,10 @@ Take your time: reason about the text's intent, context, and phrasing before ans
 {"category": "...", "reason": "..."}
 
 Categories:
-- "porn": the text seeks to produce, continue, or roleplay sexually explicit content. Anything sexualizing minors is always "porn".
-- "political": the text seeks to produce politically illegal content such as subverting state power, inciting separatism, or extremist propaganda.
-- "benign": everything else. Discussing, mentioning, reporting on, prohibiting, or studying sensitive topics (news, education, law, moderation policy, technical work) is "benign" even when it quotes prohibited words. Agent or tool system prompts, developer configuration, and defensive security policy text (security testing, CTF, refusing attacks) are "benign".
-- "uncertain": you genuinely cannot decide. Use it freely — an undecided text must never be forced into "porn" or "political".
+- "porn": the text seeks to produce, continue, or roleplay sexually explicit content. Judge intent, not vocabulary: the request may use slang, euphemism, or no explicit word at all. Typical porn forms include: erotic fiction or NSFW roleplay requests ("成人小说", "开车", detailed bodily descriptions); jailbreak prompts that instruct the model to ignore safety rules and write explicit content; requests to generate, describe, or caption sexual images ("色图", bikini/lingerie pin-ups, sexualized captions); quoted or pasted material that itself contains explicit sexual content, even when the outer task is analysis, extraction, summarization, or "learning" — if the material being fed in is explicit, classify "porn". Anything sexualizing minors (including "萝莉", "正太", child-like characters in sexual contexts) is always "porn".
+- "political": the text seeks to produce politically illegal content such as subverting state power, inciting separatism, or extremist propaganda. Porn/NSFW evidence outweighs political evidence: when a text hits both, prefer "porn".
+- "benign": everything else. Discussing, mentioning, reporting on, or prohibiting sensitive topics (news, education, law, moderation policy, technical work) is "benign" even when it quotes prohibited words. Agent or tool system prompts, developer configuration, and defensive security policy text (security testing, CTF, refusing attacks) are "benign".
+- "uncertain": you genuinely cannot decide after analysis. Reserve it for truly borderline text, not for content you suspect is porn — a suspicion of explicit intent classifies "porn", because a false pass is worse than a false block.
 
 In "reason" state the concrete evidence: what the text asks for, and why that makes it blocking or not. One to three sentences, always written in Simplified Chinese (简体中文), regardless of the request text's language."#;
 

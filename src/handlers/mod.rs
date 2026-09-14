@@ -104,13 +104,19 @@ async fn ensure_content_allowed(
         .content_firewall
         .as_ref()
         .map(|firewall| {
-            scanned
-                .iter()
-                .filter_map(|text| firewall.find_blocked_term(text))
-                .map(str::to_string)
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect()
+            // CF-5a: collect every distinct term across all scanned strings,
+            // not just the first hit — the judge and the audit trail need the
+            // full signal, and one keyword per request hides evidence.
+            let mut hits: Vec<String> = Vec::new();
+            for text in scanned {
+                for term in firewall.find_all_blocked_terms(text) {
+                    let term = term.to_string();
+                    if !hits.contains(&term) {
+                        hits.push(term);
+                    }
+                }
+            }
+            hits
         })
         .unwrap_or_default();
     // CF-33: no keyword hit — forward directly with no judge call.
@@ -154,11 +160,13 @@ async fn ensure_content_allowed(
     {
         // CF-30: benign and uncertain verdicts are allowed; record an event
         // (always on a keyword hit per CF-33) so borderline requests stay
-        // auditable together with the judge's stated reason.
-        let term = keyword_hits.first().cloned().unwrap_or_default();
+        // auditable together with the judge's stated reason. The event term
+        // carries every hit joined for full audit context.
+        let term = keyword_hits.join("、");
+        let first_term = keyword_hits.first().cloned().unwrap_or_default();
         let text = scanned
             .iter()
-            .find(|text| !term.is_empty() && text.to_lowercase().contains(term.as_str()))
+            .find(|text| !first_term.is_empty() && text.to_lowercase().contains(first_term.as_str()))
             .copied()
             .unwrap_or_default();
         tracing::info!(

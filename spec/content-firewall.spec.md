@@ -34,29 +34,13 @@ API. Canonicalization happens at compile time only (CF-4) and never rewrites
 the stored value. Keyword matches are hints for the judge and the mark
 trigger (CF-30); they MUST NOT cause a rejection by themselves.
 
-CF-3. The built-in default keyword list is exactly (one term per line, 18
-terms):
-
-```
-porn
-child erotica
-child nude
-csam
-csem
-sexualized minors
-underage nude
-色情
-黄片
-成人片
-儿童裸照
-儿童裸体
-未成年裸照
-未成年裸体
-嫖宿幼女
-强奸幼女
-猥亵儿童
-裸聊
-```
+CF-3. The built-in default keyword list is ordered by weight: NSFW/CSAM
+terms first (the enforcement priority), political terms after. The exact
+terms live in `DEFAULT_BLOCKED_WORDS` (`src/content_firewall.rs`); the list
+contains NSFW slang and variants (`色图`, `瑟瑟`, `开车`, `成人小说`, `本子`,
+`萝莉`, `nsfw`, `r18`, `hentai`, …), zero-tolerance child terms, and
+political terms (`颠覆国家政权`, `煽动分裂`, `恐怖主义`, …). Administrators
+extend or narrow the list through the settings page at any time.
 
 CF-4. Term canonicalization: split the raw value on `\n`, trim leading and
 trailing Unicode whitespace from each line, drop empty lines, lowercase each
@@ -68,6 +52,14 @@ terms. Matching is leftmost substring matching against the Unicode-lowercased
 scanned string. Word boundaries are NOT required: a term matches inside any
 surrounding text. When the canonicalized term list is empty, no automaton
 exists and no scanning occurs.
+
+CF-5a. Keyword extraction MUST collect every distinct canonicalized term that
+matches any scanned string of the request, not only the first hit. The hit
+list is ordered by compiled-list position (so the default NSFW-first weights
+put the strongest signal first), is passed in full to the judge as the hint
+line, appears in full in the client-facing rejection message (CF-15), and is
+joined into the event `term` field (CF-21) so the audit trail records the
+complete signal.
 
 ## 2. Scanned text set
 
@@ -113,7 +105,7 @@ error envelope:
 {"error": {"message": "触发网站风控违禁词，无法调用模型：内容命中网关内容防火墙规则[关键词：a、b]，已被拦截。请修改内容后重试。", "type": "content_policy_violation", "param": null, "code": "content_blocked"}}
 ```
 
-The message lists the canonicalized keyword hits (CF-5) joined with `、`
+The message lists every canonicalized keyword hit (CF-5a) joined with `、`
 inside the brackets; by CF-33 every rejection has at least one. On
 `/v1/messages` the same status, code, type, and message are wrapped in the
 Anthropic error envelope by the existing handler wrapper. On the responses
@@ -167,8 +159,8 @@ CF-21. `endpoint` is one of: `chat_completions`, `responses`, `messages`,
 WebSocket responses path records `responses`. `content` is the scanned string
 that triggered the event, truncated to at most 8000 Unicode scalar values,
 unchanged otherwise. For a blocked event `term` is the judge category
-(CF-28); for a marked event `term` is the first canonicalized keyword that
-matched (CF-30). The events list API returns `content` in full; the dashboard
+(CF-28); for a marked event `term` is every canonicalized keyword hit joined
+with `、` (CF-30, CF-5a). The events list API returns `content` in full; the dashboard
 shows a truncated summary in the table and the full text in a click-open
 dialog.
 
