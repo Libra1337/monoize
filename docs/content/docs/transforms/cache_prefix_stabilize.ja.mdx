@@ -1,6 +1,6 @@
 ---
 title: "自動キャッシュ: プロンプト接頭辞を安定化"
-description: リクエストごとに変わる agent のメタデータを安定した system テキストの後ろへ移動し、暗黙の接頭辞キャッシュが一致するようにします。
+description: リクエストごとに変わる agent のメタデータを会話の後ろの末尾 user ノードへ移動し、暗黙の接頭辞キャッシュが履歴と一致するようにします。
 ---
 
 ## 動作
@@ -9,9 +9,11 @@ description: リクエストごとに変わる agent のメタデータを安定
 
 コーディング agent は、リクエストごとに変わる内容を system prompt の先頭付近に置きます。Claude Code は `<env>` ブロックと `x-anthropic-billing-header` の行を書き込みます。Codex CLI は `<environment_context>` を書き込みます。Cursor は `<user_info>` と `<timestamp>` を書き込みます。
 
-この変換はその内容を安定した指示テキストの後ろへ移動します。既定の動作は移動なので、モデルが読む token は同じで、順序だけが変わります。token は削除しません。
+この変換は先頭の system 連続区間からその内容を取り出します。既定の動作は、既存のすべてのメッセージの後ろに新しい user ノードとして移動することです。モデルが読む token は同じで、順序だけが変わります。token は削除しません。
 
-この変換は先頭に連続する system ノードと developer ノードだけを読み書きします。user と assistant の内容には一切触れません。
+末尾の system ノードでは不十分です。Gemini はすべての system ノードを `systemInstruction` に連結します。Responses は最初の system ノードを `instructions` へ持ち上げます。どちらも変化するブロックを会話の前に戻します。
+
+この変換は先頭に連続する system ノードと developer ノードからのみ可変行を読みます。既存の user と assistant の内容は編集しません。移動は末尾の user ノードを 1 つ追加します。
 
 ## 実測結果
 
@@ -25,6 +27,8 @@ description: リクエストごとに変わる agent のメタデータを安定
 | system prompt の末尾へ移動 | 0% | 92.8% | 90.9% | 89.0% | 87.2% |
 
 1 ターン目は常に 0% です。キャッシュを読むのではなく書き込むためです。
+
+この表は 2,900 token の system prompt を使っています。コーディング agent のセッションで system prompt が約 2,000 token、会話が 70,000 token まで増える場合、変化するブロックが system prompt の末尾に残ると、キャッシュは system prompt の直後で切れます。そのため relocate はそのブロックを会話の後ろへ user メッセージとして追加します。
 
 ## 参照情報
 
@@ -46,7 +50,7 @@ Anthropic（`messages`）上流ではこの変換は何もしません。この�
 
 | オプション | 型 | 必須 | 既定値 | 説明 |
 | --- | --- | --- | --- | --- |
-| `action` | string | いいえ | `"relocate"` | `relocate` は一致した行を system prompt の末尾へ移動します。`strip` は削除します。 |
+| `action` | string | いいえ | `"relocate"` | `relocate` は一致した行を既存のすべてのメッセージの後ろの末尾 user ノードへ移動します。`strip` は削除します。 |
 | `blocks` | array | いいえ | 組み込みの集合 | 照合する行区切りのブロック標識です。各項目に `open` と `close` が必要です。空の配列はブロック照合を無効にします。 |
 | `line_prefixes` | array | いいえ | 組み込みの集合 | 照合する行の接頭辞です。空の配列は行照合を無効にします。 |
 

@@ -2,7 +2,7 @@
 
 ## 0. Status
 
-- Version: `1.4.0`
+- Version: `1.5.0`
 - Scope: Six request-phase `cache_*` domain transforms that automatically optimize provider prompt caching by injecting Anthropic `cache_control` markers, OpenAI prompt-cache request fields and content breakpoints, and user identity fields, and by relocating per-request agent metadata out of the cacheable prompt prefix.
 - Dependency: URP Transform System (see `urp-transform-system.spec.md`, TF-1 through TF-7b; historical IDs map to the canonical `cache_*` IDs through TF-17).
 
@@ -256,9 +256,24 @@ request produced these cache-read rates:
 
 Coding agents place such content near the top of the system prompt: Claude Code emits an
 `<env>` block and an `x-anthropic-billing-header` line, Codex CLI emits
-`<environment_context>`, and Cursor emits `<user_info>` and `<timestamp>`. This transform
-moves that content behind the stable text. Row 4 of the table is the postcondition it
-targets.
+`<environment_context>`, and Cursor emits `<user_info>` and `<timestamp>`.
+
+Row 4 of the table is not a sufficient postcondition. An implicit prefix cache matches from
+the first token of the serialized upstream request. A volatile block at the end of the
+system prompt still sits in front of every User, Assistant, and ToolResult node. Measured
+on `DeepSeek/DeepSeek-V4-Pro-0813` over `chat_completion`, a sibling session of about 40,000
+input tokens on the same channel read 99% cache, while a session whose input grew past
+70,000 tokens pinned `cache_read_tokens` at 2,048.
+
+A trailing `System` node is also not sufficient. The Gemini encoder concatenates every
+`System` and `Developer` node into `systemInstruction` at the top of the request. The
+Responses encoder lifts the first `System` or `Developer` node into `instructions` at the
+top of the request. Either path puts the volatile block back in front of the conversation.
+
+This transform therefore moves the volatile content out of the leading system run and onto
+a trailing `User` node after every existing input node. Chat Completions, Responses, and
+Gemini all leave a trailing `User` node at the end of the serialized request, so the
+conversation remains a cacheable prefix.
 
 ### 7A.2 Registration
 
@@ -331,26 +346,32 @@ no-op.
 ACPS-14. For every `Node::Text` in the stable prefix, its `content` MUST become the
 remaining lines joined by a single `\n`, with leading and trailing `\n` characters removed.
 
-ACPS-15. When `action = "relocate"`, let `target` be the last `Node::Text` in the stable
-prefix. After ACPS-14, `target.content` MUST equal `volatile` joined by a single `\n` when
-`target.content` is empty, and otherwise MUST equal `target.content`, one `\n`, then
-`volatile` joined by a single `\n`.
+ACPS-15. When `action = "relocate"`, after ACPS-14 the transform MUST append exactly one new
+`Node::Text` to `req.input` with `role = User` and `content` equal to `volatile` joined by a
+single `\n`. The new node MUST be the last node of `req.input`. The transform MUST NOT
+reinsert `volatile` into any node that was already in `req.input`. The transform MUST NOT
+use `role = System` or `role = Developer` for this trailing node: those roles are hoisted
+in front of the conversation by the Gemini encoder and, for the first such node, by the
+Responses encoder.
 
-ACPS-16. When `action = "relocate"`, the multiset of non-empty lines across the stable
-prefix MUST be unchanged. The transform MUST NOT delete, add, or edit a line.
+ACPS-16. When `action = "relocate"`, the multiset of non-empty lines across `req.input` MUST
+be unchanged. The transform MUST NOT delete, add, or edit a line. Moving a line from a
+stable-prefix node into the trailing `User` node required by ACPS-15 is a permitted
+reordering.
 
 ACPS-17. When `action = "strip"`, no volatile line is reinserted.
 
 ACPS-18. After ACPS-15 or ACPS-17, every node in the stable prefix that is a `Node::Text`
-with empty `content` MUST be removed from `req.input`. A node outside the stable prefix MUST
-NOT be removed.
+with empty `content` MUST be removed from `req.input`. A node that was already outside the
+stable prefix MUST NOT be removed.
 
 ACPS-19. The transform MUST NOT modify `req.model`, `req.tools`, `req.response_format`,
-`req.user`, any `extra_body`, or any node content outside the stable prefix.
+`req.user`, any `extra_body`, or the content of any node that was already outside the stable
+prefix. ACPS-15 is the only permitted insertion: one new trailing `User` node.
 
-ACPS-20. The transform is idempotent. Line-oriented matching and single-`\n` joining are
-what make this hold: a second application extracts the already-relocated trailing lines and
-reappends them in the same order at the same position.
+ACPS-20. The transform is idempotent. After a successful relocate, the trailing `User` node
+sits outside the stable prefix defined by ACPS-7, so a second application finds no volatile
+line in the prefix and is a no-op.
 
 ACPS-21. The transform does not guarantee a cache hit. An upstream cache hit additionally
 requires upstream eligibility, a minimum prompt size, and a stable prefix in the caller's
@@ -374,7 +395,7 @@ ORD-7. `cache_openai_tool_use` SHOULD run before `cache_openai_prompt` when `cac
 
 ORD-8. `cache_prefix_stabilize` SHOULD run before `cache_openai_prompt`. `cache_openai_prompt` builds its key material from the stable prefix nodes (ACOP-10), so running it first would hash the volatile content that `cache_prefix_stabilize` is about to move and would produce a different `prompt_cache_key` on every request.
 
-ORD-9. `cache_prefix_stabilize` with the built-in line set makes `prompt_strip_anthropic_billing_header` redundant for an OpenAI upstream request, because the billing line is relocated behind the stable prefix instead of deleted. Enabling both is permitted: whichever runs first removes the line from the prefix, and the other then finds nothing to act on.
+ORD-9. `cache_prefix_stabilize` with the built-in line set makes `prompt_strip_anthropic_billing_header` redundant for an OpenAI upstream request, because the billing line is removed from the stable prefix (and, under `relocate`, appended as a trailing `User` node) instead of deleted. Enabling both is permitted: whichever runs first removes the line from the prefix, and the other then finds nothing to act on.
 
 ## 9. Invariants
 

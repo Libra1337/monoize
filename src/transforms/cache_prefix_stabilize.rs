@@ -11,7 +11,10 @@ use std::any::Any;
 /// Line-delimited blocks that coding agents emit into the system prompt to describe the
 /// current machine, working directory, clock, or session. Every one of them changes between
 /// requests, and an upstream that caches by token prefix loses everything after the first
-/// changed token. Relocating them behind the stable instruction text costs no tokens.
+/// changed token. Relocating them to a trailing user node, after the conversation, keeps
+/// the conversation itself a cacheable prefix. A trailing system node is not enough:
+/// Gemini concatenates every system node into `systemInstruction`, and Responses lifts the
+/// first system node into `instructions`.
 const DEFAULT_BLOCKS: &[(&str, &str)] = &[
     ("<env>", "</env>"),
     ("<environment_context>", "</environment_context>"),
@@ -80,11 +83,11 @@ impl Transform for CachePrefixStabilizeTransform {
         &[
             (
                 "en",
-                "Moves per-request agent metadata blocks, such as Claude Code <env> or Codex <environment_context>, behind the stable system text so an implicit prefix cache can match. Relocation keeps every token.",
+                "Moves per-request agent metadata blocks, such as Claude Code <env> or Codex <environment_context>, to a trailing user node after the conversation so an implicit prefix cache can match the history. Relocation keeps every token.",
             ),
             (
                 "zh",
-                "把每次请求都会变的 agent 元数据块（如 Claude Code 的 <env>、Codex 的 <environment_context>）移到稳定的 system 文本之后，使隐式前缀缓存能够命中。搬移不删除任何 token。",
+                "把每次请求都会变的 agent 元数据块（如 Claude Code 的 <env>、Codex 的 <environment_context>）移到整次请求末尾的 user 节点，使隐式前缀缓存能命中对话历史。搬移不删除任何 token。",
             ),
         ]
     }
@@ -195,7 +198,11 @@ impl Transform for CachePrefixStabilizeTransform {
 
         // The cacheable prefix is the leading run of System/Developer nodes, the same
         // definition `cache_openai_prompt` uses to build its key material. A volatile segment
-        // after that run is already behind every stable token and costs nothing.
+        // left at the end of that run still sits in front of the conversation. A trailing
+        // System node is also not enough: Gemini concatenates every System/Developer node
+        // into `systemInstruction`, and Responses lifts the first such node into
+        // `instructions`. Relocate therefore appends a User node after every existing
+        // input node, which every OpenAI-family encoder leaves at the end of the request.
         let prefix_len = req
             .input
             .iter()
@@ -225,36 +232,17 @@ impl Transform for CachePrefixStabilizeTransform {
             return Ok(());
         }
 
-        if cfg.action == Action::Relocate {
-            let target = req.input[..prefix_len]
-                .iter()
-                .rposition(|node| matches!(node, Node::Text { .. }));
-            match target {
-                Some(idx) => {
-                    let Node::Text { content, .. } = &mut req.input[idx] else {
-                        unreachable!("rposition selected a Text node");
-                    };
-                    let relocated = volatile.join("\n");
-                    *content = if content.is_empty() {
-                        relocated
-                    } else {
-                        format!("{content}\n{relocated}")
-                    };
-                }
-                // Every prefix node is non-text, so the extraction above found nothing and
-                // this branch is unreachable. Reinsert as a new node rather than lose content.
-                None => req
-                    .input
-                    .insert(prefix_len, Node::text(OrdinaryRole::System, volatile.join("\n"))),
-            }
-        }
-
         let mut index = 0usize;
         req.input.retain(|node| {
             let keep = !matches!(node, Node::Text { content, .. } if index < prefix_len && content.is_empty());
             index += 1;
             keep
         });
+
+        if cfg.action == Action::Relocate {
+            req.input
+                .push(Node::text(OrdinaryRole::User, volatile.join("\n")));
+        }
 
         Ok(())
     }
@@ -340,6 +328,9 @@ mod tests {
     use tempfile::TempDir;
 
     async fn context(upstream: Option<ProviderType>) -> TransformRuntimeContext {
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
         let temp_dir = TempDir::new().expect("temp dir");
         let cache = ImageTransformCache::new(
             temp_dir.path().join("cache"),
@@ -402,30 +393,53 @@ mod tests {
 ## Rules\nPrefer the existing convention.";
 
     #[tokio::test]
-    async fn relocates_the_agent_environment_block_behind_the_stable_text() {
+    async fn relocates_the_agent_environment_block_behind_the_conversation() {
         let mut req = request(vec![
             Node::text(OrdinaryRole::System, AGENT_SYSTEM),
             Node::text(OrdinaryRole::User, "hello"),
+            Node::assistant_text("hi"),
         ]);
         run(&mut req, json!({}), Some(ProviderType::ChatCompletion)).await;
 
+        assert_eq!(req.input.len(), 4);
         assert_eq!(
             text_of(&req.input[0]),
-            "You are a coding agent.\n## Rules\nPrefer the existing convention.\n\
-<env>\nWorking directory: /workspace\nToday's date: 2026-09-10\n</env>"
+            "You are a coding agent.\n## Rules\nPrefer the existing convention."
         );
-        // No token may be lost: relocation is a reordering, not a deletion.
-        assert_eq!(text_of(&req.input[0]).len(), AGENT_SYSTEM.len());
         assert_eq!(text_of(&req.input[1]), "hello");
+        assert_eq!(text_of(&req.input[2]), "hi");
+        assert_eq!(
+            text_of(&req.input[3]),
+            "<env>\nWorking directory: /workspace\nToday's date: 2026-09-10\n</env>"
+        );
+        assert_eq!(
+            req.input[3].role(),
+            Some(OrdinaryRole::User),
+            "the relocated block must be a trailing user node so Gemini and Responses cannot hoist it"
+        );
     }
 
     #[tokio::test]
     async fn relocation_is_idempotent() {
-        let mut once = request(vec![Node::text(OrdinaryRole::System, AGENT_SYSTEM)]);
+        let mut once = request(vec![
+            Node::text(OrdinaryRole::System, AGENT_SYSTEM),
+            Node::text(OrdinaryRole::User, "hello"),
+        ]);
         run(&mut once, json!({}), Some(ProviderType::ChatCompletion)).await;
-        let after_first = text_of(&once.input[0]).to_string();
+        let after_first: Vec<(OrdinaryRole, String)> = once
+            .input
+            .iter()
+            .map(|node| (node.role().expect("role"), text_of(node).to_string()))
+            .collect();
+        assert_eq!(after_first.len(), 3);
+        assert_eq!(after_first[2].0, OrdinaryRole::User);
         run(&mut once, json!({}), Some(ProviderType::ChatCompletion)).await;
-        assert_eq!(text_of(&once.input[0]), after_first);
+        let after_second: Vec<(OrdinaryRole, String)> = once
+            .input
+            .iter()
+            .map(|node| (node.role().expect("role"), text_of(node).to_string()))
+            .collect();
+        assert_eq!(after_second, after_first);
     }
 
     #[tokio::test]
@@ -448,7 +462,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn collects_across_prefix_nodes_and_appends_to_the_last_one_in_order() {
+    async fn collects_across_prefix_nodes_and_appends_a_trailing_user_node_in_order() {
         let mut req = request(vec![
             Node::text(OrdinaryRole::System, "First.\nx-anthropic-billing-header: cch=a1;"),
             Node::text(OrdinaryRole::Developer, "<timestamp>\nnow\n</timestamp>\nSecond."),
@@ -456,11 +470,15 @@ mod tests {
         ]);
         run(&mut req, json!({}), Some(ProviderType::ChatCompletion)).await;
 
+        assert_eq!(req.input.len(), 4);
         assert_eq!(text_of(&req.input[0]), "First.");
+        assert_eq!(text_of(&req.input[1]), "Second.");
+        assert_eq!(text_of(&req.input[2]), "go");
         assert_eq!(
-            text_of(&req.input[1]),
-            "Second.\nx-anthropic-billing-header: cch=a1;\n<timestamp>\nnow\n</timestamp>"
+            text_of(&req.input[3]),
+            "x-anthropic-billing-header: cch=a1;\n<timestamp>\nnow\n</timestamp>"
         );
+        assert_eq!(req.input[3].role(), Some(OrdinaryRole::User));
     }
 
     #[tokio::test]
@@ -528,10 +546,12 @@ mod tests {
             Some(ProviderType::ChatCompletion),
         )
         .await;
+        assert_eq!(text_of(&req.input[0]), "Stable rules.\nMore rules.");
         assert_eq!(
-            text_of(&req.input[0]),
-            "Stable rules.\nMore rules.\n<opencode-context>\ncwd=/w\n</opencode-context>"
+            text_of(&req.input[1]),
+            "<opencode-context>\ncwd=/w\n</opencode-context>"
         );
+        assert_eq!(req.input[1].role(), Some(OrdinaryRole::User));
         // The built-in set must not be consulted once the caller supplies one.
         let mut billing = request(vec![Node::text(
             OrdinaryRole::System,
@@ -564,5 +584,87 @@ mod tests {
                 .is_err()
         );
         assert!(transform.parse_config(json!({"action": "nope"})).is_err());
+    }
+
+    fn encoded_chat_prefix(req: &UrpRequest) -> String {
+        crate::urp::encode::openai_chat::encode_request(req, "probe")["messages"]
+            .to_string()
+    }
+
+    fn common_prefix_len(left: &str, right: &str) -> usize {
+        left.bytes()
+            .zip(right.bytes())
+            .take_while(|(a, b)| a == b)
+            .count()
+    }
+
+    fn growing_agent_turns(env_clocks: &[&str]) -> Vec<UrpRequest> {
+        let mut history = vec![
+            Node::text(OrdinaryRole::User, "load workspace"),
+            Node::assistant_text("loaded"),
+        ];
+        env_clocks
+            .iter()
+            .enumerate()
+            .map(|(index, clock)| {
+                let system = format!(
+                    "You are a coding agent.\n<env>\nWorking directory: /workspace\nClock: {clock}\n</env>\n## Rules\nPrefer the existing convention."
+                );
+                let mut input = vec![Node::text(OrdinaryRole::System, system)];
+                input.extend(history.clone());
+                input.push(Node::text(
+                    OrdinaryRole::User,
+                    format!("continue turn {}", index + 1),
+                ));
+                history.push(Node::text(
+                    OrdinaryRole::User,
+                    format!("continue turn {}", index + 1),
+                ));
+                history.push(Node::assistant_text(format!("ack {}", index + 1)));
+                request(input)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn growing_conversation_extends_the_encoded_prefix_instead_of_pinning_it() {
+        let clocks = ["t1", "t2", "t3", "t4"];
+        let mut rewritten = growing_agent_turns(&clocks);
+        for req in &mut rewritten {
+            run(req, json!({}), Some(ProviderType::ChatCompletion)).await;
+            assert_eq!(
+                req.input.last().and_then(Node::role),
+                Some(OrdinaryRole::User)
+            );
+        }
+        let rewritten_bodies: Vec<String> =
+            rewritten.iter().map(encoded_chat_prefix).collect();
+        let original_bodies: Vec<String> = growing_agent_turns(&clocks)
+            .iter()
+            .map(encoded_chat_prefix)
+            .collect();
+
+        let mut original_shared = common_prefix_len(&original_bodies[0], &original_bodies[1]);
+        let mut rewritten_shared = common_prefix_len(&rewritten_bodies[0], &rewritten_bodies[1]);
+        for index in 2..rewritten_bodies.len() {
+            let next_original =
+                common_prefix_len(&original_bodies[index - 1], &original_bodies[index]);
+            let next_rewritten =
+                common_prefix_len(&rewritten_bodies[index - 1], &rewritten_bodies[index]);
+            assert_eq!(
+                next_original, original_shared,
+                "the old system-tail layout must pin the shared prefix"
+            );
+            assert!(
+                next_rewritten > rewritten_shared,
+                "the trailing-user layout must grow the shared prefix as history grows: {rewritten_shared} then {next_rewritten}"
+            );
+            original_shared = next_original;
+            rewritten_shared = next_rewritten;
+        }
+        assert!(
+            rewritten_shared > original_shared,
+            "relocated history must share more prefix bytes than the pinned system tail"
+        );
     }
 }

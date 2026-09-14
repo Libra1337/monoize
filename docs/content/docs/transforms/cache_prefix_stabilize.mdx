@@ -1,6 +1,6 @@
 ---
 title: "Auto-cache: stabilize the prompt prefix"
-description: Move per-request agent metadata behind the stable system text so an implicit prefix cache can match.
+description: Move per-request agent metadata to a trailing user node after the conversation so an implicit prefix cache can match the history.
 ---
 
 ## What it does
@@ -9,9 +9,11 @@ An upstream with implicit prefix caching matches on the exact token prefix. One 
 
 Coding agents place content that changes on every request near the top of the system prompt. Claude Code emits an `<env>` block and an `x-anthropic-billing-header` line. Codex CLI emits `<environment_context>`. Cursor emits `<user_info>` and `<timestamp>`.
 
-This transform moves that content behind the stable instruction text. The default action relocates it, so the model reads the same tokens in a different order. No token is deleted.
+This transform removes that content from the leading system run. The default action relocates it to a new user node at the end of the request, after every existing message. The model reads the same tokens in a different order. No token is deleted.
 
-The transform reads and writes only the leading run of system and developer nodes. It never touches user or assistant content.
+A trailing system node is not enough. Gemini concatenates every system node into `systemInstruction`. Responses lifts the first system node into `instructions`. Either path puts the changing block back in front of the conversation.
+
+The transform reads volatile lines only from the leading run of system and developer nodes. It never edits existing user or assistant content. Relocation appends one trailing user node.
 
 ## Measured effect
 
@@ -25,6 +27,8 @@ One 2,900-token system prompt, model `ZhipuAi/GLM-5.3`, a five-turn growing conv
 | Moved to the end of the system prompt | 0% | 92.8% | 90.9% | 89.0% | 87.2% |
 
 Turn 1 always reads 0% because it writes the cache instead of reading it.
+
+That table used a 2,900-token system prompt. A coding-agent session with a 2,000-token system prompt and a 70,000-token conversation still misses the cache after the system prompt if the changing block stays at the end of the system prompt. Relocate therefore appends the block after the conversation as a user message.
 
 ## Reference
 
@@ -46,7 +50,7 @@ The transform is a no-op for an Anthropic (`messages`) upstream. That protocol c
 
 | Option | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `action` | string | No | `"relocate"` | `relocate` moves the matched lines to the end of the system prompt. `strip` deletes them. |
+| `action` | string | No | `"relocate"` | `relocate` moves the matched lines to a trailing user node after every existing message. `strip` deletes them. |
 | `blocks` | array | No | Built-in set | Line-delimited block markers to match. Each entry needs `open` and `close`. An empty array disables block matching. |
 | `line_prefixes` | array | No | Built-in set | Line prefixes to match. An empty array disables line matching. |
 

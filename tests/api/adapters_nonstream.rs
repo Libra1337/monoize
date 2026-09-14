@@ -693,12 +693,13 @@ const AGENT_SYSTEM_PROMPT: &str = "You are a coding agent.\n\
 <env>\nWorking directory: /workspace\nToday's date: 2026-09-10\n</env>\n\
 ## Rules\nPrefer the existing convention.";
 
-/// ACPS-15: the volatile block must reach the upstream behind the stable text, so the stable
-/// text becomes a prefix the upstream can cache. Asserting on the body the upstream received
-/// is what proves the rewrite survives decode, transform, and encode rather than only holding
-/// inside the transform's own unit test.
+/// ACPS-15: the volatile block must reach the upstream as a trailing user message after every
+/// existing input node, so the conversation remains a cacheable prefix. A trailing system
+/// message is not enough: Gemini concatenates every system node into `systemInstruction`, and
+/// Responses lifts the first system node into `instructions`. Asserting on the body the
+/// upstream received is what proves the rewrite survives decode, transform, and encode.
 #[tokio::test]
-async fn prefix_stabilize_moves_the_agent_env_block_behind_the_stable_system_text() {
+async fn prefix_stabilize_moves_the_agent_env_block_behind_the_conversation() {
     let ctx = setup().await;
     install_prefix_stabilize_rule(&ctx, json!({})).await;
 
@@ -717,18 +718,34 @@ async fn prefix_stabilize_moves_the_agent_env_block_behind_the_stable_system_tex
     assert_eq!(status, StatusCode::OK, "{response}");
 
     let upstream = last_captured_body(&ctx, "chat");
+    let messages = upstream["messages"].as_array().expect("messages");
     assert_eq!(
-        upstream["messages"][0]["content"],
-        json!(
-            "You are a coding agent.\n## Rules\nPrefer the existing convention.\n\
-<env>\nWorking directory: /workspace\nToday's date: 2026-09-10\n</env>"
-        ),
-        "the volatile block must arrive after the stable text: {upstream}"
+        messages[0]["content"],
+        json!("You are a coding agent.\n## Rules\nPrefer the existing convention."),
+        "the leading system node must keep only the stable text: {upstream}"
     );
+    let last = messages.last().expect("last message");
     assert_eq!(
-        upstream["messages"][1]["content"],
-        json!("which rule applies?"),
-        "{upstream}"
+        last["role"],
+        json!("user"),
+        "the relocated block must arrive as a user message: {upstream}"
+    );
+    let last_text = match &last["content"] {
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => panic!("unexpected last content {other}"),
+    };
+    assert!(
+        last_text.contains("<env>\nWorking directory: /workspace\nToday's date: 2026-09-10\n</env>"),
+        "the volatile block must arrive after the conversation: {upstream}"
+    );
+    assert!(
+        last_text.contains("which rule applies?"),
+        "the original user text must still be present: {upstream}"
     );
 }
 
@@ -754,11 +771,23 @@ async fn prefix_stabilize_preserves_every_line_of_the_system_prompt() {
     assert_eq!(status, StatusCode::OK, "{response}");
 
     let upstream = last_captured_body(&ctx, "chat");
-    let delivered = upstream["messages"][0]["content"]
-        .as_str()
-        .expect("system content")
-        .to_string();
+    let delivered: String = upstream["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .map(|message| match &message["content"] {
+            Value::String(text) => text.clone(),
+            Value::Array(parts) => parts
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            other => panic!("unexpected content {other}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut sent_lines: Vec<&str> = AGENT_SYSTEM_PROMPT.lines().collect();
+    sent_lines.push("go");
     let mut delivered_lines: Vec<&str> = delivered.lines().collect();
     sent_lines.sort_unstable();
     delivered_lines.sort_unstable();
