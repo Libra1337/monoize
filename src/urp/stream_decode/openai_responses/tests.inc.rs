@@ -242,3 +242,29 @@ mod joined_sse_data_tests {
         assert!(parse_responses_sse_data(&oversized).is_err());
     }
 }
+
+#[cfg(test)]
+mod delta_extra_body_tests {
+    use super::*;
+
+    #[test]
+    fn output_text_delta_extra_body_excludes_the_wire_event_type() {
+        let extra = delta_extra_body_with_phase(
+            json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "item_id": "msg_mock",
+                "delta": "answer",
+                "vendor_hint": "keep"
+            }),
+            &HashMap::new(),
+        );
+
+        assert!(
+            !extra.contains_key("type"),
+            "wire event type must not enter item extra_body: {extra:?}"
+        );
+        assert_eq!(extra.get("vendor_hint"), Some(&json!("keep")));
+    }
+}

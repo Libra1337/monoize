@@ -154,6 +154,9 @@ fn delta_extra_body_with_phase(
     let mut extra = split_known_fields(
         data_val.clone(),
         &[
+            // The SSE event name is not item metadata. Keeping it would merge the wire
+            // event type into the downstream item and overwrite its real "type".
+            "type",
             "delta",
             "text",
             "output_index",

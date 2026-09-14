@@ -330,6 +330,8 @@ FP6g. The streaming pipeline MUST use `ResponseDone.output` as the authoritative
 
 FP6h. Decoder responsibilities are split-and-forward only. Decoder output MUST be flat nodes or canonical node lifecycle events. Downstream envelope reconstruction belongs only to the encoder.
 
+FP6h.1. The `type` field of an upstream Responses stream envelope names the wire event, not item metadata. When a stream decoder extracts extra item fields from an envelope payload, `type` MUST be treated as a known field and MUST NOT enter node `extra_body` or envelope passthrough state. A downstream encoder that merges such passthrough state into an output item would otherwise overwrite the item's own `type` with the upstream event name.
+
 FP6i. A pass-through stream whose decoder, retained-output stage, response-transform stage, downstream encoder, or stage task fails MUST finalize with `status = "error"` using that failure's code and status. It MUST NOT execute billing settlement and MUST NOT finalize as success. A downstream receiver closure is not a stage failure because SSE send helpers continue draining the upstream stream for terminal usage.
 
 FP6j. Buffered synthetic streaming MUST not finalize success or execute billing settlement until synthetic downstream encoding returns success. If synthetic encoding fails, Monoize MUST skip billing and finalize the admitted request as error. If encoding succeeds and billing settlement then fails, Monoize MUST finalize the request as `billing_settlement_failed`.
