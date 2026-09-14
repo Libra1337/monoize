@@ -58,15 +58,21 @@ async fn start_judge(category: &'static str) -> (String, Arc<AtomicUsize>) {
 }
 
 /// Points the runtime judge at `base_url` (CF-18) and optionally enables it.
+/// Deterministic tests also force the CF-35 sampler to always select so the
+/// judge path runs on the turn that opens a session window; the CF-34 window
+/// itself still suppresses repeat turns.
 async fn configure_judge(ctx: &TestContext, base_url: &str, enabled: bool) {
-    let mut runtime = ctx.state.monoize_runtime.write().await;
-    runtime.moderation_judge = monoize::moderation_judge::JudgeConfig {
-        enabled,
-        base_url: base_url.to_string(),
-        api_key: "test-judge-key".to_string(),
-        model: "judge-model".to_string(),
-        timeout_ms: 4000,
-    };
+    {
+        let mut runtime = ctx.state.monoize_runtime.write().await;
+        runtime.moderation_judge = monoize::moderation_judge::JudgeConfig {
+            enabled,
+            base_url: base_url.to_string(),
+            api_key: "test-judge-key".to_string(),
+            model: "judge-model".to_string(),
+            timeout_ms: 4000,
+        };
+    }
+    *ctx.state.moderation_judge_sampler.write().expect("sampler") = Box::new(|| true);
 }
 
 fn upstream_call_count(ctx: &TestContext) -> usize {
@@ -504,4 +510,132 @@ async fn benign_verdict_forwards_request_to_upstream() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(upstream_call_count(&ctx), 1);
+}
+
+/// CF-34: within a live session window, in-window turns are spot-checked by
+/// the sampler. With the sampler rejecting every draw, the opening turn is
+/// judged once and all later turns of the same conversation — an agent
+/// re-sending its keyword-bearing history — are marked with no judge call.
+#[tokio::test]
+async fn session_window_judges_once_then_marks_subsequent_turns() {
+    let ctx = setup().await;
+    configure_firewall(&ctx, true, "BadWord\n").await;
+    let (judge_url, judge_calls) = start_judge("benign").await;
+    {
+        let mut runtime = ctx.state.monoize_runtime.write().await;
+        runtime.moderation_judge = monoize::moderation_judge::JudgeConfig {
+            enabled: true,
+            base_url: judge_url,
+            api_key: "test-judge-key".to_string(),
+            model: "judge-model".to_string(),
+            timeout_ms: 4000,
+        };
+    }
+    *ctx.state.moderation_judge_sampler.write().expect("sampler") = Box::new(|| false);
+
+    for turn in 0..5 {
+        let (status, _body) = json_post(
+            &ctx,
+            "/v1/chat/completions",
+            json!({
+                "model": "gpt-5-mini-chat",
+                "messages": [{ "role": "user", "content": format!("turn {turn} with badword") }]
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    assert_eq!(
+        judge_calls.load(Ordering::SeqCst),
+        1,
+        "the opening turn must be the session window's only judge call"
+    );
+    assert_eq!(upstream_call_count(&ctx), 5);
+
+    let (rows, total) = monoize::firewall_events::list_events(
+        &ctx.state.db_pool,
+        &monoize::firewall_events::FirewallEventFilter {
+            term: None,
+            action: None,
+            since_ms: None,
+            until_ms: None,
+        },
+        10,
+        0,
+    )
+    .await
+    .expect("list events");
+    assert_eq!(total, 5);
+    assert_eq!(rows[0].action, "marked");
+    assert_eq!(rows[0].reason, "session already judged");
+    // rows are newest first: the opening turn is last
+    assert_eq!(rows[4].reason, "test evidence");
+}
+
+/// CF-35: the opening turn of a fresh session is judged even when the
+/// sampler rejects everything — sampling never shields the first turn of a
+/// new conversation — and a not-selected later turn is marked with no judge
+/// call.
+#[tokio::test]
+async fn sampler_rejection_never_shields_the_opening_turn_of_a_new_session() {
+    let ctx = setup().await;
+    configure_firewall(&ctx, true, "BadWord\n").await;
+    let (judge_url, judge_calls) = start_judge("porn").await;
+    {
+        let mut runtime = ctx.state.monoize_runtime.write().await;
+        runtime.moderation_judge = monoize::moderation_judge::JudgeConfig {
+            enabled: true,
+            base_url: judge_url,
+            api_key: "test-judge-key".to_string(),
+            model: "judge-model".to_string(),
+            timeout_ms: 4000,
+        };
+    }
+    // Sampler rejects every in-window spot-check.
+    *ctx.state.moderation_judge_sampler.write().expect("sampler") = Box::new(|| false);
+
+    // Opening turn: judged despite the rejecting sampler.
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [{ "role": "user", "content": "fresh session badword" }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(judge_calls.load(Ordering::SeqCst), 1);
+
+    // The blocked verdict rejects the turn; the window holds, so the next
+    // in-window turn is not selected by the sampler and is only marked.
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [{ "role": "user", "content": "still badword in history" }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(judge_calls.load(Ordering::SeqCst), 1);
+    let (rows, total) = monoize::firewall_events::list_events(
+        &ctx.state.db_pool,
+        &monoize::firewall_events::FirewallEventFilter {
+            term: None,
+            action: None,
+            since_ms: None,
+            until_ms: None,
+        },
+        10,
+        0,
+    )
+    .await
+    .expect("list events");
+    assert_eq!(total, 2);
+    assert_eq!(rows[0].action, "marked");
+    assert_eq!(rows[0].reason, "session already judged");
+    assert_eq!(rows[1].action, "blocked");
 }
