@@ -102,8 +102,8 @@ SA-TX5. Transfer MUST execute atomically in a single transaction:
 4. Deduct `amount` from the locked `users.balance_nano_usd`.
 5. Add `amount` to the locked `api_keys.sub_account_balance_nano`.
 6. Write two ledger entries:
-   - `kind = "sub_account_transfer_out"`, negative delta, on user
-   - `kind = "sub_account_transfer_in"`, positive delta, on user (with `api_key_id` in meta)
+   - `kind = "sub_account_transfer_out"`, negative delta, `account_scope = "user"`, `balance_after_nano_usd` equal to the resulting user balance
+   - `kind = "sub_account_transfer_in"`, positive delta, `account_scope = "sub_account"`, `balance_after_nano_usd` equal to the resulting sub-account balance, with `api_key_id` in meta
 
 SA-TX6. If the owning user is `balance_unlimited = true`, the user balance deduction step MUST be skipped (unlimited users can fund sub-accounts without draining their own balance). The transfer MUST still credit the API key sub-account and write the `sub_account_transfer_in` ledger entry.
 
@@ -213,17 +213,20 @@ SA-MIG3. Data migration for existing keys:
 
 ## 8. Ledger entry kinds
 
-| Kind                           | Direction | Description                                              |
-|--------------------------------|-----------|----------------------------------------------------------|
-| `request_charge`               | negative  | Charge against user balance (existing, unchanged)        |
-| `api_key_charge`               | negative  | Charge against API key sub-account balance               |
-| `admin_adjustment`             | either    | Admin adjustment of user balance (existing)              |
-| `sub_account_transfer_out`     | negative  | User balance deducted for transfer to API key            |
-| `sub_account_transfer_in`      | positive  | API key sub-account credited from user transfer          |
-| `sub_account_refund`           | positive  | Positive sub-account balance returned to user             |
-| `sub_account_debt_transfer`    | negative  | Negative sub-account balance transferred to user          |
-| `sub_account_delete_settlement`| either    | Signed sub-account balance consolidated before key delete |
-| `admin_sub_account_adjustment` | positive  | Admin direct increase of API key sub-account balance     |
+| Kind                           | Scope        | Direction | Description                                              |
+|--------------------------------|--------------|-----------|----------------------------------------------------------|
+| `request_charge`               | `user`       | negative  | Charge against user balance (existing, unchanged)        |
+| `api_key_charge`               | `sub_account`| negative  | Charge against API key sub-account balance               |
+| `admin_adjustment`             | `user`       | either    | Admin adjustment of user balance (existing)              |
+| `sub_account_transfer_out`     | `user`       | negative  | User balance deducted for transfer to API key            |
+| `sub_account_transfer_in`      | `sub_account`| positive  | API key sub-account credited from user transfer          |
+| `sub_account_refund`           | `user`       | positive  | Positive sub-account balance returned to user             |
+| `sub_account_debt_transfer`    | `user`       | negative  | Negative sub-account balance transferred to user         |
+| `sub_account_delete_settlement`| `user`       | either    | Signed sub-account balance consolidated before key delete |
+| `admin_sub_account_adjustment` | `sub_account`| positive  | Admin direct increase of API key sub-account balance     |
+
+The `Scope` column is defined by §10. A row's `balance_after_nano_usd` is only interpretable
+together with its scope.
 
 ## 9. Error codes
 
@@ -233,3 +236,35 @@ SA-MIG3. Data migration for existing keys:
 | Transfer to key with sub_account_enabled = 0       | 400  | `invalid_request`     | `"sub-account not enabled on this key"`                   |
 | Transfer amount ≤ 0                                | 400  | `invalid_request`     | `"transfer amount must be positive"`                      |
 | User insufficient balance for transfer             | 402  | `insufficient_balance`| `"insufficient balance for transfer"`                     |
+
+## 10. Ledger account scope
+
+The `billing_ledger` table is keyed by `user_id`, but it records two distinct accounts. Some
+kinds describe a movement of the owning user's wallet balance; others describe a movement of an
+API key's sub-account balance. The `balance_after_nano_usd` column carries the resulting balance
+of whichever account the row describes, so the column is only interpretable together with the
+account it belongs to.
+
+SA-SCOPE1. Every `billing_ledger` row MUST carry `account_scope` with exactly one of two values:
+
+- `user`: the row describes the owning user's wallet balance. `delta_nano_usd` is the change to
+  that wallet and `balance_after_nano_usd` is the resulting wallet balance.
+- `sub_account`: the row describes one API key's sub-account balance. `delta_nano_usd` is the
+  change to that sub-account and `balance_after_nano_usd` is the resulting sub-account balance.
+  `meta_json.api_key_id` MUST identify that key.
+
+SA-SCOPE2. The scope of each kind is fixed by the table in §8.
+
+SA-SCOPE3. Scope MUST be derived from the kind by the ledger append helper. A caller MUST NOT
+supply a scope that disagrees with SA-SCOPE2.
+
+SA-SCOPE4. Wallet reconciliation MUST hold: for every user, the sum of `delta_nano_usd` over
+rows whose `account_scope = 'user'` equals that user's `users.balance_nano_usd`.
+
+SA-SCOPE5. Sub-account reconciliation MUST hold: for every API key, the sum of `delta_nano_usd`
+over rows whose `account_scope = 'sub_account'` and whose `meta_json.api_key_id` equals that key
+equals that key's `api_keys.sub_account_balance_nano`, except where SA-TX6 or SA-API6a skipped
+the wallet mutation for an unlimited user; those rows still carry their sub-account scope.
+
+SA-SCOPE6. A ledger read that presents a balance history MUST label each row with its scope, so
+that a reader never compares a sub-account balance against a wallet balance.

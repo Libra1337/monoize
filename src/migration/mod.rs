@@ -86,6 +86,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260915_000081_billing_rate_peak_price::Migration),
             Box::new(m20260915_000082_api_key_model_bindings::Migration),
             Box::new(m20260915_000083_org_key_ownership::Migration),
+            Box::new(m20260915_000101_billing_ledger_account_scope::Migration),
         ]
     }
 }
@@ -301,6 +302,7 @@ mod m20260915_000080_firewall_event_reason;
 mod m20260915_000081_billing_rate_peak_price;
 mod m20260915_000082_api_key_model_bindings;
 mod m20260915_000083_org_key_ownership;
+mod m20260915_000101_billing_ledger_account_scope;
 
 #[cfg(test)]
 mod tests {

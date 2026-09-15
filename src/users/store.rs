@@ -1006,7 +1006,7 @@ impl UserStore {
             .db
             .read()
             .query_all(self.db.stmt(
-                "SELECT id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at
+                "SELECT id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at, account_scope
                  FROM billing_ledger
                  WHERE user_id = $1
                  ORDER BY created_at DESC, id DESC
@@ -1038,6 +1038,9 @@ impl UserStore {
                         .map_err(|error| error.to_string())?,
                     meta,
                     created_at,
+                    account_scope: row
+                        .try_get::<String>("", "account_scope")
+                        .unwrap_or_else(|_| "user".to_string()),
                 })
             })
             .collect()
@@ -3716,6 +3719,18 @@ impl UserStore {
         Ok(())
     }
 
+    /// SA-SCOPE3: the account a ledger row describes is a property of its kind, so it is derived
+    /// here rather than passed by callers. A caller cannot write a row whose `account_scope`
+    /// disagrees with the kind's scope in §8.
+    fn ledger_account_scope(kind: &str) -> &'static str {
+        match kind {
+            "api_key_charge" | "sub_account_transfer_in" | "admin_sub_account_adjustment" => {
+                "sub_account"
+            }
+            _ => "user",
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn insert_billing_ledger_tx(
         &self,
@@ -3729,8 +3744,8 @@ impl UserStore {
     ) -> Result<(), BillingError> {
         let id = uuid::Uuid::new_v4().to_string();
         tx.execute(self.db.stmt(
-            r#"INSERT INTO billing_ledger (id, user_id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+            r#"INSERT INTO billing_ledger (id, user_id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at, account_scope)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
             vec![
                 id.into(),
                 user_id.into(),
@@ -3739,6 +3754,7 @@ impl UserStore {
                 balance_after_nano_usd.map(|v| v.to_string()).into(),
                 meta.to_string().into(),
                 created_at_rfc3339.into(),
+                Self::ledger_account_scope(kind).into(),
             ],
         ))
         .await
@@ -4334,6 +4350,126 @@ mod tests {
         assert_eq!(created, 2);
         assert_eq!(rejected, 4);
         assert_eq!(store.count_user_api_keys(&user.id).await.unwrap(), 2);
+    }
+
+    #[test]
+    fn ledger_scope_is_derived_from_kind() {
+        // SA-SCOPE2/SA-SCOPE3: the three kinds whose balance_after_nano_usd is a sub-account
+        // balance are the only sub-account rows.
+        for kind in [
+            "api_key_charge",
+            "sub_account_transfer_in",
+            "admin_sub_account_adjustment",
+        ] {
+            assert_eq!(
+                UserStore::ledger_account_scope(kind),
+                "sub_account",
+                "{kind} describes a sub-account balance"
+            );
+        }
+        for kind in [
+            "request_charge",
+            "admin_adjustment",
+            "sub_account_transfer_out",
+            "sub_account_refund",
+            "sub_account_debt_transfer",
+            "sub_account_delete_settlement",
+            "store_recharge",
+            "redemption_credit",
+        ] {
+            assert_eq!(
+                UserStore::ledger_account_scope(kind),
+                "user",
+                "{kind} describes a wallet balance"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn wallet_ledger_reconciles_after_a_sub_account_transfer() {
+        // SA-SCOPE4: a sub-account transfer moves the wallet down and the sub-account up. The
+        // wallet sum must reflect only the wallet leg, otherwise the ledger cannot reconcile.
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let (log_broadcast, _) = tokio::sync::broadcast::channel(4);
+        let store = UserStore::new(db.clone(), log_broadcast)
+            .await
+            .expect("store creates");
+        let user = store
+            .create_user("scope-reconcile", "password123", UserRole::User, None)
+            .await
+            .unwrap();
+        store
+            .admin_adjust_user_balance(&user.id, Some("1000000000".to_string()), None, "admin-1")
+            .await
+            .unwrap();
+        let key = store
+            .create_api_key_extended(
+                &user.id,
+                CreateApiKeyInput {
+                    name: "scope-key".to_string(),
+                    expires_in_days: None,
+                    sub_account_enabled: true,
+                    sub_account_balance_nano_usd: None,
+                    model_limits_enabled: false,
+                    model_limits: Vec::new(),
+                    ip_whitelist: Vec::new(),
+                    group_ids: Vec::new(),
+                    channel_bindings: Vec::new(),
+                    model_bindings: Vec::new(),
+                    max_multiplier: None,
+                    transforms: Vec::new(),
+                    model_redirects: Vec::new(),
+                    reasoning_envelope_enabled: true,
+                    request_capture_mode: crate::users::RequestCaptureMode::Off,
+                },
+                false,
+            )
+            .await
+            .expect("sub-account key creates");
+
+        store
+            .transfer_to_sub_account(&key.0.id, &user.id, 250_000_000)
+            .await
+            .expect("transfer succeeds");
+
+        let wallet_sum: i128 = store
+            .list_billing_ledger(&user.id, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.account_scope == "user")
+            .map(|entry| entry.delta_nano_usd.parse::<i128>().unwrap())
+            .sum();
+        let user_balance: i128 = store
+            .get_user_balance_uncached(&user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .balance_nano_usd;
+
+        assert_eq!(
+            wallet_sum, user_balance,
+            "the wallet-scoped ledger sum must equal the wallet balance"
+        );
+
+        let sub_sum: i128 = store
+            .list_billing_ledger(&user.id, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.account_scope == "sub_account")
+            .map(|entry| entry.delta_nano_usd.parse::<i128>().unwrap())
+            .sum();
+        assert_eq!(
+            sub_sum, 250_000_000,
+            "the sub-account-scoped sum must equal the sub-account balance"
+        );
     }
 
     #[tokio::test]

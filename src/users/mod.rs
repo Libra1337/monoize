@@ -146,6 +146,10 @@ pub struct BillingLedgerEntry {
     pub balance_after_nano_usd: Option<String>,
     pub meta: Value,
     pub created_at: DateTime<Utc>,
+    /// SA-SCOPE6: which account `delta_nano_usd` and `balance_after_nano_usd` describe.
+    /// `"user"` is the owning user's wallet; `"sub_account"` is one API key's sub-account
+    /// (`meta.api_key_id`). A reader MUST NOT compare a balance across the two.
+    pub account_scope: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1165,6 +1165,11 @@ pub async fn list_org_keys(
                     &row.try_get::<String>("", "model_limits").unwrap_or_else(|_| "[]".to_string()),
                 ).unwrap_or_default(),
                 "created_at": row.try_get::<String>("", "created_at").unwrap_or_default(),
+                // SA-SCOPE6: label the account so a reader never compares a sub-account
+                // balance against a wallet balance.
+                "account_scope": row
+                    .try_get::<String>("", "account_scope")
+                    .unwrap_or_else(|_| "user".to_string()),
             }))
             .collect::<Vec<_>>(),
         "shared": shared
@@ -1284,7 +1289,7 @@ pub async fn org_ledger(
     let rows = read
         .query_all(Statement::from_sql_and_values(
             backend,
-            "SELECT id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at
+            "SELECT id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at, account_scope
              FROM billing_ledger WHERE user_id = $1
              ORDER BY created_at DESC, id DESC LIMIT 200",
             [org_id.into()],
