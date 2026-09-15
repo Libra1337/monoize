@@ -2282,7 +2282,7 @@ fn build_v1_router() -> Router<AppState> {
             "/images/edits",
             post(crate::handlers::image_api::create_image_edit),
         )
-        .layer(CorsLayer::very_permissive())
+        .layer(CorsLayer::permissive())
 }
 
 fn build_root_api_router(metrics_path: &str) -> Router<AppState> {
@@ -2302,7 +2302,7 @@ fn build_balance_compatibility_router() -> Router<AppState> {
     Router::new()
         .route("/api/codex/usage", get(crate::handlers::codex_usage))
         .route("/user/balance", get(crate::handlers::deepseek_user_balance))
-        .layer(CorsLayer::very_permissive())
+        .layer(CorsLayer::permissive())
 }
 
 fn build_store_callback_router() -> Router<AppState> {

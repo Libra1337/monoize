@@ -42,7 +42,6 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "jso
 uuid = { version = "1.19.0", features = ["v4", "serde"] }
 argon2 = { version = "0.5", features = ["std"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
-jsonwebtoken = "9"
 inventory = "0.3.21"
 dashmap = "6.1.0"
 image = "0.25.8"
@@ -66,7 +65,7 @@ url = "2.5.8"
 zeroize = { version = "1.9.0", features = ["derive"] }
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 rsa = { version = "0.9.10", features = ["sha2", "pem"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 clap = { version = "=4.5.60", features = ["derive"] }
 md-5 = "0.10.6"
 
