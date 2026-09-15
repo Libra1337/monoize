@@ -153,15 +153,33 @@ WS11a. Monoize MUST assign a new UUID `x-request-id` header to every generated W
 
 WS12. A valid client Ping MUST receive the WebSocket protocol Pong behavior supplied by the WebSocket implementation. A Close message MUST close the connection. A binary data message or a JSON value that is not an object MUST produce a WebSocket error event with status `400` and code `invalid_websocket_event`.
 
+WS12a. WS12 MUST hold while a generated turn is in flight. While Monoize forwards a generated turn's events, it MUST continue to read inbound client messages, and it MUST answer a client Ping with a Pong before that turn's terminal event. A client Close received mid-turn MUST abandon the remainder of that turn and close the connection.
+
+Rationale: the underlying implementation enqueues the automatic Pong and flushes it only on the next socket write. A turn whose upstream is silent performs no writes, so without an explicit read the Pong is not observable to the client, and an intermediary that treats an unanswered Ping as a dead peer closes the connection mid-turn.
+
+WS12b. A client Close or a WebSocket send failure observed mid-turn MUST NOT retain WS7 continuation state for that turn.
+
 WS13. The WebSocket message and frame limit MUST default to 50 MiB, equal to the forwarding HTTP body limit in C5, and MUST be configurable with `MONOIZE_RESPONSES_WS_MESSAGE_MAX_BYTES`.
 
 WS14. Per-connection limits MUST default to 128 accepted turns, 104857600 cumulative inbound text bytes, 4096 retained continuation items, and 33554432 retained continuation JSON bytes. The corresponding environment variables are `MONOIZE_RESPONSES_WS_MAX_TURNS`, `MONOIZE_RESPONSES_WS_CONNECTION_MAX_BYTES`, `MONOIZE_RESPONSES_WS_HISTORY_MAX_ITEMS`, and `MONOIZE_RESPONSES_WS_HISTORY_MAX_BYTES`.
 
-WS15. A connection that exceeds its turn or cumulative inbound-byte limit MUST receive an error event with code `websocket_connection_limit_exceeded` and then close. A continuation request whose assembled input exceeds a history limit MUST receive an error with code `websocket_history_limit_exceeded`, MUST NOT call upstream, and MUST keep the prior bounded continuation state unchanged.
+WS15. A connection that exceeds its turn or cumulative inbound-byte limit MUST receive an error event with code `websocket_connection_limit_reached` and then close. The code is fixed by the Codex client, which maps exactly `websocket_connection_limit_reached` to a retry on a fresh connection and maps any other code carried with a non-2xx `status` to a non-retryable transport error. A continuation request whose assembled input exceeds a history limit MUST receive an error with code `websocket_history_limit_exceeded`, MUST NOT call upstream, and MUST keep the prior bounded continuation state unchanged.
 
 WS16. The downstream HTTP-SSE parser used by the WebSocket bridge MUST bound both one pending frame and the undecoded buffer. The default for each is 52428800 bytes, configurable with `MONOIZE_RESPONSES_WS_SSE_FRAME_MAX_BYTES` and `MONOIZE_RESPONSES_WS_SSE_BUFFER_MAX_BYTES`. Exceeding either bound MUST terminate that generated turn with an error and MUST NOT retain partial continuation state.
 
 WS17. If a successful terminal response output exceeds the configured retained item or byte limit, Monoize MUST forward the response normally but MUST clear connection-local continuation state. A later append/continuation MUST receive `previous_response_not_found`.
+
+WS18. While a generated turn is in flight, Monoize MUST NOT leave the WebSocket without an outbound frame for longer than `MONOIZE_RESPONSES_WS_KEEPALIVE_MS`, default 15000. When that interval elapses with no forwarded event, Monoize MUST send a WebSocket Ping frame. The keep-alive interval MUST be measured from the last outbound frame of any kind, so a turn that streams events continuously sends no Ping.
+
+Preconditions and postconditions: for a generated turn whose upstream produces its first event after `d` milliseconds, the WebSocket MUST carry at least `floor(d / MONOIZE_RESPONSES_WS_KEEPALIVE_MS)` outbound frames before that first event.
+
+WS18a. The downstream HTTP-SSE keep-alive comment frames that carry no `data:` field MUST NOT be forwarded as WebSocket text messages, because WS4 admits only Responses stream events as text. WS18 replaces them with the WebSocket protocol's own liveness frame.
+
+Rationale for WS18 and WS18a: a Responses turn is silent for the whole upstream reasoning phase. An SSE downstream keeps that connection alive with comment frames; before WS18 the bridge dropped them and emitted nothing, so an intermediary idle timeout closed the connection mid-turn with no Close frame. The Codex client reports that condition as `stream closed before response.completed`.
+
+WS19. Every generated turn MUST end with exactly one Responses terminal event on the WebSocket, one of `response.completed`, `response.incomplete`, `response.failed`, `response.cancelled`, or one `error` event. If the downstream SSE body ends without one, Monoize MUST send an `error` event with status `502` and code `upstream_stream_incomplete` before accepting the next client message.
+
+Rationale: the bridge is the last hop to the client. FP7a places the same obligation on each stream encoder; WS19 makes it independent of the encoder so that a dropped SSE body, a panicked stream task, or a future encoder that omits its terminal cannot present a turn with no terminal event.
 
 ### 2.3 Dashboard API
 
@@ -1773,7 +1791,11 @@ SE1. If an error occurs before any data has been streamed, Monoize MUST return a
 - for `POST /v1/responses`: one named `event: error` whose JSON payload contains top-level `type = "error"`, `sequence_number`, `code`, `message`, and `param`, followed by `data: [DONE]`;
 - for `POST /v1/messages`: one named `event: error` with an Anthropic-compatible error object, then close the SSE stream without appending `data: [DONE]`.
 
-For `POST /v1/responses`, Monoize MUST NOT emit `response.failed` for the SE1 pre-stream error case. The `response.failed` event is reserved for a Responses response object that has failed after the Responses stream exists.
+SE1c. For `POST /v1/responses`, the SE1 pre-stream error MUST be followed by one `response.failed` event before the `[DONE]` sentinel. The frame order MUST be: one `event: error`, then one `event: response.failed`, then `data: [DONE]`. The `response.failed` payload's `response.error.code` and `response.error.message` MUST equal the `code` and `message` of the preceding `error` frame, and `response.status` MUST be `"failed"`.
+
+Rationale: the `error` frame alone is not observable by a Responses client. The Codex client's stream reader has no branch for a bare `error` event; it logs the event as unhandled and discards it, so the stream ends with no terminal event and the client reports a generic "stream closed before response.completed" instead of the actual cause. A `model_pricing_required` or `no_healthy_upstream` failure is therefore invisible to the operator. The `error` frame is retained for clients that do read it, and `response.failed` is the terminal that clients act on.
+
+This rule replaces the earlier prohibition on emitting `response.failed` for the SE1 case. That prohibition was protocol-correct — `response.failed` describes a response object that exists — but its effect was to make every pre-stream failure unattributable at the client.
 
 SE1a. If the error was caused by an upstream HTTP error response and that response body contains JSON field `error.code`, `error.type`, or `error.param`, Monoize MUST preserve those values on the downstream error object using `upstream_code`, `upstream_type`, and `upstream_param`. After route exhaustion, a non-stream JSON error and a pre-stream Responses `event: error` SSE payload MUST use the final non-empty `upstream_code` as the top-level `code`. They MUST use `upstream_error` only when the final failed attempt has no upstream code. For example, `thinking_signature_invalid` MUST remain `thinking_signature_invalid`; Monoize MUST NOT replace it with `upstream_error`.
 

@@ -624,6 +624,7 @@ pub async fn create_response(
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::Responses;
         let downstream_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let logical_model_for_prestream_error = req.model.clone();
         let stream = deferred_forward_event_stream(
             downstream,
             forward_stream_typed(
@@ -639,6 +640,7 @@ pub async fn create_response(
                 downstream_gone.clone(),
             ),
             downstream_gone,
+            logical_model_for_prestream_error,
         );
         return Ok(sse_response(stream, api_stream_keep_alive()));
     }
@@ -712,6 +714,7 @@ pub async fn create_chat_completions(
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::ChatCompletions;
         let downstream_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let logical_model_for_prestream_error = req.model.clone();
         let stream = deferred_forward_event_stream(
             downstream,
             forward_stream_typed(
@@ -727,6 +730,7 @@ pub async fn create_chat_completions(
                 downstream_gone.clone(),
             ),
             downstream_gone,
+            logical_model_for_prestream_error,
         );
         return Ok(sse_response(stream, api_stream_keep_alive()));
     }
@@ -811,6 +815,7 @@ async fn create_messages_inner(
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::AnthropicMessages;
         let downstream_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let logical_model_for_prestream_error = req.model.clone();
         let stream = deferred_forward_event_stream(
             downstream,
             forward_stream_typed(
@@ -826,6 +831,7 @@ async fn create_messages_inner(
                 downstream_gone.clone(),
             ),
             downstream_gone,
+            logical_model_for_prestream_error,
         );
         return Ok(sse_response(stream, messages_stream_keep_alive()));
     }

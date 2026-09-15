@@ -42,6 +42,9 @@ mod streaming_responses;
 #[path = "api/responses_websocket.rs"]
 mod responses_websocket;
 
+#[path = "api/unpriced_server_tools.rs"]
+mod unpriced_server_tools;
+
 #[path = "api/streaming_chat.rs"]
 mod streaming_chat;
 

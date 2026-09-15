@@ -99,7 +99,11 @@ fn spawn_stream_attempt_error(
     );
 }
 
-fn prestream_error_stream(downstream: DownstreamProtocol, err: AppError) -> ForwardEventStream {
+fn prestream_error_stream(
+    downstream: DownstreamProtocol,
+    err: AppError,
+    logical_model: String,
+) -> ForwardEventStream {
     let (tx, rx) = mpsc::channel::<Event>(8);
     tokio::spawn(async move {
         match downstream {
@@ -110,6 +114,41 @@ fn prestream_error_stream(downstream: DownstreamProtocol, err: AppError) -> Forw
                         Event::default()
                             .event("error")
                             .data(responses_error.to_string()),
+                    )
+                    .await;
+                // SE1c: the bare `error` frame is not observable by a Responses client -- the
+                // Codex reader has no branch for it and discards it, leaving the stream with no
+                // terminal event and the client reporting a generic truncation. Emit the
+                // terminal that clients act on, carrying the same code and message.
+                let now = chrono::Utc::now().timestamp();
+                let failed = json!({
+                    "type": "response.failed",
+                    "sequence_number": 2,
+                    "response": {
+                        "id": format!("resp_{}", uuid::Uuid::new_v4()),
+                        "object": "response",
+                        "created_at": now,
+                        "completed_at": now,
+                        "model": logical_model,
+                        "status": "failed",
+                        "output": [],
+                        "error": {
+                            "code": responses_error.get("code").cloned().unwrap_or(Value::Null),
+                            "message": responses_error
+                                .get("message")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                        },
+                        "incomplete_details": Value::Null,
+                        "usage": Value::Null,
+                        "metadata": {},
+                    }
+                });
+                let _ = tx
+                    .send(
+                        Event::default()
+                            .event("response.failed")
+                            .data(failed.to_string()),
                     )
                     .await;
                 let _ = tx.send(Event::default().data("[DONE]")).await;
@@ -145,6 +184,7 @@ pub(super) fn deferred_forward_event_stream<F, S>(
     downstream: DownstreamProtocol,
     forwarding: F,
     downstream_gone: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    logical_model: String,
 ) -> futures_util::stream::BoxStream<'static, Result<Event, std::convert::Infallible>>
 where
     F: std::future::Future<Output = AppResult<S>> + Send + 'static,
@@ -192,7 +232,7 @@ where
                 }
             }
             Err(err) => {
-                let err_stream = prestream_error_stream(downstream, err);
+                let err_stream = prestream_error_stream(downstream, err, logical_model);
                 tokio::pin!(err_stream);
                 let mut downstream_open = true;
                 loop {
@@ -1682,6 +1722,7 @@ mod tests {
             DownstreamProtocol::Responses,
             forwarding,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            "test-model".to_string(),
         );
         let response = Sse::new(stream)
             .keep_alive(
@@ -1714,6 +1755,7 @@ mod tests {
             DownstreamProtocol::Responses,
             async move { Ok::<_, AppError>(inner) },
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            "test-model".to_string(),
         );
         assert!(stream.next().await.is_some());
         drop(stream);
@@ -1737,6 +1779,7 @@ mod tests {
             DownstreamProtocol::Responses,
             async move { Ok::<_, AppError>(inner) },
             downstream_gone.clone(),
+            "test-model".to_string(),
         );
         assert!(stream.next().await.is_some());
         drop(stream);
@@ -1761,6 +1804,7 @@ mod tests {
                 Ok::<_, AppError>(futures_util::stream::empty())
             },
             downstream_gone.clone(),
+            "test-model".to_string(),
         );
         drop(stream);
 

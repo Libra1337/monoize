@@ -2255,7 +2255,7 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
 }
 
 #[tokio::test]
-async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
+async fn build_monoize_attempts_admits_unpriced_server_tool_meter_class() {
     let runtime = RuntimeConfig {
         listen: "127.0.0.1:0".to_string(),
         metrics_path: "/metrics".to_string(),
@@ -2330,13 +2330,16 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
     let mut req = build_test_routing_request("gpt-priced");
     req.server_tool_usage_classes = vec!["web_search".to_string()];
     let auth = build_test_auth_with_role(None, UserRole::Admin);
-    let err = build_monoize_attempts(&state, &req, &auth)
+    // MB-M5: an unpriced server-native tool usage class settles at zero instead of
+    // excluding the mapping. A rejecting gate made every Codex request fail, because that
+    // client enables `web_search` by default.
+    let attempts = build_monoize_attempts(&state, &req, &auth)
         .await
-        .expect_err("missing meter rate must reject admin");
+        .expect("missing meter rate must not reject");
 
-    assert_eq!(err.status, StatusCode::FORBIDDEN);
-    assert_eq!(err.code, "model_pricing_required");
-    assert!(err.message.contains("meter rate required"));
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].server_tool_usage_classes, vec!["web_search"]);
+    assert!(attempts[0].billable_pricing_available);
 }
 
 #[tokio::test]

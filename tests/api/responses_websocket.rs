@@ -240,6 +240,160 @@ async fn responses_websocket_v1_append_reconstructs_prior_output_and_new_input()
     server.abort();
 }
 
+/// Drives one turn against a silent upstream and reports what the socket carried:
+/// (pongs received, server Pings received, terminal reached).
+async fn observe_silent_turn(
+    socket: &mut TestWebSocket,
+    upstream_delay_ms: u64,
+    client_ping: bool,
+    budget: Duration,
+) -> (usize, usize, bool) {
+    send_json(
+        socket,
+        json!({
+            "type": "response.create",
+            "model": "gpt-5-mini",
+            "input": "slow",
+            "stream": true,
+            "force_upstream_delay_ms": upstream_delay_ms
+        }),
+    )
+    .await;
+    if client_ping {
+        socket
+            .send(Message::Ping(vec![7].into()))
+            .await
+            .expect("send ping");
+    }
+
+    let mut pongs = 0usize;
+    let mut server_pings = 0usize;
+    let mut terminal = false;
+    tokio::time::timeout(budget, async {
+        while let Some(message) = socket.next().await {
+            match message.expect("websocket receive") {
+                Message::Pong(_) => pongs += 1,
+                Message::Ping(_) => server_pings += 1,
+                Message::Text(text) => {
+                    let event: Value = serde_json::from_str(text.as_str()).expect("event JSON");
+                    if event.get("type").and_then(Value::as_str) == Some("response.completed") {
+                        terminal = true;
+                        return;
+                    }
+                }
+                Message::Close(frame) => panic!("closed before terminal: {frame:?}"),
+                _ => {}
+            }
+        }
+        panic!("socket ended before a terminal event");
+    })
+    .await
+    .expect("turn must terminate");
+    (pongs, server_pings, terminal)
+}
+
+/// WS12a: a Ping sent mid-turn must be answered before that turn's terminal. The queued
+/// automatic Pong only flushes on a socket read, and a turn awaiting a silent upstream
+/// performs no reads unless the bridge reads inbound messages concurrently. An intermediary
+/// that treats an unanswered Ping as a dead peer closes the connection mid-turn.
+#[tokio::test]
+async fn responses_websocket_answers_ping_during_upstream_silence() {
+    let ctx = setup().await;
+    let (address, server) = start_downstream(&ctx).await;
+    let mut socket =
+        connect_responses_websocket(address, "/v1/responses", Some(&ctx.auth_header), None)
+            .await
+            .expect("connect websocket");
+
+    let (pongs, _, terminal) =
+        observe_silent_turn(&mut socket, 3_000, true, Duration::from_secs(30)).await;
+
+    assert!(terminal);
+    assert_eq!(pongs, 1, "the mid-turn Ping must be answered");
+
+    socket.close(None).await.expect("close websocket");
+    server.abort();
+}
+
+/// WS18: a turn whose upstream is silent must not leave the socket without an outbound frame
+/// for longer than the keep-alive interval. Before this, the bridge dropped the downstream
+/// SSE comment heartbeats and emitted nothing at all, so an intermediary idle timeout closed
+/// the connection mid-turn with no Close frame -- which the Codex client reports as
+/// `stream closed before response.completed`.
+///
+/// The upstream delay exceeds the 15s default interval. Configuring a shorter interval would
+/// mean setting a process-global environment variable, which the limits are read from per
+/// upgrade and would leak into tests running in parallel.
+#[tokio::test]
+async fn responses_websocket_sends_keepalive_ping_during_long_upstream_silence() {
+    let ctx = setup().await;
+    let (address, server) = start_downstream(&ctx).await;
+    let mut socket =
+        connect_responses_websocket(address, "/v1/responses", Some(&ctx.auth_header), None)
+            .await
+            .expect("connect websocket");
+
+    let (_, server_pings, terminal) =
+        observe_silent_turn(&mut socket, 16_500, false, Duration::from_secs(60)).await;
+
+    assert!(terminal);
+    assert!(
+        server_pings > 0,
+        "a silent turn longer than the keep-alive interval must carry a Ping"
+    );
+
+    socket.close(None).await.expect("close websocket");
+    server.abort();
+}
+
+/// WS4: a client may send its next request before the current turn terminates. The message
+/// must be served after that terminal, not dropped. Reading inbound messages concurrently
+/// with forwarding (WS12a) makes this reachable, so the bridge buffers them.
+#[tokio::test]
+async fn responses_websocket_serves_a_request_that_arrives_mid_turn() {
+    let ctx = setup().await;
+    let (address, server) = start_downstream(&ctx).await;
+    let mut socket =
+        connect_responses_websocket(address, "/v1/responses", Some(&ctx.auth_header), None)
+            .await
+            .expect("connect websocket");
+
+    send_json(
+        &mut socket,
+        json!({
+            "type": "response.create",
+            "model": "gpt-5-mini",
+            "input": "first",
+            "stream": true,
+            "force_upstream_delay_ms": 1500
+        }),
+    )
+    .await;
+    // Pipelined immediately, while the first turn is still waiting on its upstream.
+    send_json(
+        &mut socket,
+        json!({
+            "type": "response.create",
+            "model": "gpt-5-mini",
+            "input": "second",
+            "stream": true
+        }),
+    )
+    .await;
+
+    let first = receive_response(&mut socket).await;
+    assert_eq!(completed_response(&first)["status"], "completed");
+    let second = receive_response(&mut socket).await;
+    assert_eq!(
+        completed_response(&second)["status"],
+        "completed",
+        "a request that arrived mid-turn must still be served"
+    );
+
+    socket.close(None).await.expect("close websocket");
+    server.abort();
+}
+
 #[tokio::test]
 async fn responses_websocket_rejects_unauthenticated_upgrade() {
     let ctx = setup().await;

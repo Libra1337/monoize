@@ -234,7 +234,13 @@ MB-M3. Duration, session, and billed-minute meters MUST require an authoritative
 
 MB-M4. Call-count meters MAY use decoded native provider events when no authoritative provider usage counter exists.
 
-MB-M5. If a request enables a server-native tool and no eligible meter rate exists for its `usage_class`, preflight MUST reject the request with HTTP `403` and code `model_pricing_required`.
+MB-M5. If a request enables a server-native tool and no eligible meter rate exists for its `usage_class`, preflight MUST admit the request and settlement MUST charge that `usage_class` at unit price `0`. An absent meter rate MUST NOT reject the request, MUST NOT exclude the provider mapping from routing, and MUST NOT contribute to `model_pricing_required`. An eligible meter rate whose `unit_price_nano` is `0` settles identically to an absent one.
+
+Rationale: a client may enable a server-native tool on every request without the operator's knowledge. The Codex client enables `web_search` by default, so a rejecting gate makes every request fail with `model_pricing_required` before request-log admission, which presents to the operator as a gateway that serves no traffic and records no reason.
+
+MB-M5a. When settlement charges a `usage_class` at unit price `0` under MB-M5 because no eligible meter rate exists, Monoize MUST emit one observability log entry per request naming each such `usage_class`, and MUST mark each resulting meter line item with `unpriced = true`. The line item MUST carry the observed billable quantity, so the unbilled volume is recoverable from the request log.
+
+MB-M5b. A meter line item settled from an eligible rate MUST NOT carry `unpriced = true`, including when that rate's `unit_price_nano` is `0`. The marker distinguishes "the operator has not priced this class" from "the operator priced this class at zero".
 
 MB-M6. For each meter `usage_class`, billing MUST apply only the first eligible row under MB-R2 whose context tier, service tier, modality, and cache-TTL dimensions match the settled usage. A lower-priority duplicate row for the same class and selected dimensions MUST NOT create another line item.
 

@@ -1,6 +1,6 @@
 use super::*;
 use axum::extract::State;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
@@ -10,6 +10,7 @@ const DEFAULT_CONNECTION_MAX_BYTES: usize = 100 * 1024 * 1024;
 const DEFAULT_MAX_TURNS: usize = 128;
 const DEFAULT_HISTORY_MAX_ITEMS: usize = 4_096;
 const DEFAULT_HISTORY_MAX_BYTES: usize = 32 * 1024 * 1024;
+const DEFAULT_KEEPALIVE_MS: u64 = 15_000;
 
 #[derive(Clone, Copy, Debug)]
 struct ResponsesWebsocketLimits {
@@ -20,6 +21,7 @@ struct ResponsesWebsocketLimits {
     history_max_bytes: usize,
     sse_frame_max_bytes: usize,
     sse_buffer_max_bytes: usize,
+    keepalive_ms: u64,
 }
 
 impl Default for ResponsesWebsocketLimits {
@@ -32,6 +34,7 @@ impl Default for ResponsesWebsocketLimits {
             history_max_bytes: DEFAULT_HISTORY_MAX_BYTES,
             sse_frame_max_bytes: DEFAULT_MESSAGE_MAX_BYTES,
             sse_buffer_max_bytes: DEFAULT_MESSAGE_MAX_BYTES,
+            keepalive_ms: DEFAULT_KEEPALIVE_MS,
         }
     }
 }
@@ -64,6 +67,10 @@ impl ResponsesWebsocketLimits {
             sse_buffer_max_bytes: positive_env(
                 "MONOIZE_RESPONSES_WS_SSE_BUFFER_MAX_BYTES",
                 defaults.sse_buffer_max_bytes,
+            ),
+            keepalive_ms: positive_env_u64(
+                "MONOIZE_RESPONSES_WS_KEEPALIVE_MS",
+                defaults.keepalive_ms,
             ),
         }
     }
@@ -110,11 +117,26 @@ impl WebsocketEventError {
         }
     }
 
+    // WS15: the code is fixed by the Codex client, which retries on a fresh connection
+    // for exactly `websocket_connection_limit_reached` and treats any other code carried
+    // with a non-2xx status as a non-retryable transport error.
     fn connection_limit() -> Self {
         Self {
             status: StatusCode::PAYLOAD_TOO_LARGE.as_u16(),
-            code: "websocket_connection_limit_exceeded",
-            message: "WebSocket connection resource limit exceeded".to_string(),
+            code: "websocket_connection_limit_reached",
+            message: "WebSocket connection resource limit reached. Create a new WebSocket \
+                      connection to continue."
+                .to_string(),
+            param: None,
+        }
+    }
+
+    // WS19: the bridge's own terminal guarantee, independent of the stream encoders.
+    fn stream_incomplete() -> Self {
+        Self {
+            status: StatusCode::BAD_GATEWAY.as_u16(),
+            code: "upstream_stream_incomplete",
+            message: "upstream stream ended before a terminal event".to_string(),
             param: None,
         }
     }
@@ -173,24 +195,41 @@ async fn serve_responses_websocket(
 
         match message {
             Message::Text(text) => {
-                inbound_bytes = inbound_bytes.saturating_add(text.len());
-                if accepted_turns >= limits.max_turns || inbound_bytes > limits.connection_max_bytes
-                {
-                    let _ = send_event_error(&mut socket, WebsocketEventError::connection_limit())
-                        .await;
-                    break;
+                // A turn can buffer client messages that arrived while it was streaming
+                // (WS4). Serve them in arrival order before returning to the socket, so a
+                // client that pipelines its turns is answered in order.
+                let mut queue = std::collections::VecDeque::from([text]);
+                let mut closed = false;
+                while let Some(text) = queue.pop_front() {
+                    inbound_bytes = inbound_bytes.saturating_add(text.len());
+                    if accepted_turns >= limits.max_turns
+                        || inbound_bytes > limits.connection_max_bytes
+                    {
+                        let _ =
+                            send_event_error(&mut socket, WebsocketEventError::connection_limit())
+                                .await;
+                        closed = true;
+                        break;
+                    }
+                    accepted_turns = accepted_turns.saturating_add(1);
+                    let outcome = handle_client_text(
+                        &mut socket,
+                        &mut session,
+                        &state,
+                        &headers,
+                        text.as_str(),
+                        limits,
+                    )
+                    .await;
+                    for deferred in outcome.deferred {
+                        queue.push_back(deferred);
+                    }
+                    if !outcome.keep_open {
+                        closed = true;
+                        break;
+                    }
                 }
-                accepted_turns = accepted_turns.saturating_add(1);
-                if !handle_client_text(
-                    &mut socket,
-                    &mut session,
-                    &state,
-                    &headers,
-                    text.as_str(),
-                    limits,
-                )
-                .await
-                {
+                if closed {
                     break;
                 }
             }
@@ -215,6 +254,22 @@ async fn serve_responses_websocket(
     }
 }
 
+/// Result of serving one client text message: whether the connection stays open, and any
+/// client messages that arrived while the turn was streaming and still need serving.
+struct TurnOutcome {
+    keep_open: bool,
+    deferred: Vec<Utf8Bytes>,
+}
+
+impl TurnOutcome {
+    fn from_send(keep_open: bool) -> Self {
+        Self {
+            keep_open,
+            deferred: Vec::new(),
+        }
+    }
+}
+
 async fn handle_client_text(
     socket: &mut WebSocket,
     session: &mut ResponsesWebsocketSession,
@@ -222,30 +277,36 @@ async fn handle_client_text(
     headers: &HeaderMap,
     text: &str,
     limits: ResponsesWebsocketLimits,
-) -> bool {
+) -> TurnOutcome {
     let value = match serde_json::from_str::<Value>(text) {
         Ok(value) => value,
         Err(err) => {
-            return send_event_error(
-                socket,
-                WebsocketEventError::invalid(format!("invalid JSON: {err}")),
-            )
-            .await;
+            return TurnOutcome::from_send(
+                send_event_error(
+                    socket,
+                    WebsocketEventError::invalid(format!("invalid JSON: {err}")),
+                )
+                .await,
+            );
         }
     };
     let Some(mut event) = value.as_object().cloned() else {
-        return send_event_error(
-            socket,
-            WebsocketEventError::invalid("WebSocket event must be a JSON object"),
-        )
-        .await;
+        return TurnOutcome::from_send(
+            send_event_error(
+                socket,
+                WebsocketEventError::invalid("WebSocket event must be a JSON object"),
+            )
+            .await,
+        );
     };
     let Some(event_type) = event.get("type").and_then(Value::as_str) else {
-        return send_event_error(
-            socket,
-            WebsocketEventError::invalid("WebSocket event is missing type"),
-        )
-        .await;
+        return TurnOutcome::from_send(
+            send_event_error(
+                socket,
+                WebsocketEventError::invalid("WebSocket event is missing type"),
+            )
+            .await,
+        );
     };
 
     let warmup = event_type == "response.create"
@@ -259,24 +320,26 @@ async fn handle_client_text(
     };
     let request = match prepared {
         Ok(request) => request,
-        Err(err) => return send_event_error(socket, err).await,
+        Err(err) => return TurnOutcome::from_send(send_event_error(socket, err).await),
     };
 
     if request.get("background").and_then(Value::as_bool) == Some(true) {
-        return send_event_error(
-            socket,
-            WebsocketEventError {
-                status: StatusCode::BAD_REQUEST.as_u16(),
-                code: "background_not_supported",
-                message: "background not supported".to_string(),
-                param: Some("background"),
-            },
-        )
-        .await;
+        return TurnOutcome::from_send(
+            send_event_error(
+                socket,
+                WebsocketEventError {
+                    status: StatusCode::BAD_REQUEST.as_u16(),
+                    code: "background_not_supported",
+                    message: "background not supported".to_string(),
+                    param: Some("background"),
+                },
+            )
+            .await,
+        );
     }
 
     if warmup {
-        return send_warmup(socket, session, request, limits).await;
+        return TurnOutcome::from_send(send_warmup(socket, session, request, limits).await);
     }
 
     let mut request_headers = headers.clone();
@@ -293,12 +356,40 @@ async fn handle_client_text(
     .await
     {
         Ok(response) => response,
-        Err(err) => return send_app_error(socket, err).await,
+        Err(err) => return TurnOutcome::from_send(send_app_error(socket, err).await),
     };
 
-    let completed = match forward_sse_body_as_websocket(socket, response, limits).await {
-        Ok(completed) => completed,
-        Err(err) => return send_event_error(socket, err).await,
+    let outcome = match forward_sse_body_as_websocket(socket, response, limits).await {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            return TurnOutcome {
+                keep_open: send_event_error(socket, err).await,
+                deferred: Vec::new(),
+            };
+        }
+    };
+    let ForwardOutcome { turn, deferred } = outcome;
+    let completed = match turn {
+        ForwardedTurn::Terminal(completed) => completed,
+        // WS19: the SSE body ended with no terminal event. The client cannot distinguish a
+        // truncated turn from a successful one without a terminal frame, so supply one here.
+        ForwardedTurn::MissingTerminal => {
+            tracing::warn!(
+                "Responses WebSocket turn ended without a terminal event; sending {}",
+                WebsocketEventError::stream_incomplete().code
+            );
+            return TurnOutcome {
+                keep_open: send_event_error(socket, WebsocketEventError::stream_incomplete()).await,
+                deferred,
+            };
+        }
+        // WS12b: no continuation state is retained for a turn the client abandoned.
+        ForwardedTurn::ClientClosed => {
+            return TurnOutcome {
+                keep_open: false,
+                deferred: Vec::new(),
+            };
+        }
     };
     if let Some(completed) = completed {
         if completed.retainable && request_with_output_fits(&request, &completed.output, limits) {
@@ -309,7 +400,10 @@ async fn handle_client_text(
             *session = ResponsesWebsocketSession::default();
         }
     }
-    true
+    TurnOutcome {
+        keep_open: true,
+        deferred,
+    }
 }
 
 fn prepare_response_create(
@@ -537,16 +631,88 @@ fn warmup_response(id: &str, model: &str, created_at: i64, status: &str) -> Valu
     })
 }
 
+/// Outcome of forwarding one generated turn's SSE body over the WebSocket.
+enum ForwardedTurn {
+    /// A Responses terminal event was forwarded. Carries WS7 continuation state when
+    /// the terminal was `response.completed`.
+    Terminal(Option<CompletedResponse>),
+    /// The SSE body ended with no terminal event. WS19 requires the bridge to supply one.
+    MissingTerminal,
+    /// The client closed the connection mid-turn (WS12a).
+    ClientClosed,
+}
+
+/// One turn's forwarding result, plus any client text messages that arrived while the turn
+/// was still streaming. WS4 lets a client send its next request without waiting for the
+/// current turn's terminal, so those messages MUST be carried to the receive loop rather
+/// than dropped; dropping one strands a client that pipelines its turns.
+struct ForwardOutcome {
+    turn: ForwardedTurn,
+    deferred: Vec<Utf8Bytes>,
+}
+
 async fn forward_sse_body_as_websocket(
     socket: &mut WebSocket,
     response: Response,
     limits: ResponsesWebsocketLimits,
-) -> Result<Option<CompletedResponse>, WebsocketEventError> {
+) -> Result<ForwardOutcome, WebsocketEventError> {
     let mut stream = response.into_body().into_data_stream();
     let mut buffer = Vec::new();
     let mut completed = None;
+    let mut terminal_seen = false;
+    let mut deferred: Vec<Utf8Bytes> = Vec::new();
+    let keepalive = std::time::Duration::from_millis(limits.keepalive_ms.max(1));
+    // WS18 measures the interval from the last outbound frame, so the deadline is tracked
+    // explicitly rather than as a per-iteration timer. An SSE keep-alive comment arrives on
+    // the same 15s cadence and produces no outbound frame; a timer rebuilt each iteration
+    // would be reset by it and never fire.
+    let mut next_keepalive = tokio::time::Instant::now() + keepalive;
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        // WS12a / WS18: the turn's upstream is silent for its whole reasoning phase. Read
+        // inbound client messages concurrently so a Ping is answered and a Close is acted
+        // on, and treat a lapsed keep-alive interval as a third event source. `socket.next()`
+        // is what flushes the implementation's queued automatic Pong; a turn that only
+        // awaits the SSE body never writes, so the Pong would never reach the client.
+        let chunk = tokio::select! {
+            biased;
+            inbound = socket.next() => {
+                match inbound {
+                    // A Ping is answered by the implementation as a side effect of this read.
+                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+                    Some(Ok(Message::Close(_))) | None => {
+                        return Ok(ForwardOutcome {
+                            turn: ForwardedTurn::ClientClosed,
+                            deferred,
+                        });
+                    }
+                    Some(Err(err)) => {
+                        tracing::debug!(error = %err, "Responses WebSocket receive failed mid-turn");
+                        return Ok(ForwardOutcome {
+                            turn: ForwardedTurn::ClientClosed,
+                            deferred,
+                        });
+                    }
+                    // WS4 runs one generation at a time, so this request waits for the
+                    // current turn's terminal instead of being served now.
+                    Some(Ok(Message::Text(text))) => {
+                        deferred.push(text);
+                        continue;
+                    }
+                    Some(Ok(Message::Binary(_))) => continue,
+                }
+            }
+            chunk = stream.next() => chunk,
+            _ = tokio::time::sleep_until(next_keepalive) => {
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    return Err(WebsocketEventError::invalid("WebSocket send failed"));
+                }
+                next_keepalive = tokio::time::Instant::now() + keepalive;
+                continue;
+            }
+        };
+
+        let Some(chunk) = chunk else { break };
         let chunk = chunk.map_err(|err| {
             tracing::debug!(error = %err, "Responses WebSocket SSE bridge read failed");
             WebsocketEventError::invalid("upstream SSE body read failed")
@@ -556,30 +722,70 @@ async fn forward_sse_body_as_websocket(
         }
         buffer.extend_from_slice(&chunk);
         for data in drain_sse_data(&mut buffer, false, limits.sse_frame_max_bytes)? {
-            if data == "[DONE]" {
-                continue;
-            }
-            if let Some(terminal) = completed_response_from_event(&data, limits) {
-                completed = Some(terminal);
-            }
-            if socket.send(Message::Text(data.into())).await.is_err() {
-                return Err(WebsocketEventError::invalid("WebSocket send failed"));
+            if forward_sse_event(socket, &data, limits, &mut completed, &mut terminal_seen).await? {
+                next_keepalive = tokio::time::Instant::now() + keepalive;
             }
         }
     }
 
     for data in drain_sse_data(&mut buffer, true, limits.sse_frame_max_bytes)? {
-        if data == "[DONE]" {
-            continue;
-        }
-        if let Some(terminal) = completed_response_from_event(&data, limits) {
-            completed = Some(terminal);
-        }
-        if socket.send(Message::Text(data.into())).await.is_err() {
-            return Err(WebsocketEventError::invalid("WebSocket send failed"));
-        }
+        forward_sse_event(socket, &data, limits, &mut completed, &mut terminal_seen).await?;
     }
-    Ok(completed)
+    Ok(ForwardOutcome {
+        turn: if terminal_seen {
+            ForwardedTurn::Terminal(completed)
+        } else {
+            ForwardedTurn::MissingTerminal
+        },
+        deferred,
+    })
+}
+
+/// Forwards one SSE payload as a WebSocket text message. Returns whether an outbound frame
+/// was actually sent, which WS18 measures its keep-alive interval from.
+async fn forward_sse_event(
+    socket: &mut WebSocket,
+    data: &str,
+    limits: ResponsesWebsocketLimits,
+    completed: &mut Option<CompletedResponse>,
+    terminal_seen: &mut bool,
+) -> Result<bool, WebsocketEventError> {
+    // WS4: `[DONE]` is an SSE sentinel, not a Responses event.
+    if data == "[DONE]" {
+        return Ok(false);
+    }
+    if let Some(terminal) = completed_response_from_event(data, limits) {
+        *completed = Some(terminal);
+    }
+    if event_is_terminal(data) {
+        *terminal_seen = true;
+    }
+    if socket
+        .send(Message::Text(data.to_owned().into()))
+        .await
+        .is_err()
+    {
+        return Err(WebsocketEventError::invalid("WebSocket send failed"));
+    }
+    Ok(true)
+}
+
+fn event_is_terminal(data: &str) -> bool {
+    serde_json::from_str::<Value>(data)
+        .ok()
+        .as_ref()
+        .and_then(|event| event.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|event_type| {
+            matches!(
+                event_type,
+                "response.completed"
+                    | "response.incomplete"
+                    | "response.failed"
+                    | "response.cancelled"
+                    | "error"
+            )
+        })
 }
 
 fn drain_sse_data(
@@ -657,6 +863,14 @@ fn positive_env(name: &str, default: usize) -> usize {
     std::env::var(name)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn positive_env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(default)
 }

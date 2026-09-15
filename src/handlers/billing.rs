@@ -827,37 +827,10 @@ pub(super) fn billing_rate_matrix_allows_request(
             }
         }
     }
-    for usage_class in server_tool_usage_classes {
-        let meter_matches_tier = |context_tier: Option<&str>| {
-            resolution.rates.iter().any(|rate| {
-                rate.rate_kind == "meter"
-                    && rate.usage_class == *usage_class
-                    && rate.modality.is_none()
-                    && rate.cache_ttl.is_none()
-                    && rate
-                        .service_tier
-                        .as_deref()
-                        .is_none_or(|tier| tier == "default")
-                    && match (rate.context_tier.as_deref(), context_tier) {
-                        (None | Some("default"), _) => true,
-                        (Some(rate_tier), Some(tier)) => rate_tier == tier,
-                        (Some(_), None) => false,
-                    }
-            })
-        };
-        let has_meter = if context_tiers.is_empty() {
-            meter_matches_tier(None)
-        } else {
-            context_tiers
-                .iter()
-                .all(|tier| meter_matches_tier(Some(tier)))
-        };
-        if !has_meter {
-            return Err(format!(
-                "meter rate required for server-native tool usage class: {usage_class}"
-            ));
-        }
-    }
+    // MB-M5: a missing meter rate for a server-native tool usage class settles at zero
+    // rather than rejecting. The usage classes therefore do not participate in matrix
+    // completeness, and this function ignores `server_tool_usage_classes` entirely.
+    let _ = server_tool_usage_classes;
     Ok(true)
 }
 
@@ -1531,6 +1504,38 @@ fn add_meter_lines(
             .checked_add(charge)
             .ok_or_else(|| "meter charge overflow".to_string())?;
     }
+    // MB-M5 / MB-M5a: a requested server-tool usage class with no eligible rate settles at
+    // zero. Record the observed quantity and mark the line `unpriced` so the request log
+    // still carries the unbilled volume; MB-M5b keeps this distinct from a rate priced at 0.
+    for usage_class in requested_usage_classes {
+        if selected_usage_classes.contains(usage_class.as_str()) {
+            continue;
+        }
+        let quantity = authoritative_meter_quantity(usage, usage_class, "call")
+            .unwrap_or_else(|| decoded_provider_item_count(output, usage_class));
+        if quantity == 0 {
+            continue;
+        }
+        tracing::warn!(
+            usage_class = %usage_class,
+            quantity,
+            "no meter rate configured for server-native tool usage class; settling at zero"
+        );
+        line_items.push(json!({
+            "rate_id": Value::Null,
+            "usage_class": usage_class,
+            "unit": "call",
+            "unit_price_nano": "0",
+            "unit_price_currency": "USD",
+            "pricing_window": if pricing.is_peak { "peak" } else { "off_peak" },
+            "quantity": quantity,
+            "charge_nano": "0",
+            "authoritative": authoritative_meter_quantity(usage, usage_class, "call").is_some(),
+            "context_tier": context_tier,
+            "service_tier": service_tier,
+            "unpriced": true,
+        }));
+    }
     Ok(total)
 }
 
@@ -1562,20 +1567,9 @@ fn ensure_settled_service_tier_rates(
         }
     }
 
-    for usage_class in requested_usage_classes {
-        let has_meter = rates.iter().any(|rate| {
-            rate.rate_kind == "meter"
-                && rate.usage_class == *usage_class
-                && rate.modality.is_none()
-                && rate.cache_ttl.is_none()
-                && rate_matches_dimension(rate, None, context_tier, Some(service_tier), None)
-        });
-        if !has_meter {
-            return Err(format!(
-                "missing meter rate for usage_class={usage_class}, context_tier={context_tier:?}, service_tier={service_tier:?}"
-            ));
-        }
-    }
+    // MB-M5: an absent meter rate for a requested server-tool usage class settles at zero,
+    // so it is not a missing-rate condition even on a non-default service tier.
+    let _ = requested_usage_classes;
     Ok(())
 }
 

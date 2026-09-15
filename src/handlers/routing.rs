@@ -299,7 +299,7 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
         Result<Option<BillingRateResolution>, String>,
     > = std::collections::HashMap::new();
     let mut blocked_models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut blocked_meter_errors: std::collections::BTreeSet<String> =
+    let mut blocked_rate_errors: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
     let mut allowed_attempts = Vec::with_capacity(attempts.len());
 
@@ -336,16 +336,10 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
                         Err(error) => Err(error),
                     }
                 }
-                None => {
-                    if urp.server_tool_usage_classes.is_empty() {
-                        Ok(None)
-                    } else {
-                        Err(format!(
-                            "meter rate required for server-native tool usage class: {}",
-                            urp.server_tool_usage_classes.join(", ")
-                        ))
-                    }
-                }
+                // MB-M5: an unpriced server-native tool usage class settles at zero rather
+                // than excluding the mapping, so a request that enables such a tool routes
+                // exactly like one that does not.
+                None => Ok(None),
             };
             pricing_cache.insert(cache_key, priced.clone());
             priced
@@ -353,7 +347,7 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
 
         match pricing {
             Err(err) => {
-                blocked_meter_errors.insert(err);
+                blocked_rate_errors.insert(err);
             }
             Ok(Some(resolution)) => {
                 attempt.billable_pricing_available = true;
@@ -366,8 +360,8 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
         }
     }
 
-    if !blocked_meter_errors.is_empty() {
-        let blocked_list = blocked_meter_errors
+    if !blocked_rate_errors.is_empty() {
+        let blocked_list = blocked_rate_errors
             .into_iter()
             .collect::<Vec<_>>()
             .join(", ");
