@@ -1,4 +1,4 @@
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::handlers::usage::{
     mark_stream_ttfb_if_needed, record_cumulative_stream_usage_snapshot,
     record_stream_done_sentinel, record_stream_response_service_tier, record_stream_terminal_error,
@@ -356,16 +356,25 @@ pub(crate) async fn stream_messages_to_urp_events(
 
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream_idle_timeout",
-                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
-            )
-        })?
-    {
+    loop {
+        let next = match tokio::time::timeout(idle_timeout, stream.next()).await {
+            Ok(next) => next,
+            Err(_) => {
+                // The downstream status was committed as 200 before the first frame, so an
+                // idle timeout can only be reported on the wire. Returning an error here
+                // without a terminal would close the stream with no explanation.
+                emit_messages_terminal_protocol_error(
+                    &tx,
+                    &runtime_metrics,
+                    "upstream_idle_timeout",
+                    format!("upstream stream idle for {idle_timeout_ms}ms without data"),
+                    HashMap::new(),
+                )
+                .await;
+                return Ok(());
+            }
+        };
+        let Some(ev) = next else { break };
         let ev = match ev {
             Ok(event) => event,
             Err(error) => {

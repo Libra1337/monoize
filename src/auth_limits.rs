@@ -319,6 +319,8 @@ pub struct InFlightSpend {
 /// still running.
 #[derive(Clone)]
 pub struct InFlightReservation {
+    // Held only to keep the reservation alive; the release happens in the inner Drop.
+    #[allow(dead_code)]
     inner: Arc<InFlightReservationInner>,
 }
 

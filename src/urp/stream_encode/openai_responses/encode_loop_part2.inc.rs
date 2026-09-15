@@ -8,6 +8,69 @@ mod tests {
         HashMap::new()
     }
 
+    // The decoder ends without a terminal when it fails -- idle timeout, transport error,
+    // or panic. Every completing path publishes `ResponseDone`. Closing the SSE stream with
+    // no terminal makes a truncated turn indistinguishable from a successful one; Responses
+    // clients report it as a stream that ended before `response.completed`.
+    #[tokio::test]
+    async fn responses_encoder_emits_a_terminal_when_the_decoder_ends_without_one() {
+        use tokio::sync::mpsc;
+
+        let (event_tx, event_rx) = mpsc::channel::<UrpStreamEvent>(8);
+        let (sse_tx, mut sse_rx) = mpsc::channel(8);
+
+        event_tx
+            .send(UrpStreamEvent::NodeStart {
+                node_index: 0,
+                header: NodeHeader::Text {
+                    id: Some("msg_partial".to_string()),
+                    role: OrdinaryRole::Assistant,
+                    phase: None,
+                },
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("node start");
+        event_tx
+            .send(UrpStreamEvent::NodeDelta {
+                node_index: 0,
+                delta: NodeDelta::Text {
+                    content: "partial answer".to_string(),
+                },
+                usage: None,
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("node delta");
+        // No ResponseDone: the decoder failed after producing content.
+        drop(event_tx);
+
+        encode_urp_stream_as_responses(event_rx, sse_tx, "gpt-5.4", Instant::now(), None, false)
+            .await
+            .expect("encode Responses stream");
+
+        let mut text = String::new();
+        while let Some(event) = sse_rx.recv().await {
+            text.push_str(&format!("{event:?}"));
+        }
+        assert!(
+            text.contains("upstream_stream_incomplete"),
+            "a decoder that ends without a terminal must produce one: {text}"
+        );
+        assert!(
+            text.contains("response.failed"),
+            "the Responses terminal for an incomplete stream is response.failed: {text}"
+        );
+        assert!(
+            text.contains("[DONE]"),
+            "the Responses stream ends with a [DONE] sentinel: {text}"
+        );
+        assert!(
+            !text.contains("response.completed"),
+            "the fallback must not claim success: {text}"
+        );
+    }
+
     #[test]
     fn responses_stream_provider_item_filters_nested_internal_metadata() {
         let native_body = json!({

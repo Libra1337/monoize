@@ -1454,6 +1454,10 @@ pub(crate) async fn encode_urp_stream_as_messages(
     let mut next_flush_node_index = 0u32;
     let mut response_id: Option<String> = None;
     let mut message_start_sent = false;
+    // Set when `ResponseDone` is seen. An empty turn is a legitimate completion that
+    // emits no terminal, so the post-loop fallback must key off this and not off the
+    // absence of a terminal alone.
+    let mut decoder_completed = false;
     let mut pending_envelope_extra: HashMap<String, Value> = HashMap::new();
     let mut should_emit_terminal_message = false;
     let mut open_node_index: Option<u32> = None;
@@ -1744,6 +1748,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 output,
                 extra_body,
             } => {
+                decoder_completed = true;
                 if let Some(usage) = &usage {
                     response_usage = Some(usage.clone());
                 }
@@ -1900,6 +1905,20 @@ pub(crate) async fn encode_urp_stream_as_messages(
         }
     }
 
+    // The decoder ended without ever completing. An empty turn is a legitimate completion that
+    // emits no terminal, so only a missing `ResponseDone` means the turn was cut short -- an
+    // idle timeout, a transport error, or a panic. Closing silently would make that
+    // indistinguishable from a clean end, so emit the canonical Messages error frame.
+    // DM7: the Messages protocol has no `[DONE]` sentinel, so none is appended here.
+    if !decoder_completed {
+        let error = messages_error_payload(
+            Some("upstream_stream_incomplete"),
+            "upstream stream ended before a terminal event",
+            &HashMap::new(),
+        );
+        send_named_messages_event(&tx, error).await?;
+    }
+
     Ok(())
 }
 
@@ -2029,7 +2048,62 @@ mod provider_item_wire_tests {
     // generic text and drop the nested upstream error object, for every model
     // and regardless of the masking switch. Exercised through the full
     // encoder so the frame the client receives is the assertion surface.
+    // The decoder ends without a terminal when it fails -- idle timeout, transport error,
+    // or panic. Every completing path returns from inside the loop after `message_stop`.
+    // Closing silently makes a truncated turn look like a clean end.
     #[tokio::test]
+    async fn messages_encoder_emits_a_terminal_when_the_decoder_ends_without_one() {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (sse_tx, mut sse_rx) = mpsc::channel(8);
+
+        event_tx
+            .send(UrpStreamEvent::NodeStart {
+                node_index: 0,
+                header: NodeHeader::Text {
+                    id: Some("msg_partial".to_string()),
+                    role: OrdinaryRole::Assistant,
+                    phase: None,
+                },
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("node start");
+        event_tx
+            .send(UrpStreamEvent::NodeDelta {
+                node_index: 0,
+                delta: urp::NodeDelta::Text {
+                    content: "partial answer".to_string(),
+                },
+                usage: None,
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("node delta");
+        // No ResponseDone: the decoder failed after producing content.
+        drop(event_tx);
+
+        encode_urp_stream_as_messages(event_rx, sse_tx, "glm-5.3", None, false)
+            .await
+            .expect("encode messages stream");
+
+        let mut text = String::new();
+        while let Some(event) = sse_rx.recv().await {
+            text.push_str(&format!("{event:?}"));
+        }
+        assert!(
+            text.contains("upstream_stream_incomplete"),
+            "a decoder that ends without a terminal must produce one: {text}"
+        );
+        assert!(
+            text.contains("event: error") || text.contains("error"),
+            "the Messages terminal for an incomplete stream is an error event: {text}"
+        );
+        assert!(
+            !text.contains("message_stop"),
+            "the fallback must not claim a clean stop: {text}"
+        );
+    }
+
     async fn messages_stream_quota_error_uses_generic_text() {
         let (event_tx, event_rx) = mpsc::channel(8);
         let (sse_tx, mut sse_rx) = mpsc::channel(8);

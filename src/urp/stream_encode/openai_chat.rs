@@ -1092,6 +1092,21 @@ pub(crate) async fn encode_urp_stream_as_chat(
         }
     }
 
+    // The decoder ended without publishing a terminal: it failed rather than completed,
+    // because every completing path sets `finished`. The HTTP status is already 200, so a
+    // silent close would be indistinguishable from a clean end. Emit the canonical Chat
+    // error frame so the client can tell the turn apart from a successful one.
+    if !finished {
+        let payload = chat_error_payload(
+            None,
+            Some("upstream_stream_incomplete"),
+            "upstream stream ended before a terminal event",
+            &HashMap::new(),
+        );
+        send_plain_sse_data(&tx, payload.to_string()).await?;
+        send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
+    }
+
     Ok(())
 }
 
@@ -1615,6 +1630,63 @@ mod tests {
         assert!(text.contains("brief summary"));
         assert!(text.contains("\\\"delta\\\":{\\\"reasoning_content\\\":\\\"brief summary\\\"}"));
         assert!(!text.contains("data: {\"reasoning_content\":\"brief summary\"}"));
+    }
+
+    // The decoder ends without a terminal when it fails -- idle timeout, transport error,
+    // or panic. Every completing path publishes `ResponseDone`, so a closed channel without
+    // one means the turn was cut short. A silent close is indistinguishable from a clean end
+    // for the client, which reports it as a stream that ended before completion.
+    #[tokio::test]
+    async fn chat_encoder_emits_a_terminal_when_the_decoder_ends_without_one() {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (sse_tx, mut sse_rx) = mpsc::channel(8);
+
+        event_tx
+            .send(UrpStreamEvent::NodeStart {
+                node_index: 0,
+                header: urp::NodeHeader::Text {
+                    id: Some("msg_partial".to_string()),
+                    role: urp::OrdinaryRole::Assistant,
+                    phase: None,
+                },
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("node start");
+        event_tx
+            .send(UrpStreamEvent::NodeDelta {
+                node_index: 0,
+                delta: urp::NodeDelta::Text {
+                    content: "partial answer".to_string(),
+                },
+                usage: None,
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("node delta");
+        // No ResponseDone: the decoder failed after producing content.
+        drop(event_tx);
+
+        encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None, false)
+            .await
+            .expect("encode stream");
+
+        let mut text = String::new();
+        while let Some(event) = sse_rx.recv().await {
+            text.push_str(&format!("{event:?}"));
+        }
+        assert!(
+            text.contains("upstream_stream_incomplete"),
+            "a decoder that ends without a terminal must produce one: {text}"
+        );
+        assert!(
+            text.contains("[DONE]"),
+            "the Chat protocol terminates with a [DONE] sentinel: {text}"
+        );
+        assert!(
+            !text.contains("finish_reason\":\"stop"),
+            "the fallback must not claim success: {text}"
+        );
     }
 
     async fn collect_chat_error_frame_text(mask_sensitive_info: bool) -> String {

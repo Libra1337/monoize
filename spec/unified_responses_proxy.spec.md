@@ -1791,3 +1791,16 @@ SE3. If the downstream channel sender is already closed, client disconnected, Mo
 SE3a. For downstream `POST /v1/responses`, Monoize-generated `event: error` SSE payloads MUST NOT nest the error under an `error` object. The fields `type`, `sequence_number`, `code`, `message`, and `param` MUST be top-level fields of the SSE JSON payload.
 
 SE4. If an upstream Responses stream emits an `error` event or `response.failed` event, Monoize MUST treat that event as terminal. Monoize MUST NOT consume or forward any later upstream `response.completed` event or `response.failed` event for that request, and MUST NOT synthesize a successful `ResponseDone` after the error. For downstream `POST /v1/responses`, the externally visible terminal JSON event MUST be `response.failed`. If the upstream failure contains `type`, `code`, `message`, or `param`, Monoize MUST preserve those fields in `response.failed.response.error`.
+
+## Stream terminal fallback
+
+FP7a. A downstream streaming encoder MUST publish its protocol's terminal frame even when its input channel closes without one. The decoder publishes a terminal on every completing path, so a closed channel without one means the decoder failed -- an idle timeout, a transport error, or a task panic -- rather than completed. The downstream HTTP status is already committed as `200` when the first frame is sent, so this condition can only be reported on the wire. Closing the stream silently MUST NOT happen, because a truncated turn would then be indistinguishable from a successful one; clients report it as a stream that ended before the completion event.
+
+FP7b. The fallback terminal MUST NOT claim success. It MUST NOT synthesize a successful terminal frame:
+- Responses: emit `response.failed` with `code = upstream_stream_incomplete`, then the `[DONE]` sentinel.
+- Chat Completions: emit the canonical Chat error frame, then the `[DONE]` sentinel.
+- Messages: emit the canonical Messages error frame. DM7 applies, so no `[DONE]` sentinel is appended.
+
+FP7c. The fallback MUST NOT fire when the decoder completed without producing a visible terminal. An empty turn is a legitimate completion: the Messages encoder emits no terminal when nothing visible was produced and no message was started. Each encoder MUST therefore distinguish "the decoder completed" from "a terminal was published", and the fallback MUST key off the former.
+
+FP7d. An upstream idle timeout MUST be reported to the downstream client as a terminal frame rather than by returning an error that closes the stream. The observed condition is a Chat Completions upstream that stops sending for `monoize_stream_idle_timeout_ms` after producing content.

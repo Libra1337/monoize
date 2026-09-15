@@ -110,6 +110,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
     let mut response_id = "resp".to_string();
     let mut created: Option<i64> = None;
     let mut error_terminal_sent = false;
+    // Set by whichever arm publishes the downstream terminal. Read after the receive
+    // loop to detect that the decoder ended without one.
+    let mut terminal_sent = false;
     let mut next_output_index = 0usize;
     let mut node_states: HashMap<u32, StreamedNodeState> = HashMap::new();
     let mut completed_output_items: Vec<(usize, Value)> = Vec::new();
@@ -1500,6 +1503,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 )
                 .await?;
                 send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
+                terminal_sent = true;
             }
             UrpStreamEvent::ProviderControl {
                 protocol,
@@ -1563,8 +1567,37 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 .await?;
                 send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
                 error_terminal_sent = true;
+                terminal_sent = true;
             }
         }
+    }
+
+    // The decoder task ended without publishing a terminal event. That happens when it
+    // fails -- an idle timeout, a transport error, or a panic -- rather than completing,
+    // because every completing path publishes `ResponseDone`. The downstream HTTP status
+    // was committed as 200 before the first frame, so the only way to tell the client is
+    // on the wire. Closing silently makes a truncated turn indistinguishable from a
+    // successful one, and Responses clients report it as a stream that ended before
+    // `response.completed`. Emit the protocol terminal instead.
+    if !terminal_sent {
+        let created_at = created.unwrap_or_else(now_ts);
+        let empty = HashMap::new();
+        let failed_response = response_failed_payload(
+            &response_id,
+            created_at,
+            logical_model,
+            Some("upstream_stream_incomplete"),
+            "upstream stream ended before a terminal event",
+            &empty,
+        );
+        send_responses_event(
+            &tx,
+            &mut seq,
+            "response.failed",
+            json!({ "response": failed_response }),
+        )
+        .await?;
+        send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
     }
 
     Ok(())

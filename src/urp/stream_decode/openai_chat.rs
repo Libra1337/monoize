@@ -69,16 +69,27 @@ pub(crate) async fn stream_chat_to_urp_events(
 
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream_idle_timeout",
-                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
-            )
-        })?
-    {
+    loop {
+        let next = match tokio::time::timeout(idle_timeout, stream.next()).await {
+            Ok(next) => next,
+            Err(_) => {
+                // The downstream status was committed as 200 before the first frame, so an
+                // idle timeout can only be reported on the wire. Returning an error here
+                // without a terminal would close the SSE stream with no explanation, which
+                // clients report as a stream that ended before the completion event.
+                emit_chat_terminal_error(
+                    &tx,
+                    &runtime_metrics,
+                    "upstream_idle_timeout",
+                    &format!("upstream stream idle for {idle_timeout_ms}ms without data"),
+                    None,
+                    None,
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        let Some(ev) = next else { break };
         let ev = match ev {
             Ok(ev) => ev,
             Err(err) => {
