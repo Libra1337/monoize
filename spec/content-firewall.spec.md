@@ -296,3 +296,5 @@ rejections.
 CF-32. Judge rejections and marked requests use the judge category and the
 first keyword hit respectively as the event `term` and reason, per CF-21 and
 CF-15.
+
+CF-JUDGE-KEY. When `MONOIZE_MODERATION_JUDGE_API_KEY` is set to a non-empty value, it MUST override the stored judge credential. The stored value MUST remain the fallback for a deployment that supplies no environment value. A deployment MUST be able to leave the stored credential empty and keep the key only in a mounted secret file, so the credential is never persisted in the database or a database backup.

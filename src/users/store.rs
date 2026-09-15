@@ -1602,6 +1602,26 @@ impl UserStore {
         Ok(())
     }
 
+    /// CF-71: a session token is stored as its SHA-256 hex digest, so a database read
+    /// does not yield a usable session. The token is 128 bits of `Uuid::new_v4` entropy,
+    /// so it is not guessable and a fast digest is the right primitive -- a password
+    /// KDF would add latency to every authenticated request for no gain.
+    ///
+    /// The column keeps holding one opaque value per session, so the unique index on
+    /// `sessions.token` and every equality lookup keep working unchanged.
+    /// Test-facing alias so an integration test can assert what the column holds.
+    pub fn hash_session_token_public(token: &str) -> String {
+        Self::hash_session_token(token)
+    }
+
+    pub(crate) fn hash_session_token(token: &str) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(token.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
     pub async fn create_session(
         &self,
         user_id: &str,
@@ -1624,7 +1644,7 @@ impl UserStore {
                 vec![
                     id.clone().into(),
                     user_id.into(),
-                    token.clone().into(),
+                    Self::hash_session_token(&token).into(),
                     now.to_rfc3339().into(),
                     expires_at.to_rfc3339().into(),
                 ],
@@ -1697,7 +1717,7 @@ impl UserStore {
             vec![
                 session.id.clone().into(),
                 session.user_id.clone().into(),
-                session.token.clone().into(),
+                Self::hash_session_token(&session.token).into(),
                 session.created_at.to_rfc3339().into(),
                 session.expires_at.to_rfc3339().into(),
             ],
@@ -1747,7 +1767,7 @@ impl UserStore {
             .read()
             .query_one(self.db.stmt(
                 "SELECT id, user_id, token, created_at, expires_at FROM sessions WHERE token = $1",
-                vec![token.into()],
+                vec![Self::hash_session_token(token).into()],
             ))
             .await
             .map_err(|e| e.to_string())?;
@@ -1786,7 +1806,10 @@ impl UserStore {
             .await
             .execute(
                 self.db
-                    .stmt("DELETE FROM sessions WHERE token = $1", vec![token.into()]),
+                    .stmt(
+                        "DELETE FROM sessions WHERE token = $1",
+                        vec![Self::hash_session_token(token).into()],
+                    ),
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -3360,6 +3383,41 @@ impl UserStore {
         Ok(())
     }
 
+    /// CF-73: the same rule as `ensure_user_can_spend`, minus the amount already committed
+    /// to in-flight requests. `reserved` is a subtraction from the spendable balance, so a
+    /// wallet with 10 nano and 9 in flight has 1 spendable and still passes; one with 10
+    /// nano and 10 in flight has 0 and does not.
+    pub async fn ensure_user_can_spend_above(
+        &self,
+        user_id: &str,
+        reserved_nano_usd: i128,
+    ) -> Result<bool, BillingError> {
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1",
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?
+            .ok_or_else(|| BillingError::new(BillingErrorKind::NotFound, "user not found"))?;
+        let raw: String = row
+            .try_get("", "balance_nano_usd")
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+        let balance = parse_nano_usd(&raw)
+            .map_err(|e| BillingError::new(BillingErrorKind::InvalidStoredBalance, e))?;
+        let unlimited = row
+            .try_get::<i32>("", "balance_unlimited")
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?
+            == 1;
+
+        if unlimited {
+            return Ok(true);
+        }
+        Ok(balance.saturating_sub(reserved_nano_usd.max(0)) > 0)
+    }
+
     pub async fn charge_user_balance_nano(
         &self,
         user_id: &str,
@@ -4227,7 +4285,7 @@ mod tests {
                     (Utc::now() - chrono::Duration::seconds(1))
                         .to_rfc3339()
                         .into(),
-                    future.token.into(),
+                    UserStore::hash_session_token(&future.token).into(),
                 ],
             ))
             .await

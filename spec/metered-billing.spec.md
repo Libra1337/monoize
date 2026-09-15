@@ -384,3 +384,19 @@ copy to survive. Catalog sync deletes every `source = 'catalog'` row, and deleti
 metadata record deletes every rate whose id begins with `model_metadata:`. A copy that kept
 either property would disappear when its unrelated source was next synced or removed.
 
+
+## Wallet preflight under concurrency
+
+MB-CONC1. Before forwarding a balance-funded request, Monoize MUST answer the preflight from the user's persisted balance minus the total amount already reserved for that user by other in-flight requests. When no amount is reserved, this answer MUST equal the pre-existing rule: sufficient when the balance is positive, and unrestricted for an unlimited balance.
+
+MB-CONC2. On passing the preflight, Monoize MUST reserve that request's own cost ceiling for the user. The ceiling MUST be the same value the plan-funded path reserves against. The reservation MUST be held until the request's funding scope is finalized, and MUST be released on every exit path: success, error, early return, or task drop. Release MUST NOT depend on a hand-written call on one path.
+
+MB-CONC3. A cloned funding scope MUST share one reservation with its original, and the amount MUST be released exactly once, when the last clone is dropped. A clone MUST NOT double-count the amount, and dropping one clone MUST NOT release it while another still holds it.
+
+MB-CONC4. The reservation MUST be subtracted from the available balance only. It MUST NOT change the persisted balance, MUST NOT write a ledger row, and MUST NOT settle.
+
+MB-CONC5. When the request's cost ceiling is unknown, Monoize MUST fall back to the pre-existing rule unchanged and MUST NOT reserve. An unpriced route MUST NOT become newly rejectable because of this rule.
+
+MB-CONC6. The reservation store MUST live in memory and MAY be lost on restart. Losing it MUST NOT permit spending, because it only ever makes the preflight stricter.
+
+MB-CONC7. The reservation MUST NOT be exposed as a balance, a ledger entry, or a billing field. It is an admission bound, not money.

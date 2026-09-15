@@ -189,6 +189,11 @@ pub struct AppState {
     pub refund_provider: Arc<dyn crate::store_billing::refund_operations::RefundProvider>,
     pub store_order_poll_limiter: crate::store_billing::poll_limit::StoreOrderPollLimiter,
     pub store_callback_limiter: crate::store_billing::callback_limit::StoreCallbackLimiter,
+    /// CF-70: failed-login counters for the dashboard login endpoint.
+    pub login_throttle: crate::auth_limits::LoginThrottle,
+    /// CF-73: wallet amounts already committed to in-flight requests, subtracted by the
+    /// balance preflight so concurrent requests cannot each spend the same balance.
+    pub in_flight_spend: crate::auth_limits::InFlightSpend,
     pub node: Arc<NodeSettings>,
     pub db_pool: DbPool,
     /// Present on replicas; drives the metering shipment pipeline.
@@ -1103,6 +1108,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         refund_provider,
         store_order_poll_limiter: crate::store_billing::poll_limit::StoreOrderPollLimiter::default(
         ),
+        login_throttle: crate::auth_limits::LoginThrottle::default(),
+        in_flight_spend: crate::auth_limits::InFlightSpend::default(),
         store_callback_limiter: crate::store_billing::callback_limit::StoreCallbackLimiter::default(
         ),
         node,
@@ -2106,10 +2113,20 @@ pub(crate) fn runtime_config_from_settings(
     runtime.content_firewall = crate::content_firewall::ContentFirewall::compile(
         &settings_snapshot.moderation_blocked_words,
     );
+    // CF-72: the judge credential is a real provider API key, and a database or backup
+    // read would otherwise expose it verbatim. When `MONOIZE_MODERATION_JUDGE_API_KEY`
+    // is set it wins over the stored value, so a deployment can keep the key in a
+    // mounted secret file and never persist it. The dashboard field remains the
+    // fallback for an environment that does not supply one.
+    let judge_api_key = std::env::var("MONOIZE_MODERATION_JUDGE_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| settings_snapshot.moderation_judge_api_key.clone());
     runtime.moderation_judge = crate::moderation_judge::JudgeConfig {
         enabled: settings_snapshot.moderation_judge_enabled,
         base_url: settings_snapshot.moderation_judge_base_url.clone(),
-        api_key: settings_snapshot.moderation_judge_api_key.clone(),
+        api_key: judge_api_key,
         model: settings_snapshot.moderation_judge_model.clone(),
         timeout_ms: settings_snapshot.moderation_judge_timeout_ms.max(1),
     };
@@ -2287,6 +2304,11 @@ fn build_v1_router() -> Router<AppState> {
 
 fn build_root_api_router(metrics_path: &str) -> Router<AppState> {
     build_v1_router()
+        // Registered here rather than on the dashboard router so both a primary and a
+        // replica answer them, and before `frontend_fallback`, which would otherwise
+        // serve the SPA with HTTP 200 for any unknown path.
+        .route("/healthz", get(crate::handlers::health_liveness))
+        .route("/readyz", get(crate::handlers::health_readiness))
         .route(metrics_path, get(crate::dashboard_handlers::get_metrics))
         .route(
             "/presets/providers",

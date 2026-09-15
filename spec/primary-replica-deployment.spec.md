@@ -385,7 +385,13 @@ F3. While the primary is unavailable, replicas MUST continue serving `/v1/**` tr
 
 ## 10. Observability
 
-O1. Every replica MUST export Prometheus counter `monoize_replica_metering_shipped_total{result="ok"|"error"}` and gauge `monoize_replica_metering_pending_entries`. The primary MUST export counter `monoize_primary_metering_applied_total`.
+O1a. Monoize MUST serve `GET /healthz` and `GET /readyz` on both the primary and the replica role. They MUST be registered on the forwarding router, which is merged before the SPA fallback, so that an unknown path continues to reach the SPA and `/healthz` does not.
+
+O1b. `GET /healthz` MUST answer HTTP `200` with the exact body `ok` followed by a newline. It MUST NOT read the database. It is the process-liveness signal, and the container healthcheck MUST use it, so a database outage MUST NOT restart a process that is otherwise serving.
+
+O1c. `GET /readyz` MUST answer HTTP `200` with a JSON object containing `status`, `database_backend`, `database_reachable`, and `role`, and MUST answer HTTP `503` with the same shape when the database read fails or exceeds its bound. It MUST perform at most one trivial read with a bounded wait. It MUST NOT be the container healthcheck, because a failing healthcheck restarts the process and a restart cannot repair a database.
+
+O2. Every replica MUST export Prometheus counter `monoize_replica_metering_shipped_total{result="ok"|"error"}` and gauge `monoize_replica_metering_pending_entries`. The primary MUST export counter `monoize_primary_metering_applied_total`.
 
 ## 11. Cross-specification revisions
 

@@ -275,8 +275,28 @@ pub async fn register(
 
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> AppResult<impl IntoResponse> {
+    // CF-70: the throttle is checked first, so a throttled caller reaches neither the
+    // CAPTCHA service nor password hashing. Failures are counted per (username, source
+    // address) and per source address, and cleared by a successful login.
+    let source_ip = crate::client_ip::canonical_client_ip_from_headers(&headers);
+    if state.login_throttle.check(&body.username, source_ip)
+        == crate::auth_limits::LoginThrottleVerdict::Throttled
+    {
+        tracing::warn!(
+            username = %body.username,
+            source_ip = ?source_ip,
+            "dashboard login throttled after repeated failures"
+        );
+        return Err(AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "login_throttled",
+            "too many failed login attempts; try again later",
+        ));
+    }
+
     verify_captcha(&state, &body.captcha_token).await?;
 
     let user_store = &state.user_store;
@@ -301,6 +321,7 @@ pub async fn login(
     .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     let Some(user) = user else {
+        state.login_throttle.record_failure(&body.username, source_ip);
         return Err(AppError::new(
             StatusCode::UNAUTHORIZED,
             "invalid_credentials",
@@ -309,6 +330,7 @@ pub async fn login(
     };
 
     if !valid {
+        state.login_throttle.record_failure(&body.username, source_ip);
         return Err(AppError::new(
             StatusCode::UNAUTHORIZED,
             "invalid_credentials",
@@ -324,6 +346,7 @@ pub async fn login(
         ));
     }
 
+    state.login_throttle.record_success(&body.username, source_ip);
     user_store.update_last_login(&user.id).await.ok();
 
     let session_ttl_days = state

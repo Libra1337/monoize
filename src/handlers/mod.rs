@@ -56,6 +56,52 @@ pub use account_balance::{codex_usage, deepseek_user_balance};
 pub use compact::compact_response;
 pub use responses_websocket::responses_websocket;
 
+/// Liveness: the process is running and serving HTTP. Deliberately does not touch the
+/// database. The container healthcheck calls this, so a database outage must not make
+/// it fail -- a failing healthcheck makes Docker restart a process that is fine, and a
+/// restart loop cannot repair a database.
+pub async fn health_liveness() -> Response {
+    (StatusCode::OK, "ok
+").into_response()
+}
+
+/// Readiness: the process can reach its database. This is the check an operator or a
+/// load balancer should read. It is NOT wired to the container healthcheck for the
+/// reason above.
+pub async fn health_readiness(State(state): State<AppState>) -> Response {
+    use sea_orm::ConnectionTrait;
+    let backend = if state.db_pool.is_sqlite() {
+        "sqlite"
+    } else if state.db_pool.is_postgres() {
+        "postgres"
+    } else {
+        "unknown"
+    };
+    // One trivial read with a bounded wait: enough to prove the pool hands out a
+    // connection, cheap enough to poll.
+    let probe = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        state
+            .db_pool
+            .read()
+            .query_one(state.db_pool.stmt("SELECT 1", vec![])),
+    )
+    .await;
+    let database_ok = matches!(probe, Ok(Ok(_)));
+    let body = json!({
+        "status": if database_ok { "ready" } else { "degraded" },
+        "database_backend": backend,
+        "database_reachable": database_ok,
+        "role": if state.node.is_replica() { "replica" } else { "primary" },
+    });
+    let status = if database_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, Json(body)).into_response()
+}
+
 #[allow(clippy::result_large_err)]
 fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> AppResult<()> {
     if !auth.model_limits_enabled || auth.model_limits.is_empty() {
@@ -1681,7 +1727,10 @@ struct AdmittedFundingScope {
 
 #[derive(Clone)]
 enum AdmittedFunding {
-    Balance,
+    /// CF-73: the reservation guard is held for the whole request, so the amount stays
+    /// counted against this user until settlement finishes (or the request dies, which
+    /// drops the guard).
+    Balance(Option<crate::auth_limits::InFlightReservation>),
     PrimaryPlan(crate::store_billing::quota::QuotaStore, String),
     ReplicaPlan(crate::replica::admission_client::AdmissionHandlerScope),
 }
@@ -1689,7 +1738,13 @@ enum AdmittedFunding {
 impl AdmittedFundingScope {
     fn balance() -> Self {
         Self {
-            funding: AdmittedFunding::Balance,
+            funding: AdmittedFunding::Balance(None),
+        }
+    }
+
+    fn balance_with_reservation(reservation: crate::auth_limits::InFlightReservation) -> Self {
+        Self {
+            funding: AdmittedFunding::Balance(Some(reservation)),
         }
     }
 
@@ -1718,7 +1773,7 @@ impl AdmittedFundingScope {
 
     async fn finish<T>(self, outcome: AppResult<T>) -> AppResult<T> {
         let (store, request_id) = match self.funding {
-            AdmittedFunding::Balance => return outcome,
+            AdmittedFunding::Balance(_reservation) => return outcome,
             AdmittedFunding::ReplicaPlan(scope) => {
                 return match outcome {
                     Err(error) => {
@@ -1803,8 +1858,10 @@ async fn ensure_balance_before_forward_for_attempts(
     if !attempts_require_balance(attempts) {
         return Ok(AdmittedFundingScope::balance());
     }
+    // Computed once and kept in scope: both the plan path and the balance fall-through
+    // below need the same ceiling.
+    let maximum = billing::plan_maximum_for_attempts(state, request, attempts).await;
     if let Some(user_id) = auth.user_id.as_deref() {
-        let maximum = billing::plan_maximum_for_attempts(state, request, attempts).await;
         if state.node.is_replica() {
             let (maximum_nano_usd, pricing_revision) = maximum.ok_or_else(|| {
                 AppError::new(
@@ -1869,8 +1926,58 @@ async fn ensure_balance_before_forward_for_attempts(
             ));
         }
     }
-    ensure_balance_before_forward(state, auth).await?;
-    Ok(AdmittedFundingScope::balance())
+    // CF-73: subtract what this user already has in flight, then hold this request's own
+    // cost ceiling. Without the subtraction every concurrent request reads the same
+    // balance and each one settlements in full, which is how a wallet reaches a negative
+    // value. With it, one wave can overshoot by at most one request's ceiling.
+    let reservation = match (auth.user_id.as_deref(), maximum.as_ref()) {
+        (Some(user_id), Some((ceiling, _))) if *ceiling > 0 => {
+            let in_flight = state.in_flight_spend.reserved_for(user_id);
+            if !state
+                .user_store
+                .ensure_user_can_spend_above(user_id, in_flight)
+                .await
+                .map_err(map_balance_preflight_error)?
+            {
+                return Err(AppError::new(
+                    StatusCode::PAYMENT_REQUIRED,
+                    "insufficient_balance",
+                    "insufficient balance",
+                ));
+            }
+            Some(state.in_flight_spend.reserve(user_id, *ceiling))
+        }
+        _ => {
+            // No priced ceiling (nothing billable on this route): keep the original
+            // rule exactly, so an unpriced request is never newly rejected.
+            ensure_balance_before_forward(state, auth).await?;
+            None
+        }
+    };
+    Ok(match reservation {
+        Some(reservation) => AdmittedFundingScope::balance_with_reservation(reservation),
+        None => AdmittedFundingScope::balance(),
+    })
+}
+
+fn map_balance_preflight_error(error: crate::users::BillingError) -> AppError {
+    match error.kind {
+        BillingErrorKind::InsufficientBalance => AppError::new(
+            StatusCode::PAYMENT_REQUIRED,
+            "insufficient_balance",
+            "insufficient balance",
+        ),
+        BillingErrorKind::NotFound => AppError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "user not found",
+        ),
+        _ => AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            error.message,
+        ),
+    }
 }
 
 fn map_plan_quota_error(error: crate::store_billing::quota::QuotaError) -> AppError {
