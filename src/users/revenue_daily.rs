@@ -452,9 +452,18 @@ pub async fn settle_elapsed_days(db: &DbPool, now: DateTime<Utc>) -> Result<u32,
     let Some(days) = crate::beijing_time::beijing_day_ids(&start_day, &yesterday) else {
         return Ok(0);
     };
+    // A day counts as settled only when it has user rows: days settled by a
+    // pre-000106 build carry a summary and model rows but no per-user detail,
+    // so they must be recomputed once to backfill the user rows.
     let settled_days = db
         .read()
-        .query_all(db.stmt("SELECT day FROM admin_revenue_daily_summaries", vec![]))
+        .query_all(db.stmt(
+            "SELECT s.day AS day \
+             FROM admin_revenue_daily_summaries s \
+             JOIN admin_revenue_daily_user_rows u ON u.day = s.day \
+             GROUP BY s.day",
+            vec![],
+        ))
         .await
         .map_err(|e| e.to_string())?
         .into_iter()
