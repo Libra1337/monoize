@@ -210,7 +210,11 @@ pub async fn aggregate_revenue_day(
         return Ok(None);
     }
     let is_postgres = db.is_postgres();
-    let mut models = Vec::new();
+    // The single scan groups by (day, model, user), so one model can appear in
+    // many rows — one per consuming user. Both the model and the user detail
+    // merge those per-user groups back into one row per model / per user.
+    let mut models_by_name: std::collections::HashMap<String, RevenueModelRow> =
+        std::collections::HashMap::new();
     let mut users_by_id: std::collections::HashMap<String, RevenueUserRow> =
         std::collections::HashMap::new();
     let mut total_calls = 0i64;
@@ -227,13 +231,26 @@ pub async fn aggregate_revenue_day(
         total_calls = total_calls.saturating_add(calls);
         total_input = total_input.saturating_add(input);
         total_output = total_output.saturating_add(output);
-        models.push(RevenueModelRow {
-            model,
-            charge_nano_usd: charge.to_string(),
-            calls,
-            input_tokens: input,
-            output_tokens: output,
-        });
+        let model_entry = models_by_name
+            .entry(model)
+            .or_insert_with(|| RevenueModelRow {
+                model: String::new(),
+                charge_nano_usd: "0".to_string(),
+                calls: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+            });
+        model_entry.calls = model_entry.calls.saturating_add(calls);
+        model_entry.input_tokens = model_entry.input_tokens.saturating_add(input);
+        model_entry.output_tokens = model_entry.output_tokens.saturating_add(output);
+        let mut model_total = model_entry
+            .charge_nano_usd
+            .parse::<i128>()
+            .map_err(|_| "revenue charge aggregate overflow".to_string())?;
+        model_total = model_total
+            .checked_add(charge)
+            .ok_or_else(|| "revenue charge aggregate overflow".to_string())?;
+        model_entry.charge_nano_usd = model_total.to_string();
         let user_id: String = row.try_get("", "user_id").map_err(|e| e.to_string())?;
         let username: Option<String> = row.try_get("", "username").ok();
         let entry = users_by_id
@@ -246,7 +263,6 @@ pub async fn aggregate_revenue_day(
                 input_tokens: 0,
                 output_tokens: 0,
             });
-        entry.user_id = entry.user_id.clone();
         entry.calls = entry.calls.saturating_add(calls);
         entry.input_tokens = entry.input_tokens.saturating_add(input);
         entry.output_tokens = entry.output_tokens.saturating_add(output);
@@ -261,6 +277,15 @@ pub async fn aggregate_revenue_day(
             .checked_add(charge)
             .ok_or_else(|| "revenue charge aggregate overflow".to_string())?;
         entry.charge_nano_usd = total.to_string();
+    }
+    // Fill the name keys into their own rows now that the maps are complete.
+    let mut models = Vec::new();
+    for (name, mut row) in models_by_name {
+        row.model = name;
+        models.push(row);
+    }
+    for (id, row) in users_by_id.iter_mut() {
+        row.user_id = id.clone();
     }
     let total_charge = models
         .iter()

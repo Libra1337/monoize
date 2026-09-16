@@ -406,3 +406,87 @@ async fn excel_export_returns_workbook() {
     // An xlsx file is a ZIP archive starting with the local-file signature.
     assert_eq!(&bytes[..2], b"PK", "xlsx must be a ZIP container");
 }
+
+/// Regression: the aggregate groups by (day, model, user), so two users
+/// consuming the same model must merge into ONE model row — persisting them
+/// separately violated the (day, model) unique index during settlement.
+#[tokio::test]
+async fn settlement_merges_per_user_groups_into_one_model_row() {
+    let state = load_state_with_runtime(RuntimeConfig::with_defaults(
+        "127.0.0.1:0",
+        "/metrics",
+        "sqlite::memory:".to_string(),
+    ))
+    .await
+    .expect("state loads");
+    let user_a = state
+        .user_store
+        .create_user("merge_a", "password123", UserRole::User, None)
+        .await
+        .expect("user a creates");
+    let user_b = state
+        .user_store
+        .create_user("merge_b", "password123", UserRole::User, None)
+        .await
+        .expect("user b creates");
+    let now = chrono::Utc::now();
+    for (id, user_id, charge) in [
+        ("merge-1", user_a.id.as_str(), "100"),
+        ("merge-2", user_b.id.as_str(), "250"),
+    ] {
+        state
+            .db_pool
+            .write()
+            .await
+            .execute(state.db_pool.stmt(
+                "INSERT INTO request_logs (id, user_id, model, is_stream, input_tokens, output_tokens, charge_nano_usd, status, created_at, created_at_unix_ms) VALUES ($1, $2, 'same-model', 0, 10, 5, $3, 'success', $4, $5)",
+                vec![
+                    id.into(),
+                    user_id.into(),
+                    charge.into(),
+                    now.to_rfc3339().into(),
+                    now.timestamp_millis().into(),
+                ],
+            ))
+            .await
+            .expect("request log inserts");
+    }
+
+    // The settlement startup pass recomputes every elapsed day inside the
+    // retention window; this must not trip the (day, model) unique index.
+    monoize::users::settle_elapsed_days(&state.db_pool, now)
+        .await
+        .expect("settlement completes without unique violation");
+
+    let today = {
+        let beijing = now.timestamp_millis() + 8 * 3600 * 1000;
+        chrono::DateTime::from_timestamp_millis(beijing)
+            .expect("timestamp")
+            .format("%Y-%m-%d")
+            .to_string()
+    };
+    use sea_orm::ConnectionTrait;
+    let rows = state
+        .db_pool
+        .read()
+        .query_all(state.db_pool.stmt(
+            "SELECT model, COUNT(*) AS n FROM admin_revenue_daily_model_rows WHERE day = $1 GROUP BY model",
+            vec![today.clone().into()],
+        ))
+        .await
+        .expect("model rows query");
+    // The current day is live-only, so query the aggregate directly instead.
+    let aggregate = monoize::users::aggregate_revenue_day(&state.db_pool, &today, &[])
+        .await
+        .expect("aggregate resolves")
+        .expect("the day has rows");
+    assert_eq!(aggregate.models.len(), 1, "same-model rows must merge");
+    assert_eq!(aggregate.models[0].model, "same-model");
+    assert_eq!(aggregate.models[0].charge_nano_usd, "350");
+    assert_eq!(aggregate.models[0].calls, 2);
+    assert_eq!(aggregate.users.len(), 2);
+    assert_eq!(aggregate.users[0].charge_nano_usd, "250");
+    assert_eq!(aggregate.users[1].charge_nano_usd, "100");
+    assert_eq!(aggregate.total_charge_nano_usd, "350");
+    let _ = rows;
+}
