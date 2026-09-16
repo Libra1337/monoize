@@ -197,6 +197,8 @@ function buildInput(form: ProviderForm, confirmPublicExposure: boolean, c: (zhTe
 		active_probe_success_threshold_override: form.active_probe_success_threshold_override,
 		active_probe_model_override: form.active_probe_model_override,
 		request_timeout_ms_override: optionalPositiveInteger(form.request_timeout_ms_override),
+		max_input_tokens: optionalPositiveInteger(form.max_input_tokens),
+		prompt_cache_incompatible_with_tools: form.prompt_cache_incompatible_with_tools,
 		extra_fields_whitelist: form.extra_fields_whitelist
 			.split(',')
 			.map(value => value.trim())
@@ -685,8 +687,10 @@ function RoutingSettings({ form, setForm, settings, c }: { form: ProviderForm; s
 			<Field label={c('单 Channel 重试', 'Retries per channel')}><Input type='number' min='0' value={form.channel_max_retries} onChange={event => setForm(previous => ({ ...previous, channel_max_retries: Number(event.target.value) }))} /></Field>
 			<Field label={c('重试间隔（毫秒）', 'Retry interval (ms)')}><Input type='number' min='0' value={form.channel_retry_interval_ms} onChange={event => setForm(previous => ({ ...previous, channel_retry_interval_ms: Number(event.target.value) }))} /></Field>
 			<Field label={c('请求超时覆盖（毫秒）', 'Request timeout override (ms)')} hint={c(`留空继承全局 ${settings?.monoize_request_timeout_ms ?? '—'}`, `Empty inherits global ${settings?.monoize_request_timeout_ms ?? '—'}`)}><Input type='number' min='1' value={form.request_timeout_ms_override} onChange={event => setForm(previous => ({ ...previous, request_timeout_ms_override: event.target.value }))} /></Field>
+			<Field label={c('输入 token 上限', 'Max input tokens')} hint={c('估算输入超过该值时跳过此渠道（路由到下一个 Provider）。留空不限制。', 'Skip this provider when the estimated input exceeds this value (routes to the next provider). Empty means no limit.')}><Input type='number' min='1' value={form.max_input_tokens} onChange={event => setForm(previous => ({ ...previous, max_input_tokens: event.target.value }))} /></Field>
 			<div className='flex items-center justify-between gap-4 rounded-lg border p-4'><div><Label>{c('启用熔断器', 'Circuit breaker')}</Label><p className='mt-1 text-xs text-muted-foreground'>{c('根据失败状态暂时移除 Channel。', 'Temporarily removes failing channels.')}</p></div><Switch checked={form.circuit_breaker_enabled} onCheckedChange={value => setForm(previous => ({ ...previous, circuit_breaker_enabled: value }))} /></div>
 			<div className='flex items-center justify-between gap-4 rounded-lg border p-4'><div><Label>{c('按模型隔离熔断', 'Per-model circuit breaker')}</Label><p className='mt-1 text-xs text-muted-foreground'>{c('同一 Channel 的模型分别维护健康状态。', 'Tracks health separately per model.')}</p></div><Switch checked={form.per_model_circuit_break} onCheckedChange={value => setForm(previous => ({ ...previous, per_model_circuit_break: value }))} /></div>
+			<div className='flex items-center justify-between gap-4 rounded-lg border p-4'><div><Label>{c('带工具请求跳过此渠道', 'Skip tool-bearing requests')}</Label><p className='mt-1 text-xs text-muted-foreground'>{c('上游对带 tools 的请求不缓存时开启：此类请求路由到下一个 Provider。', 'Enable when the upstream does not cache tool-bearing requests: such requests route to the next provider.')}</p></div><Switch checked={form.prompt_cache_incompatible_with_tools} onCheckedChange={value => setForm(previous => ({ ...previous, prompt_cache_incompatible_with_tools: value }))} /></div>
 		</div>
 	</div>
 }

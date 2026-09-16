@@ -61,6 +61,8 @@ export type ProviderForm = {
 	active_probe_success_threshold_override: number | null
 	active_probe_model_override: string | null
 	request_timeout_ms_override: string
+	max_input_tokens: string
+	prompt_cache_incompatible_with_tools: boolean | null
 	extra_fields_whitelist: string
 	strip_cross_protocol_nested_extra: boolean | null
 	group_id: string
@@ -148,6 +150,8 @@ export function emptyForm(): ProviderForm {
 		active_probe_success_threshold_override: null,
 		active_probe_model_override: null,
 		request_timeout_ms_override: '',
+		max_input_tokens: '',
+		prompt_cache_incompatible_with_tools: false,
 		extra_fields_whitelist: '',
 		strip_cross_protocol_nested_extra: null,
 		group_id: '',
@@ -175,6 +179,8 @@ export function fromProvider(provider: Provider): ProviderForm {
 		active_probe_success_threshold_override: provider.active_probe_success_threshold_override ?? null,
 		active_probe_model_override: provider.active_probe_model_override ?? null,
 		request_timeout_ms_override: provider.request_timeout_ms_override == null ? '' : String(provider.request_timeout_ms_override),
+		max_input_tokens: provider.max_input_tokens == null ? '' : String(provider.max_input_tokens),
+		prompt_cache_incompatible_with_tools: provider.prompt_cache_incompatible_with_tools ?? false,
 		extra_fields_whitelist: provider.extra_fields_whitelist?.join(', ') ?? '',
 		strip_cross_protocol_nested_extra: provider.strip_cross_protocol_nested_extra ?? null,
 		group_id: provider.group_id,

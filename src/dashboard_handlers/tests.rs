@@ -344,6 +344,8 @@ fn dashboard_provider_response_includes_group_and_channel_hides_api_key() {
         active_probe_success_threshold_override: None,
         active_probe_model_override: None,
         request_timeout_ms_override: None,
+        max_input_tokens: None,
+        prompt_cache_incompatible_with_tools: false,
         extra_fields_whitelist: None,
         strip_cross_protocol_nested_extra: None,
         group_id: "g-alpha".to_string(),

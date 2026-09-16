@@ -636,6 +636,8 @@ fn build_test_routing_request(model: &str) -> UrpRequest {
         server_tool_usage_classes: Vec::new(),
         affinity_explicit: None,
         affinity_prefix_hash: crate::handlers::helpers::short_xxh3_hex(model),
+        estimated_input_tokens: 0,
+        has_tools: false,
     }
 }
 
@@ -851,6 +853,8 @@ async fn seed_group_routing_provider(
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            max_input_tokens: None,
+            prompt_cache_incompatible_with_tools: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             enabled: true,
@@ -951,6 +955,8 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            max_input_tokens: None,
+            prompt_cache_incompatible_with_tools: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
@@ -1981,6 +1987,8 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            max_input_tokens: None,
+            prompt_cache_incompatible_with_tools: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
@@ -2119,6 +2127,8 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            max_input_tokens: None,
+            prompt_cache_incompatible_with_tools: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
@@ -2202,6 +2212,8 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            max_input_tokens: None,
+            prompt_cache_incompatible_with_tools: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
@@ -2284,6 +2296,8 @@ async fn build_monoize_attempts_admits_unpriced_server_tool_meter_class() {
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            max_input_tokens: None,
+            prompt_cache_incompatible_with_tools: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
@@ -2372,6 +2386,8 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            max_input_tokens: None,
+            prompt_cache_incompatible_with_tools: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
@@ -2508,6 +2524,8 @@ async fn build_monoize_attempts_does_not_use_metadata_pricing_profile_fallback()
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            max_input_tokens: None,
+            prompt_cache_incompatible_with_tools: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_id: String::new(),
@@ -2769,6 +2787,176 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         attempt_channel_names(&default_only),
         BTreeSet::from(["public"])
     );
+}
+
+const RTA9_MODEL: &str = "gpt-rta9-guard";
+
+/// Seeds one provider serving RTA9_MODEL with the given cache-routing guard fields.
+async fn seed_rta9_provider(
+    state: &AppState,
+    name: &str,
+    channel_name: &str,
+    max_input_tokens: Option<u64>,
+    prompt_cache_incompatible_with_tools: Option<bool>,
+) {
+    state
+        .monoize_store
+        .create_provider(CreateMonoizeProviderInput {
+            confirm_public_exposure: true,
+            pricing_profile: Some("openai".to_string()),
+            multiplier: Default::default(),
+            name: name.to_string(),
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: false,
+            per_model_circuit_break: false,
+            transforms: Vec::new(),
+            api_type_overrides: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            max_input_tokens,
+            prompt_cache_incompatible_with_tools,
+            extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
+            enabled: true,
+            priority: Some(0),
+            group_id: String::new(),
+            channel: CreateMonoizeChannelInput {
+                name: channel_name.to_string(),
+                provider_type: MonoizeProviderType::Responses,
+                base_url: format!("https://{channel_name}.example.com"),
+                api_key: Some("secret".to_string()),
+                enabled: true,
+                allow_missing_usage: false,
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+                models: std::collections::HashMap::from([(
+                    RTA9_MODEL.to_string(),
+                    MonoizeModelEntry {
+                        redirect: None,
+                        pricing_profile_mode: Default::default(),
+                        pricing_profile_override: None,
+                        multiplier_override: Some(Multiplier::ONE),
+                    },
+                )]),
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
+                affinity_enabled_override: None,
+                affinity_idle_ttl_seconds_override: None,
+                affinity_failback_mode_override: None,
+                affinity_failback_delay_seconds_override: None,
+                proxy_url: None,
+                extra_headers: None,
+                session_affinity_auto: None,
+            },
+        })
+        .await
+        .expect("provider created");
+}
+
+fn rta9_request(estimated_input_tokens: u64, has_tools: bool) -> UrpRequest {
+    UrpRequest {
+        model: RTA9_MODEL.to_string(),
+        max_multiplier: None,
+        server_tool_usage_classes: Vec::new(),
+        affinity_explicit: None,
+        affinity_prefix_hash: crate::handlers::helpers::short_xxh3_hex(RTA9_MODEL),
+        estimated_input_tokens,
+        has_tools,
+    }
+}
+
+async fn rta9_state() -> AppState {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+        node: crate::node_config::NodeSettings::primary_default(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+    seed_model_pricing(&state, RTA9_MODEL).await;
+    state
+}
+
+#[tokio::test]
+async fn rta9_skips_provider_when_estimated_input_tokens_exceed_the_limit() {
+    let state = rta9_state().await;
+    seed_rta9_provider(&state, "capped", "capped-channel", Some(500), None).await;
+    seed_rta9_provider(&state, "fallback", "fallback-channel", None, None).await;
+
+    let auth = build_test_auth(None);
+    let over = rta9_request(501, false);
+    let attempts = build_monoize_attempts(&state, &over, &auth)
+        .await
+        .expect("routing succeeds");
+    assert_eq!(attempt_channel_names(&attempts), BTreeSet::from(["fallback-channel"]));
+
+    let at_limit = rta9_request(500, false);
+    let attempts = build_monoize_attempts(&state, &at_limit, &auth)
+        .await
+        .expect("routing succeeds");
+    assert_eq!(
+        attempt_channel_names(&attempts),
+        BTreeSet::from(["capped-channel", "fallback-channel"]),
+        "the limit itself must not skip: strictly greater than excludes"
+    );
+}
+
+#[tokio::test]
+async fn rta9_skips_provider_for_tool_bearing_requests_when_flagged() {
+    let state = rta9_state().await;
+    seed_rta9_provider(&state, "tools-hostile", "tools-hostile-channel", None, Some(true)).await;
+    seed_rta9_provider(&state, "neutral", "neutral-channel", None, None).await;
+
+    let auth = build_test_auth(None);
+    let with_tools = rta9_request(0, true);
+    let attempts = build_monoize_attempts(&state, &with_tools, &auth)
+        .await
+        .expect("routing succeeds");
+    assert_eq!(attempt_channel_names(&attempts), BTreeSet::from(["neutral-channel"]));
+
+    let without_tools = rta9_request(0, false);
+    let attempts = build_monoize_attempts(&state, &without_tools, &auth)
+        .await
+        .expect("routing succeeds");
+    assert_eq!(
+        attempt_channel_names(&attempts),
+        BTreeSet::from(["tools-hostile-channel", "neutral-channel"])
+    );
+}
+
+#[tokio::test]
+async fn rta9_defaults_keep_every_provider_eligible() {
+    let state = rta9_state().await;
+    seed_rta9_provider(&state, "unguarded", "unguarded-channel", None, None).await;
+
+    let auth = build_test_auth(None);
+    let big_tools_request = rta9_request(u64::MAX, true);
+    let attempts = build_monoize_attempts(&state, &big_tools_request, &auth)
+        .await
+        .expect("routing succeeds");
+    assert_eq!(attempt_channel_names(&attempts), BTreeSet::from(["unguarded-channel"]));
+}
+
+#[tokio::test]
+async fn rta9_skipping_the_only_provider_yields_zero_attempts() {
+    let state = rta9_state().await;
+    seed_rta9_provider(&state, "capped", "capped-channel", Some(100), None).await;
+
+    let auth = build_test_auth(None);
+    let over = rta9_request(101, false);
+    let attempts = build_monoize_attempts(&state, &over, &auth)
+        .await
+        .expect("routing succeeds without contacting upstream");
+    assert!(attempts.is_empty(), "RTA-8b zero-attempt path: no attempts remain");
 }
 
 #[tokio::test]

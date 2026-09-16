@@ -704,6 +704,18 @@ pub(super) async fn collect_provider_attempts(
     if !crate::users::is_provider_group_eligible(&provider.group_id, effective_groups) {
         return;
     }
+    // RTA-9: cache-capability static filter. Placement matters: after group
+    // eligibility, before the model-entry check, and outside the health filter
+    // so a skip never records passive samples or clears affinity.
+    if provider
+        .max_input_tokens
+        .is_some_and(|limit| urp.estimated_input_tokens > limit)
+    {
+        return;
+    }
+    if provider.prompt_cache_incompatible_with_tools && urp.has_tools {
+        return;
+    }
     let supporting_channels: Vec<crate::monoize_routing::MonoizeChannel> =
         std::iter::once(&provider.channel)
             .filter(|channel| {

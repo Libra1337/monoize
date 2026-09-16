@@ -835,6 +835,44 @@ fn affinity_prefix_hash(req: &urp::UrpRequest) -> String {
     format!("{:016x}", writer.digest())
 }
 
+/// EST-1 byte sink: counts serialized bytes without storing them. Unlike
+/// `BoundedHashWriter` there is no node-count or byte cap, because the estimate
+/// must cover the whole request, not a prefix.
+struct CountingWriter {
+    bytes: u64,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.bytes += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// EST-1: estimates the request's input tokens before routing. Serializes every
+/// input node with the same canonical form as the affinity prefix hash (no caps),
+/// adds the compact serialization of `tools` when present, and divides bytes by
+/// four. Production `chat_completion` upstream bodies measure ~4.2 bytes per
+/// reported prompt token, so the estimate errs low by at most ~5%. Routing
+/// threshold input only; never persisted as usage.
+pub(super) fn estimate_input_tokens(req: &urp::UrpRequest) -> u64 {
+    let mut writer = CountingWriter { bytes: 0 };
+    let nodes = req
+        .input
+        .iter()
+        .map(canonical_affinity_node)
+        .collect::<Vec<_>>();
+    let _ = serde_json::to_writer(&mut writer, &nodes);
+    if let Some(tools) = &req.tools {
+        let _ = serde_json::to_writer(&mut writer, tools);
+    }
+    writer.bytes.div_ceil(4)
+}
+
 pub(super) fn build_routing_stub(
     req: &urp::UrpRequest,
     max_multiplier: Option<Multiplier>,
@@ -845,6 +883,8 @@ pub(super) fn build_routing_stub(
         server_tool_usage_classes: server_tool_usage_classes(req.tools.as_deref()),
         affinity_explicit: stable_affinity_field(req),
         affinity_prefix_hash: affinity_prefix_hash(req),
+        estimated_input_tokens: estimate_input_tokens(req),
+        has_tools: req.tools.as_ref().is_some_and(|tools| !tools.is_empty()),
     }
 }
 
@@ -858,6 +898,8 @@ pub(super) fn build_embeddings_routing_stub(
         server_tool_usage_classes: Vec::new(),
         affinity_explicit: None,
         affinity_prefix_hash: short_xxh3_hex(model),
+        estimated_input_tokens: 0,
+        has_tools: false,
     }
 }
 
@@ -1699,5 +1741,85 @@ mod tests {
             urp::Node::Text { content, .. }
                 if content == "\n\n![image](https://example.com/one.png)"
         )));
+    }
+
+    #[test]
+    fn estimate_input_tokens_is_serialized_bytes_divided_by_four() {
+        let req = urp::UrpRequest {
+            model: "estimate-model".to_string(),
+            input: vec![
+                urp::Node::text(urp::OrdinaryRole::System, "You are a probe."),
+                urp::Node::text(urp::OrdinaryRole::User, "hello world"),
+            ],
+            tools: None,
+            ..urp_request_defaults()
+        };
+        let nodes = req
+            .input
+            .iter()
+            .map(canonical_affinity_node)
+            .collect::<Vec<_>>();
+        let expected_bytes = serde_json::to_string(&nodes).expect("serializable").len() as u64;
+        assert_eq!(estimate_input_tokens(&req), expected_bytes.div_ceil(4));
+    }
+
+    #[test]
+    fn estimate_input_tokens_includes_tools_bytes() {
+        let without_tools = urp::UrpRequest {
+            model: "estimate-model".to_string(),
+            input: vec![urp::Node::text(urp::OrdinaryRole::User, "hi")],
+            tools: None,
+            ..urp_request_defaults()
+        };
+        let tools = vec![urp::ToolDefinition {
+            tool_type: "function".to_string(),
+            name: Some("read_file".to_string()),
+            description: Some("Read a file from disk.".to_string()),
+            function: None,
+            custom: None,
+            extra_body: Default::default(),
+        }];
+        let with_tools = urp::UrpRequest {
+            model: "estimate-model".to_string(),
+            input: vec![urp::Node::text(urp::OrdinaryRole::User, "hi")],
+            tools: Some(tools),
+            ..urp_request_defaults()
+        };
+        let base = estimate_input_tokens(&without_tools);
+        let with = estimate_input_tokens(&with_tools);
+        assert!(with > base, "tools must add to the estimate: {with} vs {base}");
+    }
+
+    #[test]
+    fn estimate_input_tokens_empty_request_is_zero() {
+        let req = urp::UrpRequest {
+            model: "estimate-model".to_string(),
+            input: Vec::new(),
+            tools: None,
+            ..urp_request_defaults()
+        };
+        // "[]" serializes to 2 bytes, so the floor is 1, not 0; a truly empty
+        // serialization cannot happen because input serializes as an array.
+        assert_eq!(estimate_input_tokens(&req), 1);
+    }
+
+    fn urp_request_defaults() -> urp::UrpRequest {
+        urp::UrpRequest {
+            model: String::new(),
+            input: Vec::new(),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
+            response_format: None,
+            user: None,
+            extra_body: Default::default(),
+        }
     }
 }

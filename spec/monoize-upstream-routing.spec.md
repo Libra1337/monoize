@@ -93,6 +93,8 @@ A provider record MUST include:
 - `channels: Channel[]` where `length >= 1`
 - `group_ids: string[]` (provider-level group ids for routing eligibility; stored non-empty per CG-2)
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
+- `max_input_tokens: integer | null` (default `null`)
+- `prompt_cache_incompatible_with_tools: boolean` (default `false`)
 
 Implementation-specific extension:
 - A provider MUST NOT contain `provider_type`.
@@ -157,6 +159,15 @@ CFG-6. Each provider MAY define a timeout override field:
 
 - `request_timeout_ms_override: integer? (>= 1)` — When set, overrides the global `request_timeout_ms` for all upstream calls made through this provider. Resolution order: provider override → global `request_timeout_ms` setting → 30000ms default.
 
+CFG-7. Each provider MAY define two cache-capability routing guard fields:
+
+- `max_input_tokens: integer? (>= 1)` — When set, the provider is skipped for requests whose estimated input tokens (EST-1) exceed this value. `null` disables the guard.
+- `prompt_cache_incompatible_with_tools: boolean` (default `false`) — When `true`, the provider is skipped for any request whose `tools` list is non-empty.
+
+Both guards are static per-provider filters (RTA-9). They exist so that a deployment can keep
+requests with a known-bad cache profile on a Provider whose upstream caches them, instead of
+paying uncached-input rates on an upstream whose prompt cache collapses for that request shape.
+
 ## 3. Request Routing Parameters
 
 The router MUST read:
@@ -176,6 +187,24 @@ RRP-2. If `effective_groups == null` (internal system traffic only), the request
 RRP-3. If `effective_groups != null`, the request is restricted to providers whose `group_ids` overlap `effective_groups` (`database-provider-routing.spec.md` R-GRP-1). Group order defines provider-ordering preference per R-GRP-2.
 
 RRP-4. If `effective_groups == []`, no provider is group-eligible.
+
+EST-1. The **estimated input tokens** of a request MUST be computed before routing from the
+decoded URP request, not from an upstream response. The estimate MUST be:
+
+1. Serialize every node of `req.input` using the same canonical node serialization as the
+   affinity input-prefix hash (AFF-5), with no node-count or byte limit, accumulating the
+   serialized byte count `input_bytes`.
+2. Serialize `req.tools` with `serde_json` compact encoding when `req.tools` is present,
+   adding its byte length to `input_bytes`.
+3. The estimate equals `ceil(input_bytes / 4)`.
+
+The divisor 4 approximates one token per four UTF-8 bytes. Measured on production
+`chat_completion` upstream bodies, the ratio is ~4.2 bytes per reported `prompt_tokens` token,
+so the estimate errs low by at most ~5%. The estimate is a routing threshold input, not a
+billing input; it MUST NOT be persisted as usage.
+
+EST-2. The estimated input tokens MUST be computed once per request and carried on the
+routing request stub, so every attempt-selection decision for one request uses the same value.
 
 ## 4. Routing Algorithm
 
@@ -280,6 +309,31 @@ error page. Deployments behind such an edge therefore see the actionable case in
 operational case as an edge error page.
 
 RTA-8a. RTA-8 has one structured-error exception. If the final failed attempt has `upstream_code = "thinking_signature_invalid"`, Monoize MUST return `error.code = "thinking_signature_invalid"` and MUST use the final attempt's client-facing error text (`spec/upstream-error-sanitization.spec.md` SAN-8) as the downstream message without an `All upstream attempts failed` wrapper. If the final `upstream_status` is a valid HTTP `4xx` status, Monoize MUST return that status. Otherwise Monoize MUST return HTTP `400`. The request log `error_code` and `error_http_status` MUST equal the downstream values; the request log `error_message` MUST equal the persisted internal detail per `spec/upstream-error-sanitization.spec.md` SAN-9 (read-time disclosure per its section 8). Monoize MUST apply this rule only after all eligible Channels and Providers are exhausted; it MUST NOT disable fail-forward.
+
+RTA-9. Cache-capability static filter. A Provider MUST be skipped for a request when either
+condition holds:
+
+1. `provider.max_input_tokens` is set and the request's estimated input tokens (EST-1) are
+   strictly greater than `provider.max_input_tokens`; or
+2. `provider.prompt_cache_incompatible_with_tools == true` and the request's `tools` list is
+   non-empty.
+
+The filter MUST run after group-eligibility (RTA-2 second bullet) and before the model-entry
+check (RTA-2 third bullet). A Provider skipped by RTA-9 produces no attempt, appears in no
+`tried_providers` list, and does not consume attempt budget. The skip MUST NOT record passive
+health samples and MUST NOT clear or replace an affinity binding; AFF-8a governs the retained
+binding. If RTA-9 leaves no eligible Provider, RTA-8b's zero-attempt error table applies.
+
+RTA-9 is motivated by measured upstream behavior (2026-09-16, two independent aggregator
+upstreams serving the same DeepSeek model over `chat_completion`, monoize request captures
+plus controlled probes): requests without `tools` read 96–100% prompt cache at every input
+size tested (up to 73,000 tokens), while requests with a non-empty `tools` list returned
+`cache_read_tokens` pinned between 2,048 and 5,248 regardless of input size (28k–163k). The
+pinned region approximately equals the serialized system prompt, so the upstream loses the
+cache at the point tools enter the prompt. Identical byte-for-byte retries with tools still
+missed on the third repetition, which places the defect at the upstream and outside monoize
+control; routing the affected request shapes to a different upstream is the only gateway-side
+remedy.
 
 ## 5. Streaming-specific Rule
 

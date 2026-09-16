@@ -39,6 +39,8 @@ async fn set_messages_metadata_collision_transform(ctx: &TestContext) {
                 active_probe_success_threshold_override: None,
                 active_probe_model_override: None,
                 request_timeout_ms_override: None,
+                max_input_tokens: None,
+                prompt_cache_incompatible_with_tools: None,
                 extra_fields_whitelist: None,
                 strip_cross_protocol_nested_extra: None,
                 group_id: None,

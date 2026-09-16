@@ -980,6 +980,8 @@ fn wholesale_input_from_source(
         active_probe_success_threshold_override: source.active_probe_success_threshold_override,
         active_probe_model_override: source.active_probe_model_override.clone(),
         request_timeout_ms_override: source.request_timeout_ms_override,
+        max_input_tokens: source.max_input_tokens,
+        prompt_cache_incompatible_with_tools: Some(source.prompt_cache_incompatible_with_tools),
         extra_fields_whitelist: source.extra_fields_whitelist.clone(),
         strip_cross_protocol_nested_extra: source.strip_cross_protocol_nested_extra,
         group_id: body.group_id,
@@ -1758,6 +1760,8 @@ mod tests {
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            max_input_tokens: None,
+            prompt_cache_incompatible_with_tools: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
         }

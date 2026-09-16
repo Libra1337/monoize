@@ -574,6 +574,8 @@ export interface Provider {
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
   request_timeout_ms_override?: number | null;
+  max_input_tokens?: number | null;
+  prompt_cache_incompatible_with_tools?: boolean | null;
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
   group_id: string;
@@ -629,6 +631,8 @@ export interface CreateProviderInput {
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
   request_timeout_ms_override?: number | null;
+  max_input_tokens?: number | null;
+  prompt_cache_incompatible_with_tools?: boolean | null;
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
   group_id?: string;
@@ -665,6 +669,8 @@ export interface UpdateProviderInput {
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
   request_timeout_ms_override?: number | null;
+  max_input_tokens?: number | null;
+  prompt_cache_incompatible_with_tools?: boolean | null;
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
   group_id?: string;

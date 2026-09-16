@@ -54,6 +54,8 @@ A provider object MUST include:
 - `active_probe_success_threshold_override?: integer | null`
 - `active_probe_model_override?: string | null`
 - `request_timeout_ms_override?: integer | null`
+- `max_input_tokens?: integer | null` (>= 1; when set, the provider is skipped for requests whose estimated input tokens exceed this value — see `monoize-upstream-routing.spec.md` RTA-9/EST-1)
+- `prompt_cache_incompatible_with_tools?: boolean` (default `false`; when `true`, the provider is skipped for requests with a non-empty `tools` list — see `monoize-upstream-routing.spec.md` RTA-9)
 - `extra_fields_whitelist?: string[] | null`
 - `strip_cross_protocol_nested_extra?: boolean | null`
 - `group_ids: string[]` (provider-level group ids for routing eligibility; stored non-empty, see `groups-registry.spec.md` GR-I2)

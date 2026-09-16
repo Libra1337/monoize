@@ -1266,6 +1266,10 @@ pub(crate) struct UrpRequest {
     pub(crate) server_tool_usage_classes: Vec<String>,
     pub(crate) affinity_explicit: Option<String>,
     pub(crate) affinity_prefix_hash: String,
+    /// EST-1: pre-routing estimate over the full decoded input plus tools, bytes/4.
+    pub(crate) estimated_input_tokens: u64,
+    /// RTA-9 condition 2 input: whether the decoded request carries any tool definition.
+    pub(crate) has_tools: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2213,5 +2217,7 @@ fn parse_urp_request(known: &Value, extra: Map<String, Value>) -> AppResult<UrpR
         model,
         max_multiplier,
         server_tool_usage_classes: Vec::new(),
+        estimated_input_tokens: 0,
+        has_tools: false,
     })
 }

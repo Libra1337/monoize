@@ -255,6 +255,8 @@ pub struct MonoizeProvider {
     pub active_probe_success_threshold_override: Option<u32>,
     pub active_probe_model_override: Option<String>,
     pub request_timeout_ms_override: Option<u64>,
+    pub max_input_tokens: Option<u64>,
+    pub prompt_cache_incompatible_with_tools: bool,
     #[serde(default)]
     pub extra_fields_whitelist: Option<Vec<String>>,
     #[serde(default)]
@@ -340,6 +342,10 @@ pub struct CreateMonoizeProviderInput {
     pub active_probe_model_override: Option<String>,
     pub request_timeout_ms_override: Option<u64>,
     #[serde(default)]
+    pub max_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub prompt_cache_incompatible_with_tools: Option<bool>,
+    #[serde(default)]
     pub extra_fields_whitelist: Option<Vec<String>>,
     #[serde(default)]
     pub strip_cross_protocol_nested_extra: Option<bool>,
@@ -393,6 +399,8 @@ pub struct UpdateMonoizeProviderInput {
     pub active_probe_success_threshold_override: Option<Option<u32>>,
     pub active_probe_model_override: Option<Option<String>>,
     pub request_timeout_ms_override: Option<Option<u64>>,
+    pub max_input_tokens: Option<Option<u64>>,
+    pub prompt_cache_incompatible_with_tools: Option<bool>,
     pub extra_fields_whitelist: Option<Option<Vec<String>>>,
     pub strip_cross_protocol_nested_extra: Option<Option<bool>>,
     pub group_id: Option<String>,
@@ -1087,6 +1095,26 @@ fn decode_provider_row(
             .map_err(|e| e.to_string())?
             .map(|value| decode_positive_u64(&id, "request_timeout_ms_override", i64::from(value)))
             .transpose()?,
+        max_input_tokens: row
+            .try_get::<Option<i64>>("", "max_input_tokens")
+            .map_err(|e| format!("provider {id} invalid max_input_tokens column: {e}"))?
+            .map(|value| decode_positive_u64(&id, "max_input_tokens", value))
+            .transpose()?,
+        prompt_cache_incompatible_with_tools: row
+            .try_get::<Option<i32>>("", "prompt_cache_incompatible_with_tools")
+            .map_err(|e| {
+                format!("provider {id} invalid prompt_cache_incompatible_with_tools column: {e}")
+            })?
+            .map(|value| {
+                decode_database_bool(
+                    "provider",
+                    &id,
+                    "prompt_cache_incompatible_with_tools",
+                    value,
+                )
+            })
+            .transpose()?
+            .unwrap_or(false),
         extra_fields_whitelist: row
             .try_get::<Option<String>>("", "extra_fields_whitelist")
             .map_err(|e| format!("provider {id} invalid extra_fields_whitelist column: {e}"))?
@@ -1134,7 +1162,8 @@ fn provider_projection(alias: &str) -> String {
                 {p}per_model_circuit_break, {p}transforms, {p}api_type_overrides,
                 {p}active_probe_enabled_override, {p}active_probe_interval_seconds_override,
                 {p}active_probe_success_threshold_override, {p}active_probe_model_override,
-                {p}request_timeout_ms_override, {p}extra_fields_whitelist,
+                {p}request_timeout_ms_override, {p}max_input_tokens,
+                {p}prompt_cache_incompatible_with_tools, {p}extra_fields_whitelist,
                 {p}strip_cross_protocol_nested_extra, {p}group_id,
                 {p}enabled, {p}priority, {p}created_at, {p}updated_at"
     )
@@ -1810,6 +1839,11 @@ impl MonoizeRoutingStore {
                 );
             }
         }
+        if let Some(v) = input.max_input_tokens
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err("max_input_tokens must be between 1 and 2147483647".to_string());
+        }
         if input.channel_retry_interval_ms < 0 {
             return Err("channel_retry_interval_ms must be >= 0".to_string());
         }
@@ -1886,14 +1920,15 @@ impl MonoizeRoutingStore {
                      channel_allow_missing_usage, transforms, api_type_overrides,
                      active_probe_enabled_override, active_probe_interval_seconds_override,
                      active_probe_success_threshold_override, active_probe_model_override,
-                     request_timeout_ms_override, extra_fields_whitelist,
+                     request_timeout_ms_override, max_input_tokens,
+                     prompt_cache_incompatible_with_tools, extra_fields_whitelist,
                      strip_cross_protocol_nested_extra, circuit_breaker_enabled,
                      per_model_circuit_break, channel_retry_interval_ms
                    ) VALUES (
                      $1, $2, $3, $4, $5, $6, $7, NULL, '1', 1, $8, $8, $9, $10, $11,
                      $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
                      $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39,
-                     $40, $41, $42, $43, $44, $45)"#,
+                     $40, $41, $42, $43, $44, $45, $46, $47)"#,
                 vec![
                     id.clone().into(),
                     group_id.into(),
@@ -1935,6 +1970,8 @@ impl MonoizeRoutingStore {
                     opt_u64_to_value(input.active_probe_success_threshold_override.map(u64::from)),
                     input.active_probe_model_override.clone().into(),
                     opt_u64_to_value(input.request_timeout_ms_override),
+                    opt_u64_to_value(input.max_input_tokens),
+                    opt_bool_to_value(input.prompt_cache_incompatible_with_tools),
                     extra_fields_whitelist_json.clone().into(),
                     opt_bool_to_value(strip_cross_proto),
                     SeaValue::Int(Some(if input.circuit_breaker_enabled { 1 } else { 0 })),
@@ -2024,6 +2061,11 @@ impl MonoizeRoutingStore {
                 );
             }
         }
+        if let Some(Some(v)) = input.max_input_tokens
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err("max_input_tokens must be between 1 and 2147483647".to_string());
+        }
         if let Some(v) = input.channel_retry_interval_ms {
             if v < 0 {
                 return Err("channel_retry_interval_ms must be >= 0".to_string());
@@ -2107,6 +2149,15 @@ impl MonoizeRoutingStore {
         }
         if let Some(value) = input.request_timeout_ms_override {
             push_value("request_timeout_ms_override", opt_u64_to_value(value));
+        }
+        if let Some(value) = input.max_input_tokens {
+            push_value("max_input_tokens", opt_u64_to_value(value));
+        }
+        if let Some(value) = input.prompt_cache_incompatible_with_tools {
+            push_value(
+                "prompt_cache_incompatible_with_tools",
+                SeaValue::Int(Some(if value { 1 } else { 0 })),
+            );
         }
         if let Some(value) = &input.extra_fields_whitelist {
             let encoded = value

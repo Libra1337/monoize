@@ -65,6 +65,8 @@ pub struct Model {
     pub active_probe_success_threshold_override: Option<i32>,
     pub active_probe_model_override: Option<String>,
     pub request_timeout_ms_override: Option<i32>,
+    pub max_input_tokens: Option<i64>,
+    pub prompt_cache_incompatible_with_tools: Option<i32>,
     pub extra_fields_whitelist: Option<String>,
     pub strip_cross_protocol_nested_extra: Option<i32>,
     pub circuit_breaker_enabled: i32,
