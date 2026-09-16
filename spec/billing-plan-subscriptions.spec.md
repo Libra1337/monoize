@@ -244,8 +244,8 @@ to call `GET /api/dashboard/billing-plans`.
 BP-U3. `GET /api/dashboard/users` MUST include these additional fields on every listed user:
 
 - `today_calls: integer` — COUNT of `request_logs` rows with that `user_id` and
-  `created_at_unix_ms >= UTC calendar-day start` (`today_start` equals
-  `UTC date of now at 00:00:00.000`, the same instant used by
+  `created_at_unix_ms >= Asia/Shanghai calendar-day start` (`today_start` equals
+  `Asia/Shanghai date of now at 00:00:00.000`, the same instant used by
   `GET /api/dashboard/analytics`);
 - `today_cost_nano_usd: string` — SUM of canonical in-range `charge_nano_usd` for
   those rows. Aggregation MUST follow `spec/request-logs.spec.md` RL-S2e;

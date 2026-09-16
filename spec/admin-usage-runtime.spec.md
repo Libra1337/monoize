@@ -26,13 +26,16 @@ compatibility route, but it MUST NOT be the only usage-ranking entry point.
 
 ## 3. Usage ranking endpoint
 
-UR-3. The authenticated usage-ranking endpoint MUST accept `range=24h`, `range=7d`, or
+UR-3. The authenticated usage-ranking endpoint MUST accept `range=today`, `range=7d`, or
 `range=30d`. The selected range MUST be applied to totals, user ranking, model ranking,
-costs, and current-user rank in one response. Missing range selects `24h`.
+costs, and current-user rank in one response. Missing range selects `today`.
 
-UR-3. The endpoint MUST aggregate request logs from the preceding 24 hours ending
-at the request time. It MUST aggregate in SQL and MUST NOT load raw request-log
-rows into application memory.
+UR-3. For `range=today`, the endpoint MUST aggregate request logs of the current
+Asia/Shanghai local day, from the current Asia/Shanghai calendar-day start 00:00:00
+(exact UTC offset `+08:00`) up to the request time. For `range=7d` and `range=30d`, the
+endpoint MUST aggregate request logs from a rolling window of the preceding 168 or 720
+hours ending at the request time. It MUST aggregate in SQL and MUST NOT load raw
+request-log rows into application memory.
 
 UR-4. The response MUST contain `time_from`, `time_to`, `total_tokens`,
 `total_input_tokens`, `total_cache_read_tokens`, `total_output_tokens`,
@@ -109,8 +112,9 @@ the administrator summary, but the summary MUST NOT replace the current rank
 with a ranked-user count.
 
 UR-7h. The public site MUST provide a navigation link and route for a public usage
-ranking. The public endpoint MUST accept exactly `24h`, `7d`, or `30d`, default to
-`24h`, and return total, anonymous user, and global model Token aggregates for the
+ranking. The public endpoint MUST accept exactly `today`, `7d`, or `30d`, default to
+`today` (current Asia/Shanghai local day per UR-3), and return total, anonymous user,
+and global model Token aggregates for the
 selected window. It MUST NOT return a user ID, username, user charge, or model charge.
 Public user rows MUST be ordered by total Tokens descending, call count descending,
 then the internal user ID using UTF-8 byte order. The internal user ID MUST NOT be returned.

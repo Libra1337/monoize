@@ -40,16 +40,19 @@ render its name, `grant_amount_usd`, and schedule.
 
 ## 2. Token Usage
 
-DH-8. The Token Usage range control MUST contain exactly `24h`, `week`, and `month`.
-The initial range is `24h`.
+DH-8. The Token Usage range control MUST contain exactly `today`, `week`, and `month`.
+The initial range is `today`.
 
 DH-9. The range values map to analytics queries as follows:
 
 | Range | `range_hours` | `buckets` |
 | --- | ---: | ---: |
-| `24h` | 24 | 24 |
+| `today` | current Asia/Shanghai day elapsed hours (at least 1) | 24 |
 | `week` | 168 | 28 |
 | `month` | 720 | 30 |
+
+The `today` range MUST cover the current Asia/Shanghai local day from 00:00:00
+up to the request time.
 
 DH-10. Every Dashboard Token Usage query MUST request `scope=self`. This rule applies to
 `user`, `admin`, and `super_admin` sessions. The page MUST NOT display another user's data.

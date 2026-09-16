@@ -31,10 +31,18 @@ import {
 } from "@/lib/usage-analytics";
 import { cn } from "@/lib/utils";
 
-type CacheRange = "24h" | "7d" | "30d";
+type CacheRange = "today" | "7d" | "30d";
+
+/** UA-26/UA-5: the today range covers the current Asia/Shanghai local day. */
+function beijingElapsedHours(): number {
+  const now = new Date();
+  const beijingHour = (now.getUTCHours() + 8) % 24;
+  const elapsed = beijingHour + (now.getUTCMinutes() > 0 || now.getUTCSeconds() > 0 || now.getUTCMilliseconds() > 0 ? 1 : 0);
+  return Math.max(1, elapsed);
+}
 
 const CACHE_RANGES: Record<CacheRange, { hours: number; buckets: number }> = {
-  "24h": { hours: 24, buckets: 24 },
+  "today": { hours: beijingElapsedHours(), buckets: 24 },
   "7d": { hours: 168, buckets: 28 },
   "30d": { hours: 720, buckets: 30 },
 };

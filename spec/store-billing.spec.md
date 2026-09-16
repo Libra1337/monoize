@@ -580,6 +580,12 @@ SB-Q-1A. A rolling `5h`, `12h`, or `custom` bucket admitted at time `t` MUST use
 
 SB-Q-1B. A `day` bucket MUST use one Asia/Shanghai local day. A `week` bucket MUST start at Monday 00:00:00 Asia/Shanghai. A `month` bucket MUST start at local day 1 at 00:00:00. Stored boundaries MUST be UTC instants derived from those local boundaries.
 
+SB-Q-1B-1. A stored quota rule with `window_kind = 'custom'` and
+`window_seconds = 86400` MUST be normalized to `window_kind = 'day'` by
+migration `m20260916_000104_normalize_quota_day`. After the migration no
+quota rule with `window_kind = 'custom'` and `window_seconds = 86400` may
+remain. Rolling `custom` windows other than 86400 seconds are unaffected.
+
 SB-Q-2. Admission MUST lock the current entitlement pointer, generation, and applicable buckets in `(window_end, quota_rule_id, bucket_id)` byte order. It MUST require `settled_fen + reserved_fen + reserve_fen <= quota_fen` for every applicable rule.
 
 SB-Q-2A. One successful admission MUST insert one reservation, one link per applicable bucket, and update every applicable bucket in one transaction. Each link MUST store its exact reserved CNY fen. A plan with five applicable rules MUST reserve all five buckets or write none.

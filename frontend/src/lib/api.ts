@@ -318,7 +318,7 @@ export interface ApiKey {
 
 export type ApiKeyCreated = ApiKey;
 
-export type ApiKeyAnalyticsRange = "24h" | "7d" | "30d" | "all";
+export type ApiKeyAnalyticsRange = "today" | "7d" | "30d" | "all";
 
 export interface ApiKeyAnalyticsTrendPoint {
   label: string;
@@ -1068,7 +1068,40 @@ export interface AdminUsageRanking {
   models: AdminUsageModelRow[];
 }
 
-export type UsageRankingRange = "24h" | "7d" | "30d";
+export type UsageRankingRange = "today" | "7d" | "30d";
+
+export interface RevenueModelRow {
+  model: string;
+  charge_nano_usd: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface RevenueDayRow {
+  day: string;
+  total_charge_nano_usd: string;
+  total_calls: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  models: RevenueModelRow[];
+}
+
+export interface AdminRevenueDaily {
+  from: string;
+  to: string;
+  days: RevenueDayRow[];
+}
+
+export interface RevenueExclusionRow {
+  user_id: string;
+  username: string;
+  created_at: string;
+}
+
+export interface AdminRevenueExclusions {
+  exclusions: RevenueExclusionRow[];
+}
 
 export interface PublicUsageRankingUserRow {
   rank_key: string;
@@ -1943,8 +1976,59 @@ class ApiClient {
     return data;
   }
 
-  async getAdminUsageRanking(range: UsageRankingRange = "24h"): Promise<AdminUsageRanking> {
+  async getAdminUsageRanking(range: UsageRankingRange = "today"): Promise<AdminUsageRanking> {
     return this.request(`/admin/usage-ranking?range=${encodeURIComponent(range)}`);
+  }
+
+  async getAdminRevenueDaily(from?: string, to?: string): Promise<AdminRevenueDaily> {
+    const params = new URLSearchParams();
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    const query = params.toString();
+    return this.request(`/admin/revenue/daily${query ? `?${query}` : ""}`);
+  }
+
+  async listAdminRevenueExclusions(): Promise<AdminRevenueExclusions> {
+    return this.request("/admin/revenue/exclusions");
+  }
+
+  async addAdminRevenueExclusion(userId: string): Promise<AdminRevenueExclusions> {
+    return this.request("/admin/revenue/exclusions", {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId }),
+    });
+  }
+
+  async removeAdminRevenueExclusion(userId: string): Promise<AdminRevenueExclusions> {
+    return this.request(`/admin/revenue/exclusions/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  /**
+   * AR-15: the Excel export is a binary download, so it cannot go through the
+   * JSON `request` helper; errors are read from the JSON error envelope.
+   */
+  async exportAdminRevenueDaily(from: string, to: string): Promise<Blob> {
+    const params = new URLSearchParams({ from, to });
+    const response = await fetch(
+      `${API_BASE}/admin/revenue/daily/export?${params.toString()}`,
+      { credentials: "include" }
+    );
+    if (!response.ok) {
+      let message = "Request failed";
+      try {
+        const data = await response.json();
+        if (response.status === 401 && data.error?.code === "unauthorized") {
+          notifyDashboardUnauthorized();
+        }
+        message = data.error?.message || data.error?.code || message;
+      } catch {
+        // a non-JSON error body keeps the default message
+      }
+      throw new Error(message);
+    }
+    return response.blob();
   }
 
   async testChannel(

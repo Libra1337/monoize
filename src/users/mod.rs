@@ -1,12 +1,19 @@
 mod groups;
 mod plans;
 mod request_logs;
+mod revenue_daily;
 mod store;
 mod utils;
 
 pub use groups::{CreateGroupInput, Group, GroupStoreError, ReorderGroupsInput, UpdateGroupInput};
 pub use plans::{BillingPlan, BillingPlanInput};
 pub use request_logs::AnalyticsBucketing;
+pub use revenue_daily::{
+    REVENUE_RECOMPUTE_LOOKBACK_DAYS, RevenueDayRow, RevenueExclusionRow, RevenueModelRow,
+    aggregate_revenue_day, list_persisted_revenue_days, list_revenue_exclusions,
+    persist_revenue_day, recompute_persisted_days, settle_elapsed_days,
+    spawn_revenue_daily_settlement,
+};
 
 use crate::db::DbPool;
 use crate::exact_decimal::Multiplier;

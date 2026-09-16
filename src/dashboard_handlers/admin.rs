@@ -5,7 +5,7 @@ use crate::handlers::routing::health_key;
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use chrono::{NaiveTime, Utc};
+use chrono::Utc;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -16,15 +16,25 @@ pub struct UsageRankingQuery {
     pub range: Option<String>,
 }
 
-fn usage_ranking_hours(range: Option<&str>) -> AppResult<i64> {
-    match range.unwrap_or("24h") {
-        "24h" => Ok(24),
-        "7d" => Ok(24 * 7),
-        "30d" => Ok(24 * 30),
+/// UR-3: `today` is the current Asia/Shanghai local day; `7d`/`30d` are rolling
+/// windows ending at the request time. The enum carries the resolved window
+/// instead of a plain hour count so the day window never has to be expressed as
+/// fractional hours.
+#[derive(Debug, Clone, Copy)]
+enum UsageRankingWindow {
+    Today,
+    RollingHours(i64),
+}
+
+fn usage_ranking_window(range: Option<&str>) -> AppResult<UsageRankingWindow> {
+    match range.unwrap_or("today") {
+        "today" => Ok(UsageRankingWindow::Today),
+        "7d" => Ok(UsageRankingWindow::RollingHours(24 * 7)),
+        "30d" => Ok(UsageRankingWindow::RollingHours(24 * 30)),
         _ => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "range must be one of 24h, 7d, or 30d",
+            "range must be one of today, 7d, or 30d",
         )),
     }
 }
@@ -151,7 +161,9 @@ pub async fn get_admin_overview(
         .sum::<usize>()
         .min(usize::MAX);
 
-    let ranking_window_from = (now - chrono::Duration::hours(24)).to_rfc3339();
+    // AD-2: the embedded ranking covers the current Asia/Shanghai local day,
+    // aligned with the `today` aggregate window.
+    let ranking_window_from = crate::beijing_time::beijing_today_start_utc(now).to_rfc3339();
     let ranking = state
         .user_store
         .get_users_usage_ranking(&ranking_window_from, &now.to_rfc3339(), 20)
@@ -169,11 +181,7 @@ pub async fn get_admin_overview(
         })
         .collect();
 
-    let today_start = Utc::now()
-        .date_naive()
-        .and_time(NaiveTime::MIN)
-        .and_utc()
-        .to_rfc3339();
+    let today_start = crate::beijing_time::beijing_today_start_utc(Utc::now()).to_rfc3339();
     let (today_calls, today_cost_nano_usd) = state
         .user_store
         .get_today_usage_totals(&today_start)
@@ -351,9 +359,9 @@ pub async fn get_admin_usage_ranking(
 ) -> AppResult<Json<Value>> {
     let caller = get_current_user(&headers, &state).await?;
     let is_admin = caller.role.can_manage_users();
-    let hours = usage_ranking_hours(query.range.as_deref())?;
+    let window = usage_ranking_window(query.range.as_deref())?;
     Ok(Json(
-        build_usage_ranking(&state, Some(&caller), is_admin, hours).await?,
+        build_usage_ranking(&state, Some(&caller), is_admin, window).await?,
     ))
 }
 
@@ -365,8 +373,8 @@ pub async fn get_public_usage_ranking(
     if !crate::public_api::admit(&headers) {
         return Ok(crate::public_api::rate_limited_response());
     }
-    let hours = usage_ranking_hours(query.range.as_deref())?;
-    let response = build_usage_ranking(&state, None, false, hours).await?;
+    let window = usage_ranking_window(query.range.as_deref())?;
+    let response = build_usage_ranking(&state, None, false, window).await?;
     let bytes = serde_json::to_vec(&response).map_err(|error| {
         AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -385,11 +393,19 @@ async fn build_usage_ranking(
     state: &AppState,
     caller: Option<&crate::users::User>,
     is_admin: bool,
-    hours: i64,
+    window: UsageRankingWindow,
 ) -> AppResult<Value> {
     let now = Utc::now();
-    let time_to = now.to_rfc3339();
-    let time_from = (now - chrono::Duration::hours(hours)).to_rfc3339();
+    let (time_from, time_to) = match window {
+        UsageRankingWindow::Today => {
+            let start = crate::beijing_time::beijing_today_start_utc(now);
+            (start.to_rfc3339(), now.to_rfc3339())
+        }
+        UsageRankingWindow::RollingHours(hours) => (
+            (now - chrono::Duration::hours(hours)).to_rfc3339(),
+            now.to_rfc3339(),
+        ),
+    };
     let rows = state
         .user_store
         .get_users_model_usage_ranking(&time_from, &time_to, caller.is_none())
@@ -573,8 +589,9 @@ async fn build_usage_ranking(
 #[cfg(test)]
 mod tests {
     use super::{
-        compare_usage_rank, insert_admin_usage_cost, may_disclose_usage_identity,
-        sort_usage_models, top_twenty_rank, usage_model_json, usage_ranking_hours,
+        UsageRankingWindow, compare_usage_rank, insert_admin_usage_cost,
+        may_disclose_usage_identity, sort_usage_models, top_twenty_rank, usage_model_json,
+        usage_ranking_window,
     };
     use crate::users::UserModelUsageRankingRow;
     use serde_json::json;
@@ -596,11 +613,25 @@ mod tests {
 
     #[test]
     fn usage_ranking_accepts_only_documented_public_windows() {
-        assert_eq!(usage_ranking_hours(None).unwrap(), 24);
-        assert_eq!(usage_ranking_hours(Some("24h")).unwrap(), 24);
-        assert_eq!(usage_ranking_hours(Some("7d")).unwrap(), 168);
-        assert_eq!(usage_ranking_hours(Some("30d")).unwrap(), 720);
-        assert!(usage_ranking_hours(Some("1d")).is_err());
+        assert!(matches!(
+            usage_ranking_window(None).unwrap(),
+            UsageRankingWindow::Today
+        ));
+        assert!(matches!(
+            usage_ranking_window(Some("today")).unwrap(),
+            UsageRankingWindow::Today
+        ));
+        assert!(matches!(
+            usage_ranking_window(Some("7d")).unwrap(),
+            UsageRankingWindow::RollingHours(168)
+        ));
+        assert!(matches!(
+            usage_ranking_window(Some("30d")).unwrap(),
+            UsageRankingWindow::RollingHours(720)
+        ));
+        assert!(usage_ranking_window(Some("1d")).is_err());
+        // The pre-normalization rolling window name must no longer be accepted.
+        assert!(usage_ranking_window(Some("24h")).is_err());
     }
 
     #[test]

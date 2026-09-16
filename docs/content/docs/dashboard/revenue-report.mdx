@@ -1,0 +1,35 @@
+---
+title: Revenue Report
+description: Review daily revenue, per-model income, and excluded users.
+---
+
+## Open the Revenue Report
+
+Open **Revenue Report** at `/dashboard/admin/revenue`. The page is visible to `admin` and `super_admin` sessions only.
+
+Each day covers Beijing time 00:00 to 24:00. Revenue is the sum of recorded request charges. Recharge and order money is not revenue.
+
+## Read the daily table
+
+1. Set **From date** and **To date**. The default range is the last 30 days.
+2. Read the day rows. Each row shows the date, revenue, call count, Token count, and the top model with its revenue.
+3. Expand a row to see every model for that day, ordered by revenue descending.
+
+Days with no revenue are omitted. The current day updates live from request logs. Past days come from a persisted daily aggregate that Monoize settles after each Beijing midnight.
+
+## Export Excel
+
+Select **Export Excel**. The browser downloads an `.xlsx` file for the selected date range. The file has one row per day, ordered by date ascending.
+
+## Exclude users
+
+The **Excluded users** card lists users whose consumption is not counted as revenue.
+
+1. Type a username or user ID in the search box.
+2. Select the user from the results.
+
+Removing a user from the list counts that user's consumption again. Both changes recompute history within the request-log retention window (365 days). Older persisted days keep their existing values.
+
+## Retention
+
+Request logs are retained for 365 days. The revenue report can look back up to 365 days.

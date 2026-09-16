@@ -68,7 +68,7 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
       `3 * MONOIZE_METERING_SHIP_INTERVAL_SECONDS`.
 - `today`: object:
   - `calls`: integer COUNT of request-log rows with
-    `created_at_unix_ms >= UTC calendar-day start` (same instant as
+    `created_at_unix_ms >= Asia/Shanghai calendar-day start` (same instant as
     `GET /api/dashboard/analytics` `today_calls`);
   - `cost_nano_usd`: nano-dollar integer string SUM of canonical in-range
     `charge_nano_usd` (same aggregation as analytics `today_cost_nano_usd`).
@@ -86,10 +86,10 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
   - `username`: string or null;
   - `call_count`: integer;
   - `cost_nano_usd`: nano-dollar integer string.
-  The aggregation window MUST be the last 24 hours ending now, computed from
-  `request_logs.created_at_unix_ms >= now - 24h` and only over rows whose
-  `created_at_unix_ms` is not null. Charge decoding MUST follow the existing
-  analytics aggregate rules (RL-analytics).
+  The aggregation window MUST be the current Asia/Shanghai local day, computed
+  from `request_logs.created_at_unix_ms >= Asia/Shanghai calendar-day start
+  00:00:00` and only over rows whose `created_at_unix_ms` is not null. Charge
+  decoding MUST follow the existing analytics aggregate rules (RL-analytics).
 - `channel_health`: array of objects, one per channel known to the routing
   store, ordered by provider priority ascending then channel name ascending:
   - `provider_id`, `provider_name`, `channel_id`, `channel_name`: strings;
@@ -106,7 +106,7 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
     is unhealthy or in cooldown; empty when `per_model_circuit_break` is
     false or every model key is healthy;
   - `today_calls`: integer COUNT of today's request-log rows for this
-    `channel_id` (UTC calendar-day start, same window as `today`);
+    `channel_id` (Asia/Shanghai calendar-day start, same window as `today`);
   - `today_cost_nano_usd`: nano-dollar integer string SUM of those rows'
     canonical `charge_nano_usd`.
 

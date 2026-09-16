@@ -124,10 +124,10 @@ async fn api_key_analytics_is_key_scoped_exact_and_owner_protected() {
         .expect("stranger session creates");
     let router = build_app(state);
 
-    let path = format!("/api/dashboard/tokens/{}/analytics?range=24h", key.id);
+    let path = format!("/api/dashboard/tokens/{}/analytics?range=today", key.id);
     let (status, body) = get_json(&router, &path, &owner_session.token).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["range"], "24h");
+    assert_eq!(body["range"], "today");
     assert_eq!(body["total_input_tokens"], "300");
     assert_eq!(body["total_cache_read_tokens"], "120");
     assert_eq!(body["total_output_tokens"], "50");

@@ -1749,7 +1749,11 @@ impl UsageReadCache {
     /// Return the cached value when it is fresh, otherwise run `load` once while
     /// holding the per-key lock. The lock is released before the result is
     /// returned, so a slow `load` blocks only callers for the same key.
-    pub async fn get_or_load<F, Fut>(&self, key: &str, load: F) -> Result<Option<UserBalance>, String>
+    pub async fn get_or_load<F, Fut>(
+        &self,
+        key: &str,
+        load: F,
+    ) -> Result<Option<UserBalance>, String>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Option<UserBalance>, String>>,
@@ -3067,9 +3071,7 @@ mod tests {
             .await;
         assert!(first.is_err());
 
-        let second = cache
-            .get_or_load("user-2", || async { Ok(None) })
-            .await;
+        let second = cache.get_or_load("user-2", || async { Ok(None) }).await;
         assert!(
             second.is_ok(),
             "a transient failure must not be replayed for the whole window"

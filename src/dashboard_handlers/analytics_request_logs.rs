@@ -6,7 +6,6 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Sse};
-use chrono::NaiveTime;
 use chrono::Utc;
 use dashmap::DashMap;
 use futures_util::{StreamExt, stream};
@@ -367,11 +366,7 @@ pub async fn get_dashboard_analytics(
     let now = Utc::now();
     let time_to = now.to_rfc3339();
     let time_from = (now - chrono::Duration::hours(range_hours)).to_rfc3339();
-    let today_start = now
-        .date_naive()
-        .and_time(NaiveTime::MIN)
-        .and_utc()
-        .to_rfc3339();
+    let today_start = crate::beijing_time::beijing_today_start_utc(now).to_rfc3339();
 
     let (user_id_filter, group_id_filter) = {
         let resolved = analytics_user_scope(

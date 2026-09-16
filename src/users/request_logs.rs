@@ -10,7 +10,7 @@ use sea_orm::{AccessMode, ConnectionTrait, IsolationLevel, TransactionTrait};
 use serde_json::Value;
 use std::collections::HashMap;
 
-const REQUEST_LOG_RETENTION_DAYS: i64 = 90;
+const REQUEST_LOG_RETENTION_DAYS: i64 = 365;
 pub(super) const REQUEST_LOG_RETENTION_INTERVAL_SECS: u64 = 3600;
 const REQUEST_LOG_MODEL_FILTER_DEFAULT_MAX_TERMS: usize = 32;
 const REQUEST_LOG_MODEL_FILTER_HARD_MAX_TERMS: usize = 32;

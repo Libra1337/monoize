@@ -11,7 +11,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use chrono::{NaiveTime, Utc};
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -107,11 +107,7 @@ pub async fn list_users(
         .list_billing_plans()
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    let today_start = Utc::now()
-        .date_naive()
-        .and_time(NaiveTime::MIN)
-        .and_utc()
-        .to_rfc3339();
+    let today_start = crate::beijing_time::beijing_today_start_utc(Utc::now()).to_rfc3339();
     let usage_rows = user_store
         .get_users_today_usage(&today_start)
         .await

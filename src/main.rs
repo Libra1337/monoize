@@ -40,6 +40,14 @@ async fn run() -> Result<(), AppError> {
             state.background_shutdown.clone(),
         );
     }
+    // AR-6: settle the revenue daily aggregates after every Beijing midnight;
+    // replicas defer to the primary's settlement.
+    if !is_replica {
+        monoize::users::spawn_revenue_daily_settlement(
+            state.db_pool.clone(),
+            state.background_shutdown.clone(),
+        );
+    }
 
     if !is_replica {
         // PRP11: retention/pending-log deletion is a primary responsibility.

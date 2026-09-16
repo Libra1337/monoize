@@ -94,8 +94,8 @@ static ADDRESS_GUARD_CACHE: std::sync::OnceLock<
     dashmap::DashMap<String, (std::time::Instant, Result<(), String>)>,
 > = std::sync::OnceLock::new();
 
-fn address_guard_cache() -> &'static dashmap::DashMap<String, (std::time::Instant, Result<(), String>)>
-{
+fn address_guard_cache()
+-> &'static dashmap::DashMap<String, (std::time::Instant, Result<(), String>)> {
     ADDRESS_GUARD_CACHE.get_or_init(dashmap::DashMap::new)
 }
 

@@ -2943,7 +2943,7 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             "/dashboard/billing-rates/profiles/{profile}/models/{model}/rename",
             post(crate::dashboard_handlers::rename_pricing_profile_model),
         )
-                .route(
+        .route(
             "/dashboard/billing-rates/sync/catalog",
             post(crate::dashboard_handlers::sync_billing_rates_catalog),
         )
@@ -3010,6 +3010,26 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/dashboard/admin/usage-ranking",
             get(crate::dashboard_handlers::get_admin_usage_ranking),
+        )
+        .route(
+            "/dashboard/admin/revenue/daily",
+            get(crate::dashboard_handlers::get_admin_revenue_daily),
+        )
+        .route(
+            "/dashboard/admin/revenue/daily/export",
+            get(crate::dashboard_handlers::export_admin_revenue_daily),
+        )
+        .route(
+            "/dashboard/admin/revenue/exclusions",
+            get(crate::dashboard_handlers::list_admin_revenue_exclusions),
+        )
+        .route(
+            "/dashboard/admin/revenue/exclusions",
+            post(crate::dashboard_handlers::add_admin_revenue_exclusion),
+        )
+        .route(
+            "/dashboard/admin/revenue/exclusions/{user_id}",
+            axum::routing::delete(crate::dashboard_handlers::remove_admin_revenue_exclusion),
         )
         .merge(build_store_mutation_router(state))
 }

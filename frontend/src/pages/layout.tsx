@@ -27,6 +27,7 @@ import {
   Activity,
   Building2,
   ShieldAlert,
+  TrendingUp,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -184,6 +185,7 @@ function Sidebar({
   const adminNavItems = [
     { to: "/dashboard/admin", icon: Gauge, label: t("nav.adminDashboard"), exact: true },
     { to: "/dashboard/admin/runtime", icon: HeartPulse, label: t("nav.adminRuntime") },
+    { to: "/dashboard/admin/revenue", icon: TrendingUp, label: t("nav.adminRevenue") },
     { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
     { to: "/dashboard/models", icon: Database, label: t("nav.models") },
     { to: "/dashboard/plans", icon: CalendarClock, label: t("nav.billingPlans") },

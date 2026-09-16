@@ -1,4 +1,11 @@
 {
   "title": "儀表板",
-  "pages": ["index", "providers-and-channels", "models", "api-keys", "store"]
+  "pages": [
+    "index",
+    "providers-and-channels",
+    "models",
+    "api-keys",
+    "revenue-report",
+    "store"
+  ]
 }

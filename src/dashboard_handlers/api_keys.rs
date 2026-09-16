@@ -23,7 +23,7 @@ pub struct ApiKeyAnalyticsQuery {
 }
 
 fn default_api_key_analytics_range() -> String {
-    "24h".to_string()
+    "today".to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -680,8 +680,11 @@ pub async fn get_api_key(
     }))
 }
 
-/// TM-AN5a bucket alignment. Each helper truncates a UTC instant down to the start
-/// of its bucket unit so a bucket label names the interval the bucket covers.
+/// TM-AN5a bucket alignment in Asia/Shanghai local time. Each helper truncates a
+/// UTC instant down to the start of its local bucket unit so a bucket label
+/// names the interval the bucket covers. The zone has no DST, so a local
+/// boundary is always exactly `+08:00` away from its UTC instant.
+#[cfg(test)]
 fn align_down_to_hour(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
     use chrono::Timelike;
     value
@@ -692,19 +695,24 @@ fn align_down_to_hour(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<
 }
 
 fn align_down_to_day(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
-    value
-        .date_naive()
-        .and_time(chrono::NaiveTime::MIN)
-        .and_utc()
+    crate::beijing_time::beijing_today_start_utc(value)
 }
 
 fn align_down_to_month(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
     use chrono::Datelike;
-    let date = value.date_naive();
+    let date = value.with_timezone(&chrono_tz::Asia::Shanghai).date_naive();
     date.with_day(1)
         .unwrap_or(date)
         .and_time(chrono::NaiveTime::MIN)
-        .and_utc()
+        .and_local_timezone(chrono_tz::Asia::Shanghai)
+        .single()
+        .map(|local| local.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|| {
+            date.with_day(1)
+                .unwrap_or(date)
+                .and_time(chrono::NaiveTime::MIN)
+                .and_utc()
+        })
 }
 
 /// The bucket unit of one API Key analytics range.
@@ -757,18 +765,29 @@ impl AnalyticsBucketPlan {
 
 fn add_months(value: chrono::DateTime<chrono::Utc>, months: i64) -> chrono::DateTime<chrono::Utc> {
     use chrono::Datelike;
-    let index = i64::from(value.year()) * 12 + i64::from(value.month()) - 1 + months;
+    // TM-AN5a: month buckets start at Beijing local day 1 midnight, so the
+    // month index is derived in Asia/Shanghai local time.
+    let local = value.with_timezone(&chrono_tz::Asia::Shanghai);
+    let index = i64::from(local.year()) * 12 + i64::from(local.month()) - 1 + months;
     let year = index.div_euclid(12);
     let month = index.rem_euclid(12) + 1;
     i32::try_from(year)
         .ok()
         .and_then(|year| chrono::NaiveDate::from_ymd_opt(year, month as u32, 1))
-        .map(|date| date.and_time(chrono::NaiveTime::MIN).and_utc())
+        .and_then(|date| {
+            date.and_time(chrono::NaiveTime::MIN)
+                .and_local_timezone(chrono_tz::Asia::Shanghai)
+                .single()
+        })
+        .map(|local| local.with_timezone(&chrono::Utc))
         .unwrap_or(value)
 }
 
 fn months_between(from: chrono::DateTime<chrono::Utc>, to: chrono::DateTime<chrono::Utc>) -> i64 {
     use chrono::Datelike;
+    // Computed in Asia/Shanghai local time so it pairs with `add_months`.
+    let from = from.with_timezone(&chrono_tz::Asia::Shanghai);
+    let to = to.with_timezone(&chrono_tz::Asia::Shanghai);
     (i64::from(to.year()) * 12 + i64::from(to.month()))
         - (i64::from(from.year()) * 12 + i64::from(from.month()))
 }
@@ -784,16 +803,21 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<chrono::DateTime<chrono::Utc>, String>>,
 {
-    let next_hour = align_down_to_hour(now) + chrono::Duration::hours(1);
     let next_day = align_down_to_day(now) + chrono::Duration::days(1);
     match range {
-        "24h" => Ok(AnalyticsBucketPlan {
-            time_from: next_hour - chrono::Duration::hours(24),
-            time_to: next_hour,
-            bucket_count: 24,
-            unit: AnalyticsBucketUnit::Hour,
-            label_format: "%m-%d %H:00",
-        }),
+        // TM-AN5/AN5b: hourly buckets of the current Asia/Shanghai local day,
+        // covering the whole local day [midnight, next midnight). Buckets after
+        // the request instant aggregate zero because the day has not elapsed.
+        "today" => {
+            let day_start = align_down_to_day(now);
+            Ok(AnalyticsBucketPlan {
+                time_from: day_start,
+                time_to: next_day,
+                bucket_count: 24,
+                unit: AnalyticsBucketUnit::Hour,
+                label_format: "%m-%d %H:00",
+            })
+        }
         "7d" | "30d" => {
             let days = if range == "7d" { 7 } else { 30 };
             Ok(AnalyticsBucketPlan {
@@ -836,7 +860,7 @@ where
         _ => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "range must equal 24h, 7d, 30d, or all",
+            "range must equal today, 7d, 30d, or all",
         )
         .with_param("range")),
     }
@@ -875,7 +899,7 @@ pub async fn get_api_key_analytics(
         unit,
         label_format,
     } = plan;
-    let today_start = now.date_naive().and_time(chrono::NaiveTime::MIN).and_utc();
+    let today_start = crate::beijing_time::beijing_today_start_utc(now);
     let raw = state
         .user_store
         .get_dashboard_analytics_bucketed(
@@ -897,9 +921,11 @@ pub async fn get_api_key_analytics(
     let mut trend = (0..bucket_count)
         .map(|index| {
             // TM-AN5a: the label names the exact interval the bucket aggregates, so it is
-            // derived by advancing whole units rather than by dividing the window.
+            // derived by advancing whole units rather than by dividing the window. Labels
+            // render in Asia/Shanghai local time, matching the local bucket boundaries.
             let label = unit
                 .advance(time_from, index)
+                .with_timezone(&chrono_tz::Asia::Shanghai)
                 .format(label_format)
                 .to_string();
             ApiKeyAnalyticsTrendPoint {
@@ -1463,7 +1489,8 @@ mod tests {
     #[test]
     fn analytics_bucket_starts_align_to_their_labelled_unit() {
         // TM-AN5a: a mid-period instant must truncate down, otherwise a bucket
-        // covering 10:37-11:37 would carry the label `10:00`.
+        // covering 10:37-11:37 would carry the label `10:00`. Day and month
+        // boundaries align in Asia/Shanghai local time.
         let mid = chrono::DateTime::parse_from_rfc3339("2026-09-08T10:37:41.523Z")
             .expect("fixed instant")
             .with_timezone(&chrono::Utc);
@@ -1472,13 +1499,15 @@ mod tests {
             align_down_to_hour(mid).to_rfc3339(),
             "2026-09-08T10:00:00+00:00"
         );
+        // 10:37 UTC is 18:37 Beijing: the local day started 2026-09-08 00:00
+        // Beijing = 2026-09-07T16:00Z.
         assert_eq!(
             align_down_to_day(mid).to_rfc3339(),
-            "2026-09-08T00:00:00+00:00"
+            "2026-09-07T16:00:00+00:00"
         );
         assert_eq!(
             align_down_to_month(mid).to_rfc3339(),
-            "2026-09-01T00:00:00+00:00"
+            "2026-08-31T16:00:00+00:00"
         );
 
         // An already-aligned instant is unchanged, so alignment is idempotent.
@@ -1502,52 +1531,62 @@ mod tests {
             .expect("range resolves")
     }
 
-    /// TM-AN5a: every bucket must cover exactly the interval its label names. A window ending
-    /// at an unaligned `now` would divide into buckets about 61 minutes wide while labelling
-    /// them on whole hours.
+    /// TM-AN5a: every bucket must cover exactly the interval its label names, and every
+    /// boundary must align in Asia/Shanghai local time. A window ending at an unaligned
+    /// `now` would divide into buckets about 61 minutes wide while labelling them on
+    /// whole hours.
     #[tokio::test]
     async fn analytics_buckets_cover_exactly_the_interval_their_label_names() {
+        // 10:37:41 UTC is 18:37:41 Beijing: the current local day is 2026-09-08
+        // and starts at 2026-09-07T16:00:00Z.
         let now = fixed_instant("2026-09-08T10:37:41.523Z");
 
-        let last_day = plan_for("24h", now).await;
-        assert_eq!(last_day.bucket_count, 24);
-        assert_eq!(last_day.unit, AnalyticsBucketUnit::Hour);
-        assert_eq!(last_day.time_to.to_rfc3339(), "2026-09-08T11:00:00+00:00");
-        assert_eq!(last_day.time_from.to_rfc3339(), "2026-09-07T11:00:00+00:00");
-        // The window is an exact multiple of the unit, so the equal-duration SQL buckets land
-        // on the same boundaries the labels name.
-        let range_ms = last_day.time_to.timestamp_millis() - last_day.time_from.timestamp_millis();
-        assert_eq!(range_ms % last_day.bucket_count, 0);
-        assert_eq!(range_ms / last_day.bucket_count, 3_600_000);
-        for index in 0..last_day.bucket_count {
-            let start = last_day.unit.advance(last_day.time_from, index);
+        let today = plan_for("today", now).await;
+        assert_eq!(today.unit, AnalyticsBucketUnit::Hour);
+        assert_eq!(
+            today.time_to.to_rfc3339(),
+            "2026-09-08T16:00:00+00:00",
+            "the exclusive end is the next Beijing midnight"
+        );
+        // The plan covers the entire local day with 24 hourly buckets.
+        assert_eq!(today.bucket_count, 24);
+        let range_ms = today.time_to.timestamp_millis() - today.time_from.timestamp_millis();
+        assert_eq!(range_ms % today.bucket_count, 0);
+        assert_eq!(range_ms / today.bucket_count, 3_600_000);
+        for index in 0..today.bucket_count {
+            let start = today.unit.advance(today.time_from, index);
             assert_eq!(
                 start.timestamp_millis(),
-                last_day.time_from.timestamp_millis() + index * 3_600_000
+                today.time_from.timestamp_millis() + index * 3_600_000
             );
             assert_eq!(start.timestamp_subsec_millis(), 0);
         }
         assert_eq!(
-            last_day
+            today
                 .unit
-                .advance(last_day.time_from, 1)
-                .format(last_day.label_format)
+                .advance(today.time_from, 1)
+                .with_timezone(&chrono_tz::Asia::Shanghai)
+                .format(today.label_format)
                 .to_string(),
-            "09-07 12:00"
+            "09-08 01:00",
+            "hour labels render the Beijing local hour"
         );
 
+        // Daily buckets align to Beijing midnight: the day containing the
+        // instant ends 2026-09-09 00:00 Beijing = 2026-09-08T16:00Z, so a 7-day
+        // plan starts 2026-09-02 00:00 Beijing = 2026-09-01T16:00Z.
         let week = plan_for("7d", now).await;
         assert_eq!(week.bucket_count, 7);
         assert_eq!(week.unit, AnalyticsBucketUnit::Day);
-        assert_eq!(week.time_to.to_rfc3339(), "2026-09-09T00:00:00+00:00");
-        assert_eq!(week.time_from.to_rfc3339(), "2026-09-02T00:00:00+00:00");
+        assert_eq!(week.time_to.to_rfc3339(), "2026-09-08T16:00:00+00:00");
+        assert_eq!(week.time_from.to_rfc3339(), "2026-09-01T16:00:00+00:00");
         let week_ms = week.time_to.timestamp_millis() - week.time_from.timestamp_millis();
         assert_eq!(week_ms % week.bucket_count, 0);
         assert_eq!(week_ms / week.bucket_count, 86_400_000);
 
         let month = plan_for("30d", now).await;
         assert_eq!(month.bucket_count, 30);
-        assert_eq!(month.time_to.to_rfc3339(), "2026-09-09T00:00:00+00:00");
+        assert_eq!(month.time_to.to_rfc3339(), "2026-09-08T16:00:00+00:00");
         let month_ms = month.time_to.timestamp_millis() - month.time_from.timestamp_millis();
         assert_eq!(month_ms % month.bucket_count, 0);
         assert_eq!(month_ms / month.bucket_count, 86_400_000);
@@ -1565,14 +1604,17 @@ mod tests {
 
         assert_eq!(plan.unit, AnalyticsBucketUnit::Month);
         assert!(plan.uses_calendar_months());
-        assert_eq!(plan.time_from.to_rfc3339(), "2026-01-01T00:00:00+00:00");
-        assert_eq!(plan.time_to.to_rfc3339(), "2026-10-01T00:00:00+00:00");
+        // Month buckets start at Beijing local day 1 midnight: 2026-01-01
+        // Beijing = 2025-12-31T16:00Z, 2026-10-01 Beijing = 2026-09-30T16:00Z.
+        assert_eq!(plan.time_from.to_rfc3339(), "2025-12-31T16:00:00+00:00");
+        assert_eq!(plan.time_to.to_rfc3339(), "2026-09-30T16:00:00+00:00");
         assert_eq!(plan.bucket_count, 9);
 
         let labels = (0..plan.bucket_count)
             .map(|index| {
                 plan.unit
                     .advance(plan.time_from, index)
+                    .with_timezone(&chrono_tz::Asia::Shanghai)
                     .format(plan.label_format)
                     .to_string()
             })
@@ -1587,11 +1629,11 @@ mod tests {
         // February is shorter than January, so an equal-duration split would drift.
         assert_eq!(
             plan.unit.advance(plan.time_from, 1).to_rfc3339(),
-            "2026-02-01T00:00:00+00:00"
+            "2026-01-31T16:00:00+00:00"
         );
         assert_eq!(
             plan.unit.advance(plan.time_from, 2).to_rfc3339(),
-            "2026-03-01T00:00:00+00:00"
+            "2026-02-28T16:00:00+00:00"
         );
     }
 
@@ -1606,9 +1648,15 @@ mod tests {
 
         assert_eq!(plan.unit, AnalyticsBucketUnit::Day);
         assert!(!plan.uses_calendar_months());
-        assert_eq!(plan.bucket_count, 8);
-        assert_eq!(plan.time_to.to_rfc3339(), "2026-09-09T00:00:00+00:00");
-        assert_eq!(plan.time_from.to_rfc3339(), "2026-09-01T00:00:00+00:00");
+        // Day alignment is Beijing local: the first event 2026-09-01T23:59:59Z
+        // is 2026-09-02 07:59 Beijing, and the request falls on Beijing day
+        // 2026-09-08, so the retained span is 6 whole local days and the plan
+        // covers 7 daily buckets.
+        assert_eq!(plan.bucket_count, 7);
+        // Daily buckets align to Beijing midnight: the day containing the
+        // request ends 2026-09-09 00:00 Beijing = 2026-09-08T16:00Z.
+        assert_eq!(plan.time_to.to_rfc3339(), "2026-09-08T16:00:00+00:00");
+        assert_eq!(plan.time_from.to_rfc3339(), "2026-09-01T16:00:00+00:00");
     }
 
     #[test]
@@ -1616,17 +1664,20 @@ mod tests {
         let december = fixed_instant("2026-12-14T09:00:00Z");
         assert_eq!(
             add_months(december, 1).to_rfc3339(),
-            "2027-01-01T00:00:00+00:00"
+            "2026-12-31T16:00:00+00:00",
+            "month buckets start at Beijing local day 1 midnight"
         );
         assert_eq!(
             add_months(december, -12).to_rfc3339(),
-            "2025-12-01T00:00:00+00:00"
+            "2025-11-30T16:00:00+00:00"
         );
-        // A 31st never overflows into the next month, because every bucket starts on day 1.
-        let january31 = fixed_instant("2026-01-31T23:00:00Z");
+        // A 31st never overflows into the next month, because every bucket
+        // starts on day 1. The instant is Beijing 2026-02-01, so one month
+        // later is Beijing 2026-03-01 = 2026-02-28T16:00Z.
+        let februaryBeijing = fixed_instant("2026-01-31T23:00:00Z");
         assert_eq!(
-            add_months(january31, 1).to_rfc3339(),
-            "2026-02-01T00:00:00+00:00"
+            add_months(februaryBeijing, 1).to_rfc3339(),
+            "2026-02-28T16:00:00+00:00"
         );
         assert_eq!(
             months_between(

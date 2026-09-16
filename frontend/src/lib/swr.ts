@@ -10,6 +10,8 @@ import type {
   DashboardAnalytics,
   AdminOverview,
   AdminUsageRanking,
+  AdminRevenueDaily,
+  AdminRevenueExclusions,
   PublicUsageRanking,
   UsageRankingRange,
   ConfigOverview,
@@ -97,6 +99,8 @@ export const SWR_KEYS = {
   ANALYTICS: "/dashboard/analytics",
   ADMIN_OVERVIEW: "/dashboard/admin/overview",
   ADMIN_USAGE: "/dashboard/admin/usage-ranking",
+  ADMIN_REVENUE_DAILY: "/dashboard/admin/revenue/daily",
+  ADMIN_REVENUE_EXCLUSIONS: "/dashboard/admin/revenue/exclusions",
   LIVE_USAGE: "/dashboard/me/live-usage",
   FIREWALL_STATS: "/dashboard/firewall/stats",
   FIREWALL_EVENTS: "/dashboard/firewall/events",
@@ -441,10 +445,29 @@ export function useAdminOverview(config?: SWRConfiguration) {
   });
 }
 
-export function useAdminUsageRanking(range: UsageRankingRange = "24h", config?: SWRConfiguration) {
+export function useAdminUsageRanking(range: UsageRankingRange = "today", config?: SWRConfiguration) {
   return useSWR<AdminUsageRanking>(`${SWR_KEYS.ADMIN_USAGE}?range=${range}`, () => api.getAdminUsageRanking(range), {
     ...defaultConfig,
     refreshInterval: 2000,
+    ...config,
+  });
+}
+
+export function adminRevenueDailySWRKey(from: string, to: string) {
+  return `${SWR_KEYS.ADMIN_REVENUE_DAILY}?from=${from}&to=${to}`;
+}
+
+export function useAdminRevenueDaily(from: string, to: string, config?: SWRConfiguration) {
+  return useSWR<AdminRevenueDaily>(adminRevenueDailySWRKey(from, to), () => api.getAdminRevenueDaily(from, to), {
+    ...defaultConfig,
+    refreshInterval: 10_000,
+    ...config,
+  });
+}
+
+export function useAdminRevenueExclusions(config?: SWRConfiguration) {
+  return useSWR<AdminRevenueExclusions>(SWR_KEYS.ADMIN_REVENUE_EXCLUSIONS, () => api.listAdminRevenueExclusions(), {
+    ...defaultConfig,
     ...config,
   });
 }

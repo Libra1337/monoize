@@ -1804,13 +1804,10 @@ impl UserStore {
         self.db
             .write()
             .await
-            .execute(
-                self.db
-                    .stmt(
-                        "DELETE FROM sessions WHERE token = $1",
-                        vec![Self::hash_session_token(token).into()],
-                    ),
-            )
+            .execute(self.db.stmt(
+                "DELETE FROM sessions WHERE token = $1",
+                vec![Self::hash_session_token(token).into()],
+            ))
             .await
             .map_err(|e| e.to_string())?;
         Ok(())

@@ -19,10 +19,18 @@ import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
 import { aggregateTokenTotals, formatCacheHitRate } from "@/lib/usage-analytics";
 import { cn } from "@/lib/utils";
 
-type DashboardRange = "24h" | "week" | "month";
+type DashboardRange = "today" | "week" | "month";
+
+/** DH-9: the today range covers the current Asia/Shanghai local day. */
+function beijingElapsedHours(): number {
+  const now = new Date();
+  const beijingHour = (now.getUTCHours() + 8) % 24;
+  const elapsed = beijingHour + (now.getUTCMinutes() > 0 || now.getUTCSeconds() > 0 || now.getUTCMilliseconds() > 0 ? 1 : 0);
+  return Math.max(1, elapsed);
+}
 
 const DASHBOARD_RANGES: Record<DashboardRange, { hours: number; buckets: number }> = {
-  "24h": { hours: 24, buckets: 24 },
+  "today": { hours: beijingElapsedHours(), buckets: 24 },
   week: { hours: 168, buckets: 28 },
   month: { hours: 720, buckets: 30 },
 };
@@ -94,7 +102,7 @@ export function DashboardPage() {
   const { user } = useAuth();
   const exchangeRate = useStoreExchangeRate(true);
   const { currency } = useStoreCurrency();
-  const [range, setRange] = useState<DashboardRange>("24h");
+  const [range, setRange] = useState<DashboardRange>("today");
   const rangeConfig = DASHBOARD_RANGES[range];
   const summary = useDashboardAnalytics(8, 720, "self", {
     keepPreviousData: true,

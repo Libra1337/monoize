@@ -49,7 +49,7 @@ export function ApiKeyAnalyticsDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const [range, setRange] = useState<ApiKeyAnalyticsRange>("24h");
+  const [range, setRange] = useState<ApiKeyAnalyticsRange>("today");
   const { data, error, isLoading, isValidating } = useApiKeyAnalytics(apiKey?.id ?? null, range);
   const exchangeRate = useStoreExchangeRate(Boolean(apiKey));
   const { currency } = useStoreCurrency();
@@ -89,7 +89,7 @@ export function ApiKeyAnalyticsDialog({
                 ) : null}
                 <Tabs value={range} onValueChange={(value) => setRange(value as ApiKeyAnalyticsRange)}>
                   <TabsList className="rounded-xl" aria-label={t("apiKeys.analyticsRange")}>
-                    <TabsTrigger value="24h">24h</TabsTrigger>
+                    <TabsTrigger value="today">{t("publicSite.usageRanking.ranges.today")}</TabsTrigger>
                     <TabsTrigger value="7d">7d</TabsTrigger>
                     <TabsTrigger value="30d">30d</TabsTrigger>
                     <TabsTrigger value="all">{t("apiKeys.analyticsAll")}</TabsTrigger>

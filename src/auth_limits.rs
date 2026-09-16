@@ -85,7 +85,10 @@ impl LoginThrottle {
     pub fn record_success(&self, username: &str, source_ip: Option<IpAddr>) {
         let key = pair_key(username, source_ip);
         let cleared = match self.pairs.lock() {
-            Ok(mut pairs) => pairs.remove(&key).map(|record| record.failures).unwrap_or(0),
+            Ok(mut pairs) => pairs
+                .remove(&key)
+                .map(|record| record.failures)
+                .unwrap_or(0),
             Err(_) => 0,
         };
         if cleared == 0 {
@@ -286,7 +289,6 @@ mod tests {
         );
     }
 }
-
 
 /// CF-73: bounds the wallet overdraft caused by the unlocked balance preflight.
 ///

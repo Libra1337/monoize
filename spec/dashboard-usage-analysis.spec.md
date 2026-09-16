@@ -20,16 +20,19 @@ hook, or request-log endpoint.
 
 UA-3. `/dashboard/logs` MUST keep its existing route, components, filters, and behavior.
 
-UA-4. The range control MUST contain exactly `24h`, `7d`, and `30d`. The initial range is
+UA-4. The range control MUST contain exactly `today`, `7d`, and `30d`. The initial range is
 `7d`.
 
 UA-5. The range values map to analytics queries as follows:
 
 | Range | `range_hours` | `buckets` |
 | --- | ---: | ---: |
-| `24h` | 24 | 24 |
+| `today` | current Asia/Shanghai day elapsed hours (at least 1) | 24 |
 | `7d` | 168 | 28 |
 | `30d` | 720 | 30 |
+
+The `today` range MUST cover the current Asia/Shanghai local day from 00:00:00
+up to the request time.
 
 ## 2. Summary And Trend
 
@@ -143,7 +146,7 @@ aggregate covers exactly the request-log rows whose `user_id` belongs to a user 
 `scope=self`, which aggregates only itself. A per-model cache hit rate is actionable only
 when it covers the traffic the reader is responsible for.
 
-UA-26. The range control MUST contain exactly `24h`, `7d`, and `30d` with the mapping of
+UA-26. The range control MUST contain exactly `today`, `7d`, and `30d` with the mapping of
 UA-5. The initial range is `7d`. The sub-page MUST NOT expose the metric control of UA-7,
 because cache hit rate is a ratio of input Tokens and does not vary by metric.
 

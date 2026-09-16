@@ -66,7 +66,7 @@ export function AdminUsagePage() {
   // non-admin session must not request an administrator endpoint. It is also only
   // needed to convert into CNY.
   const exchangeRate = useStoreExchangeRate(currency === "CNY" && isAdmin);
-  const [range, setRange] = useState<UsageRankingRange>("24h");
+  const [range, setRange] = useState<UsageRankingRange>("today");
   const { data, error, isLoading, isValidating, mutate } = useAdminUsageRanking(range);
   const [selected, setSelected] = useState<AdminUsageUserRow | null>(null);
 
@@ -126,7 +126,7 @@ export function AdminUsagePage() {
         title={t("adminUsage.title")}
         description={t("adminUsage.description")}
         actions={<div className="flex items-center gap-3"><div className="flex rounded-xl border bg-muted/40 p-1" role="group" aria-label={t("publicSite.usageRanking.rangeLabel")}>
-          {(["24h", "7d", "30d"] as UsageRankingRange[]).map((item) => <button key={item} type="button" aria-pressed={range === item} onClick={() => setRange(item)} className="relative min-h-9 rounded-lg px-3 text-xs font-medium text-muted-foreground transition-colors data-[active=true]:text-foreground" data-active={range === item}>{range === item && <motion.span layoutId="admin-usage-range" className="absolute inset-0 rounded-lg bg-background shadow-sm" transition={{ duration: 0.55, ease: "easeInOut" }} />}<span className="relative z-10">{t(`publicSite.usageRanking.ranges.${item}`)}</span></button>)}
+          ({(["today", "7d", "30d"] as UsageRankingRange[]).map((item) => <button key={item} type="button" aria-pressed={range === item} onClick={() => setRange(item)} className="relative min-h-9 rounded-lg px-3 text-xs font-medium text-muted-foreground transition-colors data-[active=true]:text-foreground" data-active={range === item}>{range === item && <motion.span layoutId="admin-usage-range" className="absolute inset-0 rounded-lg bg-background shadow-sm" transition={{ duration: 0.55, ease: "easeInOut" }} />}<span className="relative z-10">{t(`publicSite.usageRanking.ranges.${item}`)}</span></button>)}
         </div><RefreshStatusLogo refreshing={isValidating} label={isValidating ? t("adminUsage.refreshing") : t("adminUsage.current")} /></div>}
       />
 

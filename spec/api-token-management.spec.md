@@ -335,7 +335,7 @@ TM-UI1. The create and edit dialogs MUST render `sub_account_balance_nano_usd` o
 TM-UI2. A non-admin create or update mutation MUST omit `sub_account_balance_nano_usd` from its JSON request body.
 ## API Key Analytics
 
-TM-AN1. `GET /api/dashboard/tokens/{key_id}/analytics` MUST accept `range` equal to `24h`, `7d`, `30d`, or `all`. An absent range MUST equal `24h`. Any other value MUST return HTTP `400`.
+TM-AN1. `GET /api/dashboard/tokens/{key_id}/analytics` MUST accept `range` equal to `today`, `7d`, `30d`, or `all`. An absent range MUST equal `today`. Any other value MUST return HTTP `400`.
 
 TM-AN2. A non-Admin caller MUST own `key_id`. An Admin MAY inspect a Key owned by another user. An unauthorized or unknown Key MUST return the existing not-found response.
 
@@ -343,11 +343,11 @@ TM-AN3. The response MUST contain total, input, cache-read, and output Tokens, r
 
 TM-AN4. Consumed Coin MUST equal the sum of persisted canonical `charge_nano_usd` values for matching request logs. The service MUST NOT calculate a historical charge from a current model rate.
 
-TM-AN5. `24h` MUST use hourly buckets. `7d` and `30d` MUST use daily buckets. `all` MUST use daily buckets when retained history spans at most 90 days and calendar-month buckets otherwise.
+TM-AN5. `today` MUST use hourly buckets covering the current Asia/Shanghai local day from 00:00:00 up to the request time. `7d` and `30d` MUST use daily buckets. `all` MUST use daily buckets when retained history spans at most 90 days and calendar-month buckets otherwise.
 
-TM-AN5a. Each bucket boundary MUST align to the start of its own bucket unit in UTC. An hourly bucket MUST start at minute zero and second zero. A daily bucket MUST start at midnight. A calendar-month bucket MUST start on day one at midnight. A label MUST NOT round a boundary that the bucket does not start at; for example, a bucket covering `10:37` to `11:37` MUST NOT be labelled `10:00`.
+TM-AN5a. Each bucket boundary MUST align to the start of its own bucket unit in Asia/Shanghai local time (UTC offset `+08:00`). An hourly bucket MUST start at minute zero and second zero local time. A daily bucket MUST start at local midnight. A calendar-month bucket MUST start on day one at local midnight. A label MUST NOT round a boundary that the bucket does not start at; for example, a bucket covering `10:37` to `11:37` MUST NOT be labelled `10:00`.
 
-TM-AN5b. Both range ends MUST align to the bucket unit. The exclusive range end MUST be the start of the unit that follows the unit containing the request instant, and the range start MUST be that end minus the bucket count in whole units. Aligning only the start leaves a range whose length is not a whole number of units, which yields buckets wider than the unit their label names. For the `all` range the start MUST additionally not precede the aligned unit that contains the first retained request.
+TM-AN5b. Both range ends MUST align to the bucket unit. The exclusive range end MUST be the start of the unit that follows the unit containing the request instant, and the range start MUST be that end minus the bucket count in whole units. For the `today` range the exclusive end MUST be the Asia/Shanghai calendar-day end following the request instant and the start MUST be that day's local midnight, covering at most 24 hourly buckets. For the `all` range the start MUST additionally not precede the aligned unit that contains the first retained request.
 
 TM-AN5c. Calendar months have unequal lengths, so month buckets MUST be derived from the calendar rather than by dividing the range into equal durations. Bucket `k` MUST cover the calendar month `k` months after the range start month. Aggregation MUST assign a request to the bucket of the calendar month that contains it.
 

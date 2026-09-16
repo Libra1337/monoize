@@ -9,6 +9,7 @@ import { DashboardLayout } from "@/pages/layout";
 import { DashboardPage } from "@/pages/dashboard";
 import { AdminDashboardPage } from "@/pages/admin-dashboard";
 import { AdminUsagePage } from "@/pages/admin-usage";
+import { AdminRevenuePage } from "@/pages/admin-revenue";
 import { AdminRuntimePage } from "@/pages/admin-runtime";
 import { ProvidersPage } from "@/pages/providers";
 import { OrdersAdminPage } from "./pages/orders-admin";
@@ -110,6 +111,7 @@ function App() {
             <Route path="status" element={<PublicStatusPage refreshInterval={2000} dashboard />} />
             <Route path="admin" element={<AdminRoute><AdminDashboardPage /></AdminRoute>} />
             <Route path="admin/usage" element={<AdminRoute><AdminUsagePage /></AdminRoute>} />
+            <Route path="admin/revenue" element={<AdminRoute><AdminRevenuePage /></AdminRoute>} />
             <Route path="admin/runtime" element={<AdminRoute><AdminRuntimePage /></AdminRoute>} />
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="tokens" element={<ApiKeysPage />} />

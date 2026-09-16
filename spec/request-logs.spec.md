@@ -414,7 +414,7 @@ RL-S7. If a PostgreSQL database still contains legacy shadow columns (`created_a
 
 RL-S8. While SQLite and PostgreSQL both remain supported, request-log writes MUST target only the canonical columns present in RL-S1. The application MUST NOT create, backfill, or write PostgreSQL-only shadow columns.
 
-RL-S9. Request-log retention MUST delete rows whose `created_at_unix_ms` is older than 90 days relative to cleanup execution time.
+RL-S9. Request-log retention MUST delete rows whose `created_at_unix_ms` is older than 365 days relative to cleanup execution time. Before this rule is applied, the retention limit was 90 days.
 
 RL-S10. Expired-row cleanup defined in RL-S9 SHOULD execute once during startup before the HTTP listener begins accepting traffic. If that cleanup attempt fails, startup MAY continue and the failure MUST be logged.
 

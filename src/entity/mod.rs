@@ -1,3 +1,6 @@
+pub mod admin_revenue_daily_model_rows;
+pub mod admin_revenue_daily_summaries;
+pub mod admin_revenue_exclusions;
 pub mod api_keys;
 pub mod billing_ledger;
 pub mod billing_plans;
@@ -16,6 +19,9 @@ pub mod system_settings;
 pub mod users;
 
 pub mod prelude {
+    pub use super::admin_revenue_daily_model_rows::Entity as AdminRevenueDailyModelRows;
+    pub use super::admin_revenue_daily_summaries::Entity as AdminRevenueDailySummaries;
+    pub use super::admin_revenue_exclusions::Entity as AdminRevenueExclusions;
     pub use super::api_keys::Entity as ApiKeys;
     pub use super::billing_ledger::Entity as BillingLedger;
     pub use super::billing_plans::Entity as BillingPlans;

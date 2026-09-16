@@ -1,4 +1,5 @@
 mod admin;
+mod admin_revenue;
 mod analytics_request_logs;
 mod api_keys;
 mod auth;
@@ -22,6 +23,10 @@ mod tests;
 
 pub use admin::{
     get_admin_overview, get_admin_usage_ranking, get_metrics, get_public_usage_ranking,
+};
+pub use admin_revenue::{
+    add_admin_revenue_exclusion, export_admin_revenue_daily, get_admin_revenue_daily,
+    list_admin_revenue_exclusions, remove_admin_revenue_exclusion,
 };
 pub use analytics_request_logs::{
     AnalyticsQuery, RequestLogsQuery, get_cache_hit_rate_by_users, get_dashboard_analytics,

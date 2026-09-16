@@ -18,7 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { AdminUsageModelRow, PublicUsageRankingUserRow, UsageRankingRange } from "@/lib/api";
 import { usePublicSiteSettings, usePublicUsageRanking } from "@/lib/swr";
 
-const ranges: UsageRankingRange[] = ["24h", "7d", "30d"];
+const ranges: UsageRankingRange[] = ["today", "7d", "30d"];
 
 function integer(value: string): bigint {
   return /^(?:0|[1-9]\d*)$/.test(value) ? BigInt(value) : 0n;
@@ -120,7 +120,7 @@ function RankingTable({
 
 export function PublicUsageRankingPage() {
   const { t } = useTranslation();
-  const [range, setRange] = useState<UsageRankingRange>("24h");
+  const [range, setRange] = useState<UsageRankingRange>("today");
   const [selected, setSelected] = useState<PublicUsageRankingUserRow | null>(null);
   const site = usePublicSiteSettings();
   const { data, error, isLoading, mutate } = usePublicUsageRanking(range);

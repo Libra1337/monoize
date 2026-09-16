@@ -1076,7 +1076,7 @@ async fn messages_streaming_upstream_error_is_logged_as_error_and_not_billed() {
 }
 
 #[tokio::test]
-async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
+async fn request_log_retention_deletes_only_rows_older_than_the_retention_window() {
     let ctx = setup().await;
     let user = ctx
         .state
@@ -1086,8 +1086,9 @@ async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
         .expect("query user")
         .expect("user exists");
 
-    let old_created_at = Utc::now() - ChronoDuration::days(91);
-    let new_created_at = Utc::now() - ChronoDuration::days(30);
+    // RL-S9: the retention limit is 365 days.
+    let old_created_at = Utc::now() - ChronoDuration::days(366);
+    let new_created_at = Utc::now() - ChronoDuration::days(90);
 
     ctx.state
         .user_store
@@ -1185,7 +1186,10 @@ async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
         .cleanup_expired_request_logs()
         .await
         .expect("cleanup expired request logs");
-    assert_eq!(deleted, 1, "only logs older than 90 days should be deleted");
+    assert_eq!(
+        deleted, 1,
+        "only logs older than 365 days should be deleted"
+    );
 
     let (logs, _, _) = ctx
         .state

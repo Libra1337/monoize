@@ -11,10 +11,19 @@ import { aggregateTokenTotals, type TokenMetric } from "@/lib/usage-analytics";
 import { useUsageAnalytics } from "@/lib/org-analytics";
 import { cn } from "@/lib/utils";
 
-type UsageRange = "24h" | "7d" | "30d";
+type UsageRange = "today" | "7d" | "30d";
+
+/** UA-5: the today range covers the current Asia/Shanghai local day, so its
+ * length in whole hours grows from 1 to 24 as the Beijing day elapses. */
+function beijingElapsedHours(): number {
+  const now = new Date();
+  const beijingHour = (now.getUTCHours() + 8) % 24;
+  const elapsed = beijingHour + (now.getUTCMinutes() > 0 || now.getUTCSeconds() > 0 || now.getUTCMilliseconds() > 0 ? 1 : 0);
+  return Math.max(1, elapsed);
+}
 
 const USAGE_RANGES: Record<UsageRange, { hours: number; buckets: number }> = {
-  "24h": { hours: 24, buckets: 24 },
+  "today": { hours: beijingElapsedHours(), buckets: 24 },
   "7d": { hours: 168, buckets: 28 },
   "30d": { hours: 720, buckets: 30 },
 };

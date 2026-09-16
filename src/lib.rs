@@ -1,6 +1,7 @@
 pub mod app;
 pub mod auth;
 pub mod auth_limits;
+pub mod beijing_time;
 pub mod billing_rate_store;
 pub(crate) mod bounded_response;
 pub mod captcha;

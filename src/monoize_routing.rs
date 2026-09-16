@@ -2504,13 +2504,9 @@ fn validate_channel_base_url(base_url: &str) -> Result<(), String> {
         vec![ip]
     } else {
         // The host may carry an explicit port; `ToSocketAddrs` requires a service.
-        let port = parsed.port().unwrap_or_else(|| {
-            if scheme == "https" {
-                443
-            } else {
-                80
-            }
-        });
+        let port = parsed
+            .port()
+            .unwrap_or_else(|| if scheme == "https" { 443 } else { 80 });
         let mut resolved = Vec::new();
         match (host, port).to_socket_addrs() {
             Ok(iter) => {

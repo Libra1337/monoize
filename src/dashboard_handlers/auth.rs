@@ -321,7 +321,9 @@ pub async fn login(
     .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     let Some(user) = user else {
-        state.login_throttle.record_failure(&body.username, source_ip);
+        state
+            .login_throttle
+            .record_failure(&body.username, source_ip);
         return Err(AppError::new(
             StatusCode::UNAUTHORIZED,
             "invalid_credentials",
@@ -330,7 +332,9 @@ pub async fn login(
     };
 
     if !valid {
-        state.login_throttle.record_failure(&body.username, source_ip);
+        state
+            .login_throttle
+            .record_failure(&body.username, source_ip);
         return Err(AppError::new(
             StatusCode::UNAUTHORIZED,
             "invalid_credentials",
@@ -346,7 +350,9 @@ pub async fn login(
         ));
     }
 
-    state.login_throttle.record_success(&body.username, source_ip);
+    state
+        .login_throttle
+        .record_success(&body.username, source_ip);
     user_store.update_last_login(&user.id).await.ok();
 
     let session_ttl_days = state
