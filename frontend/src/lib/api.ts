@@ -745,6 +745,14 @@ export interface CopyPricingProfileResult {
   copied: number;
 }
 
+export interface RenameProfileModelResult {
+  target_model: string;
+  written: number;
+  removed: number;
+  /** Rows the model registry owns keep the former name (MB-A9c). */
+  synchronized_retained: number;
+}
+
 export interface UpsertBillingRateInput {
   source?: string;
   pricing_profile?: string;
@@ -1795,6 +1803,23 @@ class ApiClient {
     return this.request(
       `/billing-rates/profiles/${encodeURIComponent(profile)}/copy`,
       { method: "POST", body: JSON.stringify({ target_profile: targetProfile }) },
+    );
+  }
+
+  /**
+   * Renames a model inside one pricing profile (MB-A9).
+   *
+   * A profile's model name is not fixed: renaming carries every priced usage class across
+   * without retyping it. Rows the model registry owns stay under the former name.
+   */
+  async renamePricingProfileModel(
+    profile: string,
+    model: string,
+    targetModel: string,
+  ): Promise<RenameProfileModelResult> {
+    return this.request(
+      `/billing-rates/profiles/${encodeURIComponent(profile)}/models/${encodeURIComponent(model)}/rename`,
+      { method: "POST", body: JSON.stringify({ target_model: targetModel }) },
     );
   }
 

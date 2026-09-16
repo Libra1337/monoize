@@ -710,6 +710,157 @@ impl BillingRateStore {
         Ok(rows.len())
     }
 
+    /// MB-A9: renames a model inside one pricing profile.
+    ///
+    /// Writes one `manual` row per source row under `target_model`, then deletes the source
+    /// rows the profile owns. A source row whose id begins with `model_metadata:` is a mirror
+    /// owned by the model registry (MB-A9c): deleting it would either be undone by the next
+    /// metadata edit or would remove pricing the operator did not ask to remove, so it is
+    /// retained and counted instead.
+    ///
+    /// The whole rename runs in one transaction (MB-A9e), so a model that bills traffic never
+    /// carries a half-renamed rate set.
+    pub async fn rename_profile_model(
+        &self,
+        profile: &str,
+        source_model: &str,
+        target_model: &str,
+    ) -> Result<RenameProfileModelOutcome, RenameProfileModelError> {
+        let target = target_model.trim();
+        if target.is_empty() {
+            return Err(RenameProfileModelError::InvalidTarget);
+        }
+        if target == source_model {
+            return Err(RenameProfileModelError::SameModel);
+        }
+
+        let write_guard = self.db.write().await;
+        let txn = write_guard
+            .begin()
+            .await
+            .map_err(|e| RenameProfileModelError::Storage(e.to_string()))?;
+        if self.db.is_postgres() {
+            txn.execute_unprepared("LOCK TABLE billing_rate_records IN SHARE ROW EXCLUSIVE MODE")
+                .await
+                .map_err(|e| RenameProfileModelError::Storage(e.to_string()))?;
+        }
+
+        // MB-A9d: refuse a target that already bills, before writing anything.
+        let target_count: i64 = txn
+            .query_one(self.db.stmt(
+                "SELECT COUNT(*) AS value FROM billing_rate_records
+                 WHERE pricing_profile = $1 AND model_pattern = $2",
+                vec![profile.into(), target.into()],
+            ))
+            .await
+            .map_err(|e| RenameProfileModelError::Storage(e.to_string()))?
+            .map(|row| row.try_get::<i64>("", "value").unwrap_or(0))
+            .unwrap_or(0);
+        if target_count > 0 {
+            return Err(RenameProfileModelError::TargetNotEmpty);
+        }
+
+        let rows = txn
+            .query_all(self.db.stmt(
+                // MB-A9f: mirrors first so a manual override of the same usage class is applied
+                // last and wins the ON CONFLICT update. Plain `ORDER BY id` would invert this,
+                // because 'manual:' sorts before 'model_metadata:'.
+                "SELECT id, usage_class FROM billing_rate_records
+                 WHERE pricing_profile = $1 AND model_pattern = $2
+                 ORDER BY CASE WHEN id LIKE 'model_metadata:%' THEN 0 ELSE 1 END ASC, id ASC",
+                vec![profile.into(), source_model.into()],
+            ))
+            .await
+            .map_err(|e| RenameProfileModelError::Storage(e.to_string()))?;
+        if rows.is_empty() {
+            return Err(RenameProfileModelError::SourceNotFound);
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let mut written_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut removable: Vec<String> = Vec::new();
+        let mut synchronized_retained = 0usize;
+
+        for row in &rows {
+            let source_id: String = row
+                .try_get("", "id")
+                .map_err(|e| RenameProfileModelError::Storage(e.to_string()))?;
+            let usage_class: String = row
+                .try_get("", "usage_class")
+                .map_err(|e| RenameProfileModelError::Storage(e.to_string()))?;
+            let written_id = renamed_rate_id(profile, target, &usage_class);
+
+            // MB-A9b: preserve every field of the source row, changing only id, source, and
+            // model_pattern. `ON CONFLICT` makes the write idempotent across two source rows
+            // that share one usage class (a synchronized row plus a manual override of it);
+            // the row applied last wins, which the MB-A9f ordering makes the manual one.
+            txn.execute(self.db.stmt(
+                "INSERT INTO billing_rate_records
+                 (id, source, pricing_profile, model_pattern, provider_type, rate_kind,
+                  usage_class, unit, unit_price_nano, unit_price_currency, peak_unit_price_nano,
+                  context_tier, service_tier, modality, cache_ttl, match_json, priority,
+                  enabled, raw_json, updated_at)
+                 SELECT $1, 'manual', pricing_profile, $2, provider_type, rate_kind, usage_class,
+                        unit, unit_price_nano, unit_price_currency, peak_unit_price_nano,
+                        context_tier, service_tier, modality, cache_ttl, match_json, priority,
+                        enabled, raw_json, $4
+                 FROM billing_rate_records WHERE id = $3
+                 ON CONFLICT(id) DO UPDATE SET
+                   unit_price_nano = excluded.unit_price_nano,
+                   unit_price_currency = excluded.unit_price_currency,
+                   peak_unit_price_nano = excluded.peak_unit_price_nano,
+                   rate_kind = excluded.rate_kind,
+                   unit = excluded.unit,
+                   context_tier = excluded.context_tier,
+                   service_tier = excluded.service_tier,
+                   modality = excluded.modality,
+                   cache_ttl = excluded.cache_ttl,
+                   match_json = excluded.match_json,
+                   priority = excluded.priority,
+                   enabled = excluded.enabled,
+                   raw_json = excluded.raw_json,
+                   updated_at = excluded.updated_at",
+                vec![
+                    written_id.clone().into(),
+                    target.into(),
+                    source_id.clone().into(),
+                    now.clone().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| RenameProfileModelError::Storage(e.to_string()))?;
+            written_ids.insert(written_id);
+
+            // MB-A9c: the profile owns everything except the registry's mirror rows.
+            if source_id.starts_with("model_metadata:") {
+                synchronized_retained += 1;
+            } else {
+                removable.push(source_id);
+            }
+        }
+
+        let removed = removable.len();
+        for source_id in removable {
+            txn.execute(self.db.stmt(
+                "DELETE FROM billing_rate_records WHERE id = $1",
+                vec![source_id.into()],
+            ))
+            .await
+            .map_err(|e| RenameProfileModelError::Storage(e.to_string()))?;
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| RenameProfileModelError::Storage(e.to_string()))?;
+
+        Ok(RenameProfileModelOutcome {
+            target_model: target.to_string(),
+            written: written_ids.len(),
+            removed,
+            synchronized_retained,
+        })
+    }
+
     pub async fn get_billing_rate(&self, id: &str) -> Result<Option<DbBillingRateRecord>, String> {
         let row = self
             .db
@@ -971,8 +1122,8 @@ fn decode_billing_rate_row(row: &sea_orm::QueryResult) -> Result<DbBillingRateRe
 mod tests {
 
     use super::{
-        BillingRateStore, CopyProfileError, UpsertBillingRateInput, glob_matches,
-        select_pricing_profile,
+        BillingRateStore, CopyProfileError, RenameProfileModelError, UpsertBillingRateInput,
+        glob_matches, select_pricing_profile,
     };
     use crate::db::DbPool;
     use crate::migration::Migrator;
@@ -1240,6 +1391,271 @@ mod tests {
                 .is_none()
         );
     }
+    /// Seeds one rate row with an explicit id, model, and usage class, so a test can build the
+    /// mixed synchronized/manual shape MB-A9c distinguishes.
+    async fn seed_rate(
+        store: &BillingRateStore,
+        id: &str,
+        profile: &str,
+        model: &str,
+        usage_class: &str,
+        price: &str,
+        source: &str,
+    ) {
+        store
+            .upsert_billing_rate(
+                id,
+                UpsertBillingRateInput {
+                    source: Some(source.to_string()),
+                    pricing_profile: Some(profile.to_string()),
+                    model_pattern: Some(Some(model.to_string())),
+                    rate_kind: Some("token".to_string()),
+                    usage_class: Some(usage_class.to_string()),
+                    unit: Some("token".to_string()),
+                    unit_price_nano: Some(price.to_string()),
+                    unit_price_currency: Some("CNY".to_string()),
+                    peak_unit_price_nano: None,
+                    priority: Some(7),
+                    enabled: Some(true),
+                    provider_type: None,
+                    context_tier: None,
+                    service_tier: None,
+                    modality: None,
+                    cache_ttl: None,
+                    match_json: None,
+                    raw_json: None,
+                },
+            )
+            .await
+            .expect("seed rate");
+    }
+
+    async fn empty_store() -> BillingRateStore {
+        let db = DbPool::connect("sqlite::memory:").await.expect("connect");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrate");
+        }
+        BillingRateStore::new(db).await.expect("store")
+    }
+
+    async fn models_in_profile(store: &BillingRateStore, profile: &str) -> Vec<(String, String)> {
+        store
+            .list_billing_rates()
+            .await
+            .expect("list")
+            .into_iter()
+            .filter(|rate| rate.pricing_profile == profile)
+            .map(|rate| {
+                (
+                    rate.model_pattern.clone().unwrap_or_default(),
+                    rate.unit_price_nano.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// MB-A9b: a rename carries every price digit onto the new name and detaches the written
+    /// row from the properties that would let an unrelated sync delete it.
+    #[tokio::test]
+    async fn renaming_a_model_carries_prices_and_detaches_from_sync() {
+        let store = empty_store().await;
+        seed_rate(
+            &store,
+            "catalog:opus:input_uncached",
+            "anthropic",
+            "claude-opus-5",
+            "input_uncached",
+            "5000",
+            "catalog",
+        )
+        .await;
+        seed_rate(
+            &store,
+            "catalog:opus:output",
+            "anthropic",
+            "claude-opus-5",
+            "output",
+            "25000",
+            "catalog",
+        )
+        .await;
+
+        let outcome = store
+            .rename_profile_model("anthropic", "claude-opus-5", "claude-opus-5-eu")
+            .await
+            .expect("rename");
+        assert_eq!(outcome.written, 2);
+        assert_eq!(outcome.removed, 2);
+        assert_eq!(outcome.synchronized_retained, 0);
+
+        let rates = store.list_billing_rates().await.expect("list");
+        assert_eq!(rates.len(), 2, "{rates:?}");
+        for rate in &rates {
+            assert_eq!(rate.model_pattern.as_deref(), Some("claude-opus-5-eu"));
+            assert_eq!(rate.source, "manual");
+            assert!(
+                !rate.id.starts_with("model_metadata:") && !rate.id.starts_with("catalog:"),
+                "{}",
+                rate.id
+            );
+        }
+        let mut prices: Vec<&str> = rates
+            .iter()
+            .map(|rate| rate.unit_price_nano.as_str())
+            .collect();
+        prices.sort_unstable();
+        assert_eq!(prices, vec!["25000", "5000"]);
+    }
+
+    /// MB-A9c: a `model_metadata:` row is owned by the model registry, so the rename must leave
+    /// it under the former name and report it. Deleting it would be undone by the next metadata
+    /// edit, or would remove pricing the operator did not ask to remove.
+    #[tokio::test]
+    async fn renaming_retains_registry_owned_rows_under_the_former_name() {
+        let store = empty_store().await;
+        seed_rate(
+            &store,
+            "model_metadata:claude-opus-5:input_uncached",
+            "anthropic",
+            "claude-opus-5",
+            "input_uncached",
+            "5000",
+            "manual",
+        )
+        .await;
+        seed_rate(
+            &store,
+            "manual:anthropic:claude-opus-5:output",
+            "anthropic",
+            "claude-opus-5",
+            "output",
+            "25000",
+            "manual",
+        )
+        .await;
+
+        let outcome = store
+            .rename_profile_model("anthropic", "claude-opus-5", "claude-opus-5-eu")
+            .await
+            .expect("rename");
+        assert_eq!(outcome.written, 2);
+        assert_eq!(outcome.removed, 1, "only the profile-owned row is deleted");
+        assert_eq!(outcome.synchronized_retained, 1);
+
+        let remaining = models_in_profile(&store, "anthropic").await;
+        // The mirror stays under the old name; both classes exist under the new one.
+        assert!(
+            remaining.contains(&("claude-opus-5".to_string(), "5000".to_string())),
+            "{remaining:?}"
+        );
+        assert!(
+            remaining.contains(&("claude-opus-5-eu".to_string(), "5000".to_string())),
+            "{remaining:?}"
+        );
+        assert!(
+            remaining.contains(&("claude-opus-5-eu".to_string(), "25000".to_string())),
+            "{remaining:?}"
+        );
+        assert_eq!(remaining.len(), 3, "{remaining:?}");
+    }
+
+    /// MB-A9d: every rejection happens before any row is written.
+    #[tokio::test]
+    async fn rename_rejections_write_nothing() {
+        let store = empty_store().await;
+        seed_rate(
+            &store,
+            "manual:anthropic:claude-opus-5:input_uncached",
+            "anthropic",
+            "claude-opus-5",
+            "input_uncached",
+            "5000",
+            "manual",
+        )
+        .await;
+        seed_rate(
+            &store,
+            "manual:anthropic:taken:input_uncached",
+            "anthropic",
+            "taken-model",
+            "input_uncached",
+            "9000",
+            "manual",
+        )
+        .await;
+
+        assert!(matches!(
+            store
+                .rename_profile_model("anthropic", "claude-opus-5", "   ")
+                .await,
+            Err(RenameProfileModelError::InvalidTarget)
+        ));
+        assert!(matches!(
+            store
+                .rename_profile_model("anthropic", "claude-opus-5", "claude-opus-5")
+                .await,
+            Err(RenameProfileModelError::SameModel)
+        ));
+        assert!(matches!(
+            store
+                .rename_profile_model("anthropic", "absent-model", "whatever")
+                .await,
+            Err(RenameProfileModelError::SourceNotFound)
+        ));
+        // A target that already bills must fail rather than merge two rate sets.
+        assert!(matches!(
+            store
+                .rename_profile_model("anthropic", "claude-opus-5", "taken-model")
+                .await,
+            Err(RenameProfileModelError::TargetNotEmpty)
+        ));
+
+        let after = models_in_profile(&store, "anthropic").await;
+        assert_eq!(after.len(), 2, "no rejection may write a row: {after:?}");
+    }
+
+    /// MB-A9b: two source rows sharing one usage class (a registry mirror plus a manual
+    /// override of it) must converge on one written row, not two.
+    #[tokio::test]
+    async fn rename_converges_duplicate_usage_classes_onto_one_row() {
+        let store = empty_store().await;
+        seed_rate(
+            &store,
+            "model_metadata:claude-opus-5:input_uncached",
+            "anthropic",
+            "claude-opus-5",
+            "input_uncached",
+            "5000",
+            "manual",
+        )
+        .await;
+        seed_rate(
+            &store,
+            "manual:anthropic:claude-opus-5:input_uncached",
+            "anthropic",
+            "claude-opus-5",
+            "input_uncached",
+            "4200",
+            "manual",
+        )
+        .await;
+
+        let outcome = store
+            .rename_profile_model("anthropic", "claude-opus-5", "claude-opus-5-eu")
+            .await
+            .expect("rename");
+        assert_eq!(outcome.written, 1, "one usage class yields one written row");
+
+        let renamed: Vec<(String, String)> = models_in_profile(&store, "anthropic")
+            .await
+            .into_iter()
+            .filter(|(model, _)| model == "claude-opus-5-eu")
+            .collect();
+        assert_eq!(renamed.len(), 1, "{renamed:?}");
+        // MB-A9f: the non-mirror row is applied last, so the operator's override survives.
+        assert_eq!(renamed[0].1, "4200");
+    }
 }
 
 /// Failure modes of [`BillingRateStore::copy_profile`] (MB-A7a).
@@ -1263,4 +1679,38 @@ pub enum CopyProfileError {
 /// retained so a copied row can be traced back to what it was copied from.
 fn copied_rate_id(target_profile: &str, source_id: &str) -> String {
     format!("manual:profile-copy:{target_profile}:{source_id}")
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RenameProfileModelError {
+    #[error("target model must not be empty")]
+    InvalidTarget,
+    #[error("target model must differ from the source model")]
+    SameModel,
+    #[error("no rates exist for that profile and model")]
+    SourceNotFound,
+    #[error("target model already has rates in this profile")]
+    TargetNotEmpty,
+    #[error("storage failure: {0}")]
+    Storage(String),
+}
+
+/// Outcome of MB-A9. `synchronized_retained` is reported rather than hidden: those rows are
+/// owned by the model registry, so the former name keeps its synchronized prices.
+#[derive(Debug, Clone, Serialize)]
+pub struct RenameProfileModelOutcome {
+    pub target_model: String,
+    pub written: usize,
+    pub removed: usize,
+    pub synchronized_retained: usize,
+}
+
+/// Builds the id of a row written by a model rename (MB-A9b).
+///
+/// The profile and target model lead so a renamed model's rows sort together, and the usage
+/// class terminates the id so one row exists per class rather than per source id -- a rename
+/// of a model that already carries both a synchronized and a manual row for one class must
+/// converge on a single written row, not two.
+fn renamed_rate_id(profile: &str, target_model: &str, usage_class: &str) -> String {
+    format!("manual:model-rename:{profile}:{target_model}:{usage_class}")
 }

@@ -1357,6 +1357,31 @@ export async function copyPricingProfile(
   }
 }
 
+/**
+ * Renames a model inside one pricing profile (MB-A9, UI20b).
+ *
+ * Not optimistic: the server decides which rows move and which synchronized rows stay under
+ * the former name, so a guessed result could show a model list the database does not hold.
+ */
+export async function renamePricingProfileModel(
+  profile: string,
+  model: string,
+  targetModel: string,
+  onError?: (error: Error) => void,
+) {
+  try {
+    const result = await api.renamePricingProfileModel(profile, model, targetModel);
+    await mutate(SWR_KEYS.BILLING_RATES);
+    mutate(SWR_KEYS.BILLING_RATE_PROFILES);
+    return result;
+  } catch (error) {
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
 export async function syncBillingRatesCatalog(
   onError?: (error: Error) => void
 ) {

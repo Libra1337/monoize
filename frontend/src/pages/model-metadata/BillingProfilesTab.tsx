@@ -8,6 +8,7 @@ import {
 	CircleDollarSign,
 	CloudDownload,
 	Copy,
+	PenLine,
 	Plus,
 	RefreshCw,
 	Search,
@@ -33,6 +34,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import {
 	copyPricingProfile,
 	deleteBillingRateOptimistic,
+	renamePricingProfileModel,
 	syncModelMetadata,
 	updatePricingProfilePatternsOptimistic,
 	upsertBillingRateOptimistic,
@@ -136,6 +138,9 @@ export function BillingProfilesTab() {
 	const [copyTarget, setCopyTarget] = useState<string | null>(null)
 	const [copyName, setCopyName] = useState('')
 	const [copying, setCopying] = useState(false)
+	const [renameTarget, setRenameTarget] = useState<string | null>(null)
+	const [renameName, setRenameName] = useState('')
+	const [renaming, setRenaming] = useState(false)
 	const [patternDraft, setPatternDraft] = useState<PricingProfilePattern[]>([])
 	const [patternsDirty, setPatternsDirty] = useState(false)
 	const [savingPatterns, setSavingPatterns] = useState(false)
@@ -178,6 +183,31 @@ export function BillingProfilesTab() {
 			toast.error(error instanceof Error ? error.message : c('复制失败', 'Copy failed'))
 		} finally {
 			setCopying(false)
+		}
+	}
+
+	// MB-A9 / UI20a: a profile's model name is not fixed. UI20c requires reporting retained
+	// synchronized rows, because those stay under the former name and are not a partial failure.
+	const runRename = async () => {
+		if (!renameTarget || !selectedProfile) return
+		const target = renameName.trim()
+		if (!target || target === renameTarget) return
+		setRenaming(true)
+		try {
+			const result = await renamePricingProfileModel(selectedProfile, renameTarget, target)
+			toast.success(c(`已把 ${result.written} 条费率改名为 ${result.target_model}`, `Renamed ${result.written} rates to ${result.target_model}`))
+			if (result.synchronized_retained > 0) {
+				toast.info(c(
+					`${renameTarget} 仍保留 ${result.synchronized_retained} 条同步价格：同步费率由模型注册表拥有，不随改名移动。`,
+					`${renameTarget} keeps ${result.synchronized_retained} synchronized prices. The model registry owns synchronized rates, so a rename does not move them.`
+				))
+			}
+			setRenameTarget(null)
+			setRenameName('')
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : c('改名失败', 'Rename failed'))
+		} finally {
+			setRenaming(false)
 		}
 	}
 
@@ -371,7 +401,7 @@ export function BillingProfilesTab() {
 										const prices = formatRatePrices(effectiveRate(modelRates, item.id))
 										return <div key={item.id} className='flex items-center justify-between gap-3 md:block'><span className='text-xs text-muted-foreground md:hidden'>{item.label}</span><span className='font-mono text-sm'>{prices.offPeak}{prices.peak ? <span className='mt-0.5 block text-xs text-muted-foreground'>{c(`峰 ${prices.peak}`, `peak ${prices.peak}`)}</span> : null}</span></div>
 									})}
-								<div className='flex justify-end gap-1'><Button size='sm' variant='ghost' onClick={() => openOverride(selectedProfile, model, modelRates)}>{c('编辑', 'Edit')}</Button>{manual ? <Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' onClick={() => void deleteManualOverrides(modelRates)} aria-label={c('删除手动覆盖', 'Delete manual override')}><Trash2 data-icon /></Button> : null}</div>
+								<div className='flex justify-end gap-1'><Button size='sm' variant='ghost' onClick={() => openOverride(selectedProfile, model, modelRates)}>{c('编辑', 'Edit')}</Button><Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' onClick={() => { setRenameTarget(model); setRenameName(model) }} aria-label={c('修改模型名', 'Rename model')}><PenLine data-icon /></Button>{manual ? <Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' onClick={() => void deleteManualOverrides(modelRates)} aria-label={c('删除手动覆盖', 'Delete manual override')}><Trash2 data-icon /></Button> : null}</div>
 							</div>
 						})}
 						{selectedModelRates.length === 0 ? <div className='rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground'>{c('这个 Profile 没有匹配的模型。', 'No models match this profile.')}</div> : null}
@@ -393,6 +423,9 @@ export function BillingProfilesTab() {
 			<DialogContent className='max-w-lg'><DialogHeader><DialogTitle>{c('复制 Profile', 'Copy profile')}</DialogTitle><DialogDescription>{copyTarget ?? ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('把这个 Profile 的所有费率复制到一个新名字。企业分组和普通分组不能共用同一个 Profile 名，所以两边同价需要两份副本。', 'Copies every rate of this profile under a new name. Enterprise and standard Groups cannot share a profile name, so matching prices need two copies.')}</p><div className='flex flex-col gap-2'><Label htmlFor='copy-profile-name'>{c('新 Profile 名', 'New profile name')}</Label><Input id='copy-profile-name' value={copyName} onChange={event => setCopyName(event.target.value)} placeholder='deepseek-std' /><p className='text-xs text-muted-foreground'>{c('目标 Profile 必须不存在任何费率，否则复制会被拒绝，以免覆盖正在计费的价格。', 'The target profile must have no rates. A non-empty target is refused so prices already billing traffic are never overwritten.')}</p></div></div><DialogFooter><Button variant='outline' onClick={() => { setCopyTarget(null); setCopyName('') }}>{c('取消', 'Cancel')}</Button><Button disabled={copying || !copyName.trim() || copyName.trim() === copyTarget} onClick={() => void runCopy()}>{copying ? c('复制中…', 'Copying…') : c('复制', 'Copy')}</Button></DialogFooter></DialogContent>
 		</Dialog>
 
+			<Dialog open={renameTarget !== null} onOpenChange={open => { if (!open) { setRenameTarget(null); setRenameName('') } }}>
+				<DialogContent className='max-w-lg'><DialogHeader><DialogTitle>{c('修改模型名', 'Rename model')}</DialogTitle><DialogDescription>{renameTarget ? `${selectedProfile} / ${renameTarget}` : ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('把这个模型的所有费率移到一个新模型名下。上游改了模型名，或者要用第二个别名提供同样的价格时使用，不需要逐个 usage class 重新输入。', 'Moves every rate of this model to a new model name. Use it when an upstream model is renamed, or to serve the same prices under a second alias, without retyping each usage class.')}</p><div className='flex flex-col gap-2'><Label htmlFor='rename-model-name'>{c('新模型名', 'New model name')}</Label><Input id='rename-model-name' value={renameName} onChange={event => setRenameName(event.target.value)} className='font-mono' placeholder='claude-opus-5-eu' /><p className='text-xs text-muted-foreground'>{c('目标模型名在这个 Profile 里必须没有任何费率，否则改名会被拒绝，以免覆盖正在计费的价格。同步价格由模型注册表拥有，会保留在原名下。', 'The target model must have no rates in this profile. A non-empty target is refused so prices already billing traffic are never overwritten. Synchronized prices are owned by the model registry and stay under the former name.')}</p></div></div><DialogFooter><Button variant='outline' onClick={() => { setRenameTarget(null); setRenameName('') }}>{c('取消', 'Cancel')}</Button><Button disabled={renaming || !renameName.trim() || renameName.trim() === renameTarget} onClick={() => void runRename()}>{renaming ? c('改名中…', 'Renaming…') : c('确认改名', 'Rename')}</Button></DialogFooter></DialogContent>
+			</Dialog>
 			<Dialog open={!!overrideTarget} onOpenChange={open => { if (!open) setOverrideTarget(null) }}>
 				<DialogContent className='max-w-2xl'><DialogHeader><DialogTitle>{c('手动价格覆盖', 'Manual price override')}</DialogTitle><DialogDescription>{overrideTarget ? `${overrideTarget.profile} / ${overrideTarget.model}` : ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('输入 CNY / 100 万 tokens。留空 Cache 表示不覆盖缓存价格。峰价仅在北京时间工作日 09:00–12:00 与 14:00–18:00 生效；留空峰价表示始终按谷价计费。', 'Enter CNY per 1M tokens. Leave cache blank to keep it unspecified. Peak prices apply Mon–Fri 09:00–12:00 and 14:00–18:00 Beijing time. Leave a peak field blank to always bill at the off-peak price.')}</p><div className='grid gap-4 sm:grid-cols-3'>{([
 					{ key: 'input', peakKey: 'inputPeak', label: 'Input' },

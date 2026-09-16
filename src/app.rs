@@ -2940,6 +2940,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::copy_pricing_profile),
         )
         .route(
+            "/dashboard/billing-rates/profiles/{profile}/models/{model}/rename",
+            post(crate::dashboard_handlers::rename_pricing_profile_model),
+        )
+                .route(
             "/dashboard/billing-rates/sync/catalog",
             post(crate::dashboard_handlers::sync_billing_rates_catalog),
         )

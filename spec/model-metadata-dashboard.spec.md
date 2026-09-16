@@ -301,6 +301,12 @@ UI19b. A successful models.dev sync MUST revalidate both model metadata and bill
 
 UI20. Manual overrides MUST be visually separated from synchronized rates. Manual rows take precedence through the existing rate priority and source semantics; deleting a manual override MUST reveal the synchronized value after SWR revalidation.
 
+UI20a. Billing Profiles MUST provide a rename action on each listed model. The action MUST call `POST /api/dashboard/billing-rates/profiles/{profile}/models/{model}/rename` with body `{ "target_model": <string> }`. The model name MUST NOT be presented as a fixed value.
+
+UI20b. The rename dialog MUST prefill the current model name, MUST reject an empty or unchanged target client-side, and MUST revalidate the billing-rate SWR resource on success.
+
+UI20c. When the renamed model retains synchronized (`model_metadata:`) rows under its former name, the UI MUST state that the former name keeps its synchronized prices, because a synchronized row is owned by the model registry rather than by the profile (PP-R1c).
+
 ### 4.9 Advanced Rates tab
 
 UI21. The Advanced Rates tab MUST list `billing_rate_records` with every low-level mutable field, including the nano-unit off-peak price, the optional nano-unit peak price, its currency, and JSON match fields. The price column MUST render `unit_price_nano`, and when `peak_unit_price_nano` is non-null MUST also render that peak value, then `unit_price_currency` and `unit`.

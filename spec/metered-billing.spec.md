@@ -390,6 +390,65 @@ copy to survive. Catalog sync deletes every `source = 'catalog'` row, and deleti
 metadata record deletes every rate whose id begins with `model_metadata:`. A copy that kept
 either property would disappear when its unrelated source was next synced or removed.
 
+MB-A9. Admin endpoint
+`POST /api/dashboard/billing-rates/profiles/{profile}/models/{model}/rename` MUST rename a
+model inside one pricing profile. The body is `{ "target_model": <string> }`. The endpoint
+MUST return `{ "target_model": <string>, "written": <count>, "removed": <count>, "synchronized_retained": <count> }`.
+
+A profile's model name is not a fixed property of the profile. An operator who renames an
+upstream model, or who serves the same prices under a second alias, must be able to carry the
+priced rows across without retyping every usage class.
+
+MB-A9a. The rename MUST resolve the source rows as every `billing_rate_records` row whose
+`pricing_profile` equals `{profile}` and whose `model_pattern` equals `{model}`, and MUST
+write one row per source row under `model_pattern = target_model`.
+
+MB-A9b. Each written row MUST take a new globally unique `id` derived from the profile, the
+target model, and the source row's `usage_class`, MUST set `source` to `manual`, and MUST
+otherwise preserve every field of the source row, including `unit_price_nano`,
+`peak_unit_price_nano`, `unit_price_currency`, `rate_kind`, `unit`, `context_tier`,
+`service_tier`, `modality`, `cache_ttl`, `match_json`, `priority`, and `enabled`.
+
+`source = manual` and an id outside the `model_metadata:` namespace are required for the same
+reason as MB-A7b: a written row that kept either property would disappear when the model
+registry next synced or removed an unrelated record.
+
+MB-A9c. After writing, the rename MUST delete every source row whose `id` does not begin with
+`model_metadata:`. It MUST NOT delete a source row whose `id` begins with `model_metadata:`,
+and MUST report the count of those retained rows as `synchronized_retained`.
+
+A `model_metadata:` row is a mirror owned by the model registry, not by the profile: the
+registry rewrites it on the next metadata edit and deletes it when the metadata record is
+deleted. Deleting one here would either be undone or would silently remove pricing the
+operator did not ask to remove. The former name therefore keeps its synchronized prices, and
+the endpoint reports that rather than concealing it.
+
+MB-A9d. The endpoint MUST reject, without writing any row:
+- a `target_model` that is empty or whitespace only, with `invalid_request`;
+- a `target_model` equal to `{model}`, with `invalid_request`;
+- a `{profile}`/`{model}` pair with no rows, with `not_found`;
+- a `target_model` that already has at least one row in `{profile}`, with HTTP `409` and code
+  `pricing_profile_model_not_empty`.
+
+Refusing a non-empty target keeps the rename from silently repricing a model that is already
+billing traffic, and makes a repeated call fail rather than duplicate.
+
+MB-A9e. The whole rename MUST run in one transaction. A partially renamed model MUST never be
+visible: a model that bills traffic must carry one complete rate set under one name.
+
+MB-A9f. When two or more source rows share one `usage_class`, the rename MUST write exactly one
+row for that class, and that row MUST carry the field values of the source row whose `id` does
+not begin with `model_metadata:`. If every such source row begins with `model_metadata:`, the
+row with the greatest `id` in ascending byte order MUST win.
+
+Two source rows share a usage class when the model registry mirrors a price and the operator
+then overrides that price manually. The manual row is the operator's explicit decision and the
+`model_metadata:` row is a value the registry computed, so the manual value MUST survive the
+rename; taking the mirror instead would silently revert an override at rename time. Writing one
+row per class rather than one per source id is required because the target `id` derives from the
+usage class (MB-A9b), so two source rows of one class address the same target row.
+
+
 
 ## Wallet preflight under concurrency
 

@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::billing_rate_store::{
     BillingRateProfileSummary, BillingRateSyncResult, CopyProfileError, DbBillingRateRecord,
-    UpsertBillingRateInput,
+    RenameProfileModelError, UpsertBillingRateInput,
 };
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
@@ -110,6 +110,51 @@ pub async fn copy_pricing_profile(
         target_profile: target,
         copied,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RenameProfileModelRequest {
+    pub target_model: String,
+}
+
+/// Renames a model inside one pricing profile (MB-A9).
+///
+/// A profile's model name is not fixed: an operator who renames an upstream model, or who
+/// serves the same prices under a second alias, carries the priced rows across without
+/// retyping every usage class. Rows the model registry owns (`model_metadata:` mirrors) stay
+/// under the former name and are reported as `synchronized_retained` (MB-A9c).
+pub async fn rename_pricing_profile_model(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((profile, model)): Path<(String, String)>,
+    Json(body): Json<RenameProfileModelRequest>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let outcome = state
+        .billing_rate_store
+        .rename_profile_model(&profile, &model, &body.target_model)
+        .await
+        .map_err(|error| match error {
+            RenameProfileModelError::InvalidTarget | RenameProfileModelError::SameModel => {
+                AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    error.to_string(),
+                )
+            }
+            RenameProfileModelError::SourceNotFound => {
+                AppError::new(StatusCode::NOT_FOUND, "not_found", error.to_string())
+            }
+            RenameProfileModelError::TargetNotEmpty => AppError::new(
+                StatusCode::CONFLICT,
+                "pricing_profile_model_not_empty",
+                error.to_string(),
+            ),
+            RenameProfileModelError::Storage(message) => {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+            }
+        })?;
+    Ok(Json(outcome))
 }
 
 pub async fn upsert_billing_rate(
