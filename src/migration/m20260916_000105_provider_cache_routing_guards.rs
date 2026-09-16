@@ -10,13 +10,12 @@ impl MigrationTrait for Migration {
         let conn = manager.get_connection();
         let backend = manager.get_database_backend();
 
-        for column in [
-            "max_input_tokens",
-            "prompt_cache_incompatible_with_tools",
-        ] {
+        for column in ["max_input_tokens", "prompt_cache_incompatible_with_tools"] {
             let sql = match backend {
                 DbBackend::Sqlite => {
-                    format!("ALTER TABLE monoize_providers ADD COLUMN {column} INTEGER DEFAULT NULL")
+                    format!(
+                        "ALTER TABLE monoize_providers ADD COLUMN {column} INTEGER DEFAULT NULL"
+                    )
                 }
                 DbBackend::Postgres => {
                     format!(
@@ -34,10 +33,7 @@ impl MigrationTrait for Migration {
         let conn = manager.get_connection();
         let backend = manager.get_database_backend();
 
-        for column in [
-            "max_input_tokens",
-            "prompt_cache_incompatible_with_tools",
-        ] {
+        for column in ["max_input_tokens", "prompt_cache_incompatible_with_tools"] {
             let sql = match backend {
                 DbBackend::Sqlite => {
                     format!("ALTER TABLE monoize_providers DROP COLUMN {column}")

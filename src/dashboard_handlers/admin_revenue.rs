@@ -64,6 +64,14 @@ fn render_revenue_day(day: &RevenueDayRow) -> Value {
             "input_tokens": row.input_tokens,
             "output_tokens": row.output_tokens,
         })).collect::<Vec<_>>(),
+        "users": day.users.iter().map(|row| json!({
+            "user_id": row.user_id,
+            "username": row.username,
+            "charge_nano_usd": row.charge_nano_usd,
+            "calls": row.calls,
+            "input_tokens": row.input_tokens,
+            "output_tokens": row.output_tokens,
+        })).collect::<Vec<_>>(),
     })
 }
 
@@ -225,6 +233,55 @@ fn build_revenue_workbook(days: &[RevenueDayRow]) -> Result<rust_xlsxwriter::Wor
     }
     // autofit returns the worksheet for chaining, not a Result.
     worksheet.autofit();
+
+    // AR-15: the Users sheet holds one row per (day, user) pair, ordered by day
+    // ascending then revenue descending (the API's users ordering).
+    let users_sheet = workbook.add_worksheet();
+    users_sheet.set_name("Users").map_err(|e| e.to_string())?;
+    let user_headers = [
+        "Day",
+        "User ID",
+        "Username",
+        "Revenue (USD)",
+        "Calls",
+        "Input Tokens",
+        "Output Tokens",
+    ];
+    for (column, header) in user_headers.iter().enumerate() {
+        users_sheet
+            .write_with_format(0, column as u16, *header, &header_format)
+            .map_err(|e| e.to_string())?;
+    }
+    let mut user_row = 1u32;
+    for day in days {
+        for user in &day.users {
+            users_sheet
+                .write(user_row, 0, &day.day)
+                .map_err(|e| e.to_string())?;
+            users_sheet
+                .write(user_row, 1, &user.user_id)
+                .map_err(|e| e.to_string())?;
+            if let Some(username) = user.username.as_deref() {
+                users_sheet
+                    .write(user_row, 2, username)
+                    .map_err(|e| e.to_string())?;
+            }
+            users_sheet
+                .write(user_row, 3, nano_usd_to_usd_string(&user.charge_nano_usd)?)
+                .map_err(|e| e.to_string())?;
+            users_sheet
+                .write(user_row, 4, user.calls)
+                .map_err(|e| e.to_string())?;
+            users_sheet
+                .write(user_row, 5, user.input_tokens)
+                .map_err(|e| e.to_string())?;
+            users_sheet
+                .write(user_row, 6, user.output_tokens)
+                .map_err(|e| e.to_string())?;
+            user_row += 1;
+        }
+    }
+    users_sheet.autofit();
     Ok(workbook)
 }
 

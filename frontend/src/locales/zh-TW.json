@@ -2099,6 +2099,7 @@
     "outputTokens": "輸出 Tokens",
     "topModel": "主要來源模型",
     "model": "模型",
+    "user": "使用者",
     "modelDetails": "該日按模型的收入明細",
     "empty": "該區間沒有收入",
     "emptyHint": "沒有匹配請求日誌的日期不會顯示。",

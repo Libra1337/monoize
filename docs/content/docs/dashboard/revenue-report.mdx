@@ -13,13 +13,13 @@ Each day covers Beijing time 00:00 to 24:00. Revenue is the sum of recorded requ
 
 1. Set **From date** and **To date**. The default range is the last 30 days.
 2. Read the day rows. Each row shows the date, revenue, call count, Token count, and the top model with its revenue.
-3. Expand a row to see every model for that day, ordered by revenue descending.
+3. Expand a row to see every model and every user for that day, each ordered by revenue descending. User rows show the username, user ID, revenue, calls, and Tokens.
 
 Days with no revenue are omitted. The current day updates live from request logs. Past days come from a persisted daily aggregate that Monoize settles after each Beijing midnight.
 
 ## Export Excel
 
-Select **Export Excel**. The browser downloads an `.xlsx` file for the selected date range. The file has one row per day, ordered by date ascending.
+Select **Export Excel**. The browser downloads an `.xlsx` file for the selected date range. The `Revenue` sheet has one row per day, ordered by date ascending. The `Users` sheet lists every user's daily consumption: day, user ID, username, revenue, calls, and Tokens.
 
 ## Exclude users
 

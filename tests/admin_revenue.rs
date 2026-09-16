@@ -235,6 +235,20 @@ async fn revenue_daily_requires_admin_and_reports_beijing_days() {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["model"], "model-a");
         assert_eq!(models[0]["charge_nano_usd"], "1099");
+
+        // AR-10: per-user detail rows, ordered by charge descending.
+        let users = day["users"].as_array().expect("users array");
+        assert_eq!(users.len(), 2);
+        assert_eq!(users[0]["user_id"], setup.excluded_user_id);
+        assert_eq!(
+            users[0]["username"], "revenue_excluded",
+            "the username snapshot must resolve through the users join"
+        );
+        assert_eq!(users[0]["charge_nano_usd"], "999");
+        assert_eq!(users[1]["user_id"], setup.user_id);
+        assert_eq!(users[1]["username"], "revenue_user");
+        assert_eq!(users[1]["charge_nano_usd"], "100");
+        assert_eq!(users[1]["calls"], 1);
     }
 }
 

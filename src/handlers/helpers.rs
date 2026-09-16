@@ -1787,7 +1787,10 @@ mod tests {
         };
         let base = estimate_input_tokens(&without_tools);
         let with = estimate_input_tokens(&with_tools);
-        assert!(with > base, "tools must add to the estimate: {with} vs {base}");
+        assert!(
+            with > base,
+            "tools must add to the estimate: {with} vs {base}"
+        );
     }
 
     #[test]

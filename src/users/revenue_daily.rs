@@ -20,6 +20,17 @@ pub struct RevenueModelRow {
     pub output_tokens: i64,
 }
 
+/// One per-user aggregate of a single Beijing day (AR-10).
+#[derive(Debug, Clone)]
+pub struct RevenueUserRow {
+    pub user_id: String,
+    pub username: Option<String>,
+    pub charge_nano_usd: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+}
+
 /// One day of the admin revenue report (AR-10).
 #[derive(Debug, Clone)]
 pub struct RevenueDayRow {
@@ -29,6 +40,7 @@ pub struct RevenueDayRow {
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
     pub models: Vec<RevenueModelRow>,
+    pub users: Vec<RevenueUserRow>,
 }
 
 /// An exclusion-list entry (AR-11).
@@ -160,18 +172,21 @@ pub async fn aggregate_revenue_day(
         limbs.join(", ")
     };
 
-    // One scan answers both the day total and the per-model rows.
+    // One scan answers the day total, the per-model rows, and the per-user rows;
+    // the users join resolves the username snapshot per AR-3.
     let sql = format!(
-        "SELECT {day_expr} AS day_id, rl.model AS model, \
+        "SELECT {day_expr} AS day_id, rl.model AS model, rl.user_id AS user_id, \
+         u.username AS username, \
          {charge_group_select}, \
          COUNT(*) AS calls, \
          COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS input_tokens, \
          COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS output_tokens \
          FROM request_logs rl \
+         LEFT JOIN users u ON u.id = rl.user_id \
          WHERE {predicate}{exclusion} \
          AND ((rl.created_at_unix_ms IS NOT NULL AND rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms < $2) \
               OR (rl.created_at_unix_ms IS NULL AND rl.created_at >= $3 AND rl.created_at < $4)) \
-         GROUP BY {day_expr}, rl.model",
+         GROUP BY {day_expr}, rl.model, rl.user_id, u.username",
         day_expr = day_expr,
         charge_group_select = charge_group_select,
         predicate = predicate,
@@ -196,6 +211,8 @@ pub async fn aggregate_revenue_day(
     }
     let is_postgres = db.is_postgres();
     let mut models = Vec::new();
+    let mut users_by_id: std::collections::HashMap<String, RevenueUserRow> =
+        std::collections::HashMap::new();
     let mut total_calls = 0i64;
     let mut total_input = 0i64;
     let mut total_output = 0i64;
@@ -217,6 +234,33 @@ pub async fn aggregate_revenue_day(
             input_tokens: input,
             output_tokens: output,
         });
+        let user_id: String = row.try_get("", "user_id").map_err(|e| e.to_string())?;
+        let username: Option<String> = row.try_get("", "username").ok();
+        let entry = users_by_id
+            .entry(user_id)
+            .or_insert_with(|| RevenueUserRow {
+                user_id: String::new(),
+                username: username.clone(),
+                charge_nano_usd: "0".to_string(),
+                calls: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+            });
+        entry.user_id = entry.user_id.clone();
+        entry.calls = entry.calls.saturating_add(calls);
+        entry.input_tokens = entry.input_tokens.saturating_add(input);
+        entry.output_tokens = entry.output_tokens.saturating_add(output);
+        if entry.username.is_none() {
+            entry.username = username;
+        }
+        let mut total = entry
+            .charge_nano_usd
+            .parse::<i128>()
+            .map_err(|_| "revenue charge aggregate overflow".to_string())?;
+        total = total
+            .checked_add(charge)
+            .ok_or_else(|| "revenue charge aggregate overflow".to_string())?;
+        entry.charge_nano_usd = total.to_string();
     }
     let total_charge = models
         .iter()
@@ -229,6 +273,8 @@ pub async fn aggregate_revenue_day(
         .into_iter()
         .fold(0i128, |acc, value| acc.saturating_add(value));
     sort_revenue_models(&mut models);
+    let mut users = users_by_id.into_values().collect::<Vec<_>>();
+    sort_revenue_users(&mut users);
     Ok(Some(RevenueDayRow {
         day: day.to_string(),
         total_charge_nano_usd: total_charge.to_string(),
@@ -236,6 +282,7 @@ pub async fn aggregate_revenue_day(
         total_input_tokens: total_input,
         total_output_tokens: total_output,
         models,
+        users,
     }))
 }
 
@@ -248,6 +295,18 @@ fn sort_revenue_models(models: &mut [RevenueModelRow]) {
         right_charge
             .cmp(&left_charge)
             .then_with(|| left.model.as_bytes().cmp(right.model.as_bytes()))
+    });
+}
+
+/// AR-10: users ordered by charge descending, then user id ascending in UTF-8
+/// byte order.
+fn sort_revenue_users(users: &mut [RevenueUserRow]) {
+    users.sort_by(|left, right| {
+        let left_charge = left.charge_nano_usd.parse::<i128>().unwrap_or(0);
+        let right_charge = right.charge_nano_usd.parse::<i128>().unwrap_or(0);
+        right_charge
+            .cmp(&left_charge)
+            .then_with(|| left.user_id.as_bytes().cmp(right.user_id.as_bytes()))
     });
 }
 
@@ -290,6 +349,12 @@ pub async fn persist_revenue_day(db: &DbPool, day: &str) -> Result<(), String> {
     .await
     .map_err(|e| e.to_string())?;
     txn.execute(db.stmt(
+        "DELETE FROM admin_revenue_daily_user_rows WHERE day = $1",
+        vec![day.into()],
+    ))
+    .await
+    .map_err(|e| e.to_string())?;
+    txn.execute(db.stmt(
         "DELETE FROM admin_revenue_daily_summaries WHERE day = $1",
         vec![day.into()],
     ))
@@ -321,6 +386,28 @@ pub async fn persist_revenue_day(db: &DbPool, day: &str) -> Result<(), String> {
                     uuid::Uuid::new_v4().to_string().into(),
                     aggregate.day.clone().into(),
                     row.model.clone().into(),
+                    row.charge_nano_usd.clone().into(),
+                    row.calls.into(),
+                    row.input_tokens.into(),
+                    row.output_tokens.into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        for row in &aggregate.users {
+            txn.execute(db.stmt(
+                "INSERT INTO admin_revenue_daily_user_rows \
+                 (id, day, user_id, username, charge_nano_usd, calls, input_tokens, output_tokens) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                vec![
+                    uuid::Uuid::new_v4().to_string().into(),
+                    aggregate.day.clone().into(),
+                    row.user_id.clone().into(),
+                    row.username
+                        .clone()
+                        .map(|name| sea_orm::Value::String(Some(Box::new(name))))
+                        .unwrap_or(sea_orm::Value::String(None)),
                     row.charge_nano_usd.clone().into(),
                     row.calls.into(),
                     row.input_tokens.into(),
@@ -433,6 +520,15 @@ pub async fn list_persisted_revenue_days(
         ))
         .await
         .map_err(|e| e.to_string())?;
+    let user_rows = db
+        .read()
+        .query_all(db.stmt(
+            "SELECT day, user_id, username, charge_nano_usd, calls, input_tokens, output_tokens \
+             FROM admin_revenue_daily_user_rows WHERE day >= $1 AND day <= $2",
+            vec![from.into(), to.into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
 
     let mut models_by_day: std::collections::HashMap<String, Vec<RevenueModelRow>> =
         std::collections::HashMap::new();
@@ -450,12 +546,31 @@ pub async fn list_persisted_revenue_days(
                 .map_err(|e| e.to_string())?,
         });
     }
+    let mut users_by_day: std::collections::HashMap<String, Vec<RevenueUserRow>> =
+        std::collections::HashMap::new();
+    for row in user_rows {
+        let day: String = row.try_get("", "day").map_err(|e| e.to_string())?;
+        users_by_day.entry(day).or_default().push(RevenueUserRow {
+            user_id: row.try_get("", "user_id").map_err(|e| e.to_string())?,
+            username: row.try_get("", "username").ok(),
+            charge_nano_usd: row
+                .try_get("", "charge_nano_usd")
+                .map_err(|e| e.to_string())?,
+            calls: row.try_get("", "calls").map_err(|e| e.to_string())?,
+            input_tokens: row.try_get("", "input_tokens").map_err(|e| e.to_string())?,
+            output_tokens: row
+                .try_get("", "output_tokens")
+                .map_err(|e| e.to_string())?,
+        });
+    }
 
     let mut days = Vec::new();
     for summary in summaries {
         let day: String = summary.try_get("", "day").map_err(|e| e.to_string())?;
         let mut models = models_by_day.remove(&day).unwrap_or_default();
         sort_revenue_models(&mut models);
+        let mut users = users_by_day.remove(&day).unwrap_or_default();
+        sort_revenue_users(&mut users);
         days.push(RevenueDayRow {
             day,
             total_charge_nano_usd: summary
@@ -471,6 +586,7 @@ pub async fn list_persisted_revenue_days(
                 .try_get("", "total_output_tokens")
                 .map_err(|e| e.to_string())?,
             models,
+            users,
         });
     }
     Ok(days)

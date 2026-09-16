@@ -2102,6 +2102,7 @@
     "outputTokens": "Output Tokens",
     "topModel": "Top Model",
     "model": "Model",
+    "user": "User",
     "modelDetails": "Per-model revenue for this day",
     "empty": "No revenue in this range",
     "emptyHint": "Days without matching request logs are omitted.",

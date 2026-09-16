@@ -2098,6 +2098,7 @@
     "outputTokens": "出力 Tokens",
     "topModel": "主力モデル",
     "model": "モデル",
+    "user": "ユーザー",
     "modelDetails": "この日のモデル別収益明細",
     "empty": "この期間に収益はありません",
     "emptyHint": "該当するリクエストログのない日は表示されません。",

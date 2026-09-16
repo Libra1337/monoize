@@ -1084,6 +1084,15 @@ export interface RevenueModelRow {
   output_tokens: number;
 }
 
+export interface RevenueUserRow {
+  user_id: string;
+  username: string | null;
+  charge_nano_usd: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
 export interface RevenueDayRow {
   day: string;
   total_charge_nano_usd: string;
@@ -1091,6 +1100,7 @@ export interface RevenueDayRow {
   total_input_tokens: number;
   total_output_tokens: number;
   models: RevenueModelRow[];
+  users: RevenueUserRow[];
 }
 
 export interface AdminRevenueDaily {

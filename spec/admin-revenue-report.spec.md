@@ -35,7 +35,7 @@ admin sessions.
 
 ## 4. Daily aggregates
 
-AR-3. The system MUST persist per-day aggregates in two tables:
+AR-3. The system MUST persist per-day aggregates in three tables:
 
 - `admin_revenue_daily_summaries`: `id` TEXT PRIMARY KEY, `day` TEXT UNIQUE
   (day id), `total_charge_nano_usd` TEXT (canonical decimal), `total_calls`
@@ -45,11 +45,18 @@ AR-3. The system MUST persist per-day aggregates in two tables:
   `model` TEXT, `charge_nano_usd` TEXT (canonical decimal), `calls` INTEGER,
   `input_tokens` BIGINT, `output_tokens` BIGINT, with
   UNIQUE(`day`, `model`).
+- `admin_revenue_daily_user_rows`: `id` TEXT PRIMARY KEY, `day` TEXT,
+  `user_id` TEXT, `username` TEXT (snapshot at computation time, nullable),
+  `charge_nano_usd` TEXT (canonical decimal), `calls` INTEGER,
+  `input_tokens` BIGINT, `output_tokens` BIGINT, with
+  UNIQUE(`day`, `user_id`). The `username` snapshot is refreshed from the
+  `users` table on every recomputation of that day and is NULL when the user
+  row no longer exists.
 
 AR-4. A settled day row MUST be recomputable: given the same `request_logs`
 content, recomputation MUST produce byte-identical aggregate values.
-Recomputation for a day MUST delete that day's existing summary row and model
-rows and insert the recomputed rows in one transaction.
+Recomputation for a day MUST delete that day's existing summary row, model
+rows, and user rows and insert the recomputed rows in one transaction.
 
 AR-5. A day MUST be settled only when the day has fully elapsed (the current
 Asia/Shanghai instant is at or past the day's end). The current day MUST NOT
@@ -97,6 +104,10 @@ before the current day, omitted `to` defaults to the current day):
     ascending in UTF-8 byte order; each item `model`, `charge_nano_usd`
     (string), `calls` (integer), `input_tokens` (integer),
     `output_tokens` (integer).
+  - `users`: array ordered by `charge_nano_usd` descending, then `user_id`
+    ascending in UTF-8 byte order; each item `user_id`, `username` (string or
+    null), `charge_nano_usd` (string), `calls` (integer), `input_tokens`
+    (integer), `output_tokens` (integer).
   A day with no matching rows MUST be absent from `days` (zero-revenue days
   are omitted, both persisted and live).
 
@@ -133,6 +144,11 @@ the same rows as AR-10 as an Excel workbook download:
   that day's `models` array, or empty when `models` is empty. Revenue cells
   are numeric USD values with 6 fractional digits computed from the exact
   nano-USD integer via decimal arithmetic, not binary floating point.
+- A second worksheet named `Users` with one row per (day, user) pair, ordered
+  by day ascending then revenue descending. Header row: Day, User ID,
+  Username, Revenue (USD), Calls, Input Tokens, Output Tokens. A NULL
+  username renders as an empty cell. The pair set and ordering MUST equal
+  the `users` arrays of AR-10 for the same range.
 - The same `from`/`to` validation as AR-10 applies; an invalid range MUST
   return HTTP 400 with code `invalid_request`.
 
@@ -144,7 +160,9 @@ AR-16. `/dashboard/admin/revenue` MUST contain:
   30 days including the current day;
 - a table with columns: Day, Revenue, Calls, Tokens (input + output total),
   Top Model (model name and its revenue). Each row MUST be expandable to
-  reveal that day's per-model rows with the same columns except Day;
+  reveal two sub-tables for that day: per-model rows and per-user rows
+  (username or user id, revenue, calls, input/output tokens), both ordered
+  by revenue descending;
 - an exclusion management card listing current exclusions with a remove
   action, and a user search box that adds a selected user to the list.
 

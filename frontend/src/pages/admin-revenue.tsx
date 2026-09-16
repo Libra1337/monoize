@@ -477,7 +477,7 @@ function DayRow({
         <td className="px-2 py-3">
           <button
             type="button"
-            disabled={day.models.length === 0}
+            disabled={day.models.length === 0 && day.users.length === 0}
             onClick={onToggle}
             aria-expanded={expanded}
             aria-label={t("adminRevenue.modelDetails")}
@@ -494,7 +494,7 @@ function DayRow({
       </tr>
       {expanded && (
         <tr className="bg-muted/25">
-          <td colSpan={6} className="px-5 py-3">
+          <td colSpan={6} className="space-y-4 px-5 py-3">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-muted-foreground">
@@ -535,6 +535,57 @@ function DayRow({
                 ))}
               </tbody>
             </table>
+            {day.users.length > 0 && (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-muted-foreground">
+                    <th className="py-1.5 pr-3 font-medium">
+                      {t("adminRevenue.user")}
+                    </th>
+                    <th className="py-1.5 px-3 text-right font-medium">
+                      {t("adminRevenue.revenue")}
+                    </th>
+                    <th className="py-1.5 px-3 text-right font-medium">
+                      {t("adminRevenue.calls")}
+                    </th>
+                    <th className="py-1.5 px-3 text-right font-medium">
+                      {t("adminRevenue.inputTokens")}
+                    </th>
+                    <th className="py-1.5 pl-3 text-right font-medium">
+                      {t("adminRevenue.outputTokens")}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {day.users.map((user) => (
+                    <tr key={user.user_id} className="border-t border-border/60">
+                      <td className="py-2 pr-3">
+                        <span className="block truncate font-medium">
+                          {user.username || user.user_id}
+                        </span>
+                        {user.username && (
+                          <span className="block max-w-64 truncate font-mono text-xs text-muted-foreground">
+                            {user.user_id}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums">
+                        <CoinAmount value={formatCost(user.charge_nano_usd)} />
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums">
+                        {formatInteger(user.calls)}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums">
+                        {formatInteger(user.input_tokens)}
+                      </td>
+                      <td className="py-2 pl-3 text-right font-mono tabular-nums">
+                        {formatInteger(user.output_tokens)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </td>
         </tr>
       )}

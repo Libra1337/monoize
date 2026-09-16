@@ -2897,7 +2897,10 @@ async fn rta9_skips_provider_when_estimated_input_tokens_exceed_the_limit() {
     let attempts = build_monoize_attempts(&state, &over, &auth)
         .await
         .expect("routing succeeds");
-    assert_eq!(attempt_channel_names(&attempts), BTreeSet::from(["fallback-channel"]));
+    assert_eq!(
+        attempt_channel_names(&attempts),
+        BTreeSet::from(["fallback-channel"])
+    );
 
     let at_limit = rta9_request(500, false);
     let attempts = build_monoize_attempts(&state, &at_limit, &auth)
@@ -2913,7 +2916,14 @@ async fn rta9_skips_provider_when_estimated_input_tokens_exceed_the_limit() {
 #[tokio::test]
 async fn rta9_skips_provider_for_tool_bearing_requests_when_flagged() {
     let state = rta9_state().await;
-    seed_rta9_provider(&state, "tools-hostile", "tools-hostile-channel", None, Some(true)).await;
+    seed_rta9_provider(
+        &state,
+        "tools-hostile",
+        "tools-hostile-channel",
+        None,
+        Some(true),
+    )
+    .await;
     seed_rta9_provider(&state, "neutral", "neutral-channel", None, None).await;
 
     let auth = build_test_auth(None);
@@ -2921,7 +2931,10 @@ async fn rta9_skips_provider_for_tool_bearing_requests_when_flagged() {
     let attempts = build_monoize_attempts(&state, &with_tools, &auth)
         .await
         .expect("routing succeeds");
-    assert_eq!(attempt_channel_names(&attempts), BTreeSet::from(["neutral-channel"]));
+    assert_eq!(
+        attempt_channel_names(&attempts),
+        BTreeSet::from(["neutral-channel"])
+    );
 
     let without_tools = rta9_request(0, false);
     let attempts = build_monoize_attempts(&state, &without_tools, &auth)
@@ -2943,7 +2956,10 @@ async fn rta9_defaults_keep_every_provider_eligible() {
     let attempts = build_monoize_attempts(&state, &big_tools_request, &auth)
         .await
         .expect("routing succeeds");
-    assert_eq!(attempt_channel_names(&attempts), BTreeSet::from(["unguarded-channel"]));
+    assert_eq!(
+        attempt_channel_names(&attempts),
+        BTreeSet::from(["unguarded-channel"])
+    );
 }
 
 #[tokio::test]
@@ -2956,7 +2972,10 @@ async fn rta9_skipping_the_only_provider_yields_zero_attempts() {
     let attempts = build_monoize_attempts(&state, &over, &auth)
         .await
         .expect("routing succeeds without contacting upstream");
-    assert!(attempts.is_empty(), "RTA-8b zero-attempt path: no attempts remain");
+    assert!(
+        attempts.is_empty(),
+        "RTA-8b zero-attempt path: no attempts remain"
+    );
 }
 
 #[tokio::test]
