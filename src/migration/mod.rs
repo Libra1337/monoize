@@ -90,8 +90,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260915_000102_session_token_hash::Migration),
             Box::new(m20260916_000103_admin_revenue_daily::Migration),
             Box::new(m20260916_000104_normalize_quota_day::Migration),
-            Box::new(m20260916_000105_admin_revenue_user_rows::Migration),
             Box::new(m20260916_000105_provider_cache_routing_guards::Migration),
+            Box::new(m20260916_000106_admin_revenue_user_rows::Migration),
         ]
     }
 }
@@ -311,8 +311,8 @@ mod m20260915_000101_billing_ledger_account_scope;
 mod m20260915_000102_session_token_hash;
 mod m20260916_000103_admin_revenue_daily;
 mod m20260916_000104_normalize_quota_day;
-mod m20260916_000105_admin_revenue_user_rows;
 mod m20260916_000105_provider_cache_routing_guards;
+mod m20260916_000106_admin_revenue_user_rows;
 
 #[cfg(test)]
 mod tests {
