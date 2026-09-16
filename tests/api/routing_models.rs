@@ -1123,11 +1123,19 @@ async fn exhausted_upstream_error_preserves_last_upstream_error_fields() {
         v["error"]["upstream_code"].as_str(),
         Some("forced_daily_limit")
     );
+    // SAN-16b: the client message is one constant. The upstream's own failure identity
+    // survives in the structured `upstream_code`, which SAN-12a admits because it is
+    // enum-shaped.
+    assert_eq!(v["error"]["message"].as_str(), Some(EXHAUSTED_CLIENT_TEXT));
     assert!(
-        v["error"]["message"]
+        !v["error"]["message"]
             .as_str()
             .unwrap_or("")
             .contains("daily usage limit exceeded"),
-        "downstream error message must include final upstream detail: {body}"
+        "upstream wording must not reach the client: {body}"
+    );
+    assert_eq!(
+        v["error"]["upstream_code"].as_str(),
+        Some("forced_daily_limit")
     );
 }

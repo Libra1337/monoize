@@ -2968,7 +2968,8 @@ fn upstream_error_to_app_replaces_transport_detail_with_generic_message() {
     );
 
     assert_eq!(err.status, StatusCode::BAD_GATEWAY);
-    assert_eq!(err.message, "failed to request upstream");
+    // SAN-16: the client text is Monoize-authored and interpolates no upstream value.
+    assert_eq!(err.message, "the upstream provider could not be reached");
     // SAN-2: the admin-tier internal detail keeps the raw transport text.
     let internal = err.internal_message.as_deref().expect("internal detail");
     assert!(
@@ -2995,7 +2996,11 @@ fn upstream_error_to_app_drops_unparsed_error_body_from_client_message() {
         true,
     );
 
-    assert_eq!(err.message, "upstream status 502 Bad Gateway");
+    // SAN-16: a 5xx upstream maps to one constant; the status is carried structurally.
+    assert_eq!(
+        err.message,
+        "the upstream provider reported an internal error"
+    );
     // SAN-2: the raw unparsed body stays admin-readable in internal detail.
     let internal = err.internal_message.as_deref().expect("internal detail");
     assert!(internal.contains("api.cloudflare.com"), "{internal}");
@@ -3003,7 +3008,9 @@ fn upstream_error_to_app_drops_unparsed_error_body_from_client_message() {
 }
 
 #[test]
-fn upstream_error_to_app_masks_structured_message_and_keeps_status_prefix() {
+fn upstream_error_to_app_maps_structured_message_to_authored_text() {
+    // SAN-16: a structured upstream error no longer reaches the client as text. The 422 maps
+    // to one constant, and the raw wording stays in the admin-tier internal detail.
     let err = routing::upstream_error_to_app(
         UpstreamCallError::new(
             UpstreamErrorKind::Http,
@@ -3015,10 +3022,17 @@ fn upstream_error_to_app_masks_structured_message_and_keeps_status_prefix() {
     );
     assert_eq!(
         err.message,
-        "upstream status 422 Unprocessable Entity: invalid request"
+        "the upstream provider rejected a request parameter"
+    );
+    assert!(
+        err.internal_message
+            .as_deref()
+            .expect("internal detail")
+            .contains("invalid request")
     );
 
-    let masked = routing::upstream_error_to_app(
+    // A structured error naming infrastructure loses it entirely, not just to `MASK`.
+    let leaky = routing::upstream_error_to_app(
         UpstreamCallError::new(
             UpstreamErrorKind::Http,
             Some(StatusCode::UNPROCESSABLE_ENTITY),
@@ -3027,76 +3041,72 @@ fn upstream_error_to_app_masks_structured_message_and_keeps_status_prefix() {
         .with_source(upstream::UpstreamErrorSource::StructuredBody),
         true,
     );
-    assert!(
-        masked.message.contains("https://***.com/***"),
-        "{}",
-        masked.message
+    assert_eq!(
+        leaky.message,
+        "the upstream provider rejected a request parameter"
     );
-    assert!(!masked.message.contains("cloudflare"), "{}", masked.message);
+    assert!(!leaky.message.contains("cloudflare"), "{}", leaky.message);
+    assert!(!leaky.message.contains("***"), "{}", leaky.message);
 }
 
 // SAN-CFG5: with `mask_sensitive_info` disabled, the client message carries
 // the raw upstream detail (TRUNC-bounded for transport/unparsed sources).
+// SAN-15a: `monoize_mask_sensitive_info` governs `MASK` only. Disabling it MUST NOT expose
+// upstream detail to a client, because SAN-16 selects the client text before `MASK` applies.
 #[test]
-fn upstream_error_to_app_exposes_raw_detail_when_masking_disabled() {
-    let transport = routing::upstream_error_to_app(
-        UpstreamCallError::new(
+fn upstream_error_to_app_keeps_authored_text_when_masking_disabled() {
+    for (kind, status, source, raw, expected) in [
+        (
             UpstreamErrorKind::Network,
             None,
+            upstream::UpstreamErrorSource::Transport,
             LEAKY_TRANSPORT_ERROR.to_string(),
+            "the upstream provider could not be reached",
         ),
-        false,
-    );
-    assert_eq!(
-        transport.message,
-        format!("upstream status 502 Bad Gateway: {LEAKY_TRANSPORT_ERROR}")
-    );
-
-    let raw_body = format!("<html>502 Bad Gateway from {LEAKY_TRANSPORT_ERROR}</html>");
-    let unparsed = routing::upstream_error_to_app(
-        UpstreamCallError::new(
+        (
             UpstreamErrorKind::Http,
             Some(StatusCode::BAD_GATEWAY),
-            raw_body.clone(),
-        )
-        .with_source(upstream::UpstreamErrorSource::UnparsedBody),
-        false,
-    );
-    assert_eq!(
-        unparsed.message,
-        format!("upstream status 502 Bad Gateway: {raw_body}")
-    );
-
-    let empty = routing::upstream_error_to_app(
-        UpstreamCallError::new(
-            UpstreamErrorKind::Http,
-            Some(StatusCode::BAD_GATEWAY),
-            "502 Bad Gateway".to_string(),
-        )
-        .with_source(upstream::UpstreamErrorSource::EmptyBody),
-        false,
-    );
-    assert_eq!(empty.message, "upstream status 502 Bad Gateway");
-
-    let structured = routing::upstream_error_to_app(
-        UpstreamCallError::new(
+            upstream::UpstreamErrorSource::UnparsedBody,
+            format!("<html>502 from {LEAKY_TRANSPORT_ERROR}</html>"),
+            "the upstream provider reported an internal error",
+        ),
+        (
             UpstreamErrorKind::Http,
             Some(StatusCode::UNPROCESSABLE_ENTITY),
+            upstream::UpstreamErrorSource::StructuredBody,
             "rejected by https://api.cloudflare.com/client/v4/accounts/abc123/ai".to_string(),
-        )
-        .with_source(upstream::UpstreamErrorSource::StructuredBody),
-        false,
-    );
-    assert_eq!(
-        structured.message,
-        "upstream status 422 Unprocessable Entity: rejected by https://api.cloudflare.com/client/v4/accounts/abc123/ai"
-    );
+            "the upstream provider rejected a request parameter",
+        ),
+    ] {
+        let err = routing::upstream_error_to_app(
+            UpstreamCallError::new(kind, status, raw.clone()).with_source(source),
+            false,
+        );
+        assert_eq!(err.message, expected, "raw was: {raw}");
+        assert!(!err.message.contains("cloudflare"), "{}", err.message);
+        assert!(
+            !err.message.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
+            "{}",
+            err.message
+        );
+        // The operator still sees everything.
+        assert!(
+            err.internal_message
+                .as_deref()
+                .expect("internal detail")
+                .contains(raw.trim_start_matches('<').split(' ').next().unwrap_or("")),
+            "internal detail lost the raw text: {:?}",
+            err.internal_message
+        );
+    }
 }
 
 // SAN-CFG5.2/5.3: transport and unparsed client text is TRUNC-bounded when
 // masking is off, so an oversized raw body cannot flood the client message.
+// SAN-16a: the client text is a constant, so an oversized raw body cannot reach the client at
+// all. TRUNC still bounds the admin-tier internal detail.
 #[test]
-fn upstream_error_to_app_truncates_raw_client_detail_when_masking_disabled() {
+fn upstream_error_to_app_bounds_internal_detail_and_never_floods_the_client() {
     let oversized = "x".repeat(3000);
     let err = routing::upstream_error_to_app(
         UpstreamCallError::new(
@@ -3107,9 +3117,14 @@ fn upstream_error_to_app_truncates_raw_client_detail_when_masking_disabled() {
         .with_source(upstream::UpstreamErrorSource::UnparsedBody),
         false,
     );
-    assert!(err.message.ends_with("... (truncated)"), "{}", err.message);
     assert_eq!(
-        err.message.chars().count(),
+        err.message,
+        "the upstream provider reported an internal error"
+    );
+    let internal = err.internal_message.as_deref().expect("internal detail");
+    assert!(internal.ends_with("... (truncated)"), "{internal}");
+    assert_eq!(
+        internal.chars().count(),
         "upstream status 502 Bad Gateway: ".chars().count()
             + 2048
             + "... (truncated)".chars().count()
@@ -3117,7 +3132,7 @@ fn upstream_error_to_app_truncates_raw_client_detail_when_masking_disabled() {
 }
 
 #[test]
-fn exhausted_error_message_omits_attempt_count_and_infra_detail() {
+fn exhausted_error_message_is_one_constant_and_names_nothing() {
     let attempt = affinity_test_attempt(
         "provider-leak",
         "channel-leak",
@@ -3140,19 +3155,17 @@ fn exhausted_error_message_omits_attempt_count_and_infra_detail() {
     let err = build_exhausted_upstream_error("deepseek-v4-flash", &tried);
 
     assert_eq!(err.status, StatusCode::BAD_GATEWAY);
-    assert_eq!(
-        err.message,
-        "All upstream attempts failed for model: deepseek-v4-flash. Last error: failed to request upstream"
-    );
-    assert!(!err.message.contains("cloudflare"), "{}", err.message);
+    // SAN-16b: no model, no attempt count, no upstream text.
+    assert_eq!(err.message, "no upstream provider could serve this request");
     assert!(
-        !err.message.contains("2 upstream attempt"),
+        !err.message.contains("deepseek-v4-flash"),
         "{}",
         err.message
     );
+    assert!(!err.message.contains("cloudflare"), "{}", err.message);
 
-    // SAN-7: the admin-tier internal detail carries the attempt count and the
-    // raw last-attempt error.
+    // SAN-7 / SAN-16a: the admin-tier internal detail keeps the model, the attempt count,
+    // and the raw last-attempt error.
     let internal = err.internal_message.as_deref().expect("internal detail");
     assert!(
         internal.starts_with("All 2 upstream attempt(s) failed for model: deepseek-v4-flash."),
@@ -3163,25 +3176,14 @@ fn exhausted_error_message_omits_attempt_count_and_infra_detail() {
         internal.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
         "{internal}"
     );
-
-    // SAN-5/SAN-10: persisted attempt errors keep the raw detail; the masked
-    // client_error never serializes.
-    let persisted = serde_json::to_value(&tried).expect("tried providers serialize");
-    let serialized = persisted.to_string();
-    assert!(!serialized.contains("client_error"), "{serialized}");
-    assert!(
-        persisted[0]["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("api.cloudflare.com")),
-        "{serialized}"
-    );
-    assert_eq!(tried[1].client_error, "failed to request upstream");
 }
 
 // SAN-CFG5 item 1: with masking disabled `client_error` equals the raw
 // AppError message, so the exhausted downstream error carries full detail.
+// SAN-15a / SAN-17: with masking disabled the client-facing attempt text is still authored by
+// Monoize, and the exhausted message still names no infrastructure.
 #[test]
-fn tried_provider_client_error_keeps_raw_text_when_masking_disabled() {
+fn tried_provider_client_error_stays_authored_when_masking_disabled() {
     let attempt = affinity_test_attempt(
         "provider-raw",
         "channel-raw",
@@ -3204,14 +3206,22 @@ fn tried_provider_client_error_keeps_raw_text_when_masking_disabled() {
         false,
     )];
 
+    // The attempt carried a 502, so SAN-16 selects the 5xx arm rather than the transport one.
     assert_eq!(
         tried[0].client_error,
-        format!("upstream status 502 Bad Gateway: {LEAKY_TRANSPORT_ERROR}")
+        "the upstream provider reported an internal error"
+    );
+    assert!(!tried[0].client_error.contains("cloudflare"));
+    // SAN-5: the persisted internal detail is untouched.
+    assert!(
+        tried[0].error.contains("api.cloudflare.com"),
+        "{}",
+        tried[0].error
     );
 
     let err = build_exhausted_upstream_error("deepseek-v4-flash", &tried);
     assert!(
-        err.message.contains("api.cloudflare.com"),
+        !err.message.contains("api.cloudflare.com"),
         "{}",
         err.message
     );
@@ -3220,8 +3230,10 @@ fn tried_provider_client_error_keeps_raw_text_when_masking_disabled() {
 // SAN-2a: when the last attempt was a quota failure, the exhausted-routing
 // downstream message composes the fixed generic quota text instead of the
 // upstream wording, even with masking disabled.
+// SAN-16b: the exhausted message is one constant, so quota wording cannot appear in it
+// either. SAN-16 keeps the per-attempt quota text on the attempt's own client_error.
 #[test]
-fn exhausted_error_replaces_quota_wording_in_last_attempt() {
+fn exhausted_error_carries_no_quota_wording() {
     let attempt = affinity_test_attempt(
         "provider-quota",
         "channel-quota",
@@ -3236,6 +3248,10 @@ fn exhausted_error_replaces_quota_wording_in_last_attempt() {
         ),
         false,
     );
+    // SAN-D2a still classifies the attempt itself as a quota failure.
+    assert_eq!(app_err.message, crate::error_sanitize::GENERIC_QUOTA_TEXT);
+    assert!(!app_err.message.contains("5 hour"), "{}", app_err.message);
+
     let tried = vec![TriedProvider::from_app_error(
         1,
         &attempt,
@@ -3243,16 +3259,11 @@ fn exhausted_error_replaces_quota_wording_in_last_attempt() {
         Some(10),
         false,
     )];
-
     let err = build_exhausted_upstream_error("glm-5.3", &tried);
-    assert!(
-        err.message
-            .contains(crate::error_sanitize::GENERIC_QUOTA_TEXT),
-        "{}",
-        err.message
-    );
+    assert_eq!(err.message, "no upstream provider could serve this request");
     assert!(!err.message.contains("5 hour"), "{}", err.message);
     assert!(!err.message.contains("resets 2026"), "{}", err.message);
+    assert!(!err.message.contains("glm-5.3"), "{}", err.message);
 }
 
 #[test]
@@ -3279,19 +3290,11 @@ fn upstream_path_for_model_percent_encodes_injected_segments() {
     // Gemini: the `models/` prefix is structural, the name itself is a single
     // segment, so a `/` inside the name must not open a new path segment.
     assert_eq!(
-        routing::upstream_path_for_model(
-            ProviderType::Gemini,
-            "models/gemini-2.5-pro",
-            false
-        ),
+        routing::upstream_path_for_model(ProviderType::Gemini, "models/gemini-2.5-pro", false),
         "/v1beta/models/models/gemini-2.5-pro:generateContent"
     );
     assert_eq!(
-        routing::upstream_path_for_model(
-            ProviderType::Gemini,
-            "gemini-2.5-pro/extra?x=1#f",
-            true
-        ),
+        routing::upstream_path_for_model(ProviderType::Gemini, "gemini-2.5-pro/extra?x=1#f", true),
         "/v1beta/models/gemini-2.5-pro%2Fextra%3Fx=1%23f:streamGenerateContent?alt=sse"
     );
 
@@ -3299,22 +3302,14 @@ fn upstream_path_for_model_percent_encodes_injected_segments() {
     // cannot open a new path segment. (A `:` routes to the version-qualified
     // `/v1/predictions` form instead, so use a colon-free key here.)
     assert_eq!(
-        routing::upstream_path_for_model(
-            ProviderType::Replicate,
-            "owner/na me?k=v",
-            false
-        ),
+        routing::upstream_path_for_model(ProviderType::Replicate, "owner/na me?k=v", false),
         "/v1/models/owner%2Fna%20me%3Fk=v/predictions"
     );
 
     // Replicate deployment: owner and name stay independent segments, only the
     // owner/name contents are encoded.
     assert_eq!(
-        routing::upstream_path_for_model(
-            ProviderType::Replicate,
-            "deployment:owner/name",
-            false
-        ),
+        routing::upstream_path_for_model(ProviderType::Replicate, "deployment:owner/name", false),
         "/v1/deployments/owner/name/predictions"
     );
     assert_eq!(

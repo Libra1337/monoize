@@ -93,7 +93,11 @@ async fn dashboard_login_is_throttled_after_repeated_failures() {
         )
         .await
         .unwrap();
-    assert_eq!(update.status(), StatusCode::OK, "captcha must be disabled for this test");
+    assert_eq!(
+        update.status(),
+        StatusCode::OK,
+        "captcha must be disabled for this test"
+    );
 
     let attempt = |username: &str| {
         let router = ctx.router.clone();
@@ -145,7 +149,12 @@ async fn a_session_token_is_not_stored_in_plaintext() {
     let user = ctx
         .state
         .user_store
-        .create_user("cf71-owner", "password123", monoize::users::UserRole::User, None)
+        .create_user(
+            "cf71-owner",
+            "password123",
+            monoize::users::UserRole::User,
+            None,
+        )
         .await
         .expect("user creates");
     let session = ctx

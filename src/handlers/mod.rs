@@ -61,8 +61,12 @@ pub use responses_websocket::responses_websocket;
 /// it fail -- a failing healthcheck makes Docker restart a process that is fine, and a
 /// restart loop cannot repair a database.
 pub async fn health_liveness() -> Response {
-    (StatusCode::OK, "ok
-").into_response()
+    (
+        StatusCode::OK,
+        "ok
+",
+    )
+        .into_response()
 }
 
 /// Readiness: the process can reach its database. This is the check an operator or a
@@ -1336,6 +1340,28 @@ fn reasoning_envelope_provider_type(provider_type: ProviderType) -> &'static str
     }
 }
 
+impl MonoizeAttempt {
+    /// SAN-D3 `IDENTITY`: the deployment-identity strings of this attempt, for SAN-17
+    /// erasure. `logical_model` is deliberately absent -- the client chose it, so redacting
+    /// it would remove text the client already has while telling it nothing new.
+    fn deployment_identity(&self) -> crate::error_sanitize::DeploymentIdentity {
+        let mut identity = crate::error_sanitize::DeploymentIdentity::new();
+        identity
+            .add_url(&self.base_url)
+            .add(&self.api_key)
+            .add(&self.upstream_model)
+            .add(&self.group_id)
+            .add(&self.provider_id)
+            .add(&self.provider_name)
+            .add(&self.channel_id)
+            .add(&self.channel_name);
+        if let Some(profile) = self.pricing_profile.as_deref() {
+            identity.add(profile);
+        }
+        identity
+    }
+}
+
 async fn maybe_sleep_before_channel_retry(attempt: &MonoizeAttempt) {
     if attempt.channel_retry_interval_ms == 0 {
         return;
@@ -1392,9 +1418,17 @@ impl TriedProvider {
                 .internal_message
                 .clone()
                 .unwrap_or_else(|| crate::error_sanitize::truncate_error_detail(&app_err.message)),
-            client_error: crate::error_sanitize::maybe_mask_sensitive_text(
-                &app_err.message,
-                mask_sensitive_info,
+            // SAN-17: the second layer. SAN-16 already makes `app_err.message` a
+            // Monoize-authored constant for upstream-derived failures, so this normally
+            // removes nothing. It exists because attempt failures also arrive from
+            // response-decoding AppErrors that never pass through `upstream_error_to_app`,
+            // and those carry upstream text; exact erasure bounds what they can publish
+            // even though `MASK` would not catch a model or Group name.
+            client_error: attempt.deployment_identity().redact(
+                &crate::error_sanitize::maybe_mask_sensitive_text(
+                    &app_err.message,
+                    mask_sensitive_info,
+                ),
             ),
             upstream_status: Some(app_err.upstream_status.unwrap_or(app_err.status.as_u16())),
             upstream_code: Some(
@@ -1973,11 +2007,9 @@ fn map_balance_preflight_error(error: crate::users::BillingError) -> AppError {
             "insufficient_balance",
             "insufficient balance",
         ),
-        BillingErrorKind::NotFound => AppError::new(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "user not found",
-        ),
+        BillingErrorKind::NotFound => {
+            AppError::new(StatusCode::UNAUTHORIZED, "unauthorized", "user not found")
+        }
         _ => AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",

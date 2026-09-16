@@ -1537,12 +1537,16 @@ async fn messages_streaming_prestream_upstream_error_returns_error_stream() {
         .find(|event| event["type"].as_str() == Some("error"))
         .expect("messages error frame");
     assert_eq!(error["error"]["type"].as_str(), Some("cyber_policy"));
+    assert_eq!(
+        error["error"]["message"].as_str(),
+        Some(EXHAUSTED_CLIENT_TEXT)
+    );
     assert!(
-        error["error"]["message"]
+        !error["error"]["message"]
             .as_str()
             .unwrap_or("")
             .contains("mock cybersecurity policy block"),
-        "error message should expose upstream detail: {text}"
+        "upstream wording must not reach the client: {text}"
     );
 }
 

@@ -1242,19 +1242,16 @@ fn messages_body_uses_files_api(value: &serde_json::Value) -> bool {
     }
 }
 
-/// SAN-6: the downstream exhausted-routing message carries only the model and
-/// the last attempt's client-facing error text — no attempt counts, no
-/// provider/channel identity, no upstream URLs. SAN-2a: quota wording in the
-/// last attempt's text collapses to the fixed generic text regardless of the
-/// masking switch; every other text passes through unchanged so SAN-CFG5
-/// still holds when masking is disabled.
-pub(super) fn build_exhausted_error_message(model: &str, tried: &[TriedProvider]) -> String {
-    if tried.is_empty() {
-        return format!("No available upstream provider for model: {model}");
-    }
-    let last_error = &tried[tried.len() - 1].client_error;
-    let sanitized_last_error = crate::error_sanitize::sanitize_quota_error_text(last_error, false);
-    format!("All upstream attempts failed for model: {model}. Last error: {sanitized_last_error}")
+/// SAN-16b: the downstream exhausted-routing message is one fixed string. It names neither
+/// the model nor the last attempt's text.
+///
+/// The model name is excluded because a client that submitted a Monoize alias would otherwise
+/// learn what that alias resolves to whenever the resolved name reaches this text. The last
+/// attempt's text is excluded because it is upstream-authored (SAN-16). The operator keeps
+/// both: `build_exhausted_error_detail` retains the model, the attempt count, and the final
+/// attempt's raw error for request-log persistence.
+pub(super) fn build_exhausted_error_message(_model: &str, _tried: &[TriedProvider]) -> String {
+    crate::error_sanitize::GENERIC_EXHAUSTED_TEXT.to_string()
 }
 
 /// SAN-7: the operator-facing internal detail keeps the attempt count and the
@@ -1308,9 +1305,11 @@ pub(super) async fn no_attempt_error(
 
 pub(super) fn build_exhausted_upstream_error(model: &str, tried: &[TriedProvider]) -> AppError {
     let last = tried.last();
+    // SAN-12a: the upstream chooses this value, and it becomes the downstream top-level
+    // `code`. A non-enumerated one is replaced rather than forwarded.
     let code = last
         .and_then(|attempt| attempt.upstream_code.as_deref())
-        .filter(|code| !code.is_empty())
+        .filter(|code| crate::error_sanitize::is_enum_shaped(code))
         .unwrap_or("upstream_error");
     let signature_invalid = code == "thinking_signature_invalid";
     let status = if signature_invalid {
@@ -1740,38 +1739,19 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
         err.error_type.as_deref(),
         err.param.as_deref(),
     );
-    // SAN-1 when masking is enabled; SAN-CFG5 items 1-4 when the admin
-    // disabled `monoize_mask_sensitive_info`.
-    let client_message = if quota {
-        crate::error_sanitize::GENERIC_QUOTA_TEXT.to_string()
-    } else {
-        match err.source {
-            upstream::UpstreamErrorSource::Transport if mask_sensitive_info => {
-                "failed to request upstream".to_string()
-            }
-            upstream::UpstreamErrorSource::UnparsedBody if mask_sensitive_info => {
-                format!("upstream status {status}")
-            }
-            upstream::UpstreamErrorSource::EmptyBody => format!("upstream status {status}"),
-            upstream::UpstreamErrorSource::Transport
-            | upstream::UpstreamErrorSource::UnparsedBody => {
-                format!(
-                    "upstream status {status}: {}",
-                    crate::error_sanitize::truncate_error_detail(&err.message)
-                )
-            }
-            upstream::UpstreamErrorSource::StructuredBody
-            | upstream::UpstreamErrorSource::Internal => {
-                format!(
-                    "upstream status {status}: {}",
-                    crate::error_sanitize::maybe_mask_sensitive_text(
-                        &err.message,
-                        mask_sensitive_info
-                    )
-                )
-            }
-        }
-    };
+    // SAN-16: the client-visible message is authored by Monoize and interpolates no upstream
+    // value. This supersedes the former per-source rewriting of SAN-1, which forwarded
+    // upstream free-form text through `MASK` -- a blacklist that cannot bound what a client
+    // learns, because a model name, a Group name, and a dotless hostname all pass it
+    // unchanged. `internal_message` below keeps the full raw detail, so no operator-facing
+    // diagnostic capability is lost. SAN-15a: this does not depend on `mask_sensitive_info`.
+    let _ = mask_sensitive_info;
+    let client_message = crate::error_sanitize::client_message_for_upstream_failure(
+        err.status.map(|status| status.as_u16()),
+        matches!(err.source, upstream::UpstreamErrorSource::Transport),
+        quota,
+    )
+    .to_string();
     // SAN-2: unmasked, TRUNC-bounded detail for request-log persistence.
     // Admins read it verbatim; non-admin dashboard reads mask it at read
     // time (SAN-13/SAN-14).

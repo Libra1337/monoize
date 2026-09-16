@@ -49,11 +49,7 @@ async fn chat_nonstream_openrouter_errors_do_not_become_successful_completions()
             "503",
         ),
         ("chat_choice_error", "openrouter choice failure", "502"),
-        (
-            "chat_metadata_error",
-            "openrouter metadata failure",
-            "P529",
-        ),
+        ("chat_metadata_error", "openrouter metadata failure", "P529"),
     ] {
         let (status, body) = json_post(
             &ctx,
@@ -67,7 +63,13 @@ async fn chat_nonstream_openrouter_errors_do_not_become_successful_completions()
         .await;
 
         assert_ne!(status, StatusCode::OK, "{mode}: {body}");
-        assert!(body.contains(expected_message), "{mode}: {body}");
+        // SAN-16: the upstream's own wording never reaches the client. The failure identity
+        // survives as `expected_code`, asserted below.
+        assert!(
+            !body.contains(expected_message),
+            "{mode}: upstream wording must not reach the client: {body}"
+        );
+        assert!(body.contains(EXHAUSTED_CLIENT_TEXT), "{mode}: {body}");
         assert!(
             !body.contains("\"finish_reason\":\"stop\""),
             "{mode} must not be rewritten as a successful completion: {body}"

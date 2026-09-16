@@ -64,12 +64,9 @@ async fn unparsed_upstream_error_body_is_hidden_from_client_and_kept_raw_in_stor
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
     assert_no_infra_leak(&body);
     let error: Value = serde_json::from_str(&body).expect("error response JSON");
-    assert_eq!(
-        error["error"]["message"],
-        json!(
-            "All upstream attempts failed for model: gpt-5-mini-chat. Last error: upstream status 502 Bad Gateway"
-        )
-    );
+    // SAN-16b: one authored constant, naming neither the model nor the upstream.
+    assert_eq!(error["error"]["message"], json!(EXHAUSTED_CLIENT_TEXT));
+    assert!(!body.contains("gpt-5-mini-chat"), "{body}");
     assert_eq!(error["error"]["code"], json!("upstream_error"));
     assert_eq!(error["error"]["upstream_status"], json!(502));
 
@@ -131,12 +128,8 @@ async fn transport_error_is_hidden_from_client() {
 
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
     let error: Value = serde_json::from_str(&body).expect("error response JSON");
-    assert_eq!(
-        error["error"]["message"],
-        json!(
-            "All upstream attempts failed for model: dead-model. Last error: failed to request upstream"
-        )
-    );
+    assert_eq!(error["error"]["message"], json!(EXHAUSTED_CLIENT_TEXT));
+    assert!(!body.contains("dead-model"), "{body}");
     assert!(!body.contains("127.0.0.1"), "{body}");
     assert!(!body.contains(&dead_port.to_string()), "{body}");
     assert!(!body.contains("error sending request"), "{body}");
@@ -169,12 +162,12 @@ async fn structured_upstream_error_message_is_masked_but_passes_through() {
     assert_no_infra_leak(&body);
     let error: Value = serde_json::from_str(&body).expect("error response JSON");
     let message = error["error"]["message"].as_str().expect("error message");
-    assert!(
-        message.contains(
-            "upstream status 422 Unprocessable Entity: invalid request against https://***.com/***"
-        ),
-        "{message}"
-    );
+    // SAN-16: the upstream wording no longer passes through at all, masked or otherwise. The
+    // former assertion accepted `https://***.com/***` in the client body; SAN-15 admits no
+    // remnant of the upstream URL, not even a masked one.
+    assert_eq!(message, EXHAUSTED_CLIENT_TEXT);
+    assert!(!message.contains("invalid request against"), "{message}");
+    assert!(!message.contains("***"), "{message}");
     assert_eq!(error["error"]["code"], json!("invalid_request_error"));
 }
 
@@ -404,7 +397,7 @@ async fn mask_sensitive_info_setting_round_trips_and_publishes_runtime() {
 // SAN-CFG5 item 3: with masking disabled, the unparsed upstream error body is
 // forwarded to the client after the status prefix, TRUNC-bounded.
 #[tokio::test]
-async fn unparsed_error_body_reaches_client_when_masking_disabled() {
+async fn unparsed_error_body_stays_hidden_when_masking_disabled() {
     let ctx = setup().await;
     let admin_token = create_admin_session(&ctx, "admin-mask-off-unparsed").await;
     set_mask_sensitive_info(&ctx, &admin_token, false).await;
@@ -423,18 +416,16 @@ async fn unparsed_error_body_reaches_client_when_masking_disabled() {
 
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
     let error: Value = serde_json::from_str(&body).expect("error response JSON");
-    assert_eq!(
-        error["error"]["message"],
-        json!(format!(
-            "All upstream attempts failed for model: gpt-5-mini-chat. Last error: upstream status 502 Bad Gateway: {LEAKY_RAW_BODY}"
-        ))
-    );
+    // SAN-15a: disabling masking governs `MASK` only. The client text is selected by SAN-16
+    // before `MASK` would run, so the raw body still cannot reach the client.
+    assert_eq!(error["error"]["message"], json!(EXHAUSTED_CLIENT_TEXT));
+    assert_no_infra_leak(&body);
 }
 
-// SAN-CFG5 item 1: with masking disabled, the structured upstream message is
-// forwarded verbatim (no MASK).
+// SAN-15a: with masking disabled the structured upstream message is still not forwarded.
+// The switch governs `MASK`; SAN-16 selects the client text before `MASK` applies.
 #[tokio::test]
-async fn structured_error_message_is_not_masked_when_masking_disabled() {
+async fn structured_error_message_stays_authored_when_masking_disabled() {
     let ctx = setup().await;
     let admin_token = create_admin_session(&ctx, "admin-mask-off-structured").await;
     set_mask_sensitive_info(&ctx, &admin_token, false).await;
@@ -455,18 +446,15 @@ async fn structured_error_message_is_not_masked_when_masking_disabled() {
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
     let error: Value = serde_json::from_str(&body).expect("error response JSON");
     let message = error["error"]["message"].as_str().expect("error message");
-    assert!(
-        message.contains(
-            "upstream status 422 Unprocessable Entity: invalid request against https://api.cloudflare.com/client/v4/accounts/ebb3b05a7371fbcbd62bde8264c86cfe/ai"
-        ),
-        "{message}"
-    );
+    // SAN-15a: unchanged by the masking switch.
+    assert_eq!(message, EXHAUSTED_CLIENT_TEXT);
+    assert_no_infra_leak(&body);
 }
 
-// SAN-CFG5 item 2: with masking disabled, the transport error text (with the
-// upstream address) is forwarded to the client after the status prefix.
+// SAN-15a: with masking disabled the transport error text, which carries the upstream
+// address, is still withheld from the client.
 #[tokio::test]
-async fn transport_error_detail_reaches_client_when_masking_disabled() {
+async fn transport_error_detail_stays_hidden_when_masking_disabled() {
     let ctx = setup().await;
     let admin_token = create_admin_session(&ctx, "admin-mask-off-transport").await;
     set_mask_sensitive_info(&ctx, &admin_token, false).await;
@@ -499,11 +487,10 @@ async fn transport_error_detail_reaches_client_when_masking_disabled() {
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
     let error: Value = serde_json::from_str(&body).expect("error response JSON");
     let message = error["error"]["message"].as_str().expect("error message");
-    assert!(
-        message.contains("upstream status 502 Bad Gateway: "),
-        "{message}"
-    );
-    assert!(message.contains("127.0.0.1"), "{message}");
+    // SAN-15a: the upstream address must not reach the client even with masking disabled.
+    assert_eq!(message, EXHAUSTED_CLIENT_TEXT);
+    assert!(!message.contains("127.0.0.1"), "{message}");
+    assert!(!body.contains(&dead_port.to_string()), "{body}");
 }
 
 // SAN-CFG5 item 5: with masking disabled, the non-admin dashboard read
@@ -589,16 +576,19 @@ async fn streaming_prestream_unparsed_error_body_is_hidden_from_client() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let sse = String::from_utf8_lossy(&bytes).to_string();
     assert_no_infra_leak(&sse);
+    // SAN-16 / FP4e: the terminal frame carries the authored constant. The upstream status is
+    // still available structurally as `upstream_status`.
     assert!(
-        sse.contains("upstream status 502 Bad Gateway"),
-        "terminal stream error frame must carry the sanitized message: {sse}"
+        sse.contains(EXHAUSTED_CLIENT_TEXT),
+        "terminal stream error frame must carry the authored message: {sse}"
     );
+    assert!(sse.contains("\"upstream_status\":502"), "{sse}");
 }
 
-// SAN-CFG5: with masking disabled, the streaming terminal error frame carries
-// the raw upstream body.
+// SAN-15a: with masking disabled the streaming terminal error frame still withholds the
+// raw upstream body.
 #[tokio::test]
-async fn streaming_prestream_unparsed_error_body_reaches_client_when_masking_disabled() {
+async fn streaming_prestream_unparsed_error_body_stays_hidden_when_masking_disabled() {
     let ctx = setup().await;
     let admin_token = create_admin_session(&ctx, "admin-mask-off-stream").await;
     set_mask_sensitive_info(&ctx, &admin_token, false).await;
@@ -624,6 +614,7 @@ async fn streaming_prestream_unparsed_error_body_reaches_client_when_masking_dis
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let sse = String::from_utf8_lossy(&bytes).to_string();
-    assert!(sse.contains("api.cloudflare.com"), "{sse}");
-    assert!(sse.contains("ebb3b05a7371fbcbd62bde8264c86cfe"), "{sse}");
+    // SAN-15a: the mid-stream frame is bound by the same guarantee as the JSON body.
+    assert_no_infra_leak(&sse);
+    assert!(sse.contains(EXHAUSTED_CLIENT_TEXT), "{sse}");
 }

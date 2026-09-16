@@ -65,3 +65,6 @@ mod store_billing;
 
 #[path = "api/store_payments.rs"]
 mod store_payments;
+
+#[path = "api/identity_redaction.rs"]
+mod identity_redaction;

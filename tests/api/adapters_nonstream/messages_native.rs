@@ -105,12 +105,18 @@ async fn messages_nonstream_error_uses_anthropic_envelope_and_request_id() {
     let body: Value = serde_json::from_slice(&body).expect("Anthropic error JSON");
     assert_eq!(body["type"], json!("error"));
     assert_eq!(body["error"]["type"], json!("invalid_request_error"));
+    // SAN-16b: the Anthropic envelope carries the same authored constant. The upstream
+    // status remains available structurally.
+    assert_eq!(
+        body["error"]["message"].as_str(),
+        Some(EXHAUSTED_CLIENT_TEXT)
+    );
     assert!(
-        body["error"]["message"]
+        !body["error"]["message"]
             .as_str()
-            .is_some_and(|message| message
-                .contains("upstream status 422 Unprocessable Entity: invalid request")),
-        "final exhausted error must retain the upstream detail: {body}"
+            .unwrap_or("")
+            .contains("invalid request"),
+        "upstream wording must not reach the client: {body}"
     );
     assert_eq!(
         body["error"]["upstream_code"],

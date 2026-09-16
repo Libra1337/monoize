@@ -40,8 +40,8 @@ async fn responses_downstream_reaches_a_native_responses_upstream() {
         .unwrap();
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let text = String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
-        .to_string();
+    let text =
+        String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes()).to_string();
 
     assert!(text.contains("event: response.created"), "{text}");
     assert!(text.contains("event: response.output_item.added"), "{text}");
@@ -147,8 +147,8 @@ async fn responses_downstream_reaches_a_chat_upstream_through_the_compatible_ove
         .unwrap();
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let text = String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
-        .to_string();
+    let text =
+        String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes()).to_string();
 
     assert!(text.contains("event: response.created"), "{text}");
     assert!(text.contains("event: response.output_item.added"), "{text}");
@@ -252,8 +252,8 @@ async fn chat_downstream_reaches_a_responses_upstream_through_the_compatible_ove
         .unwrap();
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let text = String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
-        .to_string();
+    let text =
+        String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes()).to_string();
 
     assert!(text.contains("chat.completion.chunk"), "{text}");
     assert!(text.contains("data: [DONE]"), "{text}");

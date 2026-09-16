@@ -137,7 +137,13 @@ protocol-agnostic and applies to every model.
 
 ## 7. Diagnostic fields
 
-SAN-12. The structured diagnostic fields `upstream_status`, `upstream_code`, `upstream_type`, and `upstream_param` remain exposed downstream unchanged, as required by RTA-8. They carry enumerated upstream error metadata, not free-form infrastructure text.
+SAN-12. The structured diagnostic field `upstream_status` remains exposed downstream unchanged, as required by RTA-8. It is an HTTP status code: a bounded integer that cannot carry infrastructure text.
+
+SAN-12a. The fields `upstream_code`, `upstream_type`, and `upstream_param` are exposed downstream only when they satisfy `ENUMSHAPE`. A field that fails `ENUMSHAPE` MUST be omitted from the downstream body. The persisted request-log value is unaffected; section 8 governs its disclosure.
+
+`ENUMSHAPE(s)` holds when `s` is at most 64 bytes, is non-empty, and every character is an ASCII alphanumeric, `_`, `-`, or `.`.
+
+Rationale: these fields are documented as enumerated metadata, but the value is chosen by the upstream, not by Monoize. An upstream that places a sentence, a URL, or a model identifier in its `code` field would otherwise publish it verbatim. `ENUMSHAPE` admits every conforming enumerated value (`insufficient_quota`, `model_not_found`, `rate_limit_exceeded`) and rejects free-form text, because a space, `/`, `:`, or `@` cannot appear in a conforming value.
 
 ## 8. Read-time disclosure of persisted error detail
 
@@ -172,3 +178,108 @@ SAN-CFG5. When `mask_sensitive_info` is `false`:
 7. SAN-3 server tracing remains unchanged.
 
 SAN-CFG6. Changing `monoize_mask_sensitive_info` via `PUT /api/dashboard/settings` MUST take effect for subsequent forwarding and dashboard reads after the settings transaction publishes `monoize_runtime` (DB23b). Already-persisted request-log rows are not rewritten.
+
+## 10. Deployment-identity redaction (client tier)
+
+The rules in sections 2, 4, and 6 bound *how* upstream error text is rewritten. This section
+bounds *what a client may learn* regardless of that rewriting, and takes precedence over
+them where they disagree.
+
+SAN-D3. The **deployment identity set** `IDENTITY` of a request attempt is the set of
+non-empty strings:
+
+1. the upstream base URL, and its host component taken alone;
+2. the upstream API key;
+3. the upstream model identifier (`attempt.upstream_model`), including any Monoize-specific
+   suffix such as `[1m]`;
+4. the Group name and Group identifier;
+5. the Provider name and Provider identifier;
+6. the Channel name and Channel identifier;
+7. the pricing profile name.
+
+`IDENTITY` is known to Monoize at error-assembly time; it is not inferred from the error
+text.
+
+SAN-15. No byte of any `IDENTITY` member MAY appear in any client-tier surface. The
+client-tier surfaces are exactly: a non-stream JSON error body, a mid-stream error frame, a
+mid-stream terminal frame carrying an error object, and a WebSocket error event. This holds
+for every downstream protocol, every endpoint in scope, and every value of
+`monoize_mask_sensitive_info`.
+
+SAN-15a. SAN-15 is not subject to `monoize_mask_sensitive_info`. That setting governs
+`MASK` only. Disabling it MUST NOT expose an `IDENTITY` member to a client.
+
+Rationale: `MASK` is a blacklist of four syntactic patterns. A blacklist cannot bound what a
+client learns, because an identifier need not match any pattern: a model name, a Group name,
+and a bare hostname without a dot each pass `MASK` unchanged. SAN-16 and SAN-17 replace the
+blacklist with a whitelist at the client boundary and keep exact erasure as a second layer.
+
+### 10.1 Whitelist: client-visible message text
+
+SAN-16. The client-visible `message` of an upstream-derived error MUST be a string authored
+by Monoize. Upstream free-form text MUST NOT be forwarded into it. The message is selected
+from the fixed catalogue below by the error's classification, and the selected string is
+constant: it interpolates no upstream value.
+
+| classification | client-visible `message` |
+| --- | --- |
+| `QUOTA` holds (SAN-D2a) | `GENERIC_QUOTA_TEXT` |
+| upstream status `400` | `the upstream provider rejected the request as invalid` |
+| upstream status `401` or `403` | `the upstream provider refused the request` |
+| upstream status `404` | `the upstream provider does not serve this model` |
+| upstream status `408`, or a transport timeout | `the upstream provider did not respond in time` |
+| upstream status `413` | `the request is too large for the upstream provider` |
+| upstream status `422` | `the upstream provider rejected a request parameter` |
+| upstream status `429` without `QUOTA` | `the upstream provider is rate limiting this request` |
+| upstream status `5xx` | `the upstream provider reported an internal error` |
+| a transport failure with no status | `the upstream provider could not be reached` |
+| a content-firewall rejection | the firewall's own rule text (SAN-18) |
+| none of the above | `the upstream provider returned an error` |
+
+SAN-16a. `internal_message` MUST retain the `TRUNC`-bounded raw upstream detail exactly as
+SAN-2 specifies. SAN-16 changes only the client-visible string. Every persisted field,
+every admin-tier read, and the server tracing log are unchanged, so no diagnostic capability
+is lost to an operator.
+
+SAN-16b. The exhausted-routing message (SAN-6) MUST NOT name the requested model. Its
+client-visible text MUST be exactly `no upstream provider could serve this request`. The
+attempt count, provider identifiers, channel identifiers, and upstream URLs were already
+excluded by SAN-6; the model name is excluded because a client that submitted a Monoize
+model alias would otherwise learn the alias it resolves to when that alias appears in the
+routing text.
+
+### 10.2 Second layer: exact erasure
+
+SAN-17. Before serialization, every client-tier string MUST have each `IDENTITY` member
+replaced by `[redacted]`, matched as an exact case-insensitive substring, longest member
+first. This runs after SAN-16 and after `MASK`.
+
+SAN-17a. SAN-17 is a defence-in-depth layer, not the primary guarantee. Under SAN-16 a
+correct implementation produces no `IDENTITY` occurrence for SAN-17 to remove. SAN-17 exists
+so that a future code path that forwards upstream text without applying SAN-16 cannot
+publish an `IDENTITY` member.
+
+SAN-17b. SAN-17 MUST NOT apply to persisted request-log fields, to admin-tier reads, or to
+the server tracing log.
+
+### 10.3 Permitted rejection reasons
+
+SAN-18. A rejection reason authored by Monoize itself MAY be exposed to a client in full,
+including a rule identifier, a rule name, and a matched-category label. The content firewall
+is such a source: its rejection text is Monoize-authored and names no upstream.
+
+SAN-16c. SAN-16 supersedes the SAN-8 text carve-out. Under the RTA-8a exception
+(`upstream_code = "thinking_signature_invalid"`), the client-visible `message` is the SAN-16
+catalogue entry for the attempt's status, not the attempt's own text. `internal_message`
+still equals the last attempt's `error`, so SAN-8's operator-facing half is unchanged. A
+client keys its retry on the `thinking_signature_invalid` code, which SAN-12a admits.
+
+SAN-18a. SAN-18 does not weaken SAN-15. A Monoize-authored rejection reason is still subject
+to SAN-17, so a rule name that happens to contain a Group name is redacted.
+
+### 10.4 Verification obligation
+
+SAN-19. The test suite MUST contain, for each downstream protocol, a case in which the
+upstream error text embeds every `IDENTITY` member and the assertion is that no member
+appears in the client-visible bytes. The case MUST run with `monoize_mask_sensitive_info`
+both enabled and disabled.

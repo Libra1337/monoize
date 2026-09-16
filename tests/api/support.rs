@@ -19,6 +19,9 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+/// SAN-16b: the only client-visible text for an exhausted-routing failure.
+const EXHAUSTED_CLIENT_TEXT: &str = "no upstream provider could serve this request";
+
 type CapturedHeaders = Arc<Mutex<Vec<(String, String)>>>;
 type CapturedBodies = Arc<Mutex<Vec<(String, Value)>>>;
 

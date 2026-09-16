@@ -260,6 +260,140 @@ fn mask_url(url_str: &str) -> String {
     result
 }
 
+/// SAN-D3 `IDENTITY`: the deployment-identity strings of one upstream attempt. Every member
+/// is known at error-assembly time, so redaction is exact substring replacement rather than
+/// pattern inference.
+#[derive(Debug, Clone, Default)]
+pub struct DeploymentIdentity {
+    members: Vec<String>,
+}
+
+impl DeploymentIdentity {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds one member. Empty and whitespace-only values are ignored: redacting them would
+    /// match at every position. Values shorter than 3 bytes are ignored for the same reason
+    /// -- a 1-2 byte identifier cannot be redacted without destroying unrelated text, and
+    /// such a value carries no useful deployment information anyway.
+    pub fn add(&mut self, value: &str) -> &mut Self {
+        let trimmed = value.trim();
+        if trimmed.len() >= 3 && !self.members.iter().any(|m| m == trimmed) {
+            self.members.push(trimmed.to_string());
+        }
+        self
+    }
+
+    /// Adds a URL plus its host taken alone, so a message naming only the host is covered.
+    pub fn add_url(&mut self, url: &str) -> &mut Self {
+        self.add(url);
+        if let Ok(parsed) = url::Url::parse(url)
+            && let Some(host) = parsed.host_str()
+        {
+            self.add(host);
+        }
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.members.is_empty()
+    }
+
+    /// SAN-17: replaces each member with `[redacted]`, case-insensitively, longest member
+    /// first. Longest-first matters: redacting a host before the full URL that contains it
+    /// would leave the URL's scheme and path intact around a `[redacted]` host.
+    pub fn redact(&self, text: &str) -> String {
+        if self.members.is_empty() || text.is_empty() {
+            return text.to_string();
+        }
+        let mut ordered: Vec<&String> = self.members.iter().collect();
+        ordered.sort_by_key(|m| std::cmp::Reverse(m.len()));
+
+        let mut out = text.to_string();
+        for member in ordered {
+            out = replace_case_insensitive(&out, member, IDENTITY_REDACTION);
+        }
+        out
+    }
+}
+
+/// SAN-17 replacement token.
+pub const IDENTITY_REDACTION: &str = "[redacted]";
+
+/// Case-insensitive substring replacement over ASCII-lowercased needles. Non-ASCII bytes are
+/// compared exactly, which is correct here: a deployment identifier that differs from the
+/// error text only by non-ASCII case is not a case that arises, and lowercasing Unicode could
+/// change byte length and invalidate the index arithmetic.
+fn replace_case_insensitive(haystack: &str, needle: &str, replacement: &str) -> String {
+    if needle.is_empty() {
+        return haystack.to_string();
+    }
+    let hay_lower = haystack.to_ascii_lowercase();
+    let needle_lower = needle.to_ascii_lowercase();
+    let mut out = String::with_capacity(haystack.len());
+    let mut cursor = 0usize;
+    while let Some(found) = hay_lower[cursor..].find(&needle_lower) {
+        let start = cursor + found;
+        let end = start + needle_lower.len();
+        // `to_ascii_lowercase` preserves byte length, so these indices are valid in
+        // `haystack`. Guard the boundary anyway: a match that splits a multi-byte character
+        // must not panic the slice.
+        if !haystack.is_char_boundary(start) || !haystack.is_char_boundary(end) {
+            cursor = start + 1;
+            while cursor < haystack.len() && !haystack.is_char_boundary(cursor) {
+                cursor += 1;
+            }
+            continue;
+        }
+        out.push_str(&haystack[cursor..start]);
+        out.push_str(replacement);
+        cursor = end;
+    }
+    out.push_str(&haystack[cursor..]);
+    out
+}
+
+/// SAN-12a `ENUMSHAPE`: whether an upstream-supplied diagnostic field may be forwarded
+/// downstream. A conforming enumerated value passes; free-form text does not, because a
+/// space, `/`, `:`, or `@` cannot appear in one.
+pub fn is_enum_shaped(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+/// SAN-16: the client-visible message catalogue. Every arm returns a constant string that
+/// interpolates no upstream value.
+pub fn client_message_for_upstream_failure(
+    upstream_status: Option<u16>,
+    is_transport_failure: bool,
+    is_quota: bool,
+) -> &'static str {
+    if is_quota {
+        return GENERIC_QUOTA_TEXT;
+    }
+    match upstream_status {
+        None if is_transport_failure => "the upstream provider could not be reached",
+        Some(400) => "the upstream provider rejected the request as invalid",
+        Some(401) | Some(403) => "the upstream provider refused the request",
+        Some(404) => "the upstream provider does not serve this model",
+        Some(408) => "the upstream provider did not respond in time",
+        Some(413) => "the request is too large for the upstream provider",
+        Some(422) => "the upstream provider rejected a request parameter",
+        Some(429) => "the upstream provider is rate limiting this request",
+        Some(status) if (500..600).contains(&status) => {
+            "the upstream provider reported an internal error"
+        }
+        _ => "the upstream provider returned an error",
+    }
+}
+
+/// SAN-16b: the exhausted-routing client message. Names no model.
+pub const GENERIC_EXHAUSTED_TEXT: &str = "no upstream provider could serve this request";
+
 #[cfg(test)]
 mod tests {
     use super::*;

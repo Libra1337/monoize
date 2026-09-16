@@ -87,16 +87,33 @@ struct ErrorBody {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        // SAN-12a: an upstream chooses these values, so a non-enumerated one is dropped
+        // rather than published. `upstream_status` is a bounded integer and is kept (SAN-12).
+        let enum_shaped =
+            |value: Option<String>| value.filter(|v| crate::error_sanitize::is_enum_shaped(v));
+        // SAN-12a: the top-level `code` and `type` are normally Monoize-authored, but the
+        // exhausted-routing path and `with_type` both copy an upstream value into them. The
+        // same shape gate applies at the boundary, so no construction path can bypass it.
+        let code = if crate::error_sanitize::is_enum_shaped(&self.code) {
+            self.code
+        } else {
+            "upstream_error".to_string()
+        };
+        let error_type = if crate::error_sanitize::is_enum_shaped(&self.error_type) {
+            self.error_type
+        } else {
+            "invalid_request_error".to_string()
+        };
         let body = ErrorEnvelope {
             error: ErrorBody {
                 message: self.message,
-                error_type: self.error_type,
+                error_type,
                 param: self.param,
-                code: self.code,
+                code,
                 upstream_status: self.upstream_status,
-                upstream_code: self.upstream_code,
-                upstream_type: self.upstream_type,
-                upstream_param: self.upstream_param,
+                upstream_code: enum_shaped(self.upstream_code),
+                upstream_type: enum_shaped(self.upstream_type),
+                upstream_param: enum_shaped(self.upstream_param),
             },
         };
         (self.status, axum::Json(body)).into_response()

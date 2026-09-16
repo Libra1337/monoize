@@ -1609,12 +1609,17 @@ async fn chat_streaming_prestream_upstream_error_returns_error_stream() {
         .find(|payload| payload.get("error").is_some())
         .expect("chat error frame");
     assert_eq!(error["error"]["code"].as_str(), Some("cyber_policy"));
+    // SAN-16: upstream wording never reaches the client; the code carries the reason.
+    assert_eq!(
+        error["error"]["message"].as_str(),
+        Some(EXHAUSTED_CLIENT_TEXT)
+    );
     assert!(
-        error["error"]["message"]
+        !error["error"]["message"]
             .as_str()
             .unwrap_or("")
             .contains("mock cybersecurity policy block"),
-        "error message should expose upstream detail: {text}"
+        "upstream wording must not reach the client: {text}"
     );
 }
 

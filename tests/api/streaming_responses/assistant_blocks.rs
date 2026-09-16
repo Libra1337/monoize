@@ -216,12 +216,14 @@ async fn responses_streaming_prestream_upstream_error_returns_error_stream() {
         .expect("error frame");
     assert_eq!(error["type"].as_str(), Some("error"));
     assert_eq!(error["code"].as_str(), Some("forced_daily_limit"));
+    // SAN-16: the reason travels in `code`, not in the message text.
+    assert_eq!(error["message"].as_str(), Some(EXHAUSTED_CLIENT_TEXT));
     assert!(
-        error["message"]
+        !error["message"]
             .as_str()
             .unwrap_or("")
             .contains("daily usage limit exceeded"),
-        "error message should expose upstream detail: {text}"
+        "upstream wording must not reach the client: {text}"
     );
 }
 
@@ -265,12 +267,14 @@ async fn responses_streaming_prestream_signature_error_omits_generic_wrapper() {
             .starts_with("All "),
         "signature validation errors must not use the generic exhausted-route wrapper: {text}"
     );
+    // SAN-16 supersedes the SAN-8 text carve-out: the client sees an authored message, and
+    // the `thinking_signature_invalid` code asserted above is what a client keys its retry on.
     assert!(
-        error["message"]
+        !error["message"]
             .as_str()
             .unwrap_or_default()
             .contains("encrypted content could not be verified"),
-        "signature validation message must preserve the upstream detail: {text}"
+        "upstream wording must not reach the client: {text}"
     );
 }
 
