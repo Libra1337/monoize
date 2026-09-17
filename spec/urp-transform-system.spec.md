@@ -162,19 +162,19 @@ TF-5. Transform registry discovery MUST be automatic through `inventory`.
 
 TF-6. Adding a new transform file with a valid inventory submission MUST be sufficient for registration.
 
+TF-6a. In addition to built-in transforms, administrator-authored custom JavaScript transforms exist under the reserved id prefix `js:`. Their identity, persistence, sandbox, registry exposure, and lookup semantics are defined by `spec/custom-js-transforms.spec.md`. Rules TF-7, TF-7a, TF-7b, and TF-14 apply to built-in canonical IDs only.
+
 TF-7. Built-ins that MUST exist are exactly:
 - `cache_anthropic_system`
 - `cache_anthropic_tool_use`
 - `cache_openai_prompt`
 - `cache_openai_tool_use`
-- `cache_prefix_stabilize`
 - `cache_user_id`
 - `field_alias_reserved_tool_names`
 - `field_custom_tools_to_function`
 - `field_override_max_tokens`
 - `field_remove`
 - `field_set`
-- `field_strip_sampling`
 - `image_compress_input`
 - `image_compress_output`
 - `image_enable_openai_generation_tool`
@@ -193,6 +193,7 @@ TF-7. Built-ins that MUST exist are exactly:
 - `reasoning_strip_encrypted`
 - `reasoning_strip_input`
 - `reasoning_strip_output`
+- `reasoning_summary_heading`
 - `reasoning_summary_to_raw_cot`
 - `reasoning_to_think_xml`
 - `role_developer_to_system`
@@ -217,7 +218,9 @@ TF-7b. Transforms that form a conversion or inverse pair MUST use mirrored IDs i
 
 TF-8. Every transform registry item returned by `/api/dashboard/transforms/registry` MUST include `type_id`, `supported_phases`, `supported_scopes`, `config_schema`, `name`, and `description`.
 
-TF-8a. `name` and `description` MUST each be a JSON object mapping a lowercase language code to a non-empty human-readable string. Both objects MUST contain at least the keys `en` and `zh`. The values MUST come from the transform's `display_name()` and `display_description()` interface members; the registry endpoint MUST NOT synthesize display text from `type_id`.
+TF-8a. `name` and `description` MUST each be a JSON object mapping a lowercase language code to a non-empty human-readable string. Both objects MUST contain at least the keys `en` and `zh`. For built-in transforms the values MUST come from the transform's `display_name()` and `display_description()` interface members; the registry endpoint MUST NOT synthesize display text from `type_id`. For custom `js:` transforms the plain-string name and description are mirrored into both keys per `spec/custom-js-transforms.spec.md` CJS-REG-2.
+
+TF-8c. After SAC-1 authorization (`spec/security-access-control.spec.md`), the registry response additionally contains one item per enabled custom `js:` transform, shaped per `spec/custom-js-transforms.spec.md` CJS-REG-1 and CJS-REG-2. Visibility filtering of custom rules for non-admin API-key callers is defined in CJS-AKV-2.
 
 TF-8b. A `config_schema` string property MAY carry `"format": "multiline"` to request a multi-line text editor in the dashboard (see `transform-config-ui.spec.md` TCU-3 rule 4). Exactly these properties MUST carry `"format": "multiline"`: `prompt_inject_system` property `content`, `prompt_append_empty_user` property `content`, and `image_output_to_markdown` property `template`.
 
@@ -238,7 +241,7 @@ TF-13. When no upstream provider is selected for a transform invocation, `upstre
 
 TF-14. Canonical transform IDs MUST match `^[a-z][a-z0-9]*(_[a-z0-9]+)*$`.
 
-TF-15. Runtime transform lookup MUST canonicalize transform IDs before resolving the registry entry.
+TF-15. Runtime transform lookup MUST canonicalize transform IDs before resolving the registry entry. After canonicalization, resolution consults the built-in registry first and the enabled custom-transform snapshot second, per `spec/custom-js-transforms.spec.md` CJS-RT-2. A rule whose id starts with `js:` and does not resolve MUST be skipped as a no-op (CJS-RT-3); every other unresolved id keeps the not-found error behavior.
 
 TF-16. On startup, the application MUST canonicalize transform IDs persisted in:
 1. `system_settings` row `key = "global_transforms"`;
@@ -410,7 +413,7 @@ SF-3a. JSON `null` is a present `when_equals` value. It MUST NOT be treated as a
 
 SF-4. If `when_equals` is present, `field_set` MUST write `value` only when the current value at `path` is exactly equal to `when_equals` under JSON structural equality. A missing path or a different value MUST be a no-op and MUST NOT create intermediate objects.
 
-SF-5. On a request, a path that starts with `reasoning.` MUST target `request.reasoning.extra_body`. Every other path MUST target `request.extra_body`.
+SF-5. On a request, a recognized `reasoning.*` path MUST target the corresponding typed `ReasoningConfig` field. Supported typed controls include effort, summary, mode, budget_tokens, and display. Unknown reasoning paths target `request.reasoning.extra_body`. Every other path targets `request.extra_body`. Setting or removing a typed field MUST NOT leave a stale native override. Conditional equality MUST compare the typed value for recognized paths.
 
 SF-6. On a non-stream response, `path` MUST target `response.extra_body`. On a stream event, `path` MUST target the event `extra_body`.
 
@@ -418,7 +421,7 @@ SF-7. A Provider request transform with config `{ "path": "service_tier", "when_
 
 ### 4.5c `field_alias_reserved_tool_names`
 
-ARTN-1. `field_alias_reserved_tool_names` MUST support request-phase and response-phase execution.
+ARTN-1. `field_alias_reserved_tool_names` MUST support request-phase and response-phase execution. Supported scopes are `provider`, `global`, and `api_key`.
 
 ARTN-2. Config MAY contain `aliases` as a JSON object mapping original function names to alias names. If `aliases` is absent, the transform MUST use the default map `{ "view_image": "client_view_image" }`. If `aliases` is present, including an empty object, the transform MUST use that object and MUST NOT add the default map.
 
@@ -441,20 +444,7 @@ ARTN-7. A `ToolCall` whose name is not in the active map MUST remain unchanged. 
 
 ARTN-8. An empty alias map MUST be a no-op in both phases.
 
-### 4.5d `field_strip_sampling`
-
-SFS-1. `field_strip_sampling` is request-phase only. Supported scopes are `Provider`, `Global`, and `ApiKey`.
-
-SFS-2. Config MUST contain `fields` as an array of at least one string. Each entry MUST be one of exactly: `temperature`, `top_p`, `stop`, `verbosity`, `parallel_tool_calls`, `max_output_tokens`, `response_format`, `user`. An empty array, an unlisted value, a missing `fields`, or an unknown config key MUST be rejected by `parse_config`.
-
-SFS-3. For each entry in `fields`, the transform MUST set the identically named typed field of `request` to absent.
-
-SFS-4. The transform MUST NOT modify `request.model`, `request.input`, `request.stream`, `request.tools`, `request.tool_choice`, `request.reasoning`, `request.extra_body`, or any typed field absent from `fields`.
-
-SFS-5. Clearing a field that is already absent MUST be a no-op and MUST NOT be an error. The transform is idempotent.
-
-SFS-6. This transform exists because SF-5 pins `field_set` and `field_remove` to `request.extra_body`, while these are typed fields that the encoders emit unconditionally. An upstream that rejects one of them therefore cannot be worked around with `field_set` or `field_remove`. Measured example: `api.vectron.meta-stone.com` answers HTTP `400` `invalid_request` for models `MoonshotAi/Kimi-K2.6` and `MoonshotAi/Kimi-K2.7-Code` whenever `temperature` is present, and answers HTTP `200` for the identical request without it.
-### 4.5e `field_custom_tools_to_function`
+### 4.5d `field_custom_tools_to_function`
 
 CTF-1. `field_custom_tools_to_function` MUST support request-phase and response-phase execution. Supported scopes are `provider`, `global`, and `api_key`.
 
@@ -491,6 +481,7 @@ CTF-12. After CTF-8 and CTF-9, for a matching `apply_patch` `ToolCall` (whether 
 2. a line that starts with `*** End Patch` becomes exactly `*** End Patch`;
 3. lines equal to `*** End of File` or `*** End of File ***` are removed;
 4. if the payload is wrapped in an `<invoke ...>...</invoke>` element, the inner text is used before rules 1–3.
+5. after a line that starts with `*** Add File`, prefix `+` on each following content line if and only if all of these hold: the line does not start with `***`; the line is not a `@@` hunk header after trimming; the line does not already start with `+`, `-`, or `\`. A `@@` hunk header, a line that starts with `*** Update File` or `*** Delete File`, and a `*** End of File` line (including when rule 3 removes it) MUST end this Add File prefixing section. The prefix MUST NOT be applied inside `*** Update File` or `*** Delete File` sections. A line that already starts with `+`, `-`, or `\` MUST remain unchanged.
 
 ### 4.6 Image transforms on request ordinary nodes
 
@@ -578,8 +569,6 @@ CUMI-8. When `output_format = original`, the transform MUST emit the same suppor
 
 Both JPEG XL modes MUST emit media type `image/jxl`. Both WebP modes MUST emit media type `image/webp`.
 
-CUMI-8A. The default application build MUST enable the Cargo feature `jpegxl`. A build that explicitly disables default features MUST compile without libjxl. In that build, selecting `jpegxl` or `jpegxl_lossless` MUST return `TransformError::Apply` with `jpeg xl support is disabled in this build`. It MUST NOT emit another image format.
-
 CUMI-9. The cache key material MUST be the ordered byte sequence:
 1. UTF-8 bytes of `compress_user_message_images:v5` (a version-frozen cache-key literal; it intentionally retains the historical transform name so existing cache entries stay valid across the TF-17 ID migration);
 2. one zero byte;
@@ -607,7 +596,7 @@ CUMI-14. The content cache root defaults to `${TMPDIR}/monoize/image-transform-c
 
 CUMI-15. Cache construction MUST scan the cache directory once, delete expired or invalid entries, evict oldest entries until startup file/byte quotas hold, and build a bounded in-memory metadata index containing key, byte count, modification time, and LRU sequence. Point reads and writes MUST use that index and MUST NOT rescan the cache directory. A point read MUST verify the indexed file's current size before allocating its contents. Point reads MUST update LRU order. A stale point-read observation MUST NOT delete a concurrently published replacement for the same key; validation and deletion MUST serialize with replacement or perform equivalent identity revalidation. Writes MUST evict through the ordered metadata index and MUST update metadata only after atomic rename succeeds. A deletion failure MUST leave metadata accounting intact and fail that cleanup/write operation. Periodic cleanup MAY traverse the bounded metadata index and MUST NOT rescan the directory.
 
-RIU-1. `image_resolve_urls` is request-phase only.
+RIU-1. `image_resolve_urls` supports request and response phases. It MUST process request input, non-streaming response output, stream `NodeDone` image nodes, and stream `ResponseDone.output`. Other stream events remain unchanged.
 
 RIU-2. Config MAY contain:
 - `timeout_seconds` (integer, default `30`)
@@ -623,6 +612,8 @@ RIU-5. On successful fetch, the transform MUST replace the source with `Image.so
 RIU-6. Multiple eligible image fetches within one request MUST be concurrent.
 
 RIU-7. A failed fetch for one image node MUST NOT block other eligible image nodes and MUST leave the failed node unchanged.
+
+RIU-8. Successful URL resolutions MUST be reused within one rule execution state so terminal stream replay does not download the same image again. Resolution MUST preserve node identity, role, and metadata. The byte limit MUST be enforced while reading the response body, before extending the buffer beyond the limit.
 
 ### 4.7 Reasoning transforms on flat nodes and stream state
 
@@ -642,7 +633,7 @@ PRTS-7. The transform MUST preserve `encrypted`, `source`, and node-local `extra
 
 PRTS-8. Empty plaintext content MUST NOT create a non-empty summary.
 
-PRTS-9. On streams, if the transform moves non-empty `NodeDelta.delta.content` into `NodeDelta.delta.summary`, it MUST set `NodeDelta.extra_body["_monoize_summary_from_plaintext_reasoning"] = true` on that same stream event. The marker means the summary delta was originally raw plaintext reasoning and MAY be emitted by a downstream Messages encoder as incremental `thinking_delta`.
+PRTS-9. On streams, if the transform moves non-empty `NodeDelta.delta.content` into `NodeDelta.delta.summary`, it MUST set `NodeDelta::Reasoning.metadata.summary_as_thinking = true` on that same stream event. The marker means the summary delta was originally raw plaintext reasoning and MAY be emitted by a downstream Messages encoder as incremental `thinking_delta`.
 
 PRTS-10. PRTS-9 MUST NOT be applied to terminal `NodeDone.node.extra_body` or `ResponseDone.output[].extra_body`. Terminal correctness is defined by `NodeDone.node` and `ResponseDone.output` after applying PRTS-4 through PRTS-8 to `Reasoning` nodes.
 
@@ -652,13 +643,13 @@ RSRC-2. Config MUST be an empty object.
 
 RSRC-3. On non-stream responses, the transform MUST inspect only ordinary `Reasoning` nodes.
 
-RSRC-4. If a `Reasoning` node carries non-empty `summary`, the transform MUST mark that node for OpenWebUI-compatible raw chain-of-thought emission by setting node-local `extra_body.openwebui_reasoning_content = true`.
+RSRC-4. If a `Reasoning` node carries non-empty `summary`, the transform MUST select the typed reasoning presentation option for the Chat reasoning_content alias. It MUST NOT create an unknown wire field or copy the summary string.
 
 RSRC-5. The transform MUST NOT modify `content`, `summary`, or `encrypted`.
 
 RSRC-6. On streams, the transform MAY annotate reasoning `NodeDelta` event `extra_body` for downstream encoders, but terminal correctness is defined by marking the final `Reasoning` nodes in `NodeDone.node` and `ResponseDone.output`.
 
-RSRC-7. When a downstream Chat Completions encoder sees `openwebui_reasoning_content = true` on a reasoning summary node, it MUST emit that summary through OpenWebUI-compatible raw-CoT fields for non-streaming and streaming encodings.
+RSRC-7. A downstream Chat encoder MUST honor the typed reasoning_content presentation option using the current typed summary or content. The option MUST NOT relabel a summary as raw CoT in canonical storage.
 
 RCD-1. `reasoning_inject_content_field` is response-phase only.
 
@@ -671,15 +662,15 @@ RCD-3. For each ordinary `Reasoning` node or reasoning `NodeDelta`, the transfor
 
 RCD-4. `encrypted` MUST NOT contribute to the resolved value.
 
-RCD-5. If a resolved value exists on a terminal `Reasoning` node, the transform MUST set node-local `extra_body.inject_reasoning_content` to that string.
+RCD-5. If a resolved value exists on a terminal `Reasoning` node, the transform MUST select a typed reasoning_content alias option. It MUST NOT retain a second text copy.
 
-RCD-6. If a resolved value exists on a reasoning `NodeDelta`, the transform MAY set event-local `extra_body.inject_reasoning_content` to that string.
+RCD-6. If a resolved value exists on a reasoning `NodeDelta`, the transform MAY select the corresponding typed presentation option on the delta.
 
 RCD-7. If a reasoning node or delta carries only encrypted reasoning and no plaintext `content` or `summary`, the transform MUST inject nothing.
 
 RCD-8. The transform MUST be independent of `reasoning_summary_to_raw_cot`. Both transforms MAY be enabled simultaneously.
 
-RCD-9. When a downstream Chat Completions encoder sees non-empty `inject_reasoning_content`, it MUST emit the additional OpenRouter-compatible or DeepSeek-compatible downstream reasoning-content field without removing normal reasoning fields.
+RCD-9. A downstream Chat encoder MUST emit a selected reasoning_content alias from current typed text without removing normal reasoning fields. Internal presentation controls MUST NOT appear on the wire.
 
 SER-1. `reasoning_strip_encrypted` is response-phase only. Supported scopes are `provider`, `global`, and `api_key`.
 
@@ -704,6 +695,72 @@ SER-7. The transform MUST be a no-op on `UrpData::Request`. Request-side strippi
 SER-8. The transform MUST behave identically whether the encrypted payload it observes is an `mz2.` envelope string or a raw upstream encrypted reasoning value. PIPE-1d guarantees that when `reasoning_envelope_enabled = true`, only the envelope form is observable; this transform MUST NOT depend on that guarantee for correctness.
 
 SER-9. The motivating use case for SER-1 through SER-8 is downstream SSE clients that cannot tolerate single SSE `data:` lines exceeding their per-line buffer. Removing `encrypted_content` shrinks the per-line payload of `response.output_item.done` and `response.completed` events without changing other observable response semantics.
+
+
+RSH-1. `reasoning_summary_heading` is response-phase only. Supported scopes are `provider`, `global`, and `api_key`.
+
+RSH-2. Config MUST be an object whose allowed properties are exactly:
+1. `default_title`: string; default `"Thinking"`;
+2. `derive_title`: boolean; default `false`;
+3. `max_title_chars`: integer; default `64`; minimum `1`.
+A parsed `max_title_chars` value of `0` MUST be `InvalidConfig`. Additional properties MUST be rejected.
+
+RSH-3. Title sanitization MUST apply to `default_title` at config parse time and to any derived title at apply time, in this order:
+1. trim;
+2. replace each `\n` and each `\r` with a single space;
+3. remove every `*` character;
+4. if the Unicode scalar count exceeds `max_title_chars`, truncate to the first `max_title_chars` Unicode scalars; if that truncated span contains any whitespace, truncate instead at the last whitespace in the span;
+5. trim;
+6. if the result is empty, use `"Thinking"`.
+
+RSH-4. A summary string has a heading if and only if, after `trim()`, all of the following hold:
+1. the string starts with `**`;
+2. a later `**` closes a non-empty inner title;
+3. the character immediately after that closing `**` is `\n` or `\r`.
+Mid-string `**emphasis**` that is not followed by `\n` or `\r` MUST NOT count as a heading.
+
+RSH-5. When the transform inserts a heading, the resulting summary MUST equal `**` + sanitized title + `**` + `\n\n` + the original summary body. The original body MUST NOT be trimmed or otherwise rewritten.
+
+RSH-6. The transform MUST NOT insert a heading when `summary` is missing or equal to the empty string.
+
+RSH-7. Title selection MUST be:
+1. first non-empty reasoning `NodeDelta.summary` for a node: sanitized `default_title`; partial delta text MUST NOT be used as a title;
+2. complete `summary` text with no prior summary delta for that node (`UrpResponse`, `NodeDone` with no earlier summary delta, and `ResponseDone`): a derived title if `derive_title` is true, otherwise sanitized `default_title`;
+3. complete `summary` text after a live heading prefix was already applied to that node: sanitized `default_title`; a different derived title MUST NOT replace the live heading.
+
+RSH-8. When `derive_title` is true and RSH-7 selects a derived title, the candidate MUST be produced as follows from the original unprefixed complete summary:
+1. trim;
+2. if a `.`, `!`, `?`, `\n`, or `\r` occurs after the first Unicode scalar, take the prefix before the first such scalar;
+3. otherwise take the full trimmed string;
+4. sanitize that candidate with RSH-3.
+
+RSH-9. The transform MUST inspect only ordinary `Reasoning.summary` and reasoning `NodeDelta.summary`. It MUST NOT move `content`. It MUST NOT modify `encrypted` or `source`.
+
+RSH-10. Operators who need plaintext `content` copied into `summary` MUST enable `reasoning_content_to_summary` earlier in the same response-phase chain. This transform MUST NOT compose that move internally.
+
+RSH-11. On non-stream `UrpResponse`, the transform MUST apply RSH-4 through RSH-8 to every ordinary `Reasoning.summary` in `response.output`.
+
+RSH-12. The transform MUST keep per-stream state keyed by `node_index` with:
+1. `summary_delta_seen`: a non-empty reasoning `NodeDelta.summary` was observed for that node;
+2. `heading_prefixed`: that node already received a heading prefix, including the case where the first non-empty delta already satisfied RSH-4.
+
+RSH-13. On the first non-empty reasoning `NodeDelta.summary` for a node:
+1. if the delta has no heading under RSH-4, prefix sanitized `default_title` using RSH-5;
+2. mark `summary_delta_seen` and `heading_prefixed`.
+Later summary deltas for that node MUST remain unchanged.
+
+RSH-14. On a `NodeDone` whose `node.type = reasoning`:
+1. format `node.summary` with RSH-4 through RSH-8;
+2. if the formatted `summary` is non-empty and `summary_delta_seen` is false, `finalize_stream_event` MUST emit a `NodeDelta::Reasoning` whose `summary` is the formatted full text, then the mutated `NodeDone`;
+3. the injected delta MUST copy `source` from the node and MUST leave `content` and `encrypted` unset.
+The replacement vector MUST include both events. The pipeline MUST ignore the original event when replacement is `Some`.
+
+RSH-15. On `ResponseDone`, the transform MUST format every `Reasoning.summary` with RSH-4 through RSH-8. It MUST NOT inject events on `ResponseDone`.
+
+RSH-16. On `UrpData::Request`, the transform MUST be a no-op.
+
+RSH-17. Applying the transform to a summary that already satisfies RSH-4 MUST leave that summary unchanged. A second apply MUST NOT add a second heading.
+
 
 ### 4.8 Response image transforms on flat ordinary nodes and stream state
 
