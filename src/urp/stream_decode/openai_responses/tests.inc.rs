@@ -228,6 +228,51 @@ mod joined_sse_data_tests {
     }
 
     #[test]
+    fn sse_event_field_wins_over_payload_type() {
+        let parsed = parse_responses_sse_data_with_event(
+            "{\"type\":\"response.completed\",\"response\":{}}",
+            "response.incomplete",
+        )
+        .expect("named SSE event with payload type is valid");
+
+        assert_eq!(parsed.events.len(), 1);
+        assert_eq!(parsed.events[0].0, "response.incomplete");
+    }
+
+    #[test]
+    fn sse_message_event_falls_back_to_payload_type() {
+        let parsed = parse_responses_sse_data_with_event(
+            "{\"type\":\"response.completed\",\"response\":{}}",
+            "message",
+        )
+        .expect("generic SSE event name falls back to the payload type");
+
+        assert_eq!(parsed.events.len(), 1);
+        assert_eq!(parsed.events[0].0, "response.completed");
+    }
+
+    #[test]
+    fn empty_sse_event_falls_back_to_payload_type() {
+        let parsed = parse_responses_sse_data_with_event(
+            "{\"type\":\"response.created\"}",
+            "",
+        )
+        .expect("missing SSE event name falls back to the payload type");
+
+        assert_eq!(parsed.events.len(), 1);
+        assert_eq!(parsed.events[0].0, "response.created");
+    }
+
+    #[test]
+    fn sse_event_cannot_replace_a_missing_payload_type() {
+        let parsed = parse_responses_sse_data_with_event("{\"sequence_number\":0}", "response.created")
+            .expect("SSE event name satisfies the naming rule without a payload type");
+
+        assert_eq!(parsed.events.len(), 1);
+        assert_eq!(parsed.events[0].0, "response.created");
+    }
+
+    #[test]
     fn enforces_joined_event_bounds() {
         let too_many = (0..65)
             .map(|index| format!("{{\"type\":\"response.vendor.{index}\"}}"))

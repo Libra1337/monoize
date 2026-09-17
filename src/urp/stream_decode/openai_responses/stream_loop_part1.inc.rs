@@ -44,7 +44,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             )
         })?;
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
-        let parsed = match parse_responses_sse_data(&ev.data) {
+        let parsed = match parse_responses_sse_data_with_event(&ev.data, &ev.event) {
             Ok(value) => value,
             Err(error) => {
                 let code = "responses_invalid_sse_json".to_string();

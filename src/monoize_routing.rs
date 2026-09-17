@@ -3207,10 +3207,15 @@ pub async fn probe_channel_completion(
 ) -> ChannelProbeOutcome {
     let effective_type = resolve_effective_api_type(api_type_overrides, provider_type, model);
     let base = channel.base_url.trim_end_matches('/');
-    let (url, body, extra_headers) = build_probe_request(base, model, effective_type, stream);
+    let (url, body, extra_headers, use_google_api_key_header) =
+        build_probe_request(base, model, effective_type, stream);
 
     let mut request = client.post(&url).timeout(Duration::from_millis(timeout_ms));
-    request = apply_provider_api_key(request, effective_type, &channel.api_key);
+    request = if use_google_api_key_header {
+        request.header("x-goog-api-key", &channel.api_key)
+    } else {
+        apply_provider_api_key(request, effective_type, &channel.api_key)
+    };
     for &(header_name, header_value) in extra_headers {
         request = request.header(header_name, header_value);
     }
@@ -3276,7 +3281,7 @@ fn build_probe_request(
     model: &str,
     effective_type: MonoizeProviderType,
     stream: bool,
-) -> (String, Value, &'static [(&'static str, &'static str)]) {
+) -> (String, Value, &'static [(&'static str, &'static str)], bool) {
     match effective_type {
         MonoizeProviderType::Responses => {
             let url = format!("{base}/v1/responses");
@@ -3286,7 +3291,7 @@ fn build_probe_request(
                 "stream": stream,
                 "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
             });
-            (url, body, &[][..])
+            (url, body, &[][..], false)
         }
         MonoizeProviderType::ChatCompletion => {
             let url = format!("{base}/v1/chat/completions");
@@ -3296,7 +3301,7 @@ fn build_probe_request(
                 "stream": stream,
                 "messages": [{"role": "user", "content": "hi"}]
             });
-            (url, body, &[][..])
+            (url, body, &[][..], false)
         }
         MonoizeProviderType::Messages => {
             let url = format!("{base}/v1/messages");
@@ -3306,7 +3311,7 @@ fn build_probe_request(
                 "stream": stream,
                 "messages": [{"role": "user", "content": "hi"}]
             });
-            (url, body, &[("anthropic-version", "2023-06-01")][..])
+            (url, body, &[("anthropic-version", "2023-06-01")][..], false)
         }
         MonoizeProviderType::Gemini => {
             let method = if stream {
@@ -3319,7 +3324,7 @@ fn build_probe_request(
                 "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
                 "generationConfig": {"maxOutputTokens": 16}
             });
-            (url, body, &[][..])
+            (url, body, &[][..], true)
         }
         MonoizeProviderType::OpenaiImage => {
             let url = format!("{base}/v1/images/generations");
@@ -3329,7 +3334,7 @@ fn build_probe_request(
                 "size": "1024x1024",
                 "n": 1,
             });
-            (url, body, &[][..])
+            (url, body, &[][..], false)
         }
         MonoizeProviderType::Replicate => {
             // Replicate providers are excluded from active probing; this is a
@@ -3339,7 +3344,7 @@ fn build_probe_request(
                 "version": model,
                 "input": {}
             });
-            (url, body, &[][..])
+            (url, body, &[][..], false)
         }
     }
 }
@@ -3808,8 +3813,8 @@ mod tests {
             false,
         );
         assert_eq!(resp_url, "https://up.example/v1/responses");
-        assert!(!resp_google_auth);
         assert!(resp_headers.is_empty());
+        assert!(!resp_google_auth);
         assert_eq!(resp_body["max_output_tokens"].as_u64(), Some(16));
         assert_eq!(resp_body["stream"].as_bool(), Some(false));
         assert!(resp_body.get("input").is_some());
@@ -3821,8 +3826,8 @@ mod tests {
             false,
         );
         assert_eq!(chat_url, "https://up.example/v1/chat/completions");
-        assert!(!chat_google_auth);
         assert!(chat_headers.is_empty());
+        assert!(!chat_google_auth);
         assert_eq!(chat_body["max_tokens"].as_u64(), Some(16));
         assert_eq!(chat_body["stream"].as_bool(), Some(false));
         assert!(chat_body.get("messages").is_some());
@@ -3834,8 +3839,8 @@ mod tests {
             false,
         );
         assert_eq!(msg_url, "https://up.example/v1/messages");
-        assert!(!msg_google_auth);
         assert_eq!(msg_headers, &[("anthropic-version", "2023-06-01")]);
+        assert!(!msg_google_auth);
         assert_eq!(msg_body["max_tokens"].as_u64(), Some(16));
         assert_eq!(msg_body["stream"].as_bool(), Some(false));
         assert!(msg_body.get("messages").is_some());
@@ -3850,8 +3855,8 @@ mod tests {
             gem_url,
             "https://up.example/v1beta/models/gemini-2.5-flash:generateContent"
         );
-        assert!(gem_google_auth);
         assert!(gem_headers.is_empty());
+        assert!(gem_google_auth);
         assert_eq!(
             gem_body["generationConfig"]["maxOutputTokens"].as_u64(),
             Some(16)
@@ -3885,8 +3890,8 @@ mod tests {
             false,
         );
         assert_eq!(img_url, "https://up.example/v1/images/generations");
-        assert!(!img_google_auth);
         assert!(img_headers.is_empty());
+        assert!(!img_google_auth);
         assert_eq!(img_body["model"].as_str(), Some("gpt-image-1"));
         assert_eq!(img_body["prompt"].as_str(), Some("test"));
         assert_eq!(img_body["size"].as_str(), Some("1024x1024"));

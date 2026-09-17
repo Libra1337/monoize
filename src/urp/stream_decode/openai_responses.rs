@@ -35,6 +35,13 @@ struct ParsedResponsesSseData {
 }
 
 fn parse_responses_sse_data(data: &str) -> Result<ParsedResponsesSseData, String> {
+    parse_responses_sse_data_with_event(data, "")
+}
+
+fn parse_responses_sse_data_with_event(
+    data: &str,
+    sse_event: &str,
+) -> Result<ParsedResponsesSseData, String> {
     if data.len() > RESPONSES_SSE_MAX_DATA_BYTES {
         return Err(format!(
             "upstream Responses event data exceeds {RESPONSES_SSE_MAX_DATA_BYTES} bytes"
@@ -68,16 +75,25 @@ fn parse_responses_sse_data(data: &str) -> Result<ParsedResponsesSseData, String
                 "upstream Responses event contains more than {RESPONSES_SSE_MAX_JOINED_VALUES} JSON values"
             ));
         }
-        let event_name = value
+        let payload_type = value
             .as_object()
             .and_then(|object| object.get("type"))
             .and_then(Value::as_str)
-            .filter(|event_name| !event_name.is_empty())
-            .ok_or_else(|| {
+            .filter(|event_name| !event_name.is_empty());
+        // PR3d: a non-empty SSE `event:` field other than "message" names the frame;
+        // otherwise the payload's own non-empty string `type` does. Joined values
+        // in one frame may each carry their own `type`, which wins per value.
+        let event_name = if !sse_event.is_empty() && sse_event != "message" {
+            sse_event.to_string()
+        } else if let Some(name) = payload_type {
+            name.to_string()
+        } else {
+            return Err(
                 "upstream Responses event value must be an object with a non-empty string type"
-                    .to_string()
-            })?;
-        events.push((event_name.to_string(), value));
+                    .to_string(),
+            );
+        };
+        events.push((event_name, value));
     }
     if events.is_empty() {
         return Err("upstream Responses event contains no JSON value".to_string());
