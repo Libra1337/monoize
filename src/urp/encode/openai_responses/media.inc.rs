@@ -907,10 +907,8 @@ mod tests {
 
         let encoded = encode_request(&req, "gpt-5.4");
         assert!(encoded.get("reasoning").is_none());
-        assert_eq!(
-            encoded["include"],
-            json!(["reasoning.encrypted_content"])
-        );
+        // PR4c.2: no synthesized `include`; an absent field stays absent.
+        assert!(encoded.get("include").is_none());
     }
 
     #[test]

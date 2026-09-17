@@ -346,7 +346,8 @@ fn push_part_into_pending_chat_message(
                     .and_then(Value::as_bool)
                     == Some(true)
             {
-                let mut function_call = json!({ "name": name, "arguments": tool_call_arguments_for_wire(arguments) });
+                let mut function_call =
+                    json!({ "name": name, "arguments": tool_call_arguments_for_wire(arguments) });
                 if let Some(obj) = function_call.as_object_mut() {
                     merge_chat_wire_extra(obj, extra_body);
                 }
