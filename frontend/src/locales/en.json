@@ -2109,11 +2109,12 @@
     "noExclusions": "No user is excluded",
     "removeExclusion": "Remove from exclusion list",
     "userTableTitle": "Daily consumption by user",
-    "userTableHint": "One row per user per day (00:00-24:00 Beijing time). Click the Day or Revenue headers to sort.",
+    "userTableHint": "Grouped by calendar day (Beijing time 00:00-24:00). Click a day header or the Revenue column to sort.",
     "activeUsers": "Consuming users",
     "exclusionsButton": "Excluded ({{count}})",
     "exclusionsButton_other": "Excluded ({{count}})",
-    "modelCount": "Models"
+    "modelCount": "Models",
+    "dayGroupSummary": "Revenue {{revenue}} · {{count}} users"
   },
   "adminRuntime": {
     "title": "Runtime Status",

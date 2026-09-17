@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { mutate } from "swr";
@@ -47,6 +48,12 @@ function beijingTodayId(): string {
 
 function formatInteger(value: number): string {
   return value.toLocaleString("en-US");
+}
+
+/** Current-year day ids render as `MM-DD`; other years keep the full form. */
+function formatDayShort(day: string): string {
+  const currentYear = new Date().getFullYear().toString();
+  return day.startsWith(`${currentYear}-`) ? day.slice(5) : day;
 }
 
 type SortKey = "day" | "revenue" | "calls" | "tokens";
@@ -185,6 +192,33 @@ export function AdminRevenuePage() {
     }
     return { revenue, calls, users: userIds.size };
   }, [flatRows]);
+
+  // Group the sorted rows per calendar day: one header row per day (with the
+  // day's totals), user rows below without repeating the date. Groups keep the
+  // day sort direction; inner rows follow the active sort key.
+  const dayGroups = useMemo(() => {
+    const groups = new Map<string, FlatRow[]>();
+    for (const row of sortedRows) {
+      const bucket = groups.get(row.day);
+      if (bucket) bucket.push(row);
+      else groups.set(row.day, [row]);
+    }
+    let days = [...groups.entries()].map(([day, rows]) => {
+      let revenue = 0n;
+      const userIds = new Set<string>();
+      for (const row of rows) {
+        revenue += row.chargeNanoUsd;
+        userIds.add(row.userId);
+      }
+      return { day, rows, revenue, users: userIds.size };
+    });
+    // sortKey "day" controls group order; other keys keep days newest-first.
+    const dayAsc = sortKey === "day" && sortDirection === "asc";
+    days = days.sort((left, right) =>
+      dayAsc ? left.day.localeCompare(right.day) : right.day.localeCompare(left.day),
+    );
+    return days;
+  }, [sortedRows, sortKey, sortDirection]);
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -411,13 +445,10 @@ export function AdminRevenuePage() {
             />
           ) : (
             <div className="max-h-[70vh] overflow-auto">
-              <table className="w-full min-w-[900px] text-sm">
+              <table className="w-full min-w-[840px] text-sm">
                 <thead className="sticky top-0 z-10">
                   <tr className="border-b bg-muted/60 text-xs text-muted-foreground backdrop-blur">
-                    <th className="px-5 py-3 text-left font-medium">
-                      {sortButton("day", t("adminRevenue.day"), "left")}
-                    </th>
-                    <th className="px-3 py-3 text-left font-medium">{t("adminRevenue.user")}</th>
+                    <th className="px-5 py-3 text-left font-medium">{t("adminRevenue.user")}</th>
                     <th className="px-3 py-3 text-right font-medium">
                       {sortButton("revenue", t("adminRevenue.revenue"))}
                     </th>
@@ -440,21 +471,22 @@ export function AdminRevenuePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRows.map((row) => {
-                    const rowKey = `${row.day}-${row.userId}`;
-                    const expanded = expandedRow === rowKey;
-                    return (
-                      <UserRow
-                        key={rowKey}
-                        row={row}
-                        expanded={expanded}
-                        formatCost={formatCost}
-                        onToggle={() =>
-                          setExpandedRow(expanded ? null : rowKey)
-                        }
-                      />
-                    );
-                  })}
+                  {dayGroups.map((group) => (
+                    <DayGroup
+                      key={group.day}
+                      day={group.day}
+                      rows={group.rows}
+                      revenue={group.revenue}
+                      users={group.users}
+                      expandedRow={expandedRow}
+                      formatCost={formatCost}
+                      daySortIcon={sortKey === "day" ? sortIcon("day") : null}
+                      onToggleDaySort={() => toggleSort("day")}
+                      onToggleRow={(rowKey) =>
+                        setExpandedRow(expandedRow === rowKey ? null : rowKey)
+                      }
+                    />
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -544,6 +576,69 @@ export function AdminRevenuePage() {
   );
 }
 
+/** One day's block: a summary header row plus that day's user rows. */
+function DayGroup({
+  day,
+  rows,
+  revenue,
+  users,
+  expandedRow,
+  formatCost,
+  daySortIcon,
+  onToggleDaySort,
+  onToggleRow,
+}: {
+  day: string;
+  rows: FlatRow[];
+  revenue: bigint;
+  users: number;
+  expandedRow: string | null;
+  formatCost: (nanoUsd: string) => string;
+  daySortIcon: ReactNode;
+  onToggleDaySort: () => void;
+  onToggleRow: (rowKey: string) => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <>
+      <tr className="border-b bg-muted/40">
+        <td colSpan={8} className="px-5 py-2">
+          <div className="flex items-center gap-3 text-xs">
+            <button
+              type="button"
+              onClick={onToggleDaySort}
+              className="flex items-center gap-1 font-mono font-semibold hover:text-foreground"
+              aria-label={t("adminRevenue.day")}
+            >
+              {formatDayShort(day)}
+              {daySortIcon}
+            </button>
+            <span className="text-muted-foreground">
+              {t("adminRevenue.dayGroupSummary", {
+                revenue: formatCost(revenue.toString()),
+                count: users,
+              })}
+            </span>
+          </div>
+        </td>
+      </tr>
+      {rows.map((row) => {
+        const rowKey = `${row.day}-${row.userId}`;
+        return (
+          <UserRow
+            key={rowKey}
+            row={row}
+            expanded={expandedRow === rowKey}
+            formatCost={formatCost}
+            onToggle={() => onToggleRow(rowKey)}
+          />
+        );
+      })}
+    </>
+  );
+}
+
 function UserRow({
   row,
   expanded,
@@ -561,12 +656,11 @@ function UserRow({
     <>
       <tr
         className={cn(
-          "border-b transition-colors duration-200 last:border-b-0 hover:bg-accent/45",
+          "border-b border-border/50 transition-colors duration-200 last:border-b-0 hover:bg-accent/45",
           expanded && "bg-accent/30"
         )}
       >
-        <td className="whitespace-nowrap px-5 py-2.5 font-mono text-xs">{row.day}</td>
-        <td className="max-w-56 px-3 py-2.5">
+        <td className="max-w-56 px-5 py-2.5">
           <span className="block truncate font-medium">{row.username || row.userId}</span>
           {row.username && (
             <span className="block truncate font-mono text-xs text-muted-foreground">
@@ -612,7 +706,7 @@ function UserRow({
       </tr>
       {expanded && (
         <tr className="bg-muted/25">
-          <td colSpan={9} className="px-5 py-3">
+          <td colSpan={8} className="px-5 py-3">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-muted-foreground">

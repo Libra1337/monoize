@@ -2106,10 +2106,11 @@
     "noExclusions": "目前沒有排除任何使用者",
     "removeExclusion": "從排除名單移除",
     "userTableTitle": "每日使用者消費明細",
-    "userTableHint": "每個使用者每天一列(北京時間 00:00-24:00)。點擊「日期」或「收入」表頭可排序。",
+    "userTableHint": "按天分組（北京時間 00:00-24:00），每組為當日消費用戶。點擊組頭日期或「收入」表頭可排序。",
     "activeUsers": "消費使用者數",
     "exclusionsButton": "排除 ({{count}})",
-    "modelCount": "模型數"
+    "modelCount": "模型數",
+    "dayGroupSummary": "收入 {{revenue}} · {{count}} 個用戶"
   },
   "adminRuntime": {
     "title": "執行狀態",

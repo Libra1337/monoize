@@ -2105,10 +2105,11 @@
     "noExclusions": "除外されているユーザーはいません",
     "removeExclusion": "除外リストから削除",
     "userTableTitle": "日次ユーザー別消費明細",
-    "userTableHint": "ユーザーごとに 1 日 1 行(北京時間 00:00-24:00)。「日付」または「収益」のヘッダーで並べ替えできます。",
+    "userTableHint": "暦日（北京時間 00:00-24:00）ごとにグループ化。日付ヘッダーまたは「収益」列をクリックで並べ替え。",
     "activeUsers": "消費ユーザー数",
     "exclusionsButton": "除外 ({{count}})",
-    "modelCount": "モデル数"
+    "modelCount": "モデル数",
+    "dayGroupSummary": "収益 {{revenue}} · {{count}} ユーザー"
   },
   "adminRuntime": {
     "title": "稼働状態",
