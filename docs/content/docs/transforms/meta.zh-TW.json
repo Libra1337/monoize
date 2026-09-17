@@ -10,6 +10,7 @@
     "cache_prefix_stabilize",
     "cache_user_id",
     "---欄位---",
+    "field_alias_reserved_tool_names",
     "field_override_max_tokens",
     "field_remove",
     "field_set",

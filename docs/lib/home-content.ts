@@ -36,7 +36,7 @@ export const homeContent: Record<Locale, HomeContent> = {
       {
         title: 'Configurable transforms',
         description:
-          '33 built-in transforms adjust requests and responses. Attach them to a Provider, an API key, or the global chain. Model globs select where each rule applies.',
+          '35 built-in transforms adjust requests and responses per Provider, per API key, or globally. Model globs select where each rule applies.',
       },
       {
         title: 'Retry, fallback, circuit breaker',
@@ -65,7 +65,7 @@ export const homeContent: Record<Locale, HomeContent> = {
       {
         title: '可配置的转换器',
         description:
-          '33 个内置转换器可修改请求和响应。可挂载到 Provider、API 密钥或全局链上，用模型通配符选择生效范围。',
+          '35 个内置 Transform 可按 Provider、API Key 或全局范围修改请求和响应。模型 glob 决定规则适用范围。',
       },
       {
         title: '重试、回退与熔断',
@@ -94,7 +94,7 @@ export const homeContent: Record<Locale, HomeContent> = {
       {
         title: '可設定的轉換器',
         description:
-          '33 個內建轉換器可修改請求和回應。可掛載到 Provider、API 金鑰或全域鏈上，用模型萬用字元選擇生效範圍。',
+          '35 個內建 Transform 可依 Provider、API 金鑰或全域範圍修改請求和回應。模型 glob 決定規則適用範圍。',
       },
       {
         title: '重試、備援與斷路器',
@@ -123,7 +123,7 @@ export const homeContent: Record<Locale, HomeContent> = {
       {
         title: '設定可能な変換ルール',
         description:
-          '33 個の組み込み変換がリクエストとレスポンスを調整します。Provider、API キー、グローバルチェーンに設定し、モデルグロブで適用範囲を選択します。',
+          '35 個の組み込み Transform が Provider、API キー、グローバルにリクエストとレスポンスを調整します。モデル glob で適用範囲を選択します。',
       },
       {
         title: 'リトライ・フォールバック・サーキットブレーカー',
