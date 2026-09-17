@@ -185,18 +185,16 @@ pub(super) async fn apply_transform_rules_response(
     upstream_provider_type: Option<ProviderType>,
 ) -> AppResult<()> {
     if !rules.is_empty() {
-        let custom_snapshot = state.custom_transform_store.snapshot();
-        let resolver = transforms::TransformResolver::new(
-            state.transform_registry.as_ref(),
-            custom_snapshot.as_ref(),
-        );
-        let mut states = transforms::build_states_for_rules(rules, resolver).map_err(|e| {
-            AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "transform_init_failed",
-                e.to_string(),
-            )
-        })?;
+        let mut states =
+            transforms::build_states_for_rules(rules, state.transform_registry.as_ref()).map_err(
+                |e| {
+                    AppError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "transform_init_failed",
+                        e.to_string(),
+                    )
+                },
+            )?;
         let context = transforms::TransformRuntimeContext {
             image_transform_cache: state.image_transform_cache.clone(),
             http_client: state.http.clone(),
@@ -209,7 +207,7 @@ pub(super) async fn apply_transform_rules_response(
             model,
             Phase::Response,
             &context,
-            resolver,
+            state.transform_registry.as_ref(),
         )
         .await
         .map_err(|e| {

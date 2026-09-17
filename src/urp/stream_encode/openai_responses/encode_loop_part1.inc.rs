@@ -265,7 +265,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .unwrap_or_else(now_ts),
                 );
 
-                let payload = if let Some(source) = extra_body
+                let mut payload = if let Some(source) = extra_body
                     .get(urp::RESPONSES_STREAM_START_SOURCE_EXTRA_KEY)
                     .and_then(Value::as_object)
                 {
