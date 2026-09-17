@@ -2094,7 +2094,6 @@
     "tokens": "Tokens",
     "inputTokens": "輸入 Tokens",
     "outputTokens": "輸出 Tokens",
-    "topModel": "主要來源模型",
     "model": "模型",
     "user": "使用者",
     "empty": "該區間沒有收入",
@@ -2107,7 +2106,9 @@
     "removeExclusion": "從排除名單移除",
     "userTableTitle": "每日使用者消費明細",
     "userTableHint": "每個使用者每天一列(北京時間 00:00-24:00)。點擊「日期」或「收入」表頭可排序。",
-    "activeUsers": "消費使用者數"
+    "activeUsers": "消費使用者數",
+    "exclusionsButton": "排除 ({{count}})",
+    "modelCount": "模型數"
   },
   "adminRuntime": {
     "title": "執行狀態",

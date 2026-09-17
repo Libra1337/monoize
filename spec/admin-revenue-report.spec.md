@@ -52,11 +52,16 @@ AR-3. The system MUST persist per-day aggregates in three tables:
   UNIQUE(`day`, `user_id`). The `username` snapshot is refreshed from the
   `users` table on every recomputation of that day and is NULL when the user
   row no longer exists.
+- `admin_revenue_daily_user_model_rows`: `id` TEXT PRIMARY KEY, `day` TEXT,
+  `user_id` TEXT, `model` TEXT, `charge_nano_usd` TEXT (canonical decimal),
+  `calls` INTEGER, `input_tokens` BIGINT, `output_tokens` BIGINT, with
+  UNIQUE(`day`, `user_id`, `model`).
 
 AR-4. A settled day row MUST be recomputable: given the same `request_logs`
 content, recomputation MUST produce byte-identical aggregate values.
 Recomputation for a day MUST delete that day's existing summary row, model
-rows, and user rows and insert the recomputed rows in one transaction.
+rows, user rows, and user-model rows and insert the recomputed rows in one
+transaction.
 
 AR-5. A day MUST be settled only when the day has fully elapsed (the current
 Asia/Shanghai instant is at or past the day's end). The current day MUST NOT
@@ -87,8 +92,8 @@ The exclusion applies ONLY to admin revenue aggregates.
 
 AR-10. `GET /api/dashboard/admin/revenue/daily?from=&to=` MUST return, for the
 inclusive day-id range `from`..`to` (validated `YYYY-MM-DD`, `from <= to`,
-range length at most 366 days; omitted `from` defaults to the day 30 days
-before the current day, omitted `to` defaults to the current day):
+range length at most 366 days; omitted `from` defaults to the current day,
+omitted `to` defaults to the current day):
 
 - `from`: string day id actually used;
 - `to`: string day id actually used;
@@ -107,7 +112,12 @@ before the current day, omitted `to` defaults to the current day):
   - `users`: array ordered by `charge_nano_usd` descending, then `user_id`
     ascending in UTF-8 byte order; each item `user_id`, `username` (string or
     null), `charge_nano_usd` (string), `calls` (integer), `input_tokens`
-    (integer), `output_tokens` (integer).
+    (integer), `output_tokens` (integer), and `models`: array of that user's
+    per-model rows for the day, ordered by `charge_nano_usd` descending then
+    `model` ascending in UTF-8 byte order; each item `model`,
+    `charge_nano_usd` (string), `calls` (integer), `input_tokens` (integer),
+    `output_tokens` (integer). The per-user model rows MUST sum (charge,
+    calls, tokens) exactly to that user's row.
   A day with no matching rows MUST be absent from `days` (zero-revenue days
   are omitted, both persisted and live).
 
@@ -149,6 +159,12 @@ the same rows as AR-10 as an Excel workbook download:
   Username, Revenue (USD), Calls, Input Tokens, Output Tokens. A NULL
   username renders as an empty cell. The pair set and ordering MUST equal
   the `users` arrays of AR-10 for the same range.
+- A third worksheet named `User Models` with one row per
+  (day, user, model) triple, ordered by day ascending then user revenue
+  descending then model revenue descending. Header row: Day, User ID,
+  Username, Model, Revenue (USD), Calls, Input Tokens, Output Tokens. The
+  triple set MUST equal the per-user `models` arrays of AR-10 for the same
+  range.
 - The same `from`/`to` validation as AR-10 applies; an invalid range MUST
   return HTTP 400 with code `invalid_request`.
 
@@ -156,20 +172,24 @@ the same rows as AR-10 as an Excel workbook download:
 
 AR-16. `/dashboard/admin/revenue` MUST contain:
 
-- a day-range control with `from` and `to` day inputs, defaulting to the last
-  30 days including the current day;
+- a day-range control with `from` and `to` day inputs, defaulting both to
+  the current day;
 - a flat spreadsheet-style table with one row per (day, user) pair, flattened
   from the per-day `users` arrays of AR-10. Columns: Day, Username (user id
-  below it), Revenue, Calls, Input Tokens, Output Tokens, Top Model (that
-  user's highest-revenue model from that day's `models` list is NOT shown;
-  the column shows the day's top model). Rows MUST be sortable by clicking
-  the Day and Revenue column headers, defaulting to day descending then
-  revenue descending. The table MUST render the full result of the selected
-  range without pagination;
+  below it), Revenue, Calls, Input Tokens, Output Tokens, Model Count. Rows
+  MUST be sortable by clicking the Day and Revenue column headers,
+  defaulting to day descending then revenue descending. The table MUST
+  render the full result of the selected range without pagination. Each row
+  MUST be expandable to reveal that user's per-model rows for that day
+  (model, revenue, calls, input tokens, output tokens), ordered by revenue
+  descending;
 - a summary strip above the table showing the range totals: revenue, calls,
   and distinct consuming users;
-- an exclusion management card listing current exclusions with a remove
-  action, and a user search box that adds a selected user to the list.
+- an exclusion management area rendered as a compact header bar with the
+  current exclusion count and a button that opens a dialog containing the
+  exclusion list (with remove actions) and the user search box that adds a
+  selected user. The bar MUST NOT expand the page layout when the list is
+  long; only the dialog scrolls.
 
 AR-17. Data fetching MUST use SWR with a 10-second refresh interval for the
 flat table. Loading MUST render a shape-matched skeleton. A failed request

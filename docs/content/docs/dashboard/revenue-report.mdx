@@ -11,15 +11,15 @@ Each day covers Beijing time 00:00 to 24:00. Revenue is the sum of recorded requ
 
 ## Read the consumption table
 
-1. Set **From date** and **To date**. The default range is the last 30 days.
+1. Set **From date** and **To date**. Both default to the current day.
 2. The main table is flat, like a spreadsheet: one row per user per day, showing the date, username, user ID, revenue, calls, input Tokens, output Tokens, and that day's top model.
-3. Click the Day or Revenue header to sort the table.
+3. Click the Day or Revenue header to sort the table. Expand a row to see that user's per-model charges for the day.
 
 Days with no revenue are omitted. The current day updates live from request logs. Past days come from a persisted daily aggregate that Monoize settles after each Beijing midnight.
 
 ## Export Excel
 
-Select **Export Excel**. The browser downloads an `.xlsx` file for the selected date range. The `Revenue` sheet has one row per day, ordered by date ascending. The `Users` sheet lists every user's daily consumption: day, user ID, username, revenue, calls, and Tokens.
+Select **Export Excel**. The browser downloads an `.xlsx` file for the selected date range. The `Revenue` sheet has one row per day, ordered by date ascending. The `Users` sheet lists every user's daily consumption: day, user ID, username, revenue, calls, and Tokens. The `User Models` sheet lists every (day, user, model) charge triple.
 
 ## Exclude users
 

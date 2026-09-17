@@ -6,6 +6,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  ChevronDown,
   Coins,
   FileSpreadsheet,
   MousePointerClick,
@@ -18,6 +19,13 @@ import {
 import { CoinAmount } from "@/components/coin-amount";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
@@ -25,7 +33,7 @@ import { PageWrapper } from "@/components/ui/motion";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
-import type { User } from "@/lib/api";
+import type { RevenueModelRow, User } from "@/lib/api";
 import { api } from "@/lib/api";
 import { SWR_KEYS, useAdminRevenueDaily, useAdminRevenueExclusions, useUsers } from "@/lib/swr";
 import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
@@ -35,12 +43,6 @@ import { cn } from "@/lib/utils";
 function beijingTodayId(): string {
   const beijingNow = new Date(Date.now() + 8 * 3600 * 1000);
   return beijingNow.toISOString().slice(0, 10);
-}
-
-function shiftDay(day: string, offsetDays: number): string {
-  const date = new Date(`${day}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + offsetDays);
-  return date.toISOString().slice(0, 10);
 }
 
 function formatInteger(value: number): string {
@@ -59,7 +61,7 @@ interface FlatRow {
   calls: number;
   inputTokens: number;
   outputTokens: number;
-  topModel: string | null;
+  models: RevenueModelRow[];
 }
 
 function RevenueSkeleton() {
@@ -92,12 +94,15 @@ export function AdminRevenuePage() {
   const exchangeRate = useStoreExchangeRate(currency === "CNY");
   const cnyPerUsd = exchangeRate.data?.cny_per_usd;
 
+  // AR-16: both bounds default to the current Beijing day.
   const today = useMemo(beijingTodayId, []);
-  const [from, setFrom] = useState(() => shiftDay(today, -29));
+  const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
   const [sortKey, setSortKey] = useState<SortKey>("day");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [exclusionsOpen, setExclusionsOpen] = useState(false);
   const [userQuery, setUserQuery] = useState("");
   const [exclusionError, setExclusionError] = useState<string | null>(null);
 
@@ -114,7 +119,6 @@ export function AdminRevenuePage() {
   const flatRows = useMemo<FlatRow[]>(() => {
     const rows: FlatRow[] = [];
     for (const day of daily.data?.days ?? []) {
-      const topModel = day.models[0]?.model ?? null;
       for (const user of day.users) {
         rows.push({
           day: day.day,
@@ -124,7 +128,7 @@ export function AdminRevenuePage() {
           calls: user.calls,
           inputTokens: user.input_tokens,
           outputTokens: user.output_tokens,
-          topModel,
+          models: user.models ?? [],
         });
       }
     }
@@ -132,12 +136,14 @@ export function AdminRevenuePage() {
   }, [daily.data]);
 
   const sortedRows = useMemo(() => {
-    const factor = sortDirection === "asc" ? 1n : -1n;
     return [...flatRows].sort((left, right) => {
       let comparison: number;
       switch (sortKey) {
         case "revenue":
-          comparison = Number(factor * (left.chargeNanoUsd - right.chargeNanoUsd));
+          comparison =
+            sortDirection === "asc"
+              ? Number(left.chargeNanoUsd - right.chargeNanoUsd)
+              : Number(right.chargeNanoUsd - left.chargeNanoUsd);
           break;
         case "calls":
           comparison = sortDirection === "asc" ? left.calls - right.calls : right.calls - left.calls;
@@ -185,7 +191,7 @@ export function AdminRevenuePage() {
       setSortDirection((direction) => (direction === "asc" ? "desc" : "asc"));
     } else {
       setSortKey(key);
-      setSortDirection(key === "day" ? "desc" : "desc");
+      setSortDirection("desc");
     }
   };
 
@@ -313,6 +319,8 @@ export function AdminRevenuePage() {
     </button>
   );
 
+  const exclusionCount = (exclusions.data?.exclusions ?? []).length;
+
   return (
     <PageWrapper className="space-y-5 pb-6">
       <PageHeader
@@ -338,6 +346,10 @@ export function AdminRevenuePage() {
               onChange={(event) => setTo(event.target.value)}
               className="h-9 w-36 font-mono text-xs"
             />
+            <Button size="sm" variant="outline" onClick={() => setExclusionsOpen(true)}>
+              <UserMinus data-icon />
+              {t("adminRevenue.exclusionsButton", { count: exclusionCount })}
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -403,11 +415,9 @@ export function AdminRevenuePage() {
                 <thead className="sticky top-0 z-10">
                   <tr className="border-b bg-muted/60 text-xs text-muted-foreground backdrop-blur">
                     <th className="px-5 py-3 text-left font-medium">
-                      {sortButton(t("adminRevenue.day"), t("adminRevenue.day"), "left")}
+                      {sortButton("day", t("adminRevenue.day"), "left")}
                     </th>
-                    <th className="px-3 py-3 text-left font-medium">
-                      {t("adminRevenue.user")}
-                    </th>
+                    <th className="px-3 py-3 text-left font-medium">{t("adminRevenue.user")}</th>
                     <th className="px-3 py-3 text-right font-medium">
                       {sortButton("revenue", t("adminRevenue.revenue"))}
                     </th>
@@ -423,52 +433,28 @@ export function AdminRevenuePage() {
                     <th className="px-3 py-3 text-right font-medium">
                       {t("adminRevenue.outputTokens")}
                     </th>
-                    <th className="px-5 py-3 text-left font-medium">
-                      {t("adminRevenue.topModel")}
+                    <th className="px-5 py-3 text-right font-medium">
+                      {t("adminRevenue.modelCount")}
                     </th>
+                    <th className="w-10 px-2 py-3" />
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRows.map((row) => (
-                    <tr
-                      key={`${row.day}-${row.userId}`}
-                      className="border-b transition-colors duration-200 last:border-b-0 hover:bg-accent/45"
-                    >
-                      <td className="whitespace-nowrap px-5 py-2.5 font-mono text-xs">
-                        {row.day}
-                      </td>
-                      <td className="max-w-56 px-3 py-2.5">
-                        <span className="block truncate font-medium">
-                          {row.username || row.userId}
-                        </span>
-                        {row.username && (
-                          <span className="block truncate font-mono text-xs text-muted-foreground">
-                            {row.userId}
-                          </span>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums">
-                        <CoinAmount value={formatCost(row.chargeNanoUsd.toString())} />
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums">
-                        {formatInteger(row.calls)}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums">
-                        {formatInteger(row.inputTokens + row.outputTokens)}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
-                        {formatInteger(row.inputTokens)}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
-                        {formatInteger(row.outputTokens)}
-                      </td>
-                      <td className="max-w-44 px-5 py-2.5">
-                        <span className="block truncate text-xs text-muted-foreground">
-                          {row.topModel ?? "—"}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {sortedRows.map((row) => {
+                    const rowKey = `${row.day}-${row.userId}`;
+                    const expanded = expandedRow === rowKey;
+                    return (
+                      <UserRow
+                        key={rowKey}
+                        row={row}
+                        expanded={expanded}
+                        formatCost={formatCost}
+                        onToggle={() =>
+                          setExpandedRow(expanded ? null : rowKey)
+                        }
+                      />
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -476,79 +462,198 @@ export function AdminRevenuePage() {
         </CardContent>
       </Card>
 
-      <Card className="overflow-hidden rounded-xl">
-        <CardContent className="p-0">
-          <div className="border-b px-5 py-4">
-            <h2 className="font-display text-base font-semibold">
-              {t("adminRevenue.exclusionsTitle")}
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {t("adminRevenue.exclusionsHint")}
-            </p>
+      <Dialog open={exclusionsOpen} onOpenChange={setExclusionsOpen}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden rounded-2xl p-0 sm:max-w-lg">
+          <div className="flex max-h-[calc(100dvh-2rem)] flex-col p-5 sm:p-6">
+            <DialogHeader className="shrink-0 pr-10">
+              <DialogTitle className="flex items-center gap-2">
+                <UserMinus className="size-5 text-primary" />
+                {t("adminRevenue.exclusionsTitle")}
+              </DialogTitle>
+              <DialogDescription className="mt-2 text-pretty">
+                {t("adminRevenue.exclusionsHint")}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="relative mt-4 shrink-0">
+              <Input
+                value={userQuery}
+                onChange={(event) => setUserQuery(event.target.value)}
+                placeholder={t("adminRevenue.searchUser")}
+                className="w-full"
+                aria-label={t("adminRevenue.searchUser")}
+              />
+              {userQuery.trim() && userMatches.length > 0 && (
+                <div className="absolute inset-x-0 top-full z-10 mt-1 rounded-lg border bg-popover p-1 shadow-md">
+                  {userMatches.map((user) => (
+                    <button
+                      key={user.id}
+                      type="button"
+                      onClick={() => void addExclusion(user)}
+                      className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
+                    >
+                      <span className="truncate font-medium">{user.username}</span>
+                      <span className="truncate font-mono text-xs text-muted-foreground">
+                        {user.id}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {exclusionError && (
+                <p className="mt-2 text-sm text-destructive">{exclusionError}</p>
+              )}
+            </div>
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
+              {exclusionCount === 0 ? (
+                <EmptyState
+                  icon={<UserMinus className="size-8 text-muted-foreground" />}
+                  title={t("adminRevenue.noExclusions")}
+                  className="py-10"
+                />
+              ) : (
+                <ul className="divide-y">
+                  {exclusions.data?.exclusions.map((row) => (
+                    <li
+                      key={row.user_id}
+                      className="flex items-center justify-between gap-3 py-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{row.username}</p>
+                        <p className="truncate font-mono text-xs text-muted-foreground">
+                          {row.user_id}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void removeExclusion(row.user_id)}
+                        aria-label={t("adminRevenue.removeExclusion")}
+                      >
+                        <X data-icon />
+                        {t("common.remove")}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
-          <div className="relative border-b px-5 py-4">
-            <Input
-              value={userQuery}
-              onChange={(event) => setUserQuery(event.target.value)}
-              placeholder={t("adminRevenue.searchUser")}
-              className="w-full max-w-sm"
-              aria-label={t("adminRevenue.searchUser")}
-            />
-            {userQuery.trim() && userMatches.length > 0 && (
-              <div className="absolute inset-x-5 top-full z-10 mt-1 max-w-sm rounded-lg border bg-popover p-1 shadow-md">
-                {userMatches.map((user) => (
-                  <button
-                    key={user.id}
-                    type="button"
-                    onClick={() => void addExclusion(user)}
-                    className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
-                  >
-                    <span className="truncate font-medium">{user.username}</span>
-                    <span className="truncate font-mono text-xs text-muted-foreground">
-                      {user.id}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-            {exclusionError && (
-              <p className="mt-2 text-sm text-destructive">{exclusionError}</p>
-            )}
-          </div>
-          {(exclusions.data?.exclusions ?? []).length === 0 ? (
-            <EmptyState
-              icon={<UserMinus className="size-8 text-muted-foreground" />}
-              title={t("adminRevenue.noExclusions")}
-              className="py-10"
-            />
-          ) : (
-            <ul className="divide-y">
-              {exclusions.data?.exclusions.map((row) => (
-                <li
-                  key={row.user_id}
-                  className="flex items-center justify-between gap-3 px-5 py-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{row.username}</p>
-                    <p className="truncate font-mono text-xs text-muted-foreground">
-                      {row.user_id}
-                    </p>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void removeExclusion(row.user_id)}
-                    aria-label={t("adminRevenue.removeExclusion")}
-                  >
-                    <X data-icon />
-                    {t("common.remove")}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+        </DialogContent>
+      </Dialog>
     </PageWrapper>
+  );
+}
+
+function UserRow({
+  row,
+  expanded,
+  formatCost,
+  onToggle,
+}: {
+  row: FlatRow;
+  expanded: boolean;
+  formatCost: (nanoUsd: string) => string;
+  onToggle: () => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <>
+      <tr
+        className={cn(
+          "border-b transition-colors duration-200 last:border-b-0 hover:bg-accent/45",
+          expanded && "bg-accent/30"
+        )}
+      >
+        <td className="whitespace-nowrap px-5 py-2.5 font-mono text-xs">{row.day}</td>
+        <td className="max-w-56 px-3 py-2.5">
+          <span className="block truncate font-medium">{row.username || row.userId}</span>
+          {row.username && (
+            <span className="block truncate font-mono text-xs text-muted-foreground">
+              {row.userId}
+            </span>
+          )}
+        </td>
+        <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums">
+          <CoinAmount value={formatCost(row.chargeNanoUsd.toString())} />
+        </td>
+        <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums">
+          {formatInteger(row.calls)}
+        </td>
+        <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums">
+          {formatInteger(row.inputTokens + row.outputTokens)}
+        </td>
+        <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
+          {formatInteger(row.inputTokens)}
+        </td>
+        <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
+          {formatInteger(row.outputTokens)}
+        </td>
+        <td className="whitespace-nowrap px-5 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
+          {formatInteger(row.models.length)}
+        </td>
+        <td className="px-2 py-2.5">
+          <button
+            type="button"
+            disabled={row.models.length === 0}
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={t("adminRevenue.modelDetails")}
+            className="flex size-7 items-center justify-center rounded-md hover:bg-accent disabled:opacity-30"
+          >
+            <ChevronDown
+              className={cn(
+                "size-4 transition-transform duration-200",
+                expanded && "rotate-180"
+              )}
+            />
+          </button>
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="bg-muted/25">
+          <td colSpan={9} className="px-5 py-3">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground">
+                  <th className="py-1.5 pr-3 font-medium">{t("adminRevenue.model")}</th>
+                  <th className="py-1.5 px-3 text-right font-medium">
+                    {t("adminRevenue.revenue")}
+                  </th>
+                  <th className="py-1.5 px-3 text-right font-medium">
+                    {t("adminRevenue.calls")}
+                  </th>
+                  <th className="py-1.5 px-3 text-right font-medium">
+                    {t("adminRevenue.inputTokens")}
+                  </th>
+                  <th className="py-1.5 pl-3 text-right font-medium">
+                    {t("adminRevenue.outputTokens")}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {row.models.map((model) => (
+                  <tr key={model.model} className="border-t border-border/60">
+                    <td className="py-2 pr-3 font-medium">{model.model}</td>
+                    <td className="py-2 px-3 text-right font-mono tabular-nums">
+                      <CoinAmount value={formatCost(model.charge_nano_usd)} />
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono tabular-nums">
+                      {formatInteger(model.calls)}
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono tabular-nums">
+                      {formatInteger(model.input_tokens)}
+                    </td>
+                    <td className="py-2 pl-3 text-right font-mono tabular-nums">
+                      {formatInteger(model.output_tokens)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

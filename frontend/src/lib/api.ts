@@ -1091,6 +1091,7 @@ export interface RevenueUserRow {
   calls: number;
   input_tokens: number;
   output_tokens: number;
+  models: RevenueModelRow[];
 }
 
 export interface RevenueDayRow {

@@ -249,6 +249,13 @@ async fn revenue_daily_requires_admin_and_reports_beijing_days() {
         assert_eq!(users[1]["username"], "revenue_user");
         assert_eq!(users[1]["charge_nano_usd"], "100");
         assert_eq!(users[1]["calls"], 1);
+        // AR-10: each user row carries that user's per-model breakdown, and
+        // the breakdown sums to the user row.
+        let user_models = users[1]["models"].as_array().expect("user models");
+        assert_eq!(user_models.len(), 1);
+        assert_eq!(user_models[0]["model"], "model-a");
+        assert_eq!(user_models[0]["charge_nano_usd"], "100");
+        assert_eq!(user_models[0]["calls"], 1);
     }
 }
 

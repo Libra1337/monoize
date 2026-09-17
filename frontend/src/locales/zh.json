@@ -2097,7 +2097,6 @@
     "tokens": "Tokens",
     "inputTokens": "输入 Tokens",
     "outputTokens": "输出 Tokens",
-    "topModel": "主要来源模型",
     "model": "模型",
     "user": "用户",
     "empty": "该区间没有收入",
@@ -2110,7 +2109,9 @@
     "removeExclusion": "从排除名单移除",
     "userTableTitle": "每日用户消费明细",
     "userTableHint": "每个用户每天一行(北京时间 00:00-24:00)。点击“日期”或“收入”表头可排序。",
-    "activeUsers": "消费用户数"
+    "activeUsers": "消费用户数",
+    "exclusionsButton": "排除 ({{count}})",
+    "modelCount": "模型数"
   },
   "adminRuntime": {
     "title": "运行状态",

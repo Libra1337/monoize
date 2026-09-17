@@ -2093,7 +2093,6 @@
     "tokens": "Tokens",
     "inputTokens": "入力 Tokens",
     "outputTokens": "出力 Tokens",
-    "topModel": "主力モデル",
     "model": "モデル",
     "user": "ユーザー",
     "empty": "この期間に収益はありません",
@@ -2106,7 +2105,9 @@
     "removeExclusion": "除外リストから削除",
     "userTableTitle": "日次ユーザー別消費明細",
     "userTableHint": "ユーザーごとに 1 日 1 行(北京時間 00:00-24:00)。「日付」または「収益」のヘッダーで並べ替えできます。",
-    "activeUsers": "消費ユーザー数"
+    "activeUsers": "消費ユーザー数",
+    "exclusionsButton": "除外 ({{count}})",
+    "modelCount": "モデル数"
   },
   "adminRuntime": {
     "title": "稼働状態",

@@ -20,7 +20,8 @@ pub struct RevenueModelRow {
     pub output_tokens: i64,
 }
 
-/// One per-user aggregate of a single Beijing day (AR-10).
+/// One per-user aggregate of a single Beijing day (AR-10), with that user's
+/// per-model breakdown.
 #[derive(Debug, Clone)]
 pub struct RevenueUserRow {
     pub user_id: String,
@@ -29,6 +30,7 @@ pub struct RevenueUserRow {
     pub calls: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    pub models: Vec<RevenueModelRow>,
 }
 
 /// One day of the admin revenue report (AR-10).
@@ -232,7 +234,7 @@ pub async fn aggregate_revenue_day(
         total_input = total_input.saturating_add(input);
         total_output = total_output.saturating_add(output);
         let model_entry = models_by_name
-            .entry(model)
+            .entry(model.clone())
             .or_insert_with(|| RevenueModelRow {
                 model: String::new(),
                 charge_nano_usd: "0".to_string(),
@@ -262,6 +264,7 @@ pub async fn aggregate_revenue_day(
                 calls: 0,
                 input_tokens: 0,
                 output_tokens: 0,
+                models: Vec::new(),
             });
         entry.calls = entry.calls.saturating_add(calls);
         entry.input_tokens = entry.input_tokens.saturating_add(input);
@@ -269,6 +272,15 @@ pub async fn aggregate_revenue_day(
         if entry.username.is_none() {
             entry.username = username;
         }
+        // The raw row IS this user's (model) group, so it feeds the per-user
+        // model breakdown directly.
+        entry.models.push(RevenueModelRow {
+            model: model.clone(),
+            charge_nano_usd: charge.to_string(),
+            calls,
+            input_tokens: input,
+            output_tokens: output,
+        });
         let mut total = entry
             .charge_nano_usd
             .parse::<i128>()
@@ -286,6 +298,7 @@ pub async fn aggregate_revenue_day(
     }
     for (id, row) in users_by_id.iter_mut() {
         row.user_id = id.clone();
+        sort_revenue_models(&mut row.models);
     }
     let total_charge = models
         .iter()
@@ -380,6 +393,12 @@ pub async fn persist_revenue_day(db: &DbPool, day: &str) -> Result<(), String> {
     .await
     .map_err(|e| e.to_string())?;
     txn.execute(db.stmt(
+        "DELETE FROM admin_revenue_daily_user_model_rows WHERE day = $1",
+        vec![day.into()],
+    ))
+    .await
+    .map_err(|e| e.to_string())?;
+    txn.execute(db.stmt(
         "DELETE FROM admin_revenue_daily_summaries WHERE day = $1",
         vec![day.into()],
     ))
@@ -441,6 +460,25 @@ pub async fn persist_revenue_day(db: &DbPool, day: &str) -> Result<(), String> {
             ))
             .await
             .map_err(|e| e.to_string())?;
+            for model_row in &row.models {
+                txn.execute(db.stmt(
+                    "INSERT INTO admin_revenue_daily_user_model_rows \
+                     (id, day, user_id, model, charge_nano_usd, calls, input_tokens, output_tokens) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    vec![
+                        uuid::Uuid::new_v4().to_string().into(),
+                        aggregate.day.clone().into(),
+                        row.user_id.clone().into(),
+                        model_row.model.clone().into(),
+                        model_row.charge_nano_usd.clone().into(),
+                        model_row.calls.into(),
+                        model_row.input_tokens.into(),
+                        model_row.output_tokens.into(),
+                    ],
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            }
         }
     }
     txn.commit().await.map_err(|e| e.to_string())
@@ -477,15 +515,15 @@ pub async fn settle_elapsed_days(db: &DbPool, now: DateTime<Utc>) -> Result<u32,
     let Some(days) = crate::beijing_time::beijing_day_ids(&start_day, &yesterday) else {
         return Ok(0);
     };
-    // A day counts as settled only when it has user rows: days settled by a
-    // pre-000106 build carry a summary and model rows but no per-user detail,
-    // so they must be recomputed once to backfill the user rows.
+    // A day counts as settled only when it has user-model rows: days settled
+    // by a pre-000107 build carry a summary and user rows but no per-user
+    // model detail, so they must be recomputed once to backfill it.
     let settled_days = db
         .read()
         .query_all(db.stmt(
             "SELECT s.day AS day \
              FROM admin_revenue_daily_summaries s \
-             JOIN admin_revenue_daily_user_rows u ON u.day = s.day \
+             JOIN admin_revenue_daily_user_model_rows um ON um.day = s.day \
              GROUP BY s.day",
             vec![],
         ))
@@ -563,6 +601,15 @@ pub async fn list_persisted_revenue_days(
         ))
         .await
         .map_err(|e| e.to_string())?;
+    let user_model_rows = db
+        .read()
+        .query_all(db.stmt(
+            "SELECT day, user_id, model, charge_nano_usd, calls, input_tokens, output_tokens \
+             FROM admin_revenue_daily_user_model_rows WHERE day >= $1 AND day <= $2",
+            vec![from.into(), to.into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
 
     let mut models_by_day: std::collections::HashMap<String, Vec<RevenueModelRow>> =
         std::collections::HashMap::new();
@@ -580,6 +627,30 @@ pub async fn list_persisted_revenue_days(
                 .map_err(|e| e.to_string())?,
         });
     }
+    let mut user_models_by_day: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, Vec<RevenueModelRow>>,
+    > = std::collections::HashMap::new();
+    for row in user_model_rows {
+        let day: String = row.try_get("", "day").map_err(|e| e.to_string())?;
+        let user_id: String = row.try_get("", "user_id").map_err(|e| e.to_string())?;
+        user_models_by_day
+            .entry(day)
+            .or_default()
+            .entry(user_id)
+            .or_default()
+            .push(RevenueModelRow {
+                model: row.try_get("", "model").map_err(|e| e.to_string())?,
+                charge_nano_usd: row
+                    .try_get("", "charge_nano_usd")
+                    .map_err(|e| e.to_string())?,
+                calls: row.try_get("", "calls").map_err(|e| e.to_string())?,
+                input_tokens: row.try_get("", "input_tokens").map_err(|e| e.to_string())?,
+                output_tokens: row
+                    .try_get("", "output_tokens")
+                    .map_err(|e| e.to_string())?,
+            });
+    }
     let mut users_by_day: std::collections::HashMap<String, Vec<RevenueUserRow>> =
         std::collections::HashMap::new();
     for row in user_rows {
@@ -595,6 +666,7 @@ pub async fn list_persisted_revenue_days(
             output_tokens: row
                 .try_get("", "output_tokens")
                 .map_err(|e| e.to_string())?,
+            models: Vec::new(),
         });
     }
 
@@ -603,7 +675,14 @@ pub async fn list_persisted_revenue_days(
         let day: String = summary.try_get("", "day").map_err(|e| e.to_string())?;
         let mut models = models_by_day.remove(&day).unwrap_or_default();
         sort_revenue_models(&mut models);
+        let user_models = user_models_by_day.remove(&day).unwrap_or_default();
         let mut users = users_by_day.remove(&day).unwrap_or_default();
+        for user in users.iter_mut() {
+            if let Some(model_rows) = user_models.get(&user.user_id) {
+                user.models = model_rows.clone();
+                sort_revenue_models(&mut user.models);
+            }
+        }
         sort_revenue_users(&mut users);
         days.push(RevenueDayRow {
             day,

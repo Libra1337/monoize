@@ -2097,7 +2097,6 @@
     "tokens": "Tokens",
     "inputTokens": "Input Tokens",
     "outputTokens": "Output Tokens",
-    "topModel": "Top Model",
     "model": "Model",
     "user": "User",
     "empty": "No revenue in this range",
@@ -2110,7 +2109,10 @@
     "removeExclusion": "Remove from exclusion list",
     "userTableTitle": "Daily consumption by user",
     "userTableHint": "One row per user per day (00:00-24:00 Beijing time). Click the Day or Revenue headers to sort.",
-    "activeUsers": "Consuming users"
+    "activeUsers": "Consuming users",
+    "exclusionsButton": "Excluded ({{count}})",
+    "exclusionsButton_other": "Excluded ({{count}})",
+    "modelCount": "Models"
   },
   "adminRuntime": {
     "title": "Runtime Status",

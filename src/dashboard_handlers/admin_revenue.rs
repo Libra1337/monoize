@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::beijing_time::{beijing_day_id, beijing_day_shift, is_valid_beijing_day_id};
+use crate::beijing_time::{beijing_day_id, is_valid_beijing_day_id};
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
 use crate::users::{
@@ -24,9 +24,8 @@ const REVENUE_RANGE_MAX_DAYS: i64 = 366;
 
 /// Resolve and validate the `from`/`to` day-id range per AR-10.
 fn resolve_revenue_range(query: &RevenueDailyQuery, today: &str) -> AppResult<(String, String)> {
-    let default_from =
-        beijing_day_shift(today, -30).ok_or_else(|| invalid_range("day arithmetic failed"))?;
-    let from = query.from.clone().unwrap_or(default_from);
+    // AR-10: an omitted from and to both default to the current day.
+    let from = query.from.clone().unwrap_or_else(|| today.to_string());
     let to = query.to.clone().unwrap_or_else(|| today.to_string());
     if !is_valid_beijing_day_id(&from) || !is_valid_beijing_day_id(&to) {
         return Err(invalid_range("from and to must be YYYY-MM-DD day ids"));
@@ -71,6 +70,13 @@ fn render_revenue_day(day: &RevenueDayRow) -> Value {
             "calls": row.calls,
             "input_tokens": row.input_tokens,
             "output_tokens": row.output_tokens,
+            "models": row.models.iter().map(|model| json!({
+                "model": model.model,
+                "charge_nano_usd": model.charge_nano_usd,
+                "calls": model.calls,
+                "input_tokens": model.input_tokens,
+                "output_tokens": model.output_tokens,
+            })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
 }
@@ -282,6 +288,62 @@ fn build_revenue_workbook(days: &[RevenueDayRow]) -> Result<rust_xlsxwriter::Wor
         }
     }
     users_sheet.autofit();
+
+    // AR-15: the User Models sheet holds one row per (day, user, model) triple.
+    let um_sheet = workbook.add_worksheet();
+    um_sheet
+        .set_name("User Models")
+        .map_err(|e| e.to_string())?;
+    let um_headers = [
+        "Day",
+        "User ID",
+        "Username",
+        "Model",
+        "Revenue (USD)",
+        "Calls",
+        "Input Tokens",
+        "Output Tokens",
+    ];
+    for (column, header) in um_headers.iter().enumerate() {
+        um_sheet
+            .write_with_format(0, column as u16, *header, &header_format)
+            .map_err(|e| e.to_string())?;
+    }
+    let mut um_row = 1u32;
+    for day in days {
+        for user in &day.users {
+            for model in &user.models {
+                um_sheet
+                    .write(um_row, 0, &day.day)
+                    .map_err(|e| e.to_string())?;
+                um_sheet
+                    .write(um_row, 1, &user.user_id)
+                    .map_err(|e| e.to_string())?;
+                if let Some(username) = user.username.as_deref() {
+                    um_sheet
+                        .write(um_row, 2, username)
+                        .map_err(|e| e.to_string())?;
+                }
+                um_sheet
+                    .write(um_row, 3, &model.model)
+                    .map_err(|e| e.to_string())?;
+                um_sheet
+                    .write(um_row, 4, nano_usd_to_usd_string(&model.charge_nano_usd)?)
+                    .map_err(|e| e.to_string())?;
+                um_sheet
+                    .write(um_row, 5, model.calls)
+                    .map_err(|e| e.to_string())?;
+                um_sheet
+                    .write(um_row, 6, model.input_tokens)
+                    .map_err(|e| e.to_string())?;
+                um_sheet
+                    .write(um_row, 7, model.output_tokens)
+                    .map_err(|e| e.to_string())?;
+                um_row += 1;
+            }
+        }
+    }
+    um_sheet.autofit();
     Ok(workbook)
 }
 
