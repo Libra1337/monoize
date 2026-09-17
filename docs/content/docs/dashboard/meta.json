@@ -6,6 +6,7 @@
     "models",
     "api-keys",
     "revenue-report",
-    "store"
+    "store",
+    "announcements"
   ]
 }

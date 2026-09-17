@@ -1120,6 +1120,49 @@ export interface AdminRevenueExclusions {
   exclusions: RevenueExclusionRow[];
 }
 
+export type AnnouncementType = "info" | "success" | "warning" | "error";
+
+export interface Announcement {
+  id: string;
+  title: string;
+  content: string;
+  type: AnnouncementType;
+  pinned: boolean;
+  enabled: boolean;
+  created_at: string;
+  created_by?: string | null;
+  is_read?: boolean;
+}
+
+export interface AnnouncementsResponse {
+  announcements: Announcement[];
+  unread_count: number;
+}
+
+export interface AdminAnnouncementsResponse {
+  announcements: Announcement[];
+}
+
+export interface CreateAnnouncementInput {
+  title: string;
+  content: string;
+  type: AnnouncementType;
+  pinned: boolean;
+  enabled: boolean;
+}
+
+export interface UpdateAnnouncementInput {
+  title?: string;
+  content?: string;
+  type?: AnnouncementType;
+  pinned?: boolean;
+  enabled?: boolean;
+}
+
+export interface UnreadCountResponse {
+  unread_count: number;
+}
+
 export interface PublicUsageRankingUserRow {
   rank_key: string;
   call_count: number;
@@ -2007,6 +2050,58 @@ class ApiClient {
 
   async listAdminRevenueExclusions(): Promise<AdminRevenueExclusions> {
     return this.request("/admin/revenue/exclusions");
+  }
+
+  async listAnnouncements(limit = 50): Promise<AnnouncementsResponse> {
+    return this.request(`/announcements?limit=${limit}`);
+  }
+
+  async markAnnouncementsRead(ids: string[]): Promise<UnreadCountResponse> {
+    return this.request("/announcements/read", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  async listAdminAnnouncements(): Promise<AdminAnnouncementsResponse> {
+    return this.request("/announcements/admin");
+  }
+
+  async createAnnouncement(
+    input: CreateAnnouncementInput
+  ): Promise<Announcement> {
+    return this.request("/announcements/admin", {
+      method: "POST",
+      body: JSON.stringify({
+        title: input.title,
+        content: input.content,
+        announcement_type: input.type,
+        pinned: input.pinned,
+        enabled: input.enabled,
+      }),
+    });
+  }
+
+  async updateAnnouncement(
+    id: string,
+    input: UpdateAnnouncementInput
+  ): Promise<Announcement> {
+    return this.request(`/announcements/admin/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.content !== undefined ? { content: input.content } : {}),
+        ...(input.type !== undefined ? { announcement_type: input.type } : {}),
+        ...(input.pinned !== undefined ? { pinned: input.pinned } : {}),
+        ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      }),
+    });
+  }
+
+  async deleteAnnouncement(id: string): Promise<void> {
+    await this.request(`/announcements/admin/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
   async addAdminRevenueExclusion(userId: string): Promise<AdminRevenueExclusions> {

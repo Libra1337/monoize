@@ -93,6 +93,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260916_000105_provider_cache_routing_guards::Migration),
             Box::new(m20260916_000106_admin_revenue_user_rows::Migration),
             Box::new(m20260917_000107_admin_revenue_user_model_rows::Migration),
+            Box::new(m20260918_000108_announcements::Migration),
         ]
     }
 }
@@ -315,6 +316,7 @@ mod m20260916_000104_normalize_quota_day;
 mod m20260916_000105_provider_cache_routing_guards;
 mod m20260916_000106_admin_revenue_user_rows;
 mod m20260917_000107_admin_revenue_user_model_rows;
+mod m20260918_000108_announcements;
 
 #[cfg(test)]
 mod tests {

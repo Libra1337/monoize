@@ -3,6 +3,8 @@ pub mod admin_revenue_daily_summaries;
 pub mod admin_revenue_daily_user_model_rows;
 pub mod admin_revenue_daily_user_rows;
 pub mod admin_revenue_exclusions;
+pub mod announcement_reads;
+pub mod announcements;
 pub mod api_keys;
 pub mod billing_ledger;
 pub mod billing_plans;
@@ -26,6 +28,8 @@ pub mod prelude {
     pub use super::admin_revenue_daily_user_model_rows::Entity as AdminRevenueDailyUserModelRows;
     pub use super::admin_revenue_daily_user_rows::Entity as AdminRevenueDailyUserRows;
     pub use super::admin_revenue_exclusions::Entity as AdminRevenueExclusions;
+    pub use super::announcement_reads::Entity as AnnouncementReads;
+    pub use super::announcements::Entity as Announcements;
     pub use super::api_keys::Entity as ApiKeys;
     pub use super::billing_ledger::Entity as BillingLedger;
     pub use super::billing_plans::Entity as BillingPlans;

@@ -1,6 +1,7 @@
 mod admin;
 mod admin_revenue;
 mod analytics_request_logs;
+mod announcements;
 mod api_keys;
 mod auth;
 mod billing_plans;
@@ -31,6 +32,10 @@ pub use admin_revenue::{
 pub use analytics_request_logs::{
     AnalyticsQuery, RequestLogsQuery, get_cache_hit_rate_by_users, get_dashboard_analytics,
     get_my_live_usage, list_my_request_logs, stream_request_logs,
+};
+pub use announcements::{
+    create_announcement, delete_announcement, list_announcements, list_announcements_admin,
+    mark_announcements_read, update_announcement,
 };
 pub use api_keys::{
     ApiKeyCreatedResponse, ApiKeyResponse, BatchDeleteApiKeysRequest, CreateApiKeyRequest,

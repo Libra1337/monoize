@@ -28,6 +28,7 @@ import {
   Building2,
   ShieldAlert,
   TrendingUp,
+  Megaphone,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,7 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { MonoizeLogo } from "@/components/MonoizeLogo";
 import { UserCenterMenu } from "@/components/user-center-menu";
+import { NotificationBell } from "@/components/announcements/notification-bell";
 import { springs } from "@/components/ui/motion";
 import { usePublicSiteSettings } from "@/lib/swr";
 import { useMyOrgs } from "@/pages/org/shared";
@@ -186,6 +188,7 @@ function Sidebar({
     { to: "/dashboard/admin", icon: Gauge, label: t("nav.adminDashboard"), exact: true },
     { to: "/dashboard/admin/runtime", icon: HeartPulse, label: t("nav.adminRuntime") },
     { to: "/dashboard/admin/revenue", icon: TrendingUp, label: t("nav.adminRevenue") },
+    { to: "/dashboard/announcements-admin", icon: Megaphone, label: t("nav.announcements") },
     { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
     { to: "/dashboard/models", icon: Database, label: t("nav.models") },
     { to: "/dashboard/plans", icon: CalendarClock, label: t("nav.billingPlans") },
@@ -318,6 +321,7 @@ function Sidebar({
         {/* Account menu (dashboard-ui-layout.spec.md DL3a-DL3g) */}
         <div className="mt-auto pt-3">
           <Separator className="mb-3" />
+          <NotificationBell collapsed={collapsed} />
           <UserCenterMenu collapsed={collapsed} onNavigate={onNavigate} />
         </div>
       </motion.div>

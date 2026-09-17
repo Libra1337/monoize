@@ -248,7 +248,8 @@
     "firewall": "内容防火墙",
     "workspace": "工作台",
     "modeSwitch": "切换空间",
-    "orgsAdmin": "组织空间管理"
+    "orgsAdmin": "组织空间管理",
+    "announcements": "公告管理"
   },
   "wallet": {
     "title": "钱包",
@@ -2509,5 +2510,39 @@
     "limitsSaved": "限额已保存",
     "empty": "暂无组织",
     "emptyDescription": "还没有任何组织空间。"
+  },
+  "announcements": {
+    "title": "系统公告",
+    "description": "系统公告与维护通知。",
+    "bell": "公告",
+    "empty": "暂无公告。",
+    "unread": "新",
+    "pinned": "置顶",
+    "markAllRead": "全部已读",
+    "snoozeToday": "今日不再提醒",
+    "types": {
+      "info": "通知",
+      "success": "成功",
+      "warning": "警告",
+      "error": "错误"
+    },
+    "admin": {
+      "title": "公告管理",
+      "description": "发布并管理面向全部用户的仪表板公告。",
+      "create": "新建公告",
+      "createTitle": "新建公告",
+      "editTitle": "编辑公告",
+      "formDescription": "公告会显示在每个用户的通知铃铛中,新公告未读时会自动弹出。",
+      "empty": "暂无公告,创建第一条吧。",
+      "loadFailed": "公告加载失败",
+      "titleLabel": "标题",
+      "contentLabel": "内容",
+      "typeLabel": "类型",
+      "pinnedLabel": "置顶",
+      "statusLabel": "已发布",
+      "timeLabel": "发布时间",
+      "titleError": "标题去掉首尾空格后须为 1-200 个字符。",
+      "contentError": "内容去掉首尾空格后须为 1-5000 个字符。"
+    }
   }
 }

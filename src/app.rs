@@ -3031,5 +3031,29 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             "/dashboard/admin/revenue/exclusions/{user_id}",
             axum::routing::delete(crate::dashboard_handlers::remove_admin_revenue_exclusion),
         )
+        .route(
+            "/dashboard/announcements",
+            get(crate::dashboard_handlers::list_announcements),
+        )
+        .route(
+            "/dashboard/announcements/read",
+            post(crate::dashboard_handlers::mark_announcements_read),
+        )
+        .route(
+            "/dashboard/announcements/admin",
+            get(crate::dashboard_handlers::list_announcements_admin),
+        )
+        .route(
+            "/dashboard/announcements/admin",
+            post(crate::dashboard_handlers::create_announcement),
+        )
+        .route(
+            "/dashboard/announcements/admin/{announcement_id}",
+            put(crate::dashboard_handlers::update_announcement),
+        )
+        .route(
+            "/dashboard/announcements/admin/{announcement_id}",
+            axum::routing::delete(crate::dashboard_handlers::delete_announcement),
+        )
         .merge(build_store_mutation_router(state))
 }

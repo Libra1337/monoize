@@ -248,7 +248,8 @@
     "firewall": "內容防火牆",
     "workspace": "工作台",
     "modeSwitch": "切換空間",
-    "orgsAdmin": "組織空間管理"
+    "orgsAdmin": "組織空間管理",
+    "announcements": "公告管理"
   },
   "wallet": {
     "title": "錢包",
@@ -2506,5 +2507,39 @@
     "limitsSaved": "限額已儲存",
     "empty": "暫無組織",
     "emptyDescription": "還沒有任何組織空間。"
+  },
+  "announcements": {
+    "title": "系統公告",
+    "description": "系統公告與維護通知。",
+    "bell": "公告",
+    "empty": "暫無公告。",
+    "unread": "新",
+    "pinned": "置頂",
+    "markAllRead": "全部已讀",
+    "snoozeToday": "今日不再提醒",
+    "types": {
+      "info": "通知",
+      "success": "成功",
+      "warning": "警告",
+      "error": "錯誤"
+    },
+    "admin": {
+      "title": "公告管理",
+      "description": "發布並管理面向全部使用者的儀表板公告。",
+      "create": "新建公告",
+      "createTitle": "新建公告",
+      "editTitle": "編輯公告",
+      "formDescription": "公告會顯示在每個使用者的通知鈴鐺中,新公告未讀時會自動彈出。",
+      "empty": "暫無公告,建立第一則吧。",
+      "loadFailed": "公告載入失敗",
+      "titleLabel": "標題",
+      "contentLabel": "內容",
+      "typeLabel": "類型",
+      "pinnedLabel": "置頂",
+      "statusLabel": "已發布",
+      "timeLabel": "發布時間",
+      "titleError": "標題去除首尾空白後須為 1-200 個字元。",
+      "contentError": "內容去除首尾空白後須為 1-5000 個字元。"
+    }
   }
 }

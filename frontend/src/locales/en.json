@@ -248,7 +248,8 @@
     "firewall": "Firewall",
     "workspace": "Workspace",
     "modeSwitch": "Switch workspace",
-    "orgsAdmin": "Org spaces"
+    "orgsAdmin": "Org spaces",
+    "announcements": "Announcements"
   },
   "wallet": {
     "title": "Wallet",
@@ -2510,5 +2511,39 @@
     "limitsSaved": "Limits saved",
     "empty": "No organizations",
     "emptyDescription": "No organization spaces exist yet."
+  },
+  "announcements": {
+    "title": "Announcements",
+    "description": "System announcements and maintenance notices.",
+    "bell": "Announcements",
+    "empty": "No announcements yet.",
+    "unread": "New",
+    "pinned": "Pinned",
+    "markAllRead": "Mark all read",
+    "snoozeToday": "Close for today",
+    "types": {
+      "info": "Info",
+      "success": "Success",
+      "warning": "Warning",
+      "error": "Error"
+    },
+    "admin": {
+      "title": "Announcements",
+      "description": "Publish and manage dashboard announcements broadcast to every user.",
+      "create": "New announcement",
+      "createTitle": "New announcement",
+      "editTitle": "Edit announcement",
+      "formDescription": "Announcements appear in every user's notification bell. New ones pop up automatically until read.",
+      "empty": "No announcements exist yet. Create the first one.",
+      "loadFailed": "Announcements failed to load",
+      "titleLabel": "Title",
+      "contentLabel": "Content",
+      "typeLabel": "Type",
+      "pinnedLabel": "Pinned",
+      "statusLabel": "Published",
+      "timeLabel": "Published at",
+      "titleError": "Title must be 1-200 characters after trimming.",
+      "contentError": "Content must be 1-5000 characters after trimming."
+    }
   }
 }

@@ -10,6 +10,7 @@ import { DashboardPage } from "@/pages/dashboard";
 import { AdminDashboardPage } from "@/pages/admin-dashboard";
 import { AdminUsagePage } from "@/pages/admin-usage";
 import { AdminRevenuePage } from "@/pages/admin-revenue";
+import { AnnouncementsAdminPage } from "@/pages/announcements-admin";
 import { AdminRuntimePage } from "@/pages/admin-runtime";
 import { ProvidersPage } from "@/pages/providers";
 import { OrdersAdminPage } from "./pages/orders-admin";
@@ -112,6 +113,7 @@ function App() {
             <Route path="admin" element={<AdminRoute><AdminDashboardPage /></AdminRoute>} />
             <Route path="admin/usage" element={<AdminRoute><AdminUsagePage /></AdminRoute>} />
             <Route path="admin/revenue" element={<AdminRoute><AdminRevenuePage /></AdminRoute>} />
+            <Route path="announcements-admin" element={<AdminRoute><AnnouncementsAdminPage /></AdminRoute>} />
             <Route path="admin/runtime" element={<AdminRoute><AdminRuntimePage /></AdminRoute>} />
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="tokens" element={<ApiKeysPage />} />

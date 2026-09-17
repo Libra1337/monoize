@@ -248,7 +248,8 @@
     "firewall": "ファイアウォール",
     "workspace": "ワークスペース",
     "modeSwitch": "スペース切替",
-    "orgsAdmin": "組織スペース"
+    "orgsAdmin": "組織スペース",
+    "announcements": "お知らせ管理"
   },
   "wallet": {
     "title": "ウォレット",
@@ -2505,5 +2506,39 @@
     "limitsSaved": "上限を保存しました",
     "empty": "組織なし",
     "emptyDescription": "組織スペースはまだありません。"
+  },
+  "announcements": {
+    "title": "お知らせ",
+    "description": "システムのお知らせとメンテナンス通知。",
+    "bell": "お知らせ",
+    "empty": "お知らせはありません。",
+    "unread": "新",
+    "pinned": "固定",
+    "markAllRead": "すべて既読",
+    "snoozeToday": "今日は表示しない",
+    "types": {
+      "info": "通知",
+      "success": "成功",
+      "warning": "警告",
+      "error": "エラー"
+    },
+    "admin": {
+      "title": "お知らせ管理",
+      "description": "全ユーザーに配信されるダッシュボードお知らせを発行・管理します。",
+      "create": "新規お知らせ",
+      "createTitle": "新規お知らせ",
+      "editTitle": "お知らせを編集",
+      "formDescription": "お知らせは全ユーザーの通知ベルに表示され、未読の場合は自動でポップアップします。",
+      "empty": "お知らせはまだありません。最初の一件を作成しましょう。",
+      "loadFailed": "お知らせの読み込みに失敗しました",
+      "titleLabel": "タイトル",
+      "contentLabel": "本文",
+      "typeLabel": "種類",
+      "pinnedLabel": "固定",
+      "statusLabel": "公開",
+      "timeLabel": "公開日時",
+      "titleError": "タイトルは前後の空白を除いて 1〜200 文字にしてください。",
+      "contentError": "本文は前後の空白を除いて 1〜5000 文字にしてください。"
+    }
   }
 }

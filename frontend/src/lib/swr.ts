@@ -10,8 +10,10 @@ import type {
   DashboardAnalytics,
   AdminOverview,
   AdminUsageRanking,
+  AdminAnnouncementsResponse,
   AdminRevenueDaily,
   AdminRevenueExclusions,
+  AnnouncementsResponse,
   PublicUsageRanking,
   UsageRankingRange,
   ConfigOverview,
@@ -101,6 +103,8 @@ export const SWR_KEYS = {
   ADMIN_USAGE: "/dashboard/admin/usage-ranking",
   ADMIN_REVENUE_DAILY: "/dashboard/admin/revenue/daily",
   ADMIN_REVENUE_EXCLUSIONS: "/dashboard/admin/revenue/exclusions",
+  ANNOUNCEMENTS: "/dashboard/announcements",
+  ADMIN_ANNOUNCEMENTS: "/dashboard/announcements/admin",
   LIVE_USAGE: "/dashboard/me/live-usage",
   FIREWALL_STATS: "/dashboard/firewall/stats",
   FIREWALL_EVENTS: "/dashboard/firewall/events",
@@ -467,6 +471,22 @@ export function useAdminRevenueDaily(from: string, to: string, config?: SWRConfi
 
 export function useAdminRevenueExclusions(config?: SWRConfiguration) {
   return useSWR<AdminRevenueExclusions>(SWR_KEYS.ADMIN_REVENUE_EXCLUSIONS, () => api.listAdminRevenueExclusions(), {
+    ...defaultConfig,
+    ...config,
+  });
+}
+
+export function useAnnouncements(config?: SWRConfiguration) {
+  return useSWR<AnnouncementsResponse>(SWR_KEYS.ANNOUNCEMENTS, () => api.listAnnouncements(), {
+    ...defaultConfig,
+    // AN-14: poll the bell data while the dashboard layout is mounted.
+    refreshInterval: 60_000,
+    ...config,
+  });
+}
+
+export function useAdminAnnouncements(config?: SWRConfiguration) {
+  return useSWR<AdminAnnouncementsResponse>(SWR_KEYS.ADMIN_ANNOUNCEMENTS, () => api.listAdminAnnouncements(), {
     ...defaultConfig,
     ...config,
   });
