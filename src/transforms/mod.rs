@@ -13,6 +13,7 @@ pub mod cache_openai_tool_use;
 pub mod cache_prefix_stabilize;
 pub mod cache_user_id;
 pub mod field_alias_reserved_tool_names;
+pub mod field_custom_tools_to_function;
 pub mod field_override_max_tokens;
 pub mod field_remove;
 pub mod field_set;
@@ -268,6 +269,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(cache_openai_tool_use::CacheOpenAiToolUseTransform),
         Box::new(cache_user_id::CacheUserIdTransform),
         Box::new(field_alias_reserved_tool_names::FieldAliasReservedToolNamesTransform),
+        Box::new(field_custom_tools_to_function::FieldCustomToolsToFunctionTransform),
         Box::new(field_override_max_tokens::FieldOverrideMaxTokensTransform),
         Box::new(field_remove::FieldRemoveTransform),
         Box::new(field_set::FieldSetTransform),
@@ -587,6 +589,7 @@ mod registry_tests {
         "cache_prefix_stabilize",
         "cache_user_id",
         "field_alias_reserved_tool_names",
+        "field_custom_tools_to_function",
         "field_override_max_tokens",
         "field_remove",
         "field_set",
