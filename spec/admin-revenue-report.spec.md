@@ -158,18 +158,23 @@ AR-16. `/dashboard/admin/revenue` MUST contain:
 
 - a day-range control with `from` and `to` day inputs, defaulting to the last
   30 days including the current day;
-- a table with columns: Day, Revenue, Calls, Tokens (input + output total),
-  Top Model (model name and its revenue). Each row MUST be expandable to
-  reveal two sub-tables for that day: per-model rows and per-user rows
-  (username or user id, revenue, calls, input/output tokens), both ordered
-  by revenue descending;
+- a flat spreadsheet-style table with one row per (day, user) pair, flattened
+  from the per-day `users` arrays of AR-10. Columns: Day, Username (user id
+  below it), Revenue, Calls, Input Tokens, Output Tokens, Top Model (that
+  user's highest-revenue model from that day's `models` list is NOT shown;
+  the column shows the day's top model). Rows MUST be sortable by clicking
+  the Day and Revenue column headers, defaulting to day descending then
+  revenue descending. The table MUST render the full result of the selected
+  range without pagination;
+- a summary strip above the table showing the range totals: revenue, calls,
+  and distinct consuming users;
 - an exclusion management card listing current exclusions with a remove
   action, and a user search box that adds a selected user to the list.
 
 AR-17. Data fetching MUST use SWR with a 10-second refresh interval for the
-daily table. Loading MUST render a shape-matched skeleton. A failed request
+flat table. Loading MUST render a shape-matched skeleton. A failed request
 MUST render an inline error state with a retry action. Exclusion add/remove
-MUST optimistically update the list and revalidate the daily table after the
+MUST optimistically update the list and revalidate the table after the
 mutation settles.
 
 AR-18. The page MUST provide an Export button that downloads the Excel file

@@ -2087,9 +2087,6 @@
     "exporting": "出力中…",
     "totalRevenue": "期間の収益",
     "totalCalls": "期間の呼び出し数",
-    "daysShown": "収益のあった日数",
-    "tableTitle": "日次収益",
-    "tableHint": "各日は北京時間 00:00–24:00 です。行を展開するとモデル別の明細を表示します。",
     "day": "日付",
     "revenue": "収益",
     "calls": "呼び出し数",
@@ -2099,7 +2096,6 @@
     "topModel": "主力モデル",
     "model": "モデル",
     "user": "ユーザー",
-    "modelDetails": "この日のモデル別収益明細",
     "empty": "この期間に収益はありません",
     "emptyHint": "該当するリクエストログのない日は表示されません。",
     "loadFailed": "収益レポートの読み込みに失敗しました",
@@ -2107,7 +2103,10 @@
     "exclusionsHint": "除外ユーザーの消費は収益に含まれません。ログ保持期間内の履歴も遡って再計算されます。",
     "searchUser": "名前または ID で除外するユーザーを検索",
     "noExclusions": "除外されているユーザーはいません",
-    "removeExclusion": "除外リストから削除"
+    "removeExclusion": "除外リストから削除",
+    "userTableTitle": "日次ユーザー別消費明細",
+    "userTableHint": "ユーザーごとに 1 日 1 行(北京時間 00:00-24:00)。「日付」または「収益」のヘッダーで並べ替えできます。",
+    "activeUsers": "消費ユーザー数"
   },
   "adminRuntime": {
     "title": "稼働状態",

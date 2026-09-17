@@ -3,13 +3,15 @@ import { useTranslation } from "react-i18next";
 import { mutate } from "swr";
 import {
   AlertTriangle,
-  ChevronDown,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Coins,
-  Download,
   FileSpreadsheet,
   MousePointerClick,
   RefreshCw,
   UserMinus,
+  Users,
   X,
 } from "lucide-react";
 
@@ -23,14 +25,9 @@ import { PageWrapper } from "@/components/ui/motion";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
-import type { RevenueDayRow, User } from "@/lib/api";
+import type { User } from "@/lib/api";
 import { api } from "@/lib/api";
-import {
-  SWR_KEYS,
-  useAdminRevenueDaily,
-  useAdminRevenueExclusions,
-  useUsers,
-} from "@/lib/swr";
+import { SWR_KEYS, useAdminRevenueDaily, useAdminRevenueExclusions, useUsers } from "@/lib/swr";
 import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
 import { cn } from "@/lib/utils";
 
@@ -50,6 +47,21 @@ function formatInteger(value: number): string {
   return value.toLocaleString("en-US");
 }
 
+type SortKey = "day" | "revenue" | "calls" | "tokens";
+type SortDirection = "asc" | "desc";
+
+/** One flattened (day, user) row of the spreadsheet-style table. */
+interface FlatRow {
+  day: string;
+  userId: string;
+  username: string | null;
+  chargeNanoUsd: bigint;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  topModel: string | null;
+}
+
 function RevenueSkeleton() {
   return (
     <div className="space-y-5">
@@ -63,6 +75,11 @@ function RevenueSkeleton() {
           <Skeleton className="h-9 w-32" />
           <Skeleton className="size-9 rounded-lg" />
         </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Skeleton className="h-20 rounded-xl" />
+        <Skeleton className="h-20 rounded-xl" />
+        <Skeleton className="h-20 rounded-xl" />
       </div>
       <Skeleton className="h-96 w-full rounded-xl" />
     </div>
@@ -78,7 +95,8 @@ export function AdminRevenuePage() {
   const today = useMemo(beijingTodayId, []);
   const [from, setFrom] = useState(() => shiftDay(today, -29));
   const [to, setTo] = useState(today);
-  const [expandedDay, setExpandedDay] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("day");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [exporting, setExporting] = useState(false);
   const [userQuery, setUserQuery] = useState("");
   const [exclusionError, setExclusionError] = useState<string | null>(null);
@@ -92,9 +110,86 @@ export function AdminRevenuePage() {
     return formatCoinFromNanoUsdForCurrency(nanoUsd, currency, cnyPerUsd ?? "0");
   };
 
-  const excludedIds = new Set(
-    (exclusions.data?.exclusions ?? []).map((row) => row.user_id)
-  );
+  // AR-16: flatten every day's per-user detail into one spreadsheet-style list.
+  const flatRows = useMemo<FlatRow[]>(() => {
+    const rows: FlatRow[] = [];
+    for (const day of daily.data?.days ?? []) {
+      const topModel = day.models[0]?.model ?? null;
+      for (const user of day.users) {
+        rows.push({
+          day: day.day,
+          userId: user.user_id,
+          username: user.username,
+          chargeNanoUsd: BigInt(user.charge_nano_usd),
+          calls: user.calls,
+          inputTokens: user.input_tokens,
+          outputTokens: user.output_tokens,
+          topModel,
+        });
+      }
+    }
+    return rows;
+  }, [daily.data]);
+
+  const sortedRows = useMemo(() => {
+    const factor = sortDirection === "asc" ? 1n : -1n;
+    return [...flatRows].sort((left, right) => {
+      let comparison: number;
+      switch (sortKey) {
+        case "revenue":
+          comparison = Number(factor * (left.chargeNanoUsd - right.chargeNanoUsd));
+          break;
+        case "calls":
+          comparison = sortDirection === "asc" ? left.calls - right.calls : right.calls - left.calls;
+          break;
+        case "tokens":
+          comparison =
+            sortDirection === "asc"
+              ? left.inputTokens + left.outputTokens - (right.inputTokens + right.outputTokens)
+              : right.inputTokens + right.outputTokens - (left.inputTokens + left.outputTokens);
+          break;
+        case "day":
+        default:
+          comparison =
+            sortDirection === "asc"
+              ? left.day.localeCompare(right.day)
+              : right.day.localeCompare(left.day);
+          break;
+      }
+      // Stable tie-breaks: day desc, then revenue desc, then user id.
+      if (comparison === 0) {
+        if (left.day !== right.day) return right.day.localeCompare(left.day);
+        if (left.chargeNanoUsd !== right.chargeNanoUsd) {
+          return right.chargeNanoUsd > left.chargeNanoUsd ? 1 : -1;
+        }
+        return left.userId.localeCompare(right.userId);
+      }
+      return comparison;
+    });
+  }, [flatRows, sortKey, sortDirection]);
+
+  const summary = useMemo(() => {
+    let revenue = 0n;
+    let calls = 0;
+    const userIds = new Set<string>();
+    for (const row of flatRows) {
+      revenue += row.chargeNanoUsd;
+      calls += row.calls;
+      userIds.add(row.userId);
+    }
+    return { revenue, calls, users: userIds.size };
+  }, [flatRows]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDirection((direction) => (direction === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDirection(key === "day" ? "desc" : "desc");
+    }
+  };
+
+  const excludedIds = new Set((exclusions.data?.exclusions ?? []).map((row) => row.user_id));
   const userMatches = useMemo(() => {
     const query = userQuery.trim().toLowerCase();
     if (!query) return [];
@@ -126,15 +221,10 @@ export function AdminRevenuePage() {
     );
     try {
       await api.addAdminRevenueExclusion(user.id);
-      await Promise.all([
-        exclusions.mutate(),
-        daily.mutate(),
-      ]);
+      await Promise.all([exclusions.mutate(), daily.mutate()]);
     } catch (error) {
       await exclusions.mutate();
-      setExclusionError(
-        error instanceof Error ? error.message : t("common.error")
-      );
+      setExclusionError(error instanceof Error ? error.message : t("common.error"));
     }
   };
 
@@ -151,9 +241,7 @@ export function AdminRevenuePage() {
       await Promise.all([exclusions.mutate(), daily.mutate()]);
     } catch (error) {
       await exclusions.mutate();
-      setExclusionError(
-        error instanceof Error ? error.message : t("common.error")
-      );
+      setExclusionError(error instanceof Error ? error.message : t("common.error"));
     }
   };
 
@@ -170,9 +258,7 @@ export function AdminRevenuePage() {
       anchor.remove();
       URL.revokeObjectURL(url);
     } catch (error) {
-      setExclusionError(
-        error instanceof Error ? error.message : t("common.error")
-      );
+      setExclusionError(error instanceof Error ? error.message : t("common.error"));
     } finally {
       setExporting(false);
     }
@@ -192,11 +278,7 @@ export function AdminRevenuePage() {
           variant="card"
           icon={<AlertTriangle className="size-8 text-destructive" />}
           title={t("adminRevenue.loadFailed")}
-          description={
-            daily.error instanceof Error
-              ? daily.error.message
-              : t("common.error")
-          }
+          description={daily.error instanceof Error ? daily.error.message : t("common.error")}
         />
         <div className="flex justify-center">
           <Button variant="outline" onClick={() => void daily.mutate()}>
@@ -208,10 +290,27 @@ export function AdminRevenuePage() {
     );
   }
 
-  const days = daily.data?.days ?? [];
-  const totalRevenue = days.reduce(
-    (sum, day) => sum + BigInt(day.total_charge_nano_usd),
-    0n
+  const sortIcon = (key: SortKey) => {
+    if (sortKey !== key) return <ArrowUpDown className="size-3 opacity-40" />;
+    return sortDirection === "asc" ? (
+      <ArrowUp className="size-3" />
+    ) : (
+      <ArrowDown className="size-3" />
+    );
+  };
+  const sortButton = (key: SortKey, label: string, align: "left" | "right" = "right") => (
+    <button
+      type="button"
+      onClick={() => toggleSort(key)}
+      className={cn(
+        "flex items-center gap-1 hover:text-foreground",
+        align === "right" && "ml-auto flex-row-reverse"
+      )}
+      aria-label={label}
+    >
+      {label}
+      {sortIcon(key)}
+    </button>
   );
 
   return (
@@ -260,36 +359,24 @@ export function AdminRevenuePage() {
         <div className="flex items-center gap-3 rounded-xl border bg-card p-4">
           <Coins className="size-5 text-warning" />
           <div>
-            <p className="text-xs text-muted-foreground">
-              {t("adminRevenue.totalRevenue")}
-            </p>
+            <p className="text-xs text-muted-foreground">{t("adminRevenue.totalRevenue")}</p>
             <p className="font-mono text-lg font-semibold">
-              <CoinAmount value={formatCost(totalRevenue.toString())} />
+              <CoinAmount value={formatCost(summary.revenue.toString())} />
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3 rounded-xl border bg-card p-4">
           <MousePointerClick className="size-5 text-primary" />
           <div>
-            <p className="text-xs text-muted-foreground">
-              {t("adminRevenue.totalCalls")}
-            </p>
-            <p className="font-mono text-lg font-semibold">
-              {formatInteger(
-                days.reduce((sum, day) => sum + day.total_calls, 0)
-              )}
-            </p>
+            <p className="text-xs text-muted-foreground">{t("adminRevenue.totalCalls")}</p>
+            <p className="font-mono text-lg font-semibold">{formatInteger(summary.calls)}</p>
           </div>
         </div>
         <div className="flex items-center gap-3 rounded-xl border bg-card p-4">
-          <Download className="size-5 text-success" />
+          <Users className="size-5 text-success" />
           <div>
-            <p className="text-xs text-muted-foreground">
-              {t("adminRevenue.daysShown")}
-            </p>
-            <p className="font-mono text-lg font-semibold">
-              {formatInteger(days.length)}
-            </p>
+            <p className="text-xs text-muted-foreground">{t("adminRevenue.activeUsers")}</p>
+            <p className="font-mono text-lg font-semibold">{formatInteger(summary.users)}</p>
           </div>
         </div>
       </div>
@@ -298,52 +385,89 @@ export function AdminRevenuePage() {
         <CardContent className="p-0">
           <div className="border-b px-5 py-4">
             <h2 className="font-display text-base font-semibold">
-              {t("adminRevenue.tableTitle")}
+              {t("adminRevenue.userTableTitle")}
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              {t("adminRevenue.tableHint")}
+              {t("adminRevenue.userTableHint")}
             </p>
           </div>
-          {days.length === 0 ? (
+          {sortedRows.length === 0 ? (
             <EmptyState
               title={t("adminRevenue.empty")}
               description={t("adminRevenue.emptyHint")}
               className="py-14"
             />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/35 text-left text-xs text-muted-foreground">
-                    <th className="px-5 py-3 font-medium">
-                      {t("adminRevenue.day")}
+            <div className="max-h-[70vh] overflow-auto">
+              <table className="w-full min-w-[900px] text-sm">
+                <thead className="sticky top-0 z-10">
+                  <tr className="border-b bg-muted/60 text-xs text-muted-foreground backdrop-blur">
+                    <th className="px-5 py-3 text-left font-medium">
+                      {sortButton(t("adminRevenue.day"), t("adminRevenue.day"), "left")}
+                    </th>
+                    <th className="px-3 py-3 text-left font-medium">
+                      {t("adminRevenue.user")}
                     </th>
                     <th className="px-3 py-3 text-right font-medium">
-                      {t("adminRevenue.revenue")}
+                      {sortButton("revenue", t("adminRevenue.revenue"))}
                     </th>
                     <th className="px-3 py-3 text-right font-medium">
-                      {t("adminRevenue.calls")}
+                      {sortButton("calls", t("adminRevenue.calls"))}
                     </th>
                     <th className="px-3 py-3 text-right font-medium">
-                      {t("adminRevenue.tokens")}
+                      {sortButton("tokens", t("adminRevenue.tokens"))}
                     </th>
-                    <th className="px-5 py-3 font-medium">
+                    <th className="px-3 py-3 text-right font-medium">
+                      {t("adminRevenue.inputTokens")}
+                    </th>
+                    <th className="px-3 py-3 text-right font-medium">
+                      {t("adminRevenue.outputTokens")}
+                    </th>
+                    <th className="px-5 py-3 text-left font-medium">
                       {t("adminRevenue.topModel")}
                     </th>
-                    <th className="w-10 px-2 py-3" />
                   </tr>
                 </thead>
                 <tbody>
-                  {days.map((day) => (
-                    <DayRow
-                      key={day.day}
-                      day={day}
-                      expanded={expandedDay === day.day}
-                      formatCost={formatCost}
-                      onToggle={() =>
-                        setExpandedDay(expandedDay === day.day ? null : day.day)
-                      }
-                    />
+                  {sortedRows.map((row) => (
+                    <tr
+                      key={`${row.day}-${row.userId}`}
+                      className="border-b transition-colors duration-200 last:border-b-0 hover:bg-accent/45"
+                    >
+                      <td className="whitespace-nowrap px-5 py-2.5 font-mono text-xs">
+                        {row.day}
+                      </td>
+                      <td className="max-w-56 px-3 py-2.5">
+                        <span className="block truncate font-medium">
+                          {row.username || row.userId}
+                        </span>
+                        {row.username && (
+                          <span className="block truncate font-mono text-xs text-muted-foreground">
+                            {row.userId}
+                          </span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums">
+                        <CoinAmount value={formatCost(row.chargeNanoUsd.toString())} />
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums">
+                        {formatInteger(row.calls)}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums">
+                        {formatInteger(row.inputTokens + row.outputTokens)}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
+                        {formatInteger(row.inputTokens)}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
+                        {formatInteger(row.outputTokens)}
+                      </td>
+                      <td className="max-w-44 px-5 py-2.5">
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {row.topModel ?? "—"}
+                        </span>
+                      </td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
@@ -426,169 +550,5 @@ export function AdminRevenuePage() {
         </CardContent>
       </Card>
     </PageWrapper>
-  );
-}
-
-function DayRow({
-  day,
-  expanded,
-  formatCost,
-  onToggle,
-}: {
-  day: RevenueDayRow;
-  expanded: boolean;
-  formatCost: (nanoUsd: string) => string;
-  onToggle: () => void;
-}) {
-  const { t } = useTranslation();
-  const topModel = day.models[0];
-  const tokens = day.total_input_tokens + day.total_output_tokens;
-
-  return (
-    <>
-      <tr
-        className={cn(
-          "border-b transition-colors duration-200 last:border-b-0 hover:bg-accent/45",
-          expanded && "bg-accent/30"
-        )}
-      >
-        <td className="px-5 py-3 font-mono">{day.day}</td>
-        <td className="px-3 py-3 text-right font-mono tabular-nums">
-          <CoinAmount value={formatCost(day.total_charge_nano_usd)} />
-        </td>
-        <td className="px-3 py-3 text-right font-mono tabular-nums">
-          {formatInteger(day.total_calls)}
-        </td>
-        <td className="px-3 py-3 text-right font-mono tabular-nums">
-          {formatInteger(tokens)}
-        </td>
-        <td className="px-5 py-3">
-          {topModel ? (
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate font-medium">{topModel.model}</span>
-              <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                (<CoinAmount value={formatCost(topModel.charge_nano_usd)} />)
-              </span>
-            </div>
-          ) : (
-            <span className="text-muted-foreground">—</span>
-          )}
-        </td>
-        <td className="px-2 py-3">
-          <button
-            type="button"
-            disabled={day.models.length === 0 && day.users.length === 0}
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={t("adminRevenue.modelDetails")}
-            className="flex size-7 items-center justify-center rounded-md hover:bg-accent disabled:opacity-30"
-          >
-            <ChevronDown
-              className={cn(
-                "size-4 transition-transform duration-200",
-                expanded && "rotate-180"
-              )}
-            />
-          </button>
-        </td>
-      </tr>
-      {expanded && (
-        <tr className="bg-muted/25">
-          <td colSpan={6} className="space-y-4 px-5 py-3">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-muted-foreground">
-                  <th className="py-1.5 pr-3 font-medium">
-                    {t("adminRevenue.model")}
-                  </th>
-                  <th className="py-1.5 px-3 text-right font-medium">
-                    {t("adminRevenue.revenue")}
-                  </th>
-                  <th className="py-1.5 px-3 text-right font-medium">
-                    {t("adminRevenue.calls")}
-                  </th>
-                  <th className="py-1.5 px-3 text-right font-medium">
-                    {t("adminRevenue.inputTokens")}
-                  </th>
-                  <th className="py-1.5 pl-3 text-right font-medium">
-                    {t("adminRevenue.outputTokens")}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {day.models.map((model) => (
-                  <tr key={model.model} className="border-t border-border/60">
-                    <td className="py-2 pr-3 font-medium">{model.model}</td>
-                    <td className="py-2 px-3 text-right font-mono tabular-nums">
-                      <CoinAmount value={formatCost(model.charge_nano_usd)} />
-                    </td>
-                    <td className="py-2 px-3 text-right font-mono tabular-nums">
-                      {formatInteger(model.calls)}
-                    </td>
-                    <td className="py-2 px-3 text-right font-mono tabular-nums">
-                      {formatInteger(model.input_tokens)}
-                    </td>
-                    <td className="py-2 pl-3 text-right font-mono tabular-nums">
-                      {formatInteger(model.output_tokens)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {day.users.length > 0 && (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-muted-foreground">
-                    <th className="py-1.5 pr-3 font-medium">
-                      {t("adminRevenue.user")}
-                    </th>
-                    <th className="py-1.5 px-3 text-right font-medium">
-                      {t("adminRevenue.revenue")}
-                    </th>
-                    <th className="py-1.5 px-3 text-right font-medium">
-                      {t("adminRevenue.calls")}
-                    </th>
-                    <th className="py-1.5 px-3 text-right font-medium">
-                      {t("adminRevenue.inputTokens")}
-                    </th>
-                    <th className="py-1.5 pl-3 text-right font-medium">
-                      {t("adminRevenue.outputTokens")}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {day.users.map((user) => (
-                    <tr key={user.user_id} className="border-t border-border/60">
-                      <td className="py-2 pr-3">
-                        <span className="block truncate font-medium">
-                          {user.username || user.user_id}
-                        </span>
-                        {user.username && (
-                          <span className="block max-w-64 truncate font-mono text-xs text-muted-foreground">
-                            {user.user_id}
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono tabular-nums">
-                        <CoinAmount value={formatCost(user.charge_nano_usd)} />
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono tabular-nums">
-                        {formatInteger(user.calls)}
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono tabular-nums">
-                        {formatInteger(user.input_tokens)}
-                      </td>
-                      <td className="py-2 pl-3 text-right font-mono tabular-nums">
-                        {formatInteger(user.output_tokens)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </td>
-        </tr>
-      )}
-    </>
   );
 }

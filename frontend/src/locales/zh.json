@@ -2091,9 +2091,6 @@
     "exporting": "正在导出…",
     "totalRevenue": "区间收入",
     "totalCalls": "区间调用次数",
-    "daysShown": "有收入的天数",
-    "tableTitle": "每日收入",
-    "tableHint": "每天为北京时间 00:00–24:00。展开一行可查看按模型的明细。",
     "day": "日期",
     "revenue": "收入",
     "calls": "调用次数",
@@ -2103,7 +2100,6 @@
     "topModel": "主要来源模型",
     "model": "模型",
     "user": "用户",
-    "modelDetails": "该日按模型的收入明细",
     "empty": "该区间没有收入",
     "emptyHint": "没有匹配请求日志的日期不会显示。",
     "loadFailed": "收入报表加载失败",
@@ -2111,7 +2107,10 @@
     "exclusionsHint": "被排除用户的消费不计入收入，日志保留期内的历史数据也会回溯重算。",
     "searchUser": "按用户名或 ID 搜索要排除的用户",
     "noExclusions": "当前没有排除任何用户",
-    "removeExclusion": "从排除名单移除"
+    "removeExclusion": "从排除名单移除",
+    "userTableTitle": "每日用户消费明细",
+    "userTableHint": "每个用户每天一行(北京时间 00:00-24:00)。点击“日期”或“收入”表头可排序。",
+    "activeUsers": "消费用户数"
   },
   "adminRuntime": {
     "title": "运行状态",

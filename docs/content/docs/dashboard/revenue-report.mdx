@@ -9,11 +9,11 @@ Open **Revenue Report** at `/dashboard/admin/revenue`. The page is visible to `a
 
 Each day covers Beijing time 00:00 to 24:00. Revenue is the sum of recorded request charges. Recharge and order money is not revenue.
 
-## Read the daily table
+## Read the consumption table
 
 1. Set **From date** and **To date**. The default range is the last 30 days.
-2. Read the day rows. Each row shows the date, revenue, call count, Token count, and the top model with its revenue.
-3. Expand a row to see every model and every user for that day, each ordered by revenue descending. User rows show the username, user ID, revenue, calls, and Tokens.
+2. The main table is flat, like a spreadsheet: one row per user per day, showing the date, username, user ID, revenue, calls, input Tokens, output Tokens, and that day's top model.
+3. Click the Day or Revenue header to sort the table.
 
 Days with no revenue are omitted. The current day updates live from request logs. Past days come from a persisted daily aggregate that Monoize settles after each Beijing midnight.
 
