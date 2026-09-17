@@ -281,6 +281,9 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                 // encoded upstream request even when the downstream and upstream
                 // protocol families differ.
                 let mut req_attempt = original_req.clone();
+                if matches!(downstream, DownstreamProtocol::Responses) {
+                    promote_responses_additional_tools(&mut req_attempt, attempt.provider_type);
+                }
                 if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
                     urp::retain_provider_items_for_protocol(
                         &mut req_attempt.input,
@@ -637,6 +640,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                     value,
                                     &req_attempt.model,
                                     state.monoize_runtime.read().await.mask_sensitive_info,
+                                    &req_attempt,
                                 ) {
                                     Ok(resp) => resp,
                                     Err(err) => {
@@ -750,6 +754,11 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         // encrypted reasoning in `mz2.` envelope form so that
                         // bulk-mutation transforms (e.g. reasoning_strip_encrypted)
                         // can reason about that single canonical surface.
+                        if auth.reasoning_envelope_enabled {
+                            urp::wrap_reasoning_envelopes_in_response(
+                                &mut resp,
+                                reasoning_envelope_provider_type(attempt.provider_type),
+                                &req_attempt.model,
                         if auth.reasoning_envelope_enabled {
                             urp::wrap_reasoning_envelopes_in_response(
                                 &mut resp,
@@ -1239,6 +1248,7 @@ pub(super) fn decode_response_from_provider(
     value: &Value,
     model: &str,
     mask_sensitive_info: bool,
+    request: &urp::UrpRequest,
 ) -> AppResult<urp::UrpResponse> {
     if provider_type == ProviderType::ChatCompletion
         && let Some(error) = embedded_chat_completion_error(value)
@@ -1258,7 +1268,7 @@ pub(super) fn decode_response_from_provider(
         )
         .with_type("server_error"));
     }
-    let decoded = match provider_type {
+    let mut decoded = match provider_type {
         ProviderType::Responses => urp::decode::openai_responses::decode_response(value),
         ProviderType::ChatCompletion => urp::decode::openai_chat::decode_response(value),
         ProviderType::Messages => urp::decode::anthropic::decode_response(value),
@@ -1266,8 +1276,12 @@ pub(super) fn decode_response_from_provider(
         ProviderType::OpenaiImage => urp::decode::openai_image::decode_response(value, model),
         ProviderType::Replicate => urp::decode::replicate::decode_response(value),
         ProviderType::Group => Err("provider_type group is virtual".to_string()),
-    };
-    decoded.map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "invalid_upstream_response", e))
+    }
+    .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "invalid_upstream_response", e))?;
+    if provider_type == ProviderType::Messages {
+        restore_messages_custom_tool_calls(request, &mut decoded);
+    }
+    Ok(decoded)
 }
 
 fn embedded_chat_completion_error(value: &Value) -> Option<&Value> {
