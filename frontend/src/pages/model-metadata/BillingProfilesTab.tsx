@@ -32,6 +32,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue
+} from '@/components/ui/select'
+import {
 	copyPricingProfile,
 	deleteBillingRateOptimistic,
 	renamePricingProfileModel,
@@ -43,7 +50,7 @@ import {
 	useModelMetadata,
 	usePricingProfilePatterns
 } from '@/lib/swr'
-import type { BillingRateRecord, PricingProfilePattern } from '@/lib/api'
+import type { BillingRateRecord, PricingProfilePattern, RateCurrency } from '@/lib/api'
 import {
 	formatNanoPerTokenPerMillion,
 	nanoPerTokenToPerMillion,
@@ -51,13 +58,21 @@ import {
 } from '@/lib/exact-decimal'
 import { cn } from '@/lib/utils'
 
-type UsageClass = 'input_uncached' | 'cache_read' | 'output'
+type UsageClass = 'input_uncached' | 'cache_read' | 'cache_write_5m' | 'cache_write_1h' | 'output'
 
 const visibleUsageClasses: Array<{ id: UsageClass; label: string }> = [
 	{ id: 'input_uncached', label: 'Input' },
 	{ id: 'cache_read', label: 'Cache read' },
+	{ id: 'cache_write_5m', label: 'Cache write 5m' },
+	{ id: 'cache_write_1h', label: 'Cache write 1h' },
 	{ id: 'output', label: 'Output' }
 ]
+
+/// UI19d: the cache-write rate rows carry the TTL on the rate itself.
+const CACHE_WRITE_TTL: Partial<Record<UsageClass, string>> = {
+	cache_write_5m: '5m',
+	cache_write_1h: '1h'
+}
 
 /// UI17a: a rate renders under the symbol of its own stored currency.
 function nanoToPerMillion(rate?: BillingRateRecord): string {
@@ -65,19 +80,21 @@ function nanoToPerMillion(rate?: BillingRateRecord): string {
 }
 
 /**
- * Prefills the CNY override form from an existing rate.
+ * Prefills the override form from an existing rate of the selected currency (UI19c).
  *
- * Only a CNY-basis rate is prefilled. Copying a models.dev USD number into a CNY field would
- * keep the digits and change their meaning, turning a $3.00 list price into a ¥3.00 charge,
- * so a USD-basis rate leaves the field empty and the operator types the CNY price.
+ * Digits are never reinterpreted across currencies: a rate denominated in the other
+ * currency leaves the field empty, so a $3.00 list price cannot become a ¥3.00 charge.
  */
-function nanoToInput(rate?: BillingRateRecord): string {
-	if (!rate || rate.unit_price_currency !== 'CNY') return ''
+function nanoToInput(rate: BillingRateRecord | undefined, currency: RateCurrency): string {
+	if (!rate || rate.unit_price_currency !== currency) return ''
 	return nanoPerTokenToPerMillion(rate.unit_price_nano) ?? ''
 }
 
-function nanoToPeakInput(rate?: BillingRateRecord): string {
-	if (!rate || rate.unit_price_currency !== 'CNY' || !rate.peak_unit_price_nano) return ''
+function nanoToPeakInput(
+	rate: BillingRateRecord | undefined,
+	currency: RateCurrency
+): string {
+	if (!rate || rate.unit_price_currency !== currency || !rate.peak_unit_price_nano) return ''
 	return nanoPerTokenToPerMillion(rate.peak_unit_price_nano) ?? ''
 }
 
@@ -131,9 +148,15 @@ export function BillingProfilesTab() {
 		inputPeak: '',
 		cache: '',
 		cachePeak: '',
+		cacheWrite5m: '',
+		cacheWrite5mPeak: '',
+		cacheWrite1h: '',
+		cacheWrite1hPeak: '',
 		output: '',
 		outputPeak: '',
 	})
+	/// UI19c: the currency every override field is denominated in.
+	const [overrideCurrency, setOverrideCurrency] = useState<RateCurrency>('CNY')
 	const [savingOverride, setSavingOverride] = useState(false)
 	const [copyTarget, setCopyTarget] = useState<string | null>(null)
 	const [copyName, setCopyName] = useState('')
@@ -273,14 +296,43 @@ export function BillingProfilesTab() {
 
 	const openOverride = (profile: string, model: string, modelRates: BillingRateRecord[]) => {
 		setOverrideTarget({ profile, model })
-		setOverrideForm({
-			input: nanoToInput(effectiveRate(modelRates, 'input_uncached')),
-			inputPeak: nanoToPeakInput(effectiveRate(modelRates, 'input_uncached')),
-			cache: nanoToInput(effectiveRate(modelRates, 'cache_read')),
-			cachePeak: nanoToPeakInput(effectiveRate(modelRates, 'cache_read')),
-			output: nanoToInput(effectiveRate(modelRates, 'output')),
-			outputPeak: nanoToPeakInput(effectiveRate(modelRates, 'output')),
-		})
+		/// UI19c: when manual rates exist in exactly one currency, that currency is the
+		/// default; both or none fall back to CNY.
+		const manualCurrencies = new Set(
+			modelRates.filter(rate => rate.source === 'manual').map(rate => rate.unit_price_currency)
+		)
+		const currency: RateCurrency =
+			manualCurrencies.size === 1 ? [...manualCurrencies][0]! : 'CNY'
+		setOverrideCurrency(currency)
+		setOverrideForm(prefillOverrideForm(modelRates, currency))
+	}
+
+	/// UI19d: switching the currency re-prefills every field from that currency's rates.
+	const changeOverrideCurrency = (currency: RateCurrency) => {
+		setOverrideCurrency(currency)
+		if (!overrideTarget) return
+		const modelRates = selectedModelRates.find(
+			([model]) => model === overrideTarget.model
+		)?.[1] ?? []
+		setOverrideForm(prefillOverrideForm(modelRates, currency))
+	}
+
+	function prefillOverrideForm(
+		modelRates: BillingRateRecord[],
+		currency: RateCurrency
+	) {
+		return {
+			input: nanoToInput(effectiveRate(modelRates, 'input_uncached'), currency),
+			inputPeak: nanoToPeakInput(effectiveRate(modelRates, 'input_uncached'), currency),
+			cache: nanoToInput(effectiveRate(modelRates, 'cache_read'), currency),
+			cachePeak: nanoToPeakInput(effectiveRate(modelRates, 'cache_read'), currency),
+			cacheWrite5m: nanoToInput(effectiveRate(modelRates, 'cache_write_5m'), currency),
+			cacheWrite5mPeak: nanoToPeakInput(effectiveRate(modelRates, 'cache_write_5m'), currency),
+			cacheWrite1h: nanoToInput(effectiveRate(modelRates, 'cache_write_1h'), currency),
+			cacheWrite1hPeak: nanoToPeakInput(effectiveRate(modelRates, 'cache_write_1h'), currency),
+			output: nanoToInput(effectiveRate(modelRates, 'output'), currency),
+			outputPeak: nanoToPeakInput(effectiveRate(modelRates, 'output'), currency),
+		}
 	}
 
 		const saveOverride = async () => {
@@ -290,20 +342,27 @@ export function BillingProfilesTab() {
 				const values: Record<UsageClass, { offPeak: string; peak: string }> = {
 					input_uncached: { offPeak: overrideForm.input, peak: overrideForm.inputPeak },
 					cache_read: { offPeak: overrideForm.cache, peak: overrideForm.cachePeak },
+					cache_write_5m: { offPeak: overrideForm.cacheWrite5m, peak: overrideForm.cacheWrite5mPeak },
+					cache_write_1h: { offPeak: overrideForm.cacheWrite1h, peak: overrideForm.cacheWrite1hPeak },
 					output: { offPeak: overrideForm.output, peak: overrideForm.outputPeak },
 				}
 				for (const { id: usageClass } of visibleUsageClasses) {
 					const value = values[usageClass].offPeak
 					const peakValue = values[usageClass].peak
-					if (!value.trim() && usageClass === 'cache_read') {
-						const existingManualCacheRate = rates.find(rate =>
+					/// UI19d: a blank optional class (cache read, cache write 5m/1h) deletes
+					/// an existing manual override and writes nothing when none exists.
+					const optionalClass = usageClass === 'cache_read'
+						|| usageClass === 'cache_write_5m'
+						|| usageClass === 'cache_write_1h'
+					if (!value.trim() && optionalClass) {
+						const existingManualRate = rates.find(rate =>
 							rate.source === 'manual' &&
 							rate.pricing_profile === overrideTarget.profile &&
 							rate.model_pattern === overrideTarget.model &&
-							rate.usage_class === 'cache_read'
+							rate.usage_class === usageClass
 						)
-						if (existingManualCacheRate) {
-							await deleteBillingRateOptimistic(existingManualCacheRate.id)
+						if (existingManualRate) {
+							await deleteBillingRateOptimistic(existingManualRate.id)
 						}
 						continue
 					}
@@ -427,11 +486,18 @@ export function BillingProfilesTab() {
 				<DialogContent className='max-w-lg'><DialogHeader><DialogTitle>{c('修改模型名', 'Rename model')}</DialogTitle><DialogDescription>{renameTarget ? `${selectedProfile} / ${renameTarget}` : ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('把这个模型的所有费率移到一个新模型名下。上游改了模型名，或者要用第二个别名提供同样的价格时使用，不需要逐个 usage class 重新输入。', 'Moves every rate of this model to a new model name. Use it when an upstream model is renamed, or to serve the same prices under a second alias, without retyping each usage class.')}</p><div className='flex flex-col gap-2'><Label htmlFor='rename-model-name'>{c('新模型名', 'New model name')}</Label><Input id='rename-model-name' value={renameName} onChange={event => setRenameName(event.target.value)} className='font-mono' placeholder='claude-opus-5-eu' /><p className='text-xs text-muted-foreground'>{c('目标模型名在这个 Profile 里必须没有任何费率，否则改名会被拒绝，以免覆盖正在计费的价格。同步价格由模型注册表拥有，会保留在原名下。', 'The target model must have no rates in this profile. A non-empty target is refused so prices already billing traffic are never overwritten. Synchronized prices are owned by the model registry and stay under the former name.')}</p></div></div><DialogFooter><Button variant='outline' onClick={() => { setRenameTarget(null); setRenameName('') }}>{c('取消', 'Cancel')}</Button><Button disabled={renaming || !renameName.trim() || renameName.trim() === renameTarget} onClick={() => void runRename()}>{renaming ? c('改名中…', 'Renaming…') : c('确认改名', 'Rename')}</Button></DialogFooter></DialogContent>
 			</Dialog>
 			<Dialog open={!!overrideTarget} onOpenChange={open => { if (!open) setOverrideTarget(null) }}>
-				<DialogContent className='max-w-2xl'><DialogHeader><DialogTitle>{c('手动价格覆盖', 'Manual price override')}</DialogTitle><DialogDescription>{overrideTarget ? `${overrideTarget.profile} / ${overrideTarget.model}` : ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'><p className='text-sm text-muted-foreground'>{c('输入 CNY / 100 万 tokens。留空 Cache 表示不覆盖缓存价格。峰价仅在北京时间工作日 09:00–12:00 与 14:00–18:00 生效；留空峰价表示始终按谷价计费。', 'Enter CNY per 1M tokens. Leave cache blank to keep it unspecified. Peak prices apply Mon–Fri 09:00–12:00 and 14:00–18:00 Beijing time. Leave a peak field blank to always bill at the off-peak price.')}</p><div className='grid gap-4 sm:grid-cols-3'>{([
+				<DialogContent className='max-w-3xl'><DialogHeader><DialogTitle>{c('手动价格覆盖', 'Manual price override')}</DialogTitle><DialogDescription>{overrideTarget ? `${overrideTarget.profile} / ${overrideTarget.model}` : ''}</DialogDescription></DialogHeader><div className='flex flex-col gap-4 py-2'>
+					<div className='flex flex-wrap items-center justify-between gap-2'>
+						<p className='text-sm text-muted-foreground'>{c('按所选货币每 100 万 tokens 计价；直接输入该货币价格，不做汇率换算。留空 Cache / 缓存写入表示不覆盖该项。峰价仅在北京时间工作日 09:00–12:00 与 14:00–18:00 生效；留空峰价表示始终按谷价计费。', 'Prices are per 1M tokens in the selected currency; the typed number is used directly with no exchange-rate conversion. Leave cache / cache-write blank to keep them unspecified. Peak prices apply Mon–Fri 09:00–12:00 and 14:00–18:00 Beijing time. Leave a peak field blank to always bill at the off-peak price.')}</p>
+						<div className='flex items-center gap-2 shrink-0'><Label htmlFor='override-currency'>{c('货币', 'Currency')}</Label><Select value={overrideCurrency} onValueChange={value => changeOverrideCurrency(value as RateCurrency)}><SelectTrigger id='override-currency' className='w-28'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='CNY'>CNY (¥)</SelectItem><SelectItem value='USD'>USD ($)</SelectItem></SelectContent></Select></div>
+					</div>
+					<div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-3'>{([
 					{ key: 'input', peakKey: 'inputPeak', label: 'Input' },
 					{ key: 'cache', peakKey: 'cachePeak', label: 'Cache read' },
+					{ key: 'cacheWrite5m', peakKey: 'cacheWrite5mPeak', label: 'Cache write 5m' },
+					{ key: 'cacheWrite1h', peakKey: 'cacheWrite1hPeak', label: 'Cache write 1h' },
 					{ key: 'output', peakKey: 'outputPeak', label: 'Output' },
-				] as const).map(item => <div key={item.key} className='flex flex-col gap-3 rounded-lg border p-3'><Label>{item.label}</Label><div className='flex flex-col gap-2'><Label className='text-xs text-muted-foreground'>{c('谷价', 'Off-peak')}</Label><div className='relative'><span className='absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground'>¥</span><Input type='text' inputMode='decimal' className='pl-7' value={overrideForm[item.key]} onChange={event => setOverrideForm(previous => ({ ...previous, [item.key]: event.target.value }))} /></div></div><div className='flex flex-col gap-2'><Label className='text-xs text-muted-foreground'>{c('峰价（可选）', 'Peak (optional)')}</Label><div className='relative'><span className='absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground'>¥</span><Input type='text' inputMode='decimal' className='pl-7' value={overrideForm[item.peakKey]} onChange={event => setOverrideForm(previous => ({ ...previous, [item.peakKey]: event.target.value }))} /></div></div></div>)}</div></div><DialogFooter><Button variant='outline' onClick={() => setOverrideTarget(null)}>{c('取消', 'Cancel')}</Button><Button disabled={savingOverride} onClick={() => void saveOverride()}>{savingOverride ? c('保存中…', 'Saving…') : c('保存覆盖', 'Save override')}</Button></DialogFooter></DialogContent>
+				] as const).map(item => <div key={item.key} className='flex flex-col gap-3 rounded-lg border p-3'><Label>{item.label}</Label><div className='flex flex-col gap-2'><Label className='text-xs text-muted-foreground'>{c('谷价', 'Off-peak')}</Label><div className='relative'><span className='absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground'>{overrideCurrency === 'CNY' ? '¥' : '$'}</span><Input type='text' inputMode='decimal' className='pl-7' value={overrideForm[item.key]} onChange={event => setOverrideForm(previous => ({ ...previous, [item.key]: event.target.value }))} /></div></div><div className='flex flex-col gap-2'><Label className='text-xs text-muted-foreground'>{c('峰价（可选）', 'Peak (optional)')}</Label><div className='relative'><span className='absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground'>{overrideCurrency === 'CNY' ? '¥' : '$'}</span><Input type='text' inputMode='decimal' className='pl-7' value={overrideForm[item.peakKey]} onChange={event => setOverrideForm(previous => ({ ...previous, [item.peakKey]: event.target.value }))} /></div></div></div>)}</div></div><DialogFooter><Button variant='outline' onClick={() => setOverrideTarget(null)}>{c('取消', 'Cancel')}</Button><Button disabled={savingOverride} onClick={() => void saveOverride()}>{savingOverride ? c('保存中…', 'Saving…') : c('保存覆盖', 'Save override')}</Button></DialogFooter></DialogContent>
 			</Dialog>
 	</>
 }
