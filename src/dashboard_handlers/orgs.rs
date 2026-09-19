@@ -1811,3 +1811,251 @@ pub async fn admin_update_org(
     tx.commit().await.map_err(storage)?;
     Ok(Json(json!({ "success": true })))
 }
+
+// ---- ORGL: org usage limits + member usage analysis ----
+
+async fn require_org_owner(
+    org_id: &str,
+    user: &crate::users::User,
+    state: &AppState,
+) -> Result<(), AppError> {
+    let role = member_role(
+        &*state.db_pool.read(),
+        state.db_pool.read().get_database_backend(),
+        org_id,
+        &user.id,
+    )
+    .await?
+    .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
+    if role != "owner" {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "org_forbidden",
+            "owner role required",
+        ));
+    }
+    Ok(())
+}
+
+fn window_json(w: &crate::users::org_limits::OrgSpendWindow) -> serde_json::Value {
+    serde_json::json!({
+        "limit_nano_usd": w.limit_nano_usd.map(|v| v.to_string()),
+        "spent_nano_usd": w.spent_nano_usd.to_string(),
+    })
+}
+
+/// ORGL-12: current limit set with live consumption, owner only.
+pub async fn org_limits(
+    State(state): State<AppState>,
+    Path(org_id): Path<String>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    require_org_owner(&org_id, &user, &state).await?;
+
+    let read = state.db_pool.read();
+    let backend = read.get_database_backend();
+    let owner_id: String = read
+        .query_one(Statement::from_string(
+            backend,
+            format!("SELECT owner_user_id FROM orgs WHERE id = '{org_id}'"),
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?
+        .try_get("", "owner_user_id")
+        .map_err(storage)?;
+
+    // Space limits + spent (same windows as enforcement).
+    let space_levels = crate::users::org_limits::load_limit_levels(
+        &state.user_store,
+        &org_id,
+        &owner_id,
+        "00000000-0000-0000-0000-000000000000",
+    )
+    .await
+    .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+
+    let member_rows = read
+        .query_all(Statement::from_string(
+            backend,
+            format!(
+                "SELECT m.user_id, u.username, m.role,
+                        m.spend_limit_total_nano_usd, m.spend_limit_hourly_nano_usd, m.spend_limit_daily_nano_usd
+                 FROM org_members m LEFT JOIN users u ON u.id = m.user_id
+                 WHERE m.org_id = '{org_id}' ORDER BY m.joined_at"
+            ),
+        ))
+        .await
+        .map_err(storage)?;
+    let mut members = Vec::new();
+    for row in &member_rows {
+        let member_id: String = row.try_get("", "user_id").map_err(storage)?;
+        let levels = crate::users::org_limits::load_limit_levels(
+            &state.user_store,
+            &org_id,
+            &member_id,
+            "00000000-0000-0000-0000-000000000000",
+        )
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+        members.push(serde_json::json!({
+            "user_id": member_id,
+            "username": row.try_get::<Option<String>>("", "username").ok().flatten(),
+            "role": row.try_get::<String>("", "role").map_err(storage)?,
+            "limits": {
+                "total_nano_usd": row.try_get::<Option<String>>("", "spend_limit_total_nano_usd").ok().flatten(),
+                "hourly_nano_usd": row.try_get::<Option<String>>("", "spend_limit_hourly_nano_usd").ok().flatten(),
+                "daily_nano_usd": row.try_get::<Option<String>>("", "spend_limit_daily_nano_usd").ok().flatten(),
+            },
+            "spent": {
+                "total_nano_usd": levels.member.as_ref().map(|m| m.total.spent_nano_usd.to_string()).unwrap_or_else(|| "0".to_string()),
+                "hourly_nano_usd": levels.member.as_ref().map(|m| m.hourly.spent_nano_usd.to_string()).unwrap_or_else(|| "0".to_string()),
+                "daily_nano_usd": levels.member.as_ref().map(|m| m.daily.spent_nano_usd.to_string()).unwrap_or_else(|| "0".to_string()),
+            },
+        }));
+    }
+
+    let key_rows = read
+        .query_all(Statement::from_string(
+            backend,
+            format!(
+                "SELECT k.id, k.name, k.created_by, u.username AS creator_username,
+                        k.spend_limit_total_nano_usd, k.spend_limit_hourly_nano_usd, k.spend_limit_daily_nano_usd
+                 FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+                 WHERE k.org_id = '{org_id}' ORDER BY k.created_at"
+            ),
+        ))
+        .await
+        .map_err(storage)?;
+    let mut keys = Vec::new();
+    for row in &key_rows {
+        let key_id: String = row.try_get("", "id").map_err(storage)?;
+        let levels = crate::users::org_limits::load_limit_levels(
+            &state.user_store,
+            &org_id,
+            &owner_id,
+            &key_id,
+        )
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+        keys.push(serde_json::json!({
+            "key_id": key_id,
+            "name": row.try_get::<String>("", "name").map_err(storage)?,
+            "created_by": row.try_get::<Option<String>>("", "created_by").ok().flatten(),
+            "creator_username": row.try_get::<Option<String>>("", "creator_username").ok().flatten(),
+            "limits": {
+                "total_nano_usd": row.try_get::<Option<String>>("", "spend_limit_total_nano_usd").ok().flatten(),
+                "hourly_nano_usd": row.try_get::<Option<String>>("", "spend_limit_hourly_nano_usd").ok().flatten(),
+                "daily_nano_usd": row.try_get::<Option<String>>("", "spend_limit_daily_nano_usd").ok().flatten(),
+            },
+            "spent": {
+                "total_nano_usd": levels.key.as_ref().map(|k| k.total.spent_nano_usd.to_string()).unwrap_or_else(|| "0".to_string()),
+                "hourly_nano_usd": levels.key.as_ref().map(|k| k.hourly.spent_nano_usd.to_string()).unwrap_or_else(|| "0".to_string()),
+                "daily_nano_usd": levels.key.as_ref().map(|k| k.daily.spent_nano_usd.to_string()).unwrap_or_else(|| "0".to_string()),
+            },
+        }));
+    }
+
+    Ok(Json(serde_json::json!({
+        "space": {
+            "limits": {
+                "total_nano_usd": space_levels.space.total.limit_nano_usd.map(|v| v.to_string()),
+                "hourly_nano_usd": space_levels.space.hourly.limit_nano_usd.map(|v| v.to_string()),
+                "daily_nano_usd": space_levels.space.daily.limit_nano_usd.map(|v| v.to_string()),
+            },
+            "spent": {
+                "total_nano_usd": space_levels.space.total.spent_nano_usd.to_string(),
+                "hourly_nano_usd": space_levels.space.hourly.spent_nano_usd.to_string(),
+                "daily_nano_usd": space_levels.space.daily.spent_nano_usd.to_string(),
+            },
+        },
+        "members": members,
+        "keys": keys,
+    })))
+}
+
+/// ORGL-10: set space + member limits, owner only.
+pub async fn update_org_limits(
+    State(state): State<AppState>,
+    Path(org_id): Path<String>,
+    headers: HeaderMap,
+    body: axum::Json<serde_json::Value>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    require_org_owner(&org_id, &user, &state).await?;
+    let space = body
+        .get("space")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let members = body
+        .get("members")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    crate::users::org_limits::apply_org_limit_patch(&state.user_store, &org_id, &space, &members)
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
+    Ok(Json(json!({"ok": true})))
+}
+
+/// ORGL-11: set key-level limits. Owner or the key's creator.
+pub async fn update_org_key_limits(
+    State(state): State<AppState>,
+    Path((org_id, key_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: axum::Json<serde_json::Value>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    require_org_member(&org_id, &user.id, &state).await?;
+    let read = state.db_pool.read();
+    let backend = read.get_database_backend();
+    let key_row = read
+        .query_one(Statement::from_string(
+            backend,
+            format!(
+                "SELECT created_by, user_id FROM api_keys WHERE id = '{key_id}' AND org_id = '{org_id}'"
+            ),
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "key not found"))?;
+    let created_by: Option<String> = key_row.try_get("", "created_by").map_err(storage)?;
+    let is_owner = member_role(&*read, backend, &org_id, &user.id)
+        .await?
+        .is_some_and(|r| r == "owner");
+    if !is_owner && created_by.as_deref() != Some(user.id.as_str()) {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "org_forbidden",
+            "owner or key creator required",
+        ));
+    }
+    crate::users::org_limits::apply_org_key_limit_patch(&state.user_store, &org_id, &key_id, &body)
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
+    Ok(Json(json!({"ok": true})))
+}
+
+#[derive(serde::Deserialize)]
+pub struct MemberUsageQuery {
+    pub range_hours: Option<i64>,
+    pub buckets: Option<i64>,
+}
+
+/// ORGL-13: per-member usage analysis, owner only.
+pub async fn org_member_usage(
+    State(state): State<AppState>,
+    Path(org_id): Path<String>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<MemberUsageQuery>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    require_org_owner(&org_id, &user, &state).await?;
+    let range_hours = query.range_hours.unwrap_or(24).clamp(1, 720);
+    let buckets = query.buckets.unwrap_or(24).clamp(1, 48);
+    let value =
+        crate::users::org_limits::member_usage(&state.user_store, &org_id, range_hours, buckets)
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    Ok(Json(value))
+}

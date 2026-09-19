@@ -1995,6 +1995,8 @@ impl UserStore {
             compiled_model_redirects,
             reasoning_envelope_enabled: input.reasoning_envelope_enabled,
             request_capture_mode: input.request_capture_mode,
+            org_id: None,
+            created_by: None,
         };
 
         Ok((api_key, key))
@@ -2075,6 +2077,7 @@ impl UserStore {
                         a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms,
                         a.model_redirects, a.reasoning_envelope_enabled,
                         a.request_capture_enabled, a.request_capture_mode,
+                        a.org_id, a.created_by,
                         u.role AS owner_role,
                         u.account_class AS owner_account_class,
                         u.id AS owner_id, u.username AS owner_username,
@@ -2886,6 +2889,12 @@ impl UserStore {
             expires_at,
             last_used_at,
             enabled: decode_required_bool(row, "enabled")?,
+            org_id: row
+                .try_get::<Option<String>>("", "org_id")
+                .map_err(|e| e.to_string())?,
+            created_by: row
+                .try_get::<Option<String>>("", "created_by")
+                .map_err(|e| e.to_string())?,
             sub_account_enabled,
             sub_account_balance_nano,
             model_limits_enabled,

@@ -1,5 +1,6 @@
 mod announcements;
 mod groups;
+pub(crate) mod org_limits;
 mod plans;
 mod request_logs;
 mod revenue_daily;
@@ -267,6 +268,12 @@ pub struct ApiKey {
     pub reasoning_envelope_enabled: bool,
     #[serde(default)]
     pub request_capture_mode: RequestCaptureMode,
+    /// ORGL: org context for org keys. `org_id` is set only when the key belongs to
+    /// a space; `created_by` attributes spend to the member for member-level limits.
+    #[serde(default, skip_serializing)]
+    pub org_id: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub created_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -623,6 +630,15 @@ pub struct UserStore {
 }
 
 pub(crate) const RESERVED_INTERNAL_USER_PREFIX: &str = "_monoize_";
+
+/// ORGL-8: org-key context resolved at authentication time. Carries the space id,
+/// the member attribution (`created_by`; None attributes to the owner), and the key id.
+#[derive(Debug, Clone)]
+pub struct OrgKeyContext {
+    pub org_id: String,
+    pub created_by: Option<String>,
+    pub api_key_id: String,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct RequestLogNameSnapshots {

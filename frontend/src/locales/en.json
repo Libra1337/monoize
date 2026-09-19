@@ -2546,5 +2546,45 @@
       "titleError": "Title must be 1-200 characters after trimming.",
       "contentError": "Content must be 1-5000 characters after trimming."
     }
+  },
+  "orgLimits": {
+    "navTitle": "Limits",
+    "title": "Usage Limits",
+    "spaceTitle": "Space limits (USD)",
+    "membersTitle": "Member limits (USD)",
+    "keysTitle": "Key limits (USD)",
+    "member": "Member",
+    "keyName": "Key",
+    "creator": "Creator",
+    "limits": "Limits (total / hourly / daily)",
+    "spentTotal": "Total spent",
+    "windowTotal": "Total",
+    "windowHourly": "Hourly",
+    "windowDaily": "Daily",
+    "save": "Save",
+    "saveSpaceAndMembers": "Save space and member limits",
+    "ownerOnly": "Only the space owner can view this page.",
+    "loadFailed": "Failed to load limits.",
+    "limitHint": "Empty means unlimited."
+  },
+  "orgUsage": {
+    "navTitle": "Member Usage",
+    "title": "Member Usage",
+    "member": "Member",
+    "charge": "Charge",
+    "calls": "Calls",
+    "callsUnit": "calls",
+    "inputTokens": "Input tokens",
+    "outputTokens": "Output tokens",
+    "cacheRead": "Cache read",
+    "trend": "Trend",
+    "byModel": "By model",
+    "noModels": "No model usage in this range.",
+    "removed": "removed",
+    "empty": "No member usage in this range.",
+    "range1h": "1h",
+    "range24h": "24h",
+    "range7d": "7d",
+    "range30d": "30d"
   }
 }

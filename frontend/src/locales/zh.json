@@ -2545,5 +2545,45 @@
       "titleError": "标题去掉首尾空格后须为 1-200 个字符。",
       "contentError": "内容去掉首尾空格后须为 1-5000 个字符。"
     }
+  },
+  "orgLimits": {
+    "navTitle": "限额",
+    "title": "用量限额",
+    "spaceTitle": "空间限额（美元）",
+    "membersTitle": "成员限额（美元）",
+    "keysTitle": "密钥限额（美元）",
+    "member": "成员",
+    "keyName": "密钥",
+    "creator": "创建者",
+    "limits": "限额（总量 / 每小时 / 每天）",
+    "spentTotal": "累计消耗",
+    "windowTotal": "总量",
+    "windowHourly": "每小时",
+    "windowDaily": "每天",
+    "save": "保存",
+    "saveSpaceAndMembers": "保存空间与成员限额",
+    "ownerOnly": "仅空间所有者可查看此页面。",
+    "loadFailed": "限额加载失败。",
+    "limitHint": "留空表示不限制。"
+  },
+  "orgUsage": {
+    "navTitle": "成员用量",
+    "title": "成员用量分析",
+    "member": "成员",
+    "charge": "消耗",
+    "calls": "调用",
+    "callsUnit": "次",
+    "inputTokens": "输入 tokens",
+    "outputTokens": "输出 tokens",
+    "cacheRead": "缓存读取",
+    "trend": "趋势",
+    "byModel": "按模型",
+    "noModels": "该时间范围内没有模型用量。",
+    "removed": "已移除",
+    "empty": "该时间范围内没有成员用量。",
+    "range1h": "1小时",
+    "range24h": "24小时",
+    "range7d": "7天",
+    "range30d": "30天"
   }
 }

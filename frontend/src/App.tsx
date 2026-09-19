@@ -21,6 +21,8 @@ import { OrgMembers } from "./pages/org/members";
 import { OrgKeys } from "./pages/org/keys";
 import { OrgWallet } from "./pages/org/wallet";
 import { OrgUsagePage, OrgCachePage } from "./pages/org/usage";
+import { OrgLimitsPage } from "./pages/org/limits";
+import { OrgMemberUsagePage } from "./pages/org/member-usage";
 import { OrgLogsPage } from "./pages/org/logs";
 import { AdminOrgsPage } from "./pages/admin-orgs";
 import { JoinOrgPage } from "./pages/join-org";
@@ -144,6 +146,8 @@ function App() {
               <Route path="home" element={<OrgHome />} />
               <Route path="usage" element={<OrgUsagePage />} />
               <Route path="usage/cache" element={<OrgCachePage />} />
+              <Route path="member-usage" element={<OrgMemberUsagePage />} />
+              <Route path="limits" element={<OrgLimitsPage />} />
               <Route path="logs" element={<OrgLogsPage />} />
               <Route path="members" element={<OrgMembers />} />
               <Route path="keys" element={<OrgKeys />} />

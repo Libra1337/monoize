@@ -1025,6 +1025,7 @@ mod tests {
             sub_account_balance_nano: "0".to_string(),
             reasoning_envelope_enabled: true,
             request_capture_mode,
+            org_key: None,
         }
     }
 

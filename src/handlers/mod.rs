@@ -1694,6 +1694,7 @@ async fn authenticate_playground_session(
         sub_account_balance_nano: "0".to_string(),
         reasoning_envelope_enabled: true,
         request_capture_mode: crate::users::RequestCaptureMode::Off,
+        org_key: None,
     })
 }
 
@@ -1733,6 +1734,42 @@ async fn ensure_balance_before_forward(
                 )),
             },
         };
+    }
+    // ORGL-5/7: admission preflight for org-key traffic. Same limit set as the
+    // settlement check; advisory-fast so a race is closed by settlement.
+    if let Some(org_key) = auth.org_key.as_ref() {
+        let member_id = org_key
+            .created_by
+            .clone()
+            .unwrap_or_else(|| org_key.org_id.clone());
+        match crate::users::org_limits::load_limit_levels(
+            &state.user_store,
+            &org_key.org_id,
+            &member_id,
+            &org_key.api_key_id,
+        )
+        .await
+        {
+            Ok(levels) => {
+                if let Err(breach) = crate::users::org_limits::evaluate_limits(&levels) {
+                    return Err(AppError::new(
+                        StatusCode::PAYMENT_REQUIRED,
+                        "org_spend_limit_reached",
+                        format!(
+                            "org spend limit reached: {} {}",
+                            breach.level, breach.window
+                        ),
+                    ));
+                }
+            }
+            Err(err) => {
+                tracing::error!(
+                    "org limit preflight failed for org {}: {}",
+                    org_key.org_id,
+                    err
+                );
+            }
+        }
     }
     let Some(user_id) = auth.user_id.as_deref() else {
         return Ok(());

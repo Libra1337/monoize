@@ -2736,6 +2736,22 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             axum::routing::delete(crate::dashboard_handlers::delete_org_key),
         )
         .route(
+            "/dashboard/orgs/{org_id}/limits",
+            get(crate::dashboard_handlers::org_limits),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/limits",
+            axum::routing::put(crate::dashboard_handlers::update_org_limits),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/keys/{key_id}/limits",
+            axum::routing::put(crate::dashboard_handlers::update_org_key_limits),
+        )
+        .route(
+            "/dashboard/orgs/{org_id}/member-usage",
+            get(crate::dashboard_handlers::org_member_usage),
+        )
+        .route(
             "/dashboard/admin/orgs",
             get(crate::dashboard_handlers::admin_list_orgs),
         )

@@ -2342,6 +2342,8 @@ mod tests {
             compiled_model_redirects: Vec::new(),
             reasoning_envelope_enabled: true,
             request_capture_mode: RequestCaptureMode::Off,
+            org_id: None,
+            created_by: None,
         }
     }
 

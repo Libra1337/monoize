@@ -2541,5 +2541,45 @@
       "titleError": "タイトルは前後の空白を除いて 1〜200 文字にしてください。",
       "contentError": "本文は前後の空白を除いて 1〜5000 文字にしてください。"
     }
+  },
+  "orgLimits": {
+    "navTitle": "上限",
+    "title": "使用量上限",
+    "spaceTitle": "スペース上限（USD）",
+    "membersTitle": "メンバー上限（USD）",
+    "keysTitle": "キー上限（USD）",
+    "member": "メンバー",
+    "keyName": "キー",
+    "creator": "作成者",
+    "limits": "上限（合計 / 毎時 / 毎日）",
+    "spentTotal": "累計使用額",
+    "windowTotal": "合計",
+    "windowHourly": "毎時",
+    "windowDaily": "毎日",
+    "save": "保存",
+    "saveSpaceAndMembers": "スペースとメンバーの上限を保存",
+    "ownerOnly": "スペースのオーナーのみ閲覧できます。",
+    "loadFailed": "上限の読み込みに失敗しました。",
+    "limitHint": "空欄は無制限を意味します。"
+  },
+  "orgUsage": {
+    "navTitle": "メンバー使用量",
+    "title": "メンバー使用量分析",
+    "member": "メンバー",
+    "charge": "使用額",
+    "calls": "呼び出し",
+    "callsUnit": "回",
+    "inputTokens": "入力 tokens",
+    "outputTokens": "出力 tokens",
+    "cacheRead": "キャッシュ読み取り",
+    "trend": "推移",
+    "byModel": "モデル別",
+    "noModels": "この期間のモデル使用量はありません。",
+    "removed": "削除済み",
+    "empty": "この期間のメンバー使用量はありません。",
+    "range1h": "1時間",
+    "range24h": "24時間",
+    "range7d": "7日",
+    "range30d": "30日"
   }
 }

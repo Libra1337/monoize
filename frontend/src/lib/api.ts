@@ -89,6 +89,72 @@ export interface OrgKeyEntry {
   model_limits?: string[];
 }
 
+export interface OrgSpendLimitSet {
+  total_nano_usd?: string | null;
+  hourly_nano_usd?: string | null;
+  daily_nano_usd?: string | null;
+}
+
+export interface OrgLimitSpent {
+  total_nano_usd: string;
+  hourly_nano_usd: string;
+  daily_nano_usd: string;
+}
+
+export interface OrgMemberLimitEntry {
+  user_id: string;
+  username?: string | null;
+  role: string;
+  limits: OrgSpendLimitSet;
+  spent: OrgLimitSpent;
+}
+
+export interface OrgKeyLimitEntry {
+  key_id: string;
+  name: string;
+  created_by?: string | null;
+  creator_username?: string | null;
+  limits: OrgSpendLimitSet;
+  spent: OrgLimitSpent;
+}
+
+export interface OrgLimitsResponse {
+  space: { limits: OrgSpendLimitSet; spent: OrgLimitSpent };
+  members: OrgMemberLimitEntry[];
+  keys: OrgKeyLimitEntry[];
+}
+
+export interface OrgMemberUsageModel {
+  model: string;
+  charge_nano_usd: string;
+  calls: number;
+}
+
+export interface OrgMemberUsageBucket {
+  bucket_start: string;
+  charge_nano_usd: string;
+  calls: number;
+}
+
+export interface OrgMemberUsageEntry {
+  user_id: string;
+  username: string;
+  total_charge_nano_usd: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  by_model: OrgMemberUsageModel[];
+  series: OrgMemberUsageBucket[];
+}
+
+export interface OrgMemberUsageResponse {
+  range_hours: number;
+  buckets: number;
+  members: OrgMemberUsageEntry[];
+  removed_members: OrgMemberUsageEntry[];
+}
+
 export interface OrgLedgerEntry {
   id: string;
   kind: string;
@@ -1755,6 +1821,39 @@ class ApiClient {
 
   async getOrgLedger(orgId: string): Promise<OrgLedgerEntry[]> {
     return this.request(`/orgs/${orgId}/ledger`);
+  }
+
+  async getOrgLimits(orgId: string): Promise<OrgLimitsResponse> {
+    return this.request(`/orgs/${orgId}/limits`);
+  }
+
+  async updateOrgLimits(
+    orgId: string,
+    space: OrgSpendLimitSet,
+    members: Record<string, OrgSpendLimitSet>,
+  ) {
+    return this.request(`/orgs/${orgId}/limits`, {
+      method: "PUT",
+      body: JSON.stringify({ space, members }),
+    });
+  }
+
+  async updateOrgKeyLimits(orgId: string, keyId: string, limits: OrgSpendLimitSet) {
+    return this.request(`/orgs/${orgId}/keys/${keyId}/limits`, {
+      method: "PUT",
+      body: JSON.stringify(limits),
+    });
+  }
+
+  async getOrgMemberUsage(
+    orgId: string,
+    rangeHours: number,
+    buckets: number,
+  ): Promise<OrgMemberUsageResponse> {
+    const params = new URLSearchParams();
+    params.set("range_hours", String(rangeHours));
+    params.set("buckets", String(buckets));
+    return this.request(`/orgs/${orgId}/member-usage?${params.toString()}`);
   }
 
   async getOrgAnalytics(

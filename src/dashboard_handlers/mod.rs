@@ -75,10 +75,11 @@ pub(crate) use providers::provider_dashboard_rate_matrix_is_complete;
 pub use request_captures::{RequestCaptureQuery, get_request_capture};
 
 pub use orgs::{
-    admin_list_orgs, admin_update_org, create_org, create_org_key, delete_org, delete_org_key,
-    deposit_to_org, distribute_from_org, invite_preview, join_org, leave_org, list_my_orgs,
-    list_org_keys, org_analytics, org_detail, org_ledger, org_request_logs, regenerate_invite,
-    remove_org_member, update_key_sharing,
+    MemberUsageQuery, admin_list_orgs, admin_update_org, create_org, create_org_key, delete_org,
+    delete_org_key, deposit_to_org, distribute_from_org, invite_preview, join_org, leave_org,
+    list_my_orgs, list_org_keys, org_analytics, org_detail, org_ledger, org_limits,
+    org_member_usage, org_request_logs, regenerate_invite, remove_org_member, update_key_sharing,
+    update_org_key_limits, update_org_limits,
 };
 pub use providers::{
     FetchChannelModelsRequest, TestChannelRequest, create_provider, create_wholesale_provider,

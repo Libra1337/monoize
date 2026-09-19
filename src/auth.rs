@@ -41,6 +41,8 @@ pub struct AuthResult {
     pub sub_account_balance_nano: String,
     pub reasoning_envelope_enabled: bool,
     pub request_capture_mode: RequestCaptureMode,
+    /// ORGL-8: set only for org-key traffic; drives the org spend-limit checks.
+    pub org_key: Option<crate::users::OrgKeyContext>,
 }
 
 #[derive(Clone)]
@@ -97,7 +99,7 @@ impl AuthState {
                             username: Some(user.username.clone()),
                             user_role: user.role,
                             account_class: user.account_class,
-                            api_key_id: Some(api_key.id),
+                            api_key_id: Some(api_key.id.clone()),
                             api_key_name: Some(api_key.name),
                             internal_source: None,
                             max_multiplier: api_key.max_multiplier,
@@ -113,6 +115,13 @@ impl AuthState {
                             sub_account_balance_nano: api_key.sub_account_balance_nano,
                             reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
                             request_capture_mode: api_key.request_capture_mode,
+                            org_key: api_key.org_id.clone().map(|org_id| {
+                                crate::users::OrgKeyContext {
+                                    org_id,
+                                    created_by: api_key.created_by.clone(),
+                                    api_key_id: api_key.id.clone(),
+                                }
+                            }),
                         });
                     }
                     Ok(None) => {}

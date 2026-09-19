@@ -7,6 +7,7 @@ import {
   ChartNoAxesCombined,
   Coins,
   DatabaseZap,
+  Gauge,
   KeyRound,
   LayoutDashboard,
   Plus,
@@ -42,6 +43,12 @@ export function OrgShell() {
     { to: "home", icon: LayoutDashboard, label: t("org.navHome"), exact: true },
     { to: "usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
     { to: "usage/cache", icon: DatabaseZap, label: t("nav.cacheHitRate") },
+    ...(active?.role === "owner"
+      ? [
+          { to: "member-usage", icon: UsersRound, label: t("orgUsage.navTitle") },
+          { to: "limits", icon: Gauge, label: t("orgLimits.navTitle") },
+        ]
+      : []),
     { to: "logs", icon: ScrollText, label: t("nav.logs") },
     { to: "members", icon: UsersRound, label: t("org.navMembers") },
     { to: "keys", icon: KeyRound, label: t("org.navKeys") },

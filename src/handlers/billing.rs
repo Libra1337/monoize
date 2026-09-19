@@ -2008,6 +2008,41 @@ async fn maybe_charge_usage_with_output(
         });
     }
 
+    // ORGL-5: settlement-time org spend-limit check. The charge is computed and the
+    // upstream tokens are already consumed, so a breach here still records the row and
+    // debits the wallet (ORGL-7) but rejects the response delivery path.
+    if let Some(org_key) = auth.org_key.as_ref() {
+        let member_id = org_key
+            .created_by
+            .clone()
+            .unwrap_or_else(|| org_key.org_id.clone());
+        match crate::users::org_limits::load_limit_levels(
+            &state.user_store,
+            &org_key.org_id,
+            &member_id,
+            &org_key.api_key_id,
+        )
+        .await
+        {
+            Ok(levels) => {
+                if let Err(breach) = crate::users::org_limits::evaluate_limits(&levels) {
+                    return Err(AppError::new(
+                        StatusCode::PAYMENT_REQUIRED,
+                        "org_spend_limit_reached",
+                        format!(
+                            "org {} spend limit reached: {} {}",
+                            org_key.org_id, breach.level, breach.window
+                        ),
+                    ));
+                }
+            }
+            Err(err) => {
+                tracing::error!("org limit check failed for org {}: {}", org_key.org_id, err);
+                // Fail open on query errors: the wallet balance check still applies.
+            }
+        }
+    }
+
     let meta = json!({
         "logical_model": logical_model,
         "upstream_model": attempt.upstream_model,

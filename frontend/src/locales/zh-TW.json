@@ -2542,5 +2542,45 @@
       "titleError": "標題去除首尾空白後須為 1-200 個字元。",
       "contentError": "內容去除首尾空白後須為 1-5000 個字元。"
     }
+  },
+  "orgLimits": {
+    "navTitle": "限額",
+    "title": "用量限額",
+    "spaceTitle": "空間限額（美元）",
+    "membersTitle": "成員限額（美元）",
+    "keysTitle": "金鑰限額（美元）",
+    "member": "成員",
+    "keyName": "金鑰",
+    "creator": "建立者",
+    "limits": "限額（總量 / 每小時 / 每天）",
+    "spentTotal": "累計消耗",
+    "windowTotal": "總量",
+    "windowHourly": "每小時",
+    "windowDaily": "每天",
+    "save": "儲存",
+    "saveSpaceAndMembers": "儲存空間與成員限額",
+    "ownerOnly": "僅空間擁有者可檢視此頁面。",
+    "loadFailed": "限額載入失敗。",
+    "limitHint": "留空表示不限制。"
+  },
+  "orgUsage": {
+    "navTitle": "成員用量",
+    "title": "成員用量分析",
+    "member": "成員",
+    "charge": "消耗",
+    "calls": "呼叫",
+    "callsUnit": "次",
+    "inputTokens": "輸入 tokens",
+    "outputTokens": "輸出 tokens",
+    "cacheRead": "快取讀取",
+    "trend": "趨勢",
+    "byModel": "依模型",
+    "noModels": "該時間範圍內沒有模型用量。",
+    "removed": "已移除",
+    "empty": "該時間範圍內沒有成員用量。",
+    "range1h": "1小時",
+    "range24h": "24小時",
+    "range7d": "7天",
+    "range30d": "30天"
   }
 }
