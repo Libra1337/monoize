@@ -87,19 +87,29 @@ counterparty in `meta_json` and row locks taken org-wallet-first.
 
 ## 5. Keys and sharing
 
-ORG-14. `POST /api/dashboard/orgs/{org_id}/keys {name, share_mode?, model_limits?}` creates
+ORG-14. `POST /api/dashboard/orgs/{org_id}/keys {name, share_mode?, model_limits?, group_ids?}` creates
 an org key owned by the org wallet row (`api_keys.user_id = org_id`,
 `api_keys.created_by` = the caller) and billed to the org wallet. The owner's default
 `share_mode` is `public`; a member's default is `private`. `model_limits` maps to the
-ordinary API-key model restriction. `api_keys.org_id` equals the org id.
+ordinary API-key model restriction. `group_ids` maps to the ordinary API-key Group
+selection and is validated against the org wallet row exactly like a personal key's
+selection against its human owner: every id must exist, match the wallet's
+`account_class` (enterprise), and be public to the wallet (or granted to it). An
+absent or empty `group_ids` means every Group the org wallet can access.
+`api_keys.org_id` equals the org id.
 
 ORG-15. `GET /api/dashboard/orgs/{org_id}/keys` returns (a) the caller's keys in the space
 with their sharing state and FULL key material and (b) keys usable by the caller (mode
 `public`; or `allow` with a share row for the caller; or `deny` without one) including
-full key material for copying. Key material in the space is always visible, never
-once-only. Each of the caller's own key entries with mode `allow` or `deny` also carries
-`shared_with`: the `user_id` list of its current `org_key_shares` rows, so the sharing
-editor can present the saved selection.
+full key material for copying. When the caller is the owner, list (b) instead contains
+EVERY other key of the space regardless of share mode, because those keys bill the org
+wallet the owner funds and ORG-17 keeps keys of removed members alive while no member
+surface can see them; the owner is the only surface that can manage them. Both lists
+carry each key's `group_ids` and `model_limits`; list (a) carries `created_at`, list (b)
+carries `created_by`, so the edit dialog can present the saved state. Key material in
+the space is always visible, never once-only. Each of the caller's own key entries with
+mode `allow` or `deny` also carries `shared_with`: the `user_id` list of its current
+`org_key_shares` rows, so the sharing editor can present the saved selection.
 
 ORG-16. `PUT /api/dashboard/orgs/{org_id}/keys/{key_id}/sharing {mode:
 "private"|"public"|"allow"|"deny", member_ids?}` is restricted to the key's owner.
@@ -108,9 +118,12 @@ ORG-16. `PUT /api/dashboard/orgs/{org_id}/keys/{key_id}/sharing {mode:
 ORG-17. Removing a member (`DELETE /api/dashboard/orgs/{org_id}/members/{user_id}`,
 owner only, cannot remove the owner) deletes their membership and share rows. Org keys
 stay owned by the org: keys the member created (`created_by = member`) remain org keys
-that keep working and keep billing the org wallet. Historical request-log rows written
-while the member belonged to the org remain attributed to the org (`request_logs.user_id
-= org_id`), so org analytics and logs are unchanged by removal.
+that keep working and keep billing the org wallet. They stay visible to the owner
+(ORG-15 owner list) and in the limits management surface (ORGL-12), so they remain
+manageable; members other than the owner cannot see them unless the share mode says so.
+Historical request-log rows written while the member belonged to the org remain
+attributed to the org (`request_logs.user_id = org_id`), so org analytics and logs are
+unchanged by removal.
 
 ORG-17a. `DELETE /api/dashboard/orgs/{org_id}/leave` lets a non-owner member leave the
 space. It behaves exactly like ORG-17 removal of the caller: membership and share rows
@@ -119,13 +132,26 @@ are deleted, org keys are untouched, and no balance moves. The owner cannot leav
 
 ORG-17b. `DELETE /api/dashboard/orgs/{org_id}/keys/{key_id}` deletes one org key
 (`created_by = caller`, or the owner for any key). The org's historical request-log
-rows for that key are preserved and keep their org attribution.
+rows for that key are preserved and keep their org attribution. The handler MUST NOT
+run the store's key deletion inside another write transaction: on SQLite every
+`DbPool::write()` acquires the same process-wide mutex, and nesting two would
+deadlock the request.
+
+ORG-17c. `PUT /api/dashboard/orgs/{org_id}/keys/{key_id}` edits one org key with the
+optional fields `{name?, group_ids?, model_limits_enabled?, model_limits?,
+ip_whitelist?, expires_in_days?}`. Authorization equals ORG-17b (the key's creator or
+the owner). `name` must stay 1..64 characters after trimming; `expires_in_days` must be
+>= 1 and replaces `expires_at` with now + N days. `group_ids` follows the ORG-14
+validation rule. The update reuses the ordinary key update path, so Group changes
+invalidate the key's authentication cache and take effect on the next request. Absent
+fields keep their stored value.
 
 ## 6. Surfaces
 
 ORG-18. `/dashboard/org` is the org space page: org switcher (member's orgs), tabs for
 overview (wallet balance, deposit/distribute, invite link card), members (list, remove),
-keys (mine + shared to me, create, sharing editor), and the org ledger. Creation and
+keys (mine + shared to me, create, sharing editor, edit dialog with name/groups/model
+restriction per ORG-17c), and the org ledger. Creation and
 joining are reachable from the same page.
 
 ORG-19. `/join/{token}` is a centered landing: org avatar, display name, owner username,
@@ -177,6 +203,12 @@ ORG-24a. Personal dashboards exclude org usage. `GET /api/dashboard/analytics`,
 `GET /api/dashboard/request-logs`, and the personal key list exclude every row and key
 whose `api_keys.org_id` is not NULL, so org-key usage never appears in a member's
 personal usage, logs, or token list.
+
+ORG-24b. `GET /api/dashboard/tokens/{key_id}/analytics` answers for an org key when the
+caller is a member of the key's space (rule recorded as TM-AN2 in
+`api-token-management.spec.md`). The aggregates follow the key's durable org
+attribution (`request_logs.user_id = org_id`, `api_key_id = key_id`), so the org key
+card's analytics view works for every member and the owner.
 
 ORG-25. `/org/{org_id}` navigation offers Overview, Usage Analysis, Cache Hit Rate, Logs,
 Members, Keys, Wallet; the three analytics/logs pages are the workspace pages bound to the

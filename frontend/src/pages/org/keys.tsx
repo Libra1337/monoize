@@ -9,6 +9,7 @@ import {
   Globe,
   Loader2,
   Lock,
+  Pencil,
   Plus,
   Settings2,
   Trash2,
@@ -32,9 +33,12 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { PageWrapper } from "@/components/ui/motion";
 import { ApiKeyAnalyticsDialog } from "@/components/api-key-analytics-dialog";
-import type { ApiKey } from "@/lib/api";
+import { GroupMultiSelect } from "@/components/groups/GroupPicker";
+import { GroupsBadge } from "@/components/GroupsBadge";
+import type { ApiKey, Group } from "@/lib/api";
 import { api, type OrgDetail, type OrgKeyEntry, type OrgShareMode } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
+import { useDashboardGroups } from "@/lib/swr";
 import { cn } from "@/lib/utils";
 
 const MODES = [
@@ -184,6 +188,7 @@ export function OrgKeys() {
   const [modelsInput, setModelsInput] = useState("");
   const [expiresInput, setExpiresInput] = useState("");
   const [ipInput, setIpInput] = useState("");
+  const [groupIds, setGroupIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [analyticsKey, setAnalyticsKey] = useState<OrgKeyEntry | null>(null);
 
@@ -191,12 +196,29 @@ export function OrgKeys() {
   const [shareMode, setShareMode] = useState<OrgShareMode>("private");
   const [shareMembers, setShareMembers] = useState<string[]>([]);
 
+  // ORG-17c: the edit dialog covers name, groups, and the model restriction.
+  const [editTarget, setEditTarget] = useState<OrgKeyEntry | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editGroupIds, setEditGroupIds] = useState<string[]>([]);
+  const [editModelsEnabled, setEditModelsEnabled] = useState(false);
+  const [editModelsInput, setEditModelsInput] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+
   const { user } = useAuth();
+  const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
+  // The org wallet is an enterprise account, so the key may select only public
+  // selectable enterprise groups (the backend applies the same rule).
+  const selectableOrgGroup = (group: Group) =>
+    group.user_selectable && group.account_class === "enterprise";
   const isOwner = detail.data?.my_role === "owner";
   const defaultMode: OrgShareMode = isOwner ? "public" : "private";
   const modelsList = useMemo(
     () => modelsInput.split(",").map((model) => model.trim()).filter(Boolean),
     [modelsInput],
+  );
+  const editModelsList = useMemo(
+    () => editModelsInput.split(",").map((model) => model.trim()).filter(Boolean),
+    [editModelsInput],
   );
 
   const openCreate = () => {
@@ -206,7 +228,16 @@ export function OrgKeys() {
     setModelsInput("");
     setExpiresInput("");
     setIpInput("");
+    setGroupIds([]);
     setCreateOpen(true);
+  };
+
+  const openEdit = (key: OrgKeyEntry) => {
+    setEditTarget(key);
+    setEditName(key.name);
+    setEditGroupIds(key.group_ids ?? []);
+    setEditModelsEnabled(key.model_limits_enabled ?? false);
+    setEditModelsInput((key.model_limits ?? []).join(", "));
   };
 
   const openSharing = (key: OrgKeyEntry) => {
@@ -243,6 +274,7 @@ export function OrgKeys() {
                         {t("org.modelLimits", { count: key.model_limits?.length ?? 0 })}
                       </Badge>
                     )}
+                    <GroupsBadge groupIds={key.group_ids ?? []} />
                   </div>
                   <button
                     type="button"
@@ -257,6 +289,15 @@ export function OrgKeys() {
                   </button>
                 </div>
                 <div className="flex gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t("org.editKey")}
+                    title={t("org.editKey")}
+                    onClick={() => openEdit(key)}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -310,7 +351,9 @@ export function OrgKeys() {
 
       {keys.data && keys.data.shared.length > 0 && (
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-muted-foreground">{t("org.sharedToMe")}</h2>
+          <h2 className="text-sm font-semibold text-muted-foreground">
+            {isOwner ? t("org.otherKeysTitle") : t("org.sharedToMe")}
+          </h2>
           {keys.data.shared.map((key) => (
             <Card key={key.id} className="rounded-2xl">
               <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
@@ -336,6 +379,39 @@ export function OrgKeys() {
                     <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
                       {t("org.modelLimits", { count: key.model_limits?.length ?? 0 })}
                     </Badge>
+                  )}
+                  <GroupsBadge groupIds={key.group_ids ?? []} />
+                  {isOwner && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t("org.editKey")}
+                      title={t("org.editKey")}
+                      onClick={() => openEdit(key)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  {isOwner && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t("org.deleteKey")}
+                      title={t("org.deleteKey")}
+                      className="text-destructive"
+                      onClick={async () => {
+                        if (!orgId || !window.confirm(t("org.deleteKeyConfirm"))) return;
+                        try {
+                          await api.deleteOrgKey(orgId, key.id);
+                          toast.success(t("org.keyDeleted"));
+                          await keys.mutate();
+                        } catch (error) {
+                          toast.error(error instanceof Error ? error.message : t("common.error"));
+                        }
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
                   )}
                   <Button
                     variant="ghost"
@@ -414,6 +490,17 @@ export function OrgKeys() {
                 <p className="text-sm text-muted-foreground">{t("apiKeys.ipHelp")}</p>
               </div>
               <div className="grid gap-2">
+                <Label>{t("apiKeys.groups")}</Label>
+                <GroupMultiSelect
+                  value={groupIds}
+                  groups={groups}
+                  loading={groupsLoading}
+                  optionFilter={selectableOrgGroup}
+                  onChange={setGroupIds}
+                />
+                <p className="text-sm text-muted-foreground">{t("org.keyGroupsHelp")}</p>
+              </div>
+              <div className="grid gap-2">
                 <Label>{t("org.permTitle")}</Label>
                 <ModeSelector value={mode} onChange={setMode} />
               </div>
@@ -433,6 +520,7 @@ export function OrgKeys() {
                       share_mode: mode,
                       model_limits_enabled: modelsEnabled,
                       model_limits: modelsEnabled ? modelsList : [],
+                      group_ids: groupIds,
                       expires_in_days: expiresInput ? parseInt(expiresInput, 10) : undefined,
                       ip_whitelist: ipInput
                         .split(",")
@@ -510,6 +598,90 @@ export function OrgKeys() {
               {t("common.save")}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editTarget} onOpenChange={(open) => !open && setEditTarget(null)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-w-lg">
+          <div className="flex min-h-0 flex-col p-6">
+            <DialogHeader className="shrink-0">
+              <DialogTitle>{t("org.editKeyTitle", { name: editTarget?.name ?? "" })}</DialogTitle>
+              <DialogDescription>{t("org.editKeyDescription")}</DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="org-key-edit-name">{t("org.keyName")}</Label>
+                <Input
+                  id="org-key-edit-name"
+                  value={editName}
+                  onChange={(event) => setEditName(event.target.value)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("apiKeys.groups")}</Label>
+                <GroupMultiSelect
+                  value={editGroupIds}
+                  groups={groups}
+                  loading={groupsLoading}
+                  optionFilter={selectableOrgGroup}
+                  onChange={setEditGroupIds}
+                />
+                <p className="text-sm text-muted-foreground">{t("org.keyGroupsHelp")}</p>
+              </div>
+              <div className="grid gap-2">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="org-key-edit-models"
+                    checked={editModelsEnabled}
+                    onCheckedChange={setEditModelsEnabled}
+                  />
+                  <Label htmlFor="org-key-edit-models">{t("apiKeys.enableModelLimits")}</Label>
+                </div>
+                {editModelsEnabled && (
+                  <div className="space-y-2">
+                    <Label htmlFor="org-key-edit-model-list">{t("apiKeys.allowedModels")}</Label>
+                    <Input
+                      id="org-key-edit-model-list"
+                      value={editModelsInput}
+                      onChange={(event) => setEditModelsInput(event.target.value)}
+                      placeholder="gpt-4, gpt-3.5-turbo"
+                    />
+                    <p className="text-sm text-muted-foreground">{t("apiKeys.modelsHelp")}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+            <DialogFooter className="shrink-0 pt-2">
+              <Button variant="outline" onClick={() => setEditTarget(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                disabled={editBusy || !editName.trim()}
+                onClick={async () => {
+                  if (!orgId || !editTarget) return;
+                  setEditBusy(true);
+                  try {
+                    await api.updateOrgKey(orgId, editTarget.id, {
+                      name: editName.trim(),
+                      group_ids: editGroupIds,
+                      model_limits_enabled: editModelsEnabled,
+                      model_limits: editModelsEnabled ? editModelsList : [],
+                    });
+                    toast.success(t("org.keyEdited"));
+                    setEditTarget(null);
+                    await keys.mutate();
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : t("common.error"));
+                  } finally {
+                    setEditBusy(false);
+                  }
+                }}
+              >
+                {editBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {t("common.save")}
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </PageWrapper>

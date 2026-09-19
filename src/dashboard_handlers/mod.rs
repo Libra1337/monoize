@@ -79,7 +79,7 @@ pub use orgs::{
     delete_org_key, deposit_to_org, distribute_from_org, invite_preview, join_org, leave_org,
     list_my_orgs, list_org_keys, org_analytics, org_detail, org_ledger, org_limits,
     org_member_usage, org_request_logs, regenerate_invite, remove_org_member, update_key_sharing,
-    update_org_key_limits, update_org_limits,
+    update_org_key, update_org_key_limits, update_org_limits,
 };
 pub use providers::{
     FetchChannelModelsRequest, TestChannelRequest, create_provider, create_wholesale_provider,

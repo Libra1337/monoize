@@ -80,11 +80,13 @@ limits and per-member limits in one call:
 ```
 
 Absent keys and `null` mean "leave unchanged" for members and "clear (unlimited)" when
-explicitly null inside a provided object. Values MUST be integers >= 0 as string or
-number; a negative or non-numeric value returns `400 invalid_request`. The owner cannot
-set a limit on the owner's own member row (the owner is not a consumer of the org wallet
-through member keys; owner spending is the wallet itself and is governed by the space
-limits and the wallet balance).
+explicitly null inside a provided object. Clearing a limit MUST store SQL NULL, never an
+empty string. A stored empty string (written by builds before this rule) MUST read as
+NULL (unlimited) everywhere a limit column is parsed. Values MUST be integers >= 0 as
+string or number; a negative or non-numeric value returns `400 invalid_request`. The
+owner cannot set a limit on the owner's own member row (the owner is not a consumer of
+the org wallet through member keys; owner spending is the wallet itself and is governed
+by the space limits and the wallet balance).
 
 ORGL-11. `PUT /api/dashboard/orgs/{org_id}/keys/{key_id}/limits` (owner, or the key's
 creator) sets the key-level limits with the same body shape

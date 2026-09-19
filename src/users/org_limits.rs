@@ -34,12 +34,15 @@ pub struct OrgLimitBreach {
 }
 
 fn parse_limit(raw: Option<String>) -> Result<Option<i128>, String> {
-    raw.map(|value| {
-        value
-            .parse::<i128>()
-            .map_err(|e| format!("invalid persisted org spend limit {value:?}: {e}"))
-    })
-    .transpose()
+    // Rows written by older builds may carry '' (cleared before NULL-clearing existed);
+    // treat the empty string exactly like NULL: unlimited.
+    raw.filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .parse::<i128>()
+                .map_err(|e| format!("invalid persisted org spend limit {value:?}: {e}"))
+        })
+        .transpose()
 }
 
 /// Charges are persisted as decimal strings. The request-log sums use the canonical
@@ -350,10 +353,14 @@ pub async fn member_usage(
     let bucket_ms = (range_hours.max(1) * 3_600_000) / buckets.max(1);
 
     let sum = sum_charge_expr(is_postgres, "rl");
+    // is_member is an aggregate over the org_members LEFT JOIN so every selected
+    // expression is either grouped (member_id, u.username, bucket_index) or
+    // aggregated; a correlated subquery over k.created_by would be rejected by
+    // PostgreSQL under this GROUP BY.
     let sql = format!(
         "SELECT COALESCE(k.created_by, o.owner_user_id) AS member_id,
                 u.username AS member_username,
-                (SELECT COUNT(*) FROM org_members om WHERE om.org_id = $1 AND om.user_id = (SELECT COALESCE(k.created_by, o.owner_user_id))) AS is_member,
+                CASE WHEN COUNT(om.user_id) > 0 THEN 1 ELSE 0 END AS is_member,
                 {sum} AS total_charge,
                 COUNT(*) AS calls,
                 COALESCE(SUM(CASE WHEN rl.status = 'success' THEN rl.input_tokens ELSE 0 END), 0) AS input_tokens,
@@ -364,8 +371,10 @@ pub async fn member_usage(
          JOIN api_keys k ON k.id = rl.api_key_id
          JOIN orgs o ON o.id = $1
          LEFT JOIN users u ON u.id = COALESCE(k.created_by, o.owner_user_id)
+         LEFT JOIN org_members om ON om.org_id = $1
+                                 AND om.user_id = COALESCE(k.created_by, o.owner_user_id)
          WHERE rl.user_id = $1 AND rl.created_at_unix_ms >= $2
-         GROUP BY member_id, bucket_index"
+         GROUP BY member_id, u.username, bucket_index"
     );
     let rows = store
         .db
@@ -563,7 +572,7 @@ pub async fn apply_org_limit_patch(
             if let Some(value) = space_obj.get(json_key) {
                 if let Some(limit) = parse_limit_patch(value)? {
                     sets.push(format!("{column} = ${idx}"));
-                    params.push(limit.map(|v| v.to_string()).unwrap_or_default().into());
+                    params.push(limit.map(|v| v.to_string()).into());
                     idx += 1;
                 }
             }
@@ -594,7 +603,7 @@ pub async fn apply_org_limit_patch(
                 if let Some(value) = patch_obj.get(json_key) {
                     if let Some(limit) = parse_limit_patch(value)? {
                         sets.push(format!("{column} = ${idx}"));
-                        params.push(limit.map(|v| v.to_string()).unwrap_or_default().into());
+                        params.push(limit.map(|v| v.to_string()).into());
                         idx += 1;
                     }
                 }
@@ -660,7 +669,7 @@ pub async fn apply_org_key_limit_patch(
         if let Some(value) = patch_obj.get(json_key) {
             if let Some(limit) = parse_limit_patch(value)? {
                 sets.push(format!("{column} = ${idx}"));
-                params.push(limit.map(|v| v.to_string()).unwrap_or_default().into());
+                params.push(limit.map(|v| v.to_string()).into());
                 idx += 1;
             }
         }

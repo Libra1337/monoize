@@ -341,7 +341,7 @@ TM-UI2. A non-admin create or update mutation MUST omit `sub_account_balance_nan
 
 TM-AN1. `GET /api/dashboard/tokens/{key_id}/analytics` MUST accept `range` equal to `today`, `7d`, `30d`, or `all`. An absent range MUST equal `today`. Any other value MUST return HTTP `400`.
 
-TM-AN2. A non-Admin caller MUST own `key_id`. An Admin MAY inspect a Key owned by another user. An unauthorized or unknown Key MUST return the existing not-found response.
+TM-AN2. A non-Admin caller MUST own `key_id`, or `key_id` MUST be an org Key (`api_keys.org_id` not NULL) of an organization the caller belongs to (`org_members` row exists); org-wide usage is already member-visible through `orgs.spec.md` ORG-23, so per-Key analytics over the same attribution adds no information. An Admin MAY inspect a Key owned by another user. An unauthorized or unknown Key MUST return the existing not-found response.
 
 TM-AN3. The response MUST contain total, input, cache-read, and output Tokens, request count, consumed Coin in nano units, current independent Key balance, trend buckets, and model rows.
 

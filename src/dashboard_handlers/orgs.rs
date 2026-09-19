@@ -1016,7 +1016,7 @@ pub async fn create_org_key(
             .unwrap_or(!body.model_limits.is_empty()),
         model_limits: body.model_limits.clone(),
         ip_whitelist: body.ip_whitelist.clone(),
-        group_ids: Vec::new(),
+        group_ids: body.group_ids.clone(),
         channel_bindings: Vec::new(),
         model_bindings: Vec::new(),
         max_multiplier: None,
@@ -1066,6 +1066,8 @@ pub struct CreateOrgKeyRequest {
     #[serde(default)]
     pub model_limits: Vec<String>,
     #[serde(default)]
+    pub group_ids: Vec<String>,
+    #[serde(default)]
     pub expires_in_days: Option<i64>,
     #[serde(default)]
     pub ip_whitelist: Vec<String>,
@@ -1080,37 +1082,51 @@ pub async fn list_org_keys(
     let user = get_current_user(&headers, &state).await?;
     let backend = state.db_pool.read().get_database_backend();
     let read = state.db_pool.read();
-    member_role(&*read, backend, &org_id, &user.id)
+    let caller_role = member_role(&*read, backend, &org_id, &user.id)
         .await?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
 
     let mine = read
         .query_all(Statement::from_sql_and_values(
             backend,
-            "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled, k.model_limits, k.created_at,
-                    u.username AS owner_username
+            "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled,
+                    k.model_limits, k.group_ids, k.created_at, u.username AS owner_username
              FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
              WHERE k.org_id = $1 AND k.created_by = $2 ORDER BY k.created_at DESC",
             [org_id.clone().into(), user.id.clone().into()],
         ))
         .await
         .map_err(storage)?;
+    // ORG-15: members see keys shared with them; the owner sees EVERY other key of
+    // the space regardless of share mode — the keys bill the org wallet the owner
+    // funds, and ORG-17 keeps keys of removed members alive and invisible to
+    // members, so the owner's view is the only surface that can manage them.
+    let shared_sql = if caller_role == "owner" {
+        "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled,
+                k.model_limits, k.group_ids, u.username AS owner_username, k.created_by
+         FROM api_keys k
+         LEFT JOIN users u ON u.id = k.created_by
+         WHERE k.org_id = $1 AND k.created_by != $2
+         ORDER BY k.created_at DESC"
+    } else {
+        "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled,
+                k.model_limits, k.group_ids, u.username AS owner_username, k.created_by
+         FROM api_keys k
+         LEFT JOIN users u ON u.id = k.created_by
+         WHERE k.org_id = $1 AND k.created_by != $2 AND (
+                k.org_share_mode = 'public'
+                OR (k.org_share_mode = 'allow'
+                    AND EXISTS (SELECT 1 FROM org_key_shares s
+                                WHERE s.api_key_id = k.id AND s.member_user_id = $2))
+                OR (k.org_share_mode = 'deny'
+                    AND NOT EXISTS (SELECT 1 FROM org_key_shares s
+                                    WHERE s.api_key_id = k.id AND s.member_user_id = $2)))
+         ORDER BY k.created_at DESC"
+    };
     let shared = read
         .query_all(Statement::from_sql_and_values(
             backend,
-            "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled,
-                    k.model_limits, u.username AS owner_username
-             FROM api_keys k
-             JOIN users u ON u.id = k.created_by
-             WHERE k.org_id = $1 AND k.created_by != $2 AND (
-                    k.org_share_mode = 'public'
-                    OR (k.org_share_mode = 'allow'
-                        AND EXISTS (SELECT 1 FROM org_key_shares s
-                                    WHERE s.api_key_id = k.id AND s.member_user_id = $2))
-                    OR (k.org_share_mode = 'deny'
-                        AND NOT EXISTS (SELECT 1 FROM org_key_shares s
-                                        WHERE s.api_key_id = k.id AND s.member_user_id = $2)))
-             ORDER BY k.created_at DESC",
+            shared_sql,
             [org_id.clone().into(), user.id.clone().into()],
         ))
         .await
@@ -1164,6 +1180,9 @@ pub async fn list_org_keys(
                 "model_limits": serde_json::from_str::<Vec<String>>(
                     &row.try_get::<String>("", "model_limits").unwrap_or_else(|_| "[]".to_string()),
                 ).unwrap_or_default(),
+                "group_ids": serde_json::from_str::<Vec<String>>(
+                    &row.try_get::<String>("", "group_ids").unwrap_or_else(|_| "[]".to_string()),
+                ).unwrap_or_default(),
                 "created_at": row.try_get::<String>("", "created_at").unwrap_or_default(),
                 // SA-SCOPE6: label the account so a reader never compares a sub-account
                 // balance against a wallet balance.
@@ -1184,7 +1203,11 @@ pub async fn list_org_keys(
                 "model_limits": serde_json::from_str::<Vec<String>>(
                     &row.try_get::<String>("", "model_limits").unwrap_or_else(|_| "[]".to_string()),
                 ).unwrap_or_default(),
+                "group_ids": serde_json::from_str::<Vec<String>>(
+                    &row.try_get::<String>("", "group_ids").unwrap_or_else(|_| "[]".to_string()),
+                ).unwrap_or_default(),
                 "owner_username": row.try_get::<String>("", "owner_username").unwrap_or_default(),
+                "created_by": row.try_get::<Option<String>>("", "created_by").unwrap_or_default(),
             }))
             .collect::<Vec<_>>(),
     })))
@@ -1401,11 +1424,84 @@ pub async fn delete_org_key(
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
     let backend = state.db_pool.read().get_database_backend();
-    let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
-    let role = member_role(&tx, backend, &org_id, &user.id)
+    // Checks run on the read pool. The mutations below MUST NOT nest: on SQLite every
+    // DbPool::write() takes the same process-wide mutex, so calling the store's
+    // delete (which takes its own write guard) inside an outer write transaction
+    // would deadlock. Share rows go first in their own short transaction; orphaned
+    // share rows can never match a live key, so the split is safe.
+    let (role, created_by) = {
+        let read = state.db_pool.read();
+        let role = member_role(&*read, backend, &org_id, &user.id)
+            .await?
+            .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
+        let key = read
+            .query_one(Statement::from_sql_and_values(
+                backend,
+                "SELECT created_by FROM api_keys WHERE id = $1 AND org_id = $2",
+                [key_id.clone().into(), org_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "key not found"))?;
+        (
+            role,
+            key.try_get::<Option<String>>("", "created_by")
+                .map_err(storage)?,
+        )
+    };
+    if role != "owner" && created_by.as_deref() != Some(user.id.as_str()) {
+        return Err(forbidden(
+            "only the key creator or the owner can delete an org key",
+        ));
+    }
+    // The share-row delete gets its own scope so the SQLite write guard drops at
+    // the closing brace, BEFORE the store's delete takes the same mutex below.
+    {
+        let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
+        tx.execute(Statement::from_sql_and_values(
+            backend,
+            "DELETE FROM org_key_shares WHERE api_key_id = $1",
+            [key_id.clone().into()],
+        ))
+        .await
+        .map_err(storage)?;
+        tx.commit().await.map_err(storage)?;
+    }
+    state
+        .user_store
+        .delete_api_key(&key_id)
+        .await
+        .map_err(|e| bad_request(&e))?;
+    Ok(Json(json!({ "success": true })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateOrgKeyRequest {
+    pub name: Option<String>,
+    pub group_ids: Option<Vec<String>>,
+    pub model_limits_enabled: Option<bool>,
+    pub model_limits: Option<Vec<String>>,
+    pub ip_whitelist: Option<Vec<String>>,
+    pub expires_in_days: Option<i64>,
+}
+
+/// ORG-17c: edit an org key's name, groups, model restriction, IP whitelist, or
+/// expiry. Creator or owner — the same permission set as deletion (ORG-17b).
+/// Group selection is validated against the org wallet row (enterprise public
+/// groups), the same rule the personal key editor applies to its owner.
+pub async fn update_org_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((org_id, key_id)): Path<(String, String)>,
+    Json(body): Json<UpdateOrgKeyRequest>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let backend = state.db_pool.read().get_database_backend();
+    let read = state.db_pool.read();
+    let role = member_role(&*read, backend, &org_id, &user.id)
         .await?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
-    let key = tx
+    let key = read
         .query_one(Statement::from_sql_and_values(
             backend,
             "SELECT created_by FROM api_keys WHERE id = $1 AND org_id = $2",
@@ -1417,23 +1513,52 @@ pub async fn delete_org_key(
     let created_by: Option<String> = key.try_get("", "created_by").map_err(storage)?;
     if role != "owner" && created_by.as_deref() != Some(user.id.as_str()) {
         return Err(forbidden(
-            "only the key creator or the owner can delete an org key",
+            "only the key creator or the owner can edit an org key",
         ));
     }
-    tx.execute(Statement::from_sql_and_values(
-        backend,
-        "DELETE FROM org_key_shares WHERE api_key_id = $1",
-        [key_id.clone().into()],
-    ))
-    .await
-    .map_err(storage)?;
-    state
+    if let Some(name) = body.name.as_deref() {
+        let name = name.trim();
+        if name.is_empty() || name.len() > 64 {
+            return Err(bad_request("name must be 1..64 characters"));
+        }
+    }
+    if body.expires_in_days.is_some_and(|days| days < 1) {
+        return Err(bad_request("expires_in_days must be positive"));
+    }
+    let expires_at = body
+        .expires_in_days
+        .map(|days| (Utc::now() + Duration::days(days)).to_rfc3339());
+    let input = crate::users::UpdateApiKeyInput {
+        name: body
+            .name
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty()),
+        enabled: None,
+        sub_account_enabled: None,
+        sub_account_balance_nano_usd: None,
+        model_limits_enabled: body.model_limits_enabled,
+        model_limits: body.model_limits,
+        ip_whitelist: body.ip_whitelist,
+        group_ids: body.group_ids,
+        channel_bindings: None,
+        model_bindings: None,
+        max_multiplier: None,
+        transforms: None,
+        model_redirects: None,
+        reasoning_envelope_enabled: None,
+        request_capture_mode: None,
+        expires_at,
+    };
+    let updated = state
         .user_store
-        .delete_api_key(&key_id)
+        .update_api_key(&key_id, input, false)
         .await
         .map_err(|e| bad_request(&e))?;
-    tx.commit().await.map_err(storage)?;
-    Ok(Json(json!({ "success": true })))
+    Ok(Json(json!({
+        "success": true,
+        "group_ids": updated.group_ids,
+        "name": updated.name,
+    })))
 }
 
 async fn require_org_member(
@@ -1856,9 +1981,10 @@ pub async fn org_limits(
     let read = state.db_pool.read();
     let backend = read.get_database_backend();
     let owner_id: String = read
-        .query_one(Statement::from_string(
+        .query_one(Statement::from_sql_and_values(
             backend,
-            format!("SELECT owner_user_id FROM orgs WHERE id = '{org_id}'"),
+            "SELECT owner_user_id FROM orgs WHERE id = $1",
+            [org_id.clone().into()],
         ))
         .await
         .map_err(storage)?
@@ -1877,14 +2003,13 @@ pub async fn org_limits(
     .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     let member_rows = read
-        .query_all(Statement::from_string(
+        .query_all(Statement::from_sql_and_values(
             backend,
-            format!(
-                "SELECT m.user_id, u.username, m.role,
-                        m.spend_limit_total_nano_usd, m.spend_limit_hourly_nano_usd, m.spend_limit_daily_nano_usd
-                 FROM org_members m LEFT JOIN users u ON u.id = m.user_id
-                 WHERE m.org_id = '{org_id}' ORDER BY m.joined_at"
-            ),
+            "SELECT m.user_id, u.username, m.role,
+                    m.spend_limit_total_nano_usd, m.spend_limit_hourly_nano_usd, m.spend_limit_daily_nano_usd
+             FROM org_members m LEFT JOIN users u ON u.id = m.user_id
+             WHERE m.org_id = $1 ORDER BY m.joined_at",
+            [org_id.clone().into()],
         ))
         .await
         .map_err(storage)?;
@@ -1904,9 +2029,9 @@ pub async fn org_limits(
             "username": row.try_get::<Option<String>>("", "username").ok().flatten(),
             "role": row.try_get::<String>("", "role").map_err(storage)?,
             "limits": {
-                "total_nano_usd": row.try_get::<Option<String>>("", "spend_limit_total_nano_usd").ok().flatten(),
-                "hourly_nano_usd": row.try_get::<Option<String>>("", "spend_limit_hourly_nano_usd").ok().flatten(),
-                "daily_nano_usd": row.try_get::<Option<String>>("", "spend_limit_daily_nano_usd").ok().flatten(),
+                "total_nano_usd": row.try_get::<Option<String>>("", "spend_limit_total_nano_usd").ok().flatten().filter(|v| !v.is_empty()),
+                "hourly_nano_usd": row.try_get::<Option<String>>("", "spend_limit_hourly_nano_usd").ok().flatten().filter(|v| !v.is_empty()),
+                "daily_nano_usd": row.try_get::<Option<String>>("", "spend_limit_daily_nano_usd").ok().flatten().filter(|v| !v.is_empty()),
             },
             "spent": {
                 "total_nano_usd": levels.member.as_ref().map(|m| m.total.spent_nano_usd.to_string()).unwrap_or_else(|| "0".to_string()),
@@ -1917,14 +2042,13 @@ pub async fn org_limits(
     }
 
     let key_rows = read
-        .query_all(Statement::from_string(
+        .query_all(Statement::from_sql_and_values(
             backend,
-            format!(
-                "SELECT k.id, k.name, k.created_by, u.username AS creator_username,
-                        k.spend_limit_total_nano_usd, k.spend_limit_hourly_nano_usd, k.spend_limit_daily_nano_usd
-                 FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
-                 WHERE k.org_id = '{org_id}' ORDER BY k.created_at"
-            ),
+            "SELECT k.id, k.name, k.created_by, u.username AS creator_username,
+                    k.spend_limit_total_nano_usd, k.spend_limit_hourly_nano_usd, k.spend_limit_daily_nano_usd
+             FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+             WHERE k.org_id = $1 ORDER BY k.created_at",
+            [org_id.clone().into()],
         ))
         .await
         .map_err(storage)?;
@@ -1945,9 +2069,9 @@ pub async fn org_limits(
             "created_by": row.try_get::<Option<String>>("", "created_by").ok().flatten(),
             "creator_username": row.try_get::<Option<String>>("", "creator_username").ok().flatten(),
             "limits": {
-                "total_nano_usd": row.try_get::<Option<String>>("", "spend_limit_total_nano_usd").ok().flatten(),
-                "hourly_nano_usd": row.try_get::<Option<String>>("", "spend_limit_hourly_nano_usd").ok().flatten(),
-                "daily_nano_usd": row.try_get::<Option<String>>("", "spend_limit_daily_nano_usd").ok().flatten(),
+                "total_nano_usd": row.try_get::<Option<String>>("", "spend_limit_total_nano_usd").ok().flatten().filter(|v| !v.is_empty()),
+                "hourly_nano_usd": row.try_get::<Option<String>>("", "spend_limit_hourly_nano_usd").ok().flatten().filter(|v| !v.is_empty()),
+                "daily_nano_usd": row.try_get::<Option<String>>("", "spend_limit_daily_nano_usd").ok().flatten().filter(|v| !v.is_empty()),
             },
             "spent": {
                 "total_nano_usd": levels.key.as_ref().map(|k| k.total.spent_nano_usd.to_string()).unwrap_or_else(|| "0".to_string()),
@@ -2010,11 +2134,10 @@ pub async fn update_org_key_limits(
     let read = state.db_pool.read();
     let backend = read.get_database_backend();
     let key_row = read
-        .query_one(Statement::from_string(
+        .query_one(Statement::from_sql_and_values(
             backend,
-            format!(
-                "SELECT created_by, user_id FROM api_keys WHERE id = '{key_id}' AND org_id = '{org_id}'"
-            ),
+            "SELECT created_by, user_id FROM api_keys WHERE id = $1 AND org_id = $2",
+            [key_id.clone().into(), org_id.clone().into()],
         ))
         .await
         .map_err(storage)?

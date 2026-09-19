@@ -2032,7 +2032,7 @@ impl UserStore {
     pub async fn get_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key_prefix = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key_prefix = $1",
                 vec![prefix.into()],
             ))
             .await
@@ -2050,7 +2050,7 @@ impl UserStore {
             .db
             .read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key = $1",
                 vec![key.into()],
             ))
             .await
@@ -2189,7 +2189,8 @@ impl UserStore {
                         a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits,
                         a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier,
                         a.transforms, a.model_redirects, a.reasoning_envelope_enabled,
-                        a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role
+                        a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by,
+                        u.role AS owner_role
                  FROM api_keys a JOIN users u ON u.id = a.user_id
                  WHERE a.user_id = $1 AND a.org_id IS NULL ORDER BY a.created_at DESC",
                 vec![user_id.into()],
@@ -2232,7 +2233,8 @@ impl UserStore {
                         a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits,
                         a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier,
                         a.transforms, a.model_redirects, a.reasoning_envelope_enabled,
-                        a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role
+                        a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by,
+                        u.role AS owner_role
                  FROM api_keys a JOIN users u ON u.id = a.user_id
                  WHERE a.id = $1 AND a.user_id = $2",
                 vec![id.into(), user_id.into()],
@@ -3272,7 +3274,7 @@ impl UserStore {
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.id = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.id = $1",
                 vec![id.into()],
             ))
             .await

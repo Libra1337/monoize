@@ -85,8 +85,10 @@ export interface OrgKeyEntry {
   created_at?: string;
   key?: string;
   owner_username?: string;
+  created_by?: string | null;
   model_limits_enabled?: boolean;
   model_limits?: string[];
+  group_ids?: string[];
 }
 
 export interface OrgSpendLimitSet {
@@ -1794,6 +1796,7 @@ class ApiClient {
       share_mode?: OrgShareMode;
       model_limits_enabled?: boolean;
       model_limits?: string[];
+      group_ids?: string[];
       expires_in_days?: number;
       ip_whitelist?: string[];
     },
@@ -1805,6 +1808,25 @@ class ApiClient {
         body: JSON.stringify(input),
       },
     );
+  }
+
+  /** ORG-17c: edit an org key (creator or owner). */
+  async updateOrgKey(
+    orgId: string,
+    keyId: string,
+    input: {
+      name?: string;
+      group_ids?: string[];
+      model_limits_enabled?: boolean;
+      model_limits?: string[];
+      ip_whitelist?: string[];
+      expires_in_days?: number;
+    },
+  ) {
+    return this.request<{ success: boolean }>(`/orgs/${orgId}/keys/${keyId}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
   }
 
   async updateOrgKeySharing(

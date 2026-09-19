@@ -877,8 +877,40 @@ pub async fn get_api_key_analytics(
         .user_store
         .get_api_key_by_id(&key_id)
         .await
-        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
-        .filter(|key| key.user_id == user.id || user.role.can_manage_users())
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
+    // ORG-24b/TM-AN2: a key of a space is readable by every member of that space;
+    // the org surfaces already expose org-wide usage to members, so per-key
+    // analytics adds no new information. Personal keys stay owner-or-admin only.
+    let org_member = match api_key.as_ref().and_then(|key| key.org_id.clone()) {
+        Some(key_org_id) => {
+            use sea_orm::ConnectionTrait as _;
+            let read = state.db_pool.read();
+            let backend = read.get_database_backend();
+            read.query_one(sea_orm::Statement::from_sql_and_values(
+                backend,
+                "SELECT 1 AS present FROM org_members WHERE org_id = $1 AND user_id = $2 LIMIT 1",
+                [key_org_id.into(), user.id.clone().into()],
+            ))
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    error.to_string(),
+                )
+            })?
+            .is_some()
+        }
+        None => false,
+    };
+    let api_key = api_key
+        .filter(|key| {
+            key.user_id == user.id
+                || user.role.can_manage_users()
+                || (key.org_id.is_some() && org_member)
+        })
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "API key not found"))?;
 
     let now = chrono::Utc::now();
