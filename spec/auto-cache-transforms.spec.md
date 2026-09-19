@@ -290,7 +290,9 @@ ACPS-4. Config schema:
   `close`. An absent `blocks` means the built-in block set of ACPS-8. An empty array
   disables block matching;
 - `line_prefixes`: optional array of strings. An absent `line_prefixes` means the built-in
-  line set of ACPS-9. An empty array disables line matching.
+  line set of ACPS-9. An empty array disables line matching;
+- `stabilize_user_preamble`: optional boolean, default `true`. Extends the extraction
+  region per ACPS-22.
 
 ACPS-5. `parse_config` MUST reject a `blocks` entry whose `open` or `close` is empty or
 whitespace-only, and MUST reject a `line_prefixes` entry that is empty or whitespace-only.
@@ -376,6 +378,31 @@ line in the prefix and is a no-op.
 ACPS-21. The transform does not guarantee a cache hit. An upstream cache hit additionally
 requires upstream eligibility, a minimum prompt size, and a stable prefix in the caller's
 own content.
+
+ACPS-22. When `stabilize_user_preamble = true` (the default) and the node immediately after
+the stable prefix is a `Node::Text` with `role = User`, that one node joins the extraction
+region of ACPS-13 through ACPS-19 in place of the system run alone. Volatile blocks and
+lines are matched inside it with the same rules as ACPS-10, extracted, and relocated or
+stripped identically. Agents such as hermes front-load per-request metadata (clock,
+environment snapshot, run id) into the first user message instead of the system prompt;
+without this rule the implicit prefix cache diverges at the first conversation node and
+only the system region is ever read from cache. Measured on
+`DeepSeek/DeepSeek-V4-Flash` over `chat_completion` via `api.vectron.meta-stone.com`
+on 2026-09-19: append-only conversations of 100K-180K input tokens read only 5,888-8,192
+cache tokens (3-4%), matching the system-prompt size, while a sibling client whose
+preamble is stable read 94-99%.
+
+ACPS-23. Only the FIRST User node after the stable prefix is eligible. A User node that
+follows another conversation node is never read or written, so ACPS-12's protection for
+ordinary conversation content is unchanged.
+
+ACPS-24. When `stabilize_user_preamble = false`, behavior is exactly the pre-ACPS-22
+transform: the extraction region is the stable prefix alone.
+
+ACPS-25. Extraction from the user preamble shares idempotency with ACPS-20: after a
+successful relocate the extracted lines sit in the trailing User node, which is not the
+first User node after the stable prefix, so a second application finds nothing to
+extract.
 
 ## 8. Transform Ordering Guidance
 

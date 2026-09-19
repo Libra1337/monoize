@@ -53,6 +53,7 @@ Anthropic（`messages`）上流ではこの変換は何もしません。この�
 | `action` | string | いいえ | `"relocate"` | `relocate` は一致した行を既存のすべてのメッセージの後ろの末尾 user ノードへ移動します。`strip` は削除します。 |
 | `blocks` | array | いいえ | 組み込みの集合 | 照合する行区切りのブロック標識です。各項目に `open` と `close` が必要です。空の配列はブロック照合を無効にします。 |
 | `line_prefixes` | array | いいえ | 組み込みの集合 | 照合する行の接頭辞です。空の配列は行照合を無効にします。 |
+| `stabilize_user_preamble` | boolean | いいえ | `true` | system の直後にある最初の user メッセージからも一致ブロックを抽出します。hermes などの agent はリクエストごとに変わるメタデータを system ではなくここに置きます。 |
 
 組み込みのブロック集合は `<env>`、`<environment_context>`、`<user_info>`、`<timestamp>` です。組み込みの行集合は `x-anthropic-billing-header:` です。
 

@@ -53,6 +53,7 @@ The transform is a no-op for an Anthropic (`messages`) upstream. That protocol c
 | `action` | string | No | `"relocate"` | `relocate` moves the matched lines to a trailing user node after every existing message. `strip` deletes them. |
 | `blocks` | array | No | Built-in set | Line-delimited block markers to match. Each entry needs `open` and `close`. An empty array disables block matching. |
 | `line_prefixes` | array | No | Built-in set | Line prefixes to match. An empty array disables line matching. |
+| `stabilize_user_preamble` | boolean | No | `true` | Also extract matched blocks from the first user message that follows the system prompt. Agents such as hermes place per-request metadata there instead of the system prompt. |
 
 The built-in block set is `<env>`, `<environment_context>`, `<user_info>`, and `<timestamp>`. The built-in line set is `x-anthropic-billing-header:`.
 

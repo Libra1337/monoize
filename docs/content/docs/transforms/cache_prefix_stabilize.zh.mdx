@@ -53,6 +53,7 @@ description: 把每次请求都会变的 agent 元数据移到整次请求末尾
 | `action` | string | 否 | `"relocate"` | `relocate` 把匹配到的行移到所有已有消息之后的末尾 user 节点；`strip` 直接删除。 |
 | `blocks` | array | 否 | 内置集合 | 要匹配的按行分隔的块标记。每项需要 `open` 和 `close`。空数组表示禁用块匹配。 |
 | `line_prefixes` | array | 否 | 内置集合 | 要匹配的行前缀。空数组表示禁用行匹配。 |
+| `stabilize_user_preamble` | boolean | 否 | `true` | 同时从 system 之后的首条 user 消息中提取匹配的块。hermes 等 agent 把每次请求都变动的元数据放在这里而不是 system 提示词里。 |
 
 内置块集合是 `<env>`、`<environment_context>`、`<user_info>` 和 `<timestamp>`。内置行集合是 `x-anthropic-billing-header:`。
 

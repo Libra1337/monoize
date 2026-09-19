@@ -53,6 +53,7 @@ description: 把每次請求都會變的 agent 中介資料移到整次請求末
 | `action` | string | 否 | `"relocate"` | `relocate` 把比對到的行移到所有既有訊息之後的末尾 user 節點；`strip` 直接刪除。 |
 | `blocks` | array | 否 | 內建集合 | 要比對的按行分隔的區塊標記。每項需要 `open` 和 `close`。空陣列表示停用區塊比對。 |
 | `line_prefixes` | array | 否 | 內建集合 | 要比對的行前綴。空陣列表示停用行比對。 |
+| `stabilize_user_preamble` | boolean | 否 | `true` | 同時從 system 之後的首條 user 訊息中提取比對到的區塊。hermes 等 agent 會把每次請求都變動的中繼資料放在這裡而非 system 提示詞。 |
 
 內建區塊集合是 `<env>`、`<environment_context>`、`<user_info>` 和 `<timestamp>`。內建行集合是 `x-anthropic-billing-header:`。
 

@@ -56,6 +56,16 @@ struct Config {
     /// Absent means the built-in agent line set. An empty array disables line matching.
     #[serde(default)]
     line_prefixes: Option<Vec<String>>,
+    /// Also extract volatile blocks from the first User node that directly follows the
+    /// leading System/Developer run. Agents that front-load their metadata into the first
+    /// user message (instead of the system prompt) diverge the prefix cache at that node,
+    /// so the whole conversation history misses the cache. Default: enabled.
+    #[serde(default = "default_true")]
+    stabilize_user_preamble: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl TransformConfig for Config {
@@ -121,7 +131,8 @@ impl Transform for CachePrefixStabilizeTransform {
                         "additionalProperties": false
                     }
                 },
-                "line_prefixes": {"type": "array", "items": {"type": "string"}}
+                "line_prefixes": {"type": "array", "items": {"type": "string"}},
+                "stabilize_user_preamble": {"type": "boolean", "default": true}
             },
             "additionalProperties": false
         })
@@ -217,8 +228,23 @@ impl Transform for CachePrefixStabilizeTransform {
             return Ok(());
         }
 
+        // The user preamble region: the first User node directly after the leading
+        // System/Developer run. Agents such as hermes front-load per-request metadata
+        // (clock, environment, run id) into that node instead of the system prompt, which
+        // diverges an implicit prefix cache at the first conversation node. Blocks and
+        // lines matched here are extracted with the same rules as the system region.
+        let mut scan_end = prefix_len;
+        if cfg.stabilize_user_preamble
+            && matches!(
+                req.input.get(prefix_len).map(Node::role),
+                Some(Some(OrdinaryRole::User))
+            )
+        {
+            scan_end = prefix_len + 1;
+        }
+
         let mut volatile: Vec<String> = Vec::new();
-        for node in req.input[..prefix_len].iter_mut() {
+        for node in req.input[..scan_end].iter_mut() {
             let Node::Text { content, .. } = node else {
                 continue;
             };
@@ -234,7 +260,7 @@ impl Transform for CachePrefixStabilizeTransform {
 
         let mut index = 0usize;
         req.input.retain(|node| {
-            let keep = !matches!(node, Node::Text { content, .. } if index < prefix_len && content.is_empty());
+            let keep = !matches!(node, Node::Text { content, .. } if index < scan_end && content.is_empty());
             index += 1;
             keep
         });
@@ -417,6 +443,112 @@ mod tests {
             req.input[3].role(),
             Some(OrdinaryRole::User),
             "the relocated block must be a trailing user node so Gemini and Responses cannot hoist it"
+        );
+    }
+
+    #[tokio::test]
+    async fn extracts_volatile_blocks_from_the_first_user_preamble() {
+        // hermes layout: static system, then the first user message front-loads an
+        // environment block that changes per request, then the conversation.
+        let mut req = request(vec![
+            Node::text(OrdinaryRole::System, "You are a coding agent."),
+            Node::text(
+                OrdinaryRole::User,
+                "<env>\nToday's date: 2026-09-19\nRun id: 7f3a\n</env>\nFind the bug in main.rs.",
+            ),
+            Node::assistant_text("I found it."),
+            Node::text(OrdinaryRole::User, "Fix it."),
+        ]);
+        run(&mut req, json!({}), Some(ProviderType::ChatCompletion)).await;
+
+        assert_eq!(req.input.len(), 5);
+        assert_eq!(text_of(&req.input[0]), "You are a coding agent.");
+        assert_eq!(
+            text_of(&req.input[1]),
+            "Find the bug in main.rs.",
+            "the stable part of the first user message stays in place"
+        );
+        assert_eq!(text_of(&req.input[2]), "I found it.");
+        assert_eq!(text_of(&req.input[3]), "Fix it.");
+        assert_eq!(
+            text_of(&req.input[4]),
+            "<env>\nToday's date: 2026-09-19\nRun id: 7f3a\n</env>"
+        );
+        assert_eq!(req.input[4].role(), Some(OrdinaryRole::User));
+    }
+
+    #[tokio::test]
+    async fn user_preamble_extraction_is_idempotent() {
+        let mut req = request(vec![
+            Node::text(OrdinaryRole::System, "You are a coding agent."),
+            Node::text(
+                OrdinaryRole::User,
+                "<env>\nRun id: 7f3a\n</env>\nFind the bug.",
+            ),
+            Node::text(OrdinaryRole::User, "Fix it."),
+        ]);
+        run(&mut req, json!({}), Some(ProviderType::ChatCompletion)).await;
+        let after_first: Vec<String> = req
+            .input
+            .iter()
+            .map(|node| text_of(node).to_string())
+            .collect();
+        run(&mut req, json!({}), Some(ProviderType::ChatCompletion)).await;
+        let after_second: Vec<String> = req
+            .input
+            .iter()
+            .map(|node| text_of(node).to_string())
+            .collect();
+        assert_eq!(after_first, after_second);
+        assert_eq!(after_second[1], "Find the bug.");
+    }
+
+    #[tokio::test]
+    async fn stabilize_user_preamble_false_keeps_the_first_user_message_untouched() {
+        let mut req = request(vec![
+            Node::text(OrdinaryRole::System, "You are a coding agent."),
+            Node::text(
+                OrdinaryRole::User,
+                "<env>\nRun id: 7f3a\n</env>\nFind the bug.",
+            ),
+        ]);
+        run(
+            &mut req,
+            json!({"stabilize_user_preamble": false}),
+            Some(ProviderType::ChatCompletion),
+        )
+        .await;
+
+        assert_eq!(
+            text_of(&req.input[1]),
+            "<env>\nRun id: 7f3a\n</env>\nFind the bug.",
+            "ACPS-24: with the flag off, user nodes are never read or written"
+        );
+        assert_eq!(req.input.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_volatile_block_in_a_later_user_node_is_never_extracted() {
+        let mut req = request(vec![
+            Node::text(OrdinaryRole::System, "You are a coding agent."),
+            Node::text(OrdinaryRole::User, "hello"),
+            Node::assistant_text("hi"),
+            Node::text(
+                OrdinaryRole::User,
+                "<env>\nRun id: 7f3a\n</env>\nNext question.",
+            ),
+        ]);
+        run(&mut req, json!({}), Some(ProviderType::ChatCompletion)).await;
+
+        assert_eq!(
+            text_of(&req.input[3]),
+            "<env>\nRun id: 7f3a\n</env>\nNext question.",
+            "ACPS-23: only the first user node after the stable prefix is eligible"
+        );
+        assert_eq!(
+            req.input.len(),
+            4,
+            "nothing volatile found, no trailing node"
         );
     }
 
