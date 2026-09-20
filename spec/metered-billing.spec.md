@@ -366,9 +366,10 @@ MB-A7. Admin endpoint `POST /api/dashboard/billing-rates/profiles/{profile}/copy
 every `billing_rate_records` row whose `pricing_profile` equals `{profile}` to the
 `target_profile` given in the body, and MUST return the number of rows copied.
 
-Profile names must stay disjoint across account classes (PP-ENT6), so an operator who wants
-the same prices for both classes must hold two named copies. Recreating a profile of several
-hundred rows by hand is not a workable alternative.
+Profile names may now be shared across account classes (PP-ENT6 removed): request-side
+routing keeps classes isolated, so a shared Profile bills every class the same rows. Copy
+remains the way to diverge prices per class when an operator wants class-differentiated
+pricing. Recreating a profile of several hundred rows by hand is not a workable alternative.
 
 MB-A7a. The endpoint MUST reject, without writing any row:
 - a `target_profile` that is empty or whitespace only, with `invalid_request`;

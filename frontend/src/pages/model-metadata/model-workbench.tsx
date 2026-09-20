@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableVirtuoso } from "react-virtuoso";
+import { mutate } from "swr";
 import { VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
 import {
   useBillingRateProfiles,
@@ -50,6 +51,7 @@ import {
   usePricingProfilePatterns,
   syncBillingRatesCatalog,
   syncModelMetadata,
+  SWR_KEYS,
 } from "@/lib/swr";
 import type { BillingRateRecord, ModelMetadataRecord } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -419,6 +421,14 @@ export function ModelWorkbench({
                     ? []
                     : selectedModelRates
                 }
+                metadata={
+                  creatingModel != null
+                    ? null
+                    : (metadata.find((m) => m.model_id === selectedModel) ?? null)
+                }
+                onMetadataChanged={() => {
+                  void mutate(SWR_KEYS.MODEL_METADATA);
+                }}
                 onRatesChanged={() => {
                   void revalidateRates();
                   void revalidateProfiles();

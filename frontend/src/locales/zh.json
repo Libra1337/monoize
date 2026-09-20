@@ -1820,7 +1820,16 @@
       "saved": "价格已保存",
       "saveFailed": "保存失败",
       "deleteOverride": "删除手动覆盖",
-      "overrideDeleted": "手动覆盖已移除;同步价格(如有)现在生效"
+      "overrideDeleted": "手动覆盖已移除;同步价格(如有)现在生效",
+      "limitsTitle": "模型限制",
+      "limitsHint": "上下文窗口与 token 上限。留空表示不限制。没有元数据记录时保存会自动创建。",
+      "maxInput": "最大输入",
+      "maxOutput": "最大输出",
+      "maxTotal": "总上限",
+      "saveLimits": "保存限制",
+      "limitsSaved": "模型限制已保存",
+      "limitsSaveFailed": "模型限制保存失败",
+      "limitsInvalid": "限制必须是非负整数"
     },
     "addPriceModel": "添加价格",
     "addPriceModelTitle": "添加模型价格",

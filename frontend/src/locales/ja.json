@@ -1816,7 +1816,16 @@
       "saved": "価格を保存しました",
       "saveFailed": "保存に失敗しました",
       "deleteOverride": "手動上書きを削除",
-      "overrideDeleted": "手動上書きを削除しました。同期価格(あれば)が適用されます"
+      "overrideDeleted": "手動上書きを削除しました。同期価格(あれば)が適用されます",
+      "limitsTitle": "モデル制限",
+      "limitsHint": "コンテキストウィンドウとトークン上限です。空欄は無制限です。メタデータがない場合、保存時に作成されます。",
+      "maxInput": "最大入力",
+      "maxOutput": "最大出力",
+      "maxTotal": "合計上限",
+      "saveLimits": "制限を保存",
+      "limitsSaved": "モデル制限を保存しました",
+      "limitsSaveFailed": "モデル制限の保存に失敗しました",
+      "limitsInvalid": "制限は 0 以上の整数にしてください"
     },
     "addPriceModel": "価格を追加",
     "addPriceModelTitle": "モデル価格を追加",

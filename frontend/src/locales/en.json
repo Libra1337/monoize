@@ -1820,7 +1820,16 @@
       "saved": "Prices saved",
       "saveFailed": "Save failed",
       "deleteOverride": "Delete manual override",
-      "overrideDeleted": "Manual override removed; synced prices (if any) now apply"
+      "overrideDeleted": "Manual override removed; synced prices (if any) now apply",
+      "limitsTitle": "Model limits",
+      "limitsHint": "Context window and token caps. Leave blank for unlimited. Saving creates the metadata record when none exists.",
+      "maxInput": "Max input",
+      "maxOutput": "Max output",
+      "maxTotal": "Max total",
+      "saveLimits": "Save limits",
+      "limitsSaved": "Model limits saved",
+      "limitsSaveFailed": "Failed to save model limits",
+      "limitsInvalid": "Limits must be non-negative integers"
     },
     "addPriceModel": "Add price",
     "addPriceModelTitle": "Add a model price",

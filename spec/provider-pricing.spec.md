@@ -464,29 +464,22 @@ and `effective_profile` derives from the selected Provider or Channel (PP-M8), w
 class is already restricted to the authenticated user account class. An Enterprise request
 therefore reaches only Enterprise Providers and resolves only their Profiles.
 
-PP-ENT6. Required invariant that PP-ENT5 depends on: one Profile name MUST NOT be reachable
-from Providers of both account classes. A shared Profile name would make one set of
-billing-rate records resolve for both classes and defeat PP-ENT2 and PP-ENT3, even
-though every routing query filters by account class. Enterprise and standard Providers
-therefore MUST use disjoint Profile names. The exclusivity applies among the classes
-`standard`, `enterprise`, and `private` only; the `agent` class is exempt by PP-W8.
+PP-ENT6. (Removed.) A Profile name MAY be reachable from Providers of several account
+classes. Price isolation is enforced by request-side routing, not by Profile-name
+exclusivity: every routing query filters Providers by the authenticated user account class
+(PP-ENT2/PP-ENT3), so a class only ever resolves the Profiles of its own Providers.
+Sharing one Profile across classes therefore bills every class the same rows — a
+deliberate operator choice when both classes should share prices — and cannot leak a
+class-specific price, because there is only one price set under the name. Operators who
+want class-differentiated prices create per-class Profiles (for example `x` and
+`x-企业`) as before.
 
-PP-ENT7. Provider create and Provider update MUST enforce PP-ENT6 before the write commits.
-The account class is the class of the Group the write targets, which is the requested Group
-when the write moves the Provider and the current Group otherwise. A Profile name is
-reachable from an account class when a Provider of that class names it as its Provider
-Profile or a model entry of that Provider overrides its Profile to that name. A write whose
-requested Profile name, including every model-level override, is reachable from the other
-account class MUST fail with HTTP `409` and code `pricing_profile_account_class_conflict`,
-and MUST NOT change any row. The Provider being updated is excluded from the reachability
-check, so keeping its own Profile is never a conflict.
+PP-ENT7. (Removed with PP-ENT6.) Provider create and update MUST NOT reject a Profile name
+because a Provider of another account class also uses it. The former `409
+pricing_profile_account_class_conflict` response no longer exists.
 
 PP-ENT8. On update, `pricing_profile` and the Channel are optional and an absent field keeps
-its stored value. The PP-ENT7 check MUST therefore run against the effective post-update
-state: the requested Provider Profile when the request supplies one and the stored Profile
-otherwise, and the requested Channel model entries when the request supplies them and the
-stored model entries otherwise. A request that names only `group_id` MUST still be checked,
-because moving a Provider carries its stored Profile into the target account class.
+its stored value.
 
 ## 14. Wholesale Providers (agent account class)
 

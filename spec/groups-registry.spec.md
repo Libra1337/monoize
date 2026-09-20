@@ -329,9 +329,9 @@ in exactly three ways:
 
 1. A Provider in an `agent` Group MUST be created through the wholesale flow defined by
    `provider-pricing.spec.md` section 14, not through the ordinary Provider create request.
-2. Pricing-Profile exclusivity (PP-ENT6) does not apply between `agent` and another class;
-   a wholesale Provider shares the base billing rates of its source class and discounts
-   through its own multipliers (PP-W8).
+2. Pricing-Profile names are not exclusive across account classes (PP-ENT6 removed), so
+   a wholesale Provider sharing the base billing rates of its source class is the normal
+   case; discounts go through its own multipliers (PP-W8).
 3. An `agent` viewer receives the full standard dashboard sidebar (DL5d).
 
 Only a user whose `account_class` is `agent` can see an `agent` Group, attach an `agent`

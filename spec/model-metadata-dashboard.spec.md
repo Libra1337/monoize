@@ -331,7 +331,18 @@ UI25. The "Manage profiles" dialog MUST list every pricing profile (name, model 
 
 UI26. After a models.dev sync completes, the page MUST show a result report with the counts `upserted`, `deleted`, and `retained_manual` (models whose manual metadata kept them out of the sync), each as a labeled number. The report MUST offer a detail action that lists the retained model ids. The catalog sync MUST show its existing upserted/skipped/deleted counts in the same report surface.
 
-### 4.12 Adding a model price directly
+### 4.12 Model limits inside the price editor
+
+UI28. The price editor panel MUST include a model-limits card with three fields —
+`max_input_tokens`, `max_output_tokens`, `max_tokens` — each a non-negative integer or
+blank. The card prefills from the selected model's `model_metadata_records` row when one
+exists and renders blank otherwise. Saving the card MUST upsert the model's metadata
+preserving every stored price field (an omitted field keeps its stored value server-side),
+and revalidate the model-metadata SWR resource. Invalid input (non-integer or negative)
+MUST be rejected client-side before the request. The card MUST be available in create mode
+too, so limits can be set together with a new price without visiting the metadata editor.
+
+### 4.13 Adding a model price directly
 
 UI27. The workbench MUST provide an "Add price" toolbar action. It MUST open a dialog that
 asks for a model name (required, non-empty after trimming) and then loads the price editor

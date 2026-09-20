@@ -75,3 +75,18 @@ models kept their manual prices. Manual prices are never overwritten by a sync.
 Open **Add price** in the toolbar, type the model name, and fill the price lanes in the
 right panel. The model does not need registry metadata, and the profile is not tied to one
 channel — every Provider that routes this model through the profile bills these prices.
+
+
+## Share a profile across account classes
+
+A pricing profile is not exclusive to one account class. Any Provider can reference any
+profile name. Price isolation stays intact because every request only resolves the
+profiles of its own class's Providers; sharing one profile across classes simply bills
+both classes the same prices. Create per-class profile copies when classes need
+different prices.
+
+## Model limits
+
+The price editor's **Model limits** card sets the context window and token caps
+(max input, max output, max total). Leave a field blank for unlimited. Saving creates
+the metadata record when none exists, so limits can be set together with a new price.

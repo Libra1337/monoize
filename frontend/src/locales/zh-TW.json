@@ -1817,7 +1817,16 @@
       "saved": "價格已儲存",
       "saveFailed": "儲存失敗",
       "deleteOverride": "刪除手動覆蓋",
-      "overrideDeleted": "手動覆蓋已移除;同步價格(如有)現在生效"
+      "overrideDeleted": "手動覆蓋已移除;同步價格(如有)現在生效",
+      "limitsTitle": "模型限制",
+      "limitsHint": "上下文視窗與 token 上限。留白表示不限制。沒有詮釋資料記錄時儲存會自動建立。",
+      "maxInput": "最大輸入",
+      "maxOutput": "最大輸出",
+      "maxTotal": "總上限",
+      "saveLimits": "儲存限制",
+      "limitsSaved": "模型限制已儲存",
+      "limitsSaveFailed": "模型限制儲存失敗",
+      "limitsInvalid": "限制必須是非負整數"
     },
     "addPriceModel": "新增價格",
     "addPriceModelTitle": "新增模型價格",

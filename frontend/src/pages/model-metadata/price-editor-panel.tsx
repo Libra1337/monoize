@@ -19,8 +19,13 @@ import {
   deleteBillingRateOptimistic,
   upsertBillingRateOptimistic,
 } from "@/lib/swr";
-import type { BillingRateRecord, RateCurrency } from "@/lib/api";
+import type {
+  BillingRateRecord,
+  ModelMetadataRecord,
+  RateCurrency,
+} from "@/lib/api";
 import { nanoPerTokenToPerMillion, perMillionToNanoPerToken } from "@/lib/exact-decimal";
+import { upsertModelMetadataOptimistic, useModelMetadata } from "@/lib/swr";
 
 type UsageClass =
   | "input_uncached"
@@ -133,17 +138,38 @@ export function PriceEditorPanel({
   profile,
   model,
   modelRates,
+  metadata,
+  onMetadataChanged,
   onRatesChanged,
 }: {
   profile: string;
   model: string | null;
   modelRates: BillingRateRecord[];
+  metadata: ModelMetadataRecord | null;
+  onMetadataChanged: () => void;
   onRatesChanged: () => void;
 }) {
   const { t } = useTranslation();
   const [currency, setCurrency] = useState<RateCurrency>("CNY");
   const [form, setForm] = useState<OverrideFormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  // UI28: model limits (context window etc.) live in model_metadata_records.
+  const [limits, setLimits] = useState({ maxInput: "", maxOutput: "", maxTotal: "" });
+  const [savingLimits, setSavingLimits] = useState(false);
+  const { data: metadataRecords = [] } = useModelMetadata();
+
+  // UI28: reflect the stored metadata limits whenever the target changes.
+  useEffect(() => {
+    if (!model) {
+      setLimits({ maxInput: "", maxOutput: "", maxTotal: "" });
+      return;
+    }
+    setLimits({
+      maxInput: metadata?.max_input_tokens != null ? String(metadata.max_input_tokens) : "",
+      maxOutput: metadata?.max_output_tokens != null ? String(metadata.max_output_tokens) : "",
+      maxTotal: metadata?.max_tokens != null ? String(metadata.max_tokens) : "",
+    });
+  }, [model, metadata]);
 
   // When the target changes, default the currency to the model's manual rates.
   useEffect(() => {
@@ -253,6 +279,56 @@ export function PriceEditorPanel({
     setForm(EMPTY_FORM);
     toast.success(t("modelMetadata.editor.overrideDeleted"));
     onRatesChanged();
+  };
+
+  const saveLimits = async () => {
+    if (!model) return;
+    const parseLimit = (value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      const parsed = Number.parseInt(trimmed, 10);
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        throw new Error(t("modelMetadata.editor.limitsInvalid"));
+      }
+      return parsed;
+    };
+    setSavingLimits(true);
+    try {
+      const maxInput = parseLimit(limits.maxInput);
+      const maxOutput = parseLimit(limits.maxOutput);
+      const maxTotal = parseLimit(limits.maxTotal);
+      await upsertModelMetadataOptimistic(
+        model,
+        {
+          // Preserve the stored price fields when only limits are edited; the server
+          // keeps omitted fields, so mirror that with the metadata record's values.
+          models_dev_provider: metadata?.models_dev_provider ?? null,
+          mode: metadata?.mode ?? null,
+          input_cost_per_token_nano: metadata?.input_cost_per_token_nano ?? null,
+          output_cost_per_token_nano: metadata?.output_cost_per_token_nano ?? null,
+          cache_read_input_cost_per_token_nano:
+            metadata?.cache_read_input_cost_per_token_nano ?? null,
+          cache_creation_input_cost_per_token_nano:
+            metadata?.cache_creation_input_cost_per_token_nano ?? null,
+          output_cost_per_reasoning_token_nano:
+            metadata?.output_cost_per_reasoning_token_nano ?? null,
+          max_input_tokens: maxInput,
+          max_output_tokens: maxOutput,
+          max_tokens: maxTotal,
+          price_currency: metadata?.price_currency,
+        },
+        metadataRecords,
+        (error) => toast.error(error.message)
+      );
+      toast.success(t("modelMetadata.editor.limitsSaved"));
+      onMetadataChanged();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t("modelMetadata.editor.limitsSaveFailed")
+      );
+    } finally {
+      setSavingLimits(false);
+    }
   };
 
   const symbol = currency === "CNY" ? "¥" : "$";
@@ -368,6 +444,64 @@ export function PriceEditorPanel({
             </div>
           </div>
         ))}
+      </div>
+
+      {/* UI28: model limits — context window and token caps. */}
+      <div className="rounded-lg border p-3">
+        <p className="mb-2 text-sm font-medium">{t("modelMetadata.editor.limitsTitle")}</p>
+        <p className="mb-3 text-xs text-muted-foreground">
+          {t("modelMetadata.editor.limitsHint")}
+        </p>
+        <div className="grid grid-cols-3 gap-2">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs text-muted-foreground">
+              {t("modelMetadata.editor.maxInput")}
+            </Label>
+            <Input
+              type="text"
+              inputMode="numeric"
+              className="font-mono"
+              value={limits.maxInput}
+              onChange={(event) =>
+                setLimits((previous) => ({ ...previous, maxInput: event.target.value }))
+              }
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs text-muted-foreground">
+              {t("modelMetadata.editor.maxOutput")}
+            </Label>
+            <Input
+              type="text"
+              inputMode="numeric"
+              className="font-mono"
+              value={limits.maxOutput}
+              onChange={(event) =>
+                setLimits((previous) => ({ ...previous, maxOutput: event.target.value }))
+              }
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs text-muted-foreground">
+              {t("modelMetadata.editor.maxTotal")}
+            </Label>
+            <Input
+              type="text"
+              inputMode="numeric"
+              className="font-mono"
+              value={limits.maxTotal}
+              onChange={(event) =>
+                setLimits((previous) => ({ ...previous, maxTotal: event.target.value }))
+              }
+            />
+          </div>
+        </div>
+        <div className="mt-3 flex justify-end">
+          <Button size="sm" variant="outline" disabled={savingLimits} onClick={() => void saveLimits()}>
+            {savingLimits && <RefreshCw data-icon className="animate-spin" />}
+            {t("modelMetadata.editor.saveLimits")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t pt-3">
