@@ -186,6 +186,9 @@ export function UsersPage() {
   });
   const [balanceMode, setBalanceMode] = useState<"set" | "add">("set");
   const [balanceAddAmount, setBalanceAddAmount] = useState("");
+  /// The add-amount currency: the wallet is nano-USD, so a CNY amount converts
+  /// through the live exchange-rate snapshot before it is applied.
+  const [balanceAddCurrency, setBalanceAddCurrency] = useState<"USD" | "CNY">("USD");
   const [saving, setSaving] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [accountClassTarget, setAccountClassTarget] = useState<{
@@ -247,7 +250,23 @@ export function UsersPage() {
         updates.role = formData.role as User["role"];
       }
       if (balanceMode === "add") {
-        const addNano = parseUsdToNanoBigInt(balanceAddAmount);
+        const addNano =
+          balanceAddCurrency === "USD"
+            ? parseUsdToNanoBigInt(balanceAddAmount)
+            : amountToNanoForCurrency(
+                balanceAddAmount,
+                balanceAddCurrency,
+                exchangeRate?.cny_per_usd
+              );
+        if (addNano === null && balanceAddAmount.trim()) {
+          toast.error(
+            balanceAddCurrency === "CNY" && !exchangeRate?.cny_per_usd
+              ? t("users.balanceAddNoRate")
+              : t("users.balanceAddInvalid")
+          );
+          setSaving(false);
+          return;
+        }
         if (addNano !== null && addNano !== 0n) {
           const newNano = BigInt(editUser.balance_nano_usd) + addNano;
           updates.balance_nano_usd = newNano.toString();
@@ -698,6 +717,7 @@ export function UsersPage() {
                         onValueChange={(v) => {
                           setBalanceMode(v as "set" | "add");
                           setBalanceAddAmount("");
+                          setBalanceAddCurrency("USD");
                         }}
                       >
                         <TabsList className="h-7">
@@ -719,23 +739,52 @@ export function UsersPage() {
                       />
                     ) : (
                       <>
-                        <Input
-                          value={balanceAddAmount}
-                          onChange={(e) => setBalanceAddAmount(e.target.value)}
-                          placeholder={t("users.balanceAddPlaceholder")}
-                        />
+                        <div className="flex items-center gap-2">
+                          <div className="relative flex-1">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                              {balanceAddCurrency === "CNY" ? "¥" : "$"}
+                            </span>
+                            <Input
+                              className="pl-7"
+                              value={balanceAddAmount}
+                              onChange={(e) => setBalanceAddAmount(e.target.value)}
+                              placeholder={t("users.balanceAddPlaceholder")}
+                            />
+                          </div>
+                          <Tabs
+                            value={balanceAddCurrency}
+                            onValueChange={(v) => setBalanceAddCurrency(v as "USD" | "CNY")}
+                          >
+                            <TabsList className="h-9">
+                              <TabsTrigger value="USD" className="px-2.5 py-0.5 text-xs">USD</TabsTrigger>
+                              <TabsTrigger value="CNY" className="px-2.5 py-0.5 text-xs">CNY</TabsTrigger>
+                            </TabsList>
+                          </Tabs>
+                        </div>
                         <p className="text-xs text-muted-foreground">
                           {t("users.balanceCurrentHint", { amount: editUser?.balance_usd ?? "0" })}
-                          {balanceAddAmount.trim() && parseUsdToNanoBigInt(balanceAddAmount) !== null && editUser && (
-                            <>
-                              {" → "}
-                              <span className="font-medium text-foreground">
-                                ${nanoToUsdString(
-                                  BigInt(editUser.balance_nano_usd) + (parseUsdToNanoBigInt(balanceAddAmount) ?? 0n)
+                          {(() => {
+                            const addNano = amountToNanoForCurrency(
+                              balanceAddAmount,
+                              balanceAddCurrency,
+                              exchangeRate?.cny_per_usd
+                            );
+                            if (!balanceAddAmount.trim() || addNano === null || !editUser) return null;
+                            return (
+                              <>
+                                {" → "}
+                                <span className="font-medium text-foreground">
+                                  ${nanoToUsdString(BigInt(editUser.balance_nano_usd) + addNano)}
+                                </span>
+                                {balanceAddCurrency === "CNY" && exchangeRate?.cny_per_usd && (
+                                  <span>
+                                    {" "}
+                                    ({t("users.balanceAddRate", { rate: exchangeRate.cny_per_usd })})
+                                  </span>
                                 )}
-                              </span>
-                            </>
-                          )}
+                              </>
+                            );
+                          })()}
                         </p>
                       </>
                     )}

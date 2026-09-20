@@ -1062,7 +1062,10 @@
     },
     "todayUsage": "本日の使用",
     "createdLogin": "作成 / 最終ログイン",
-    "callsUnit": "回"
+    "callsUnit": "回",
+    "balanceAddInvalid": "有効な金額を入力してください",
+    "balanceAddNoRate": "為替スナップショットがないため、USD 金額を入力してください",
+    "balanceAddRate": "レート CNY/USD {{rate}}"
   },
   "apiKeys": {
     "title": "トークン管理",

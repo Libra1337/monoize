@@ -1062,7 +1062,10 @@
     },
     "todayUsage": "今日用量",
     "createdLogin": "创建 / 登录",
-    "callsUnit": "次"
+    "callsUnit": "次",
+    "balanceAddInvalid": "请输入有效金额",
+    "balanceAddNoRate": "当前没有汇率快照,请改用美元金额",
+    "balanceAddRate": "汇率 CNY/USD {{rate}}"
   },
   "apiKeys": {
     "title": "令牌管理",

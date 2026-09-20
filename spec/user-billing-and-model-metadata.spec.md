@@ -115,6 +115,16 @@ A4. Balance mutation by admin MUST write one ledger entry with type `admin_adjus
 
 A5. `PUT /api/dashboard/users/{user_id}` MUST apply ordinary user fields, `balance_nano_usd`, `balance_unlimited`, and the A4 ledger row in one database transaction through one `UserStore` operation. Password hashing, balance parsing, group serialization, and other deterministic validation MUST finish before the transaction begins. A database or ledger failure MUST roll back every field change. Cache invalidation MUST occur only after commit; API-key cache entries for the user MUST be invalidated for any persisted field change, and the balance cache entry MUST additionally be invalidated when either balance field changes.
 
+A6. The users-page balance editor MUST offer two modes: `set` (an absolute balance) and
+`add` (a delta applied to the current balance). The `add` mode MUST offer a currency
+choice of exactly `USD` and `CNY`. A `USD` amount converts to nano-USD directly; a `CNY`
+amount converts by dividing by the current exchange-rate snapshot's `cny_per_usd` (the
+same snapshot the billing engine reads), with the result previewed to the operator before
+saving. When no rate snapshot is available, a `CNY` add MUST be rejected client-side with
+an explicit message suggesting a `USD` amount, and MUST NOT silently apply the CNY digits
+as USD. All conversions MUST use exact integer/BigInt arithmetic; the editor MUST NOT pass
+the amount through JavaScript `Number` beyond reading the rate scalar.
+
 ## 4. Billing eligibility
 
 BE1. Billing applies only when the request is authenticated by database API key (resolved `user_id` exists).

@@ -1062,7 +1062,10 @@
     },
     "todayUsage": "今日用量",
     "createdLogin": "建立 / 登入",
-    "callsUnit": "次"
+    "callsUnit": "次",
+    "balanceAddInvalid": "請輸入有效金額",
+    "balanceAddNoRate": "目前沒有匯率快照,請改用美元金額",
+    "balanceAddRate": "匯率 CNY/USD {{rate}}"
   },
   "apiKeys": {
     "title": "Token 管理",

@@ -1062,7 +1062,10 @@
     },
     "todayUsage": "Today",
     "createdLogin": "Created / Login",
-    "callsUnit": "calls"
+    "callsUnit": "calls",
+    "balanceAddInvalid": "Enter a valid amount",
+    "balanceAddNoRate": "No exchange-rate snapshot is available; add a USD amount instead",
+    "balanceAddRate": "rate CNY/USD {{rate}}"
   },
   "apiKeys": {
     "title": "Token Management",
