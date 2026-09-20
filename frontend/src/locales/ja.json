@@ -1817,7 +1817,12 @@
       "saveFailed": "保存に失敗しました",
       "deleteOverride": "手動上書きを削除",
       "overrideDeleted": "手動上書きを削除しました。同期価格(あれば)が適用されます"
-    }
+    },
+    "addPriceModel": "価格を追加",
+    "addPriceModelTitle": "モデル価格を追加",
+    "addPriceModelDescription": "選択した課金プロファイル内のモデル名に手動価格行を作成します。プロファイルは単一チャネルに紐づきません。このプロファイル経由でこのモデルをルーティングするすべての Provider に適用されます。",
+    "addPriceModelHint": "レジストリのメタデータは不要です。クライアントがリクエストする正確なモデル名を入力してください。",
+    "addPriceModelConfirm": "編集を開始"
   },
   "apiDocsConsole": {
     "title": "API ドキュメント",

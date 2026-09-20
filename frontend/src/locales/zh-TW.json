@@ -1818,7 +1818,12 @@
       "saveFailed": "儲存失敗",
       "deleteOverride": "刪除手動覆蓋",
       "overrideDeleted": "手動覆蓋已移除;同步價格(如有)現在生效"
-    }
+    },
+    "addPriceModel": "新增價格",
+    "addPriceModelTitle": "新增模型價格",
+    "addPriceModelDescription": "在目前計費 Profile 內為某個模型名建立手動價格列。Profile 不綁定單一 channel:凡是透過該 Profile 路由此模型的 Provider 都適用這些價格。",
+    "addPriceModelHint": "模型無需先有詮釋資料。輸入客戶端請求時使用的確切模型名。",
+    "addPriceModelConfirm": "開始編輯"
   },
   "apiDocsConsole": {
     "title": "API 文件",

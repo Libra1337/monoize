@@ -207,7 +207,7 @@ UI4. Page heading: "Model Database" (en) / "模型数据库" (zh).
 
 UI4a. The page MUST be a single-page master-detail workbench (no tab bar):
 
-- a toolbar: a pricing-profile selector (fed by `GET /api/dashboard/billing-rates/profiles`, each option showing its model count), a model search input, one sync dropdown (Sync models.dev / Sync catalog), a "Match rules" button, a "Manage profiles" button, and a create dropdown (New price / New model metadata);
+- a toolbar: a pricing-profile selector (fed by `GET /api/dashboard/billing-rates/profiles`, each option showing its model count), a model search input, one sync dropdown (Sync models.dev / Sync catalog), a "Match rules" button, a "Manage profiles" button, and an add-price action (New model price), and a create-model-metadata action (New model metadata);
 - a master list: one virtualized row per model of the selected profile, with the price editor as a right-hand sticky panel (a bottom sheet under `lg`);
 - an "Advanced rates" entry that opens the existing low-level rate table inside a dialog.
 
@@ -330,6 +330,18 @@ UI25. The "Manage profiles" dialog MUST list every pricing profile (name, model 
 ### 4.11 Sync result report
 
 UI26. After a models.dev sync completes, the page MUST show a result report with the counts `upserted`, `deleted`, and `retained_manual` (models whose manual metadata kept them out of the sync), each as a labeled number. The report MUST offer a detail action that lists the retained model ids. The catalog sync MUST show its existing upserted/skipped/deleted counts in the same report surface.
+
+### 4.12 Adding a model price directly
+
+UI27. The workbench MUST provide an "Add price" toolbar action. It MUST open a dialog that
+asks for a model name (required, non-empty after trimming) and then loads the price editor
+for that name inside the selected profile with every lane empty (create mode). The dialog
+MUST state that the profile is not tied to one channel — the created rows apply to every
+Provider that routes the model through the selected profile. Saving writes the same manual
+rows as the regular editor (including `provider_type = null` so the price applies to every
+protocol), and after the first save the editor MUST switch to editing the now-existing
+model in place. The model name MUST NOT require a registry metadata record to exist; the
+master list MUST show the model as soon as its rate rows exist.
 
 ### 4.8 Billing integration note
 

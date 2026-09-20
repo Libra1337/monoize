@@ -25,6 +25,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { PageWrapper } from "@/components/ui/motion";
 import {
   Select,
@@ -82,6 +90,9 @@ export function ModelWorkbench({
   const [selectedProfile, setSelectedProfile] = useState<string>("");
   const [search, setSearch] = useState("");
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [creatingModel, setCreatingModel] = useState<string | null>(null);
+  const [addModelOpen, setAddModelOpen] = useState(false);
+  const [addModelName, setAddModelName] = useState("");
   const [patternsOpen, setPatternsOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
   const [syncing, setSyncing] = useState<"models_dev" | "catalog" | null>(null);
@@ -185,6 +196,7 @@ export function ModelWorkbench({
           onValueChange={(value) => {
             setSelectedProfile(value);
             setSelectedModel(null);
+            setCreatingModel(null);
           }}
         >
           <SelectTrigger className="w-56 font-mono text-xs" aria-label={t("modelMetadata.profile")}>
@@ -246,8 +258,12 @@ export function ModelWorkbench({
             {t("modelMetadata.profiles.manageButton")}
           </Button>
 
-          <Button onClick={onCreateMetadata}>
+          <Button variant="outline" onClick={() => setAddModelOpen(true)}>
             <Plus data-icon />
+            {t("modelMetadata.addPriceModel")}
+          </Button>
+          <Button onClick={onCreateMetadata}>
+            <Database data-icon />
             {t("modelMetadata.addModel")}
           </Button>
         </div>
@@ -312,7 +328,10 @@ export function ModelWorkbench({
                   return (
                     <>
                       <VirtualTableCell
-                        onClick={() => setSelectedModel(row.model)}
+                        onClick={() => {
+                          setCreatingModel(null);
+                          setSelectedModel(row.model);
+                        }}
                         data-selected={isSelected}
                       >
                         <ModelBadge
@@ -322,7 +341,10 @@ export function ModelWorkbench({
                         />
                       </VirtualTableCell>
                       <VirtualTableCell
-                        onClick={() => setSelectedModel(row.model)}
+                        onClick={() => {
+                          setCreatingModel(null);
+                          setSelectedModel(row.model);
+                        }}
                         data-selected={isSelected}
                       >
                         <div className="min-w-0">
@@ -355,6 +377,7 @@ export function ModelWorkbench({
                             aria-label={t("common.edit")}
                             onClick={(event) => {
                               event.stopPropagation();
+                              setCreatingModel(null);
                               setSelectedModel(row.model);
                             }}
                           >
@@ -390,17 +413,74 @@ export function ModelWorkbench({
             ) : (
               <PriceEditorPanel
                 profile={selectedProfile}
-                model={selectedModel}
-                modelRates={selectedModelRates}
+                model={creatingModel ?? selectedModel}
+                modelRates={
+                  creatingModel != null
+                    ? []
+                    : selectedModelRates
+                }
                 onRatesChanged={() => {
                   void revalidateRates();
                   void revalidateProfiles();
+                  // After the first save the model exists as rate rows; keep
+                  // editing it in place rather than staying in create mode.
+                  if (creatingModel != null) {
+                    setSelectedModel(creatingModel);
+                    setCreatingModel(null);
+                  }
                 }}
               />
             )}
           </div>
         </aside>
       </div>
+
+      <Dialog open={addModelOpen} onOpenChange={setAddModelOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("modelMetadata.addPriceModelTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("modelMetadata.addPriceModelDescription")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 py-2">
+            <Label htmlFor="add-model-name">{t("modelMetadata.modelId")}</Label>
+            <Input
+              id="add-model-name"
+              value={addModelName}
+              onChange={(event) => setAddModelName(event.target.value)}
+              className="font-mono"
+              placeholder="gpt-4o-audit"
+            />
+            <p className="text-xs text-muted-foreground">
+              {t("modelMetadata.addPriceModelHint")}
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setAddModelOpen(false);
+                setAddModelName("");
+              }}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              disabled={!addModelName.trim()}
+              onClick={() => {
+                const name = addModelName.trim();
+                setSelectedModel(null);
+                setCreatingModel(name);
+                setAddModelOpen(false);
+                setAddModelName("");
+              }}
+            >
+              {t("modelMetadata.addPriceModelConfirm")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <MatchPatternsDialog
         open={patternsOpen}

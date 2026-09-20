@@ -1821,7 +1821,12 @@
       "saveFailed": "Save failed",
       "deleteOverride": "Delete manual override",
       "overrideDeleted": "Manual override removed; synced prices (if any) now apply"
-    }
+    },
+    "addPriceModel": "Add price",
+    "addPriceModelTitle": "Add a model price",
+    "addPriceModelDescription": "Create manual price rows for a model name inside the selected pricing profile. The profile is not tied to one channel: these prices apply to every Provider that routes this model through this profile.",
+    "addPriceModelHint": "The model does not need registry metadata. Type the exact model name your clients request.",
+    "addPriceModelConfirm": "Start editing"
   },
   "apiDocsConsole": {
     "title": "API Docs",

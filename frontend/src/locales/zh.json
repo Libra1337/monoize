@@ -1821,7 +1821,12 @@
       "saveFailed": "保存失败",
       "deleteOverride": "删除手动覆盖",
       "overrideDeleted": "手动覆盖已移除;同步价格(如有)现在生效"
-    }
+    },
+    "addPriceModel": "添加价格",
+    "addPriceModelTitle": "添加模型价格",
+    "addPriceModelDescription": "在当前计费 Profile 内为某个模型名创建手动价格行。Profile 不绑定单个 channel:凡通过该 Profile 路由此模型的 Provider 都适用这些价格。",
+    "addPriceModelHint": "模型无需先有元数据。输入客户端请求时使用的确切模型名。",
+    "addPriceModelConfirm": "开始编辑"
   },
   "apiDocsConsole": {
     "title": "API 文档",
