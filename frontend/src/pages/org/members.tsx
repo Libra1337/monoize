@@ -119,6 +119,9 @@ export function OrgMembers() {
                           size="sm"
                           className="text-destructive"
                           onClick={async () => {
+                            // ORG-17c: removal also deletes the org keys this member
+                            // created, so nothing usable lingers in key list/limits.
+                            if (!window.confirm(t("org.removeMemberConfirmKeys"))) return;
                             try {
                               await api.removeOrgMember(orgId, member.user_id);
                               toast.success(t("org.memberRemoved"));

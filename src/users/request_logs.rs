@@ -2173,6 +2173,43 @@ impl UserStore {
         Ok((logs, total, total_charge_nano_usd))
     }
 
+    /// AKDL-1: this key's spend in the current Asia/Shanghai day, in nano-USD.
+    /// Aggregated live from request_logs so the counter resets at Beijing
+    /// midnight without any scheduled job.
+    pub async fn get_api_key_daily_spend_nano_usd(&self, api_key_id: &str) -> Result<i128, String> {
+        let is_postgres = self.db.is_postgres();
+        let day_start = crate::beijing_time::beijing_today_start_utc(chrono::Utc::now());
+        let day_end = crate::beijing_time::beijing_day_start_utc(
+            &crate::beijing_time::beijing_day_shift(
+                &crate::beijing_time::beijing_day_id(chrono::Utc::now()),
+                1,
+            )
+            .expect("tomorrow is a valid day id"),
+        )
+        .expect("tomorrow is a valid day id");
+        let sql = format!(
+            "{} FROM request_logs rl WHERE rl.api_key_id = $1 AND rl.created_at >= $2 AND rl.created_at < $3",
+            charge_aggregate_select(is_postgres)
+        );
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                &sql,
+                vec![
+                    api_key_id.to_string().into(),
+                    day_start.to_rfc3339().into(),
+                    day_end.to_rfc3339().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "no daily spend aggregate row".to_string())?;
+        decode_charge_aggregate(&row, is_postgres)?
+            .parse::<i128>()
+            .map_err(|_| "daily spend aggregate overflow".to_string())
+    }
+
     pub async fn get_api_key_analytics_start(
         &self,
         user_id: &str,

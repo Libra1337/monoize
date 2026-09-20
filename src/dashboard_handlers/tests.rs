@@ -761,6 +761,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 model_redirects: create_body.model_redirects,
                 reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
                 request_capture_mode: create_body.request_capture_mode,
+                daily_limit_nano_usd: None,
             },
             false,
         )
@@ -793,6 +794,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         model_redirects: created.model_redirects.clone(),
         reasoning_envelope_enabled: created.reasoning_envelope_enabled,
         request_capture_mode: created.request_capture_mode,
+        daily_limit_nano_usd: None,
     })
     .expect("created response serializes");
     assert!(created_value.get("use_user_group").is_none());
@@ -827,6 +829,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 reasoning_envelope_enabled: None,
                 request_capture_mode: update_body.request_capture_mode,
                 expires_at: None,
+                daily_limit_nano_usd: None,
             },
             false,
         )
@@ -876,6 +879,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
                 expires_at: None,
+                daily_limit_nano_usd: None,
             },
             false,
         )
@@ -908,6 +912,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         model_redirects: fetched.model_redirects,
         reasoning_envelope_enabled: fetched.reasoning_envelope_enabled,
         request_capture_mode: fetched.request_capture_mode,
+        daily_limit_nano_usd: None,
     })
     .expect("response serializes");
     assert_eq!(
@@ -958,6 +963,7 @@ async fn admin_sub_account_adjustment_records_initial_credit_and_refund() {
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
                 request_capture_mode: crate::users::RequestCaptureMode::Off,
+                daily_limit_nano_usd: None,
             },
             true,
         )
@@ -985,6 +991,7 @@ async fn admin_sub_account_adjustment_records_initial_credit_and_refund() {
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
                 expires_at: None,
+                daily_limit_nano_usd: None,
             },
             true,
         )
@@ -1099,6 +1106,7 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_visibility() {
             model_redirects: Vec::new(),
             reasoning_envelope_enabled: true,
             request_capture_mode: crate::users::RequestCaptureMode::Off,
+            daily_limit_nano_usd: None,
         }
     }
 
@@ -1138,6 +1146,7 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_visibility() {
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
                 expires_at: None,
+                daily_limit_nano_usd: None,
             },
             false,
         )
@@ -1203,6 +1212,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 model_redirects: create_body.model_redirects,
                 reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
                 request_capture_mode: create_body.request_capture_mode,
+                daily_limit_nano_usd: None,
             },
             false,
         )
@@ -1236,6 +1246,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
                 expires_at: None,
+                daily_limit_nano_usd: None,
             },
             false,
         )
@@ -1267,6 +1278,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 }],
                 reasoning_envelope_enabled: true,
                 request_capture_mode: crate::users::RequestCaptureMode::Off,
+                daily_limit_nano_usd: None,
             },
             false,
         )

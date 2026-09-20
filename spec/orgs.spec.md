@@ -116,14 +116,17 @@ ORG-16. `PUT /api/dashboard/orgs/{org_id}/keys/{key_id}/sharing {mode:
 `allow`/`deny` MUST list only current members; otherwise `400 invalid_request`.
 
 ORG-17. Removing a member (`DELETE /api/dashboard/orgs/{org_id}/members/{user_id}`,
-owner only, cannot remove the owner) deletes their membership and share rows. Org keys
-stay owned by the org: keys the member created (`created_by = member`) remain org keys
-that keep working and keep billing the org wallet. They stay visible to the owner
-(ORG-15 owner list) and in the limits management surface (ORGL-12), so they remain
-manageable; members other than the owner cannot see them unless the share mode says so.
-Historical request-log rows written while the member belonged to the org remain
-attributed to the org (`request_logs.user_id = org_id`), so org analytics and logs are
-unchanged by removal.
+owner only, cannot remove the owner) deletes their membership and share rows, and —
+unless the request body sets `delete_keys = false` — also deletes every org key the
+member created (`api_keys.org_id = {org_id} AND created_by = member`) in the same
+transaction. The response reports `deleted_keys`. Historical request-log rows written
+while the member belonged to the org remain attributed to the org
+(`request_logs.user_id = org_id`), so org analytics and logs are unchanged by removal.
+
+ORG-17c. `delete_keys` defaults to `true`. When it is `false`, keys the member created
+remain org keys that keep working and keep billing the org wallet, visible to the owner
+(ORG-15 owner list) and in the limits management surface (ORGL-12). The frontend remove
+action always sends the default and confirms that the member's keys are deleted.
 
 ORG-17a. `DELETE /api/dashboard/orgs/{org_id}/leave` lets a non-owner member leave the
 space. It behaves exactly like ORG-17 removal of the caller: membership and share rows

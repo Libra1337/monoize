@@ -61,6 +61,7 @@ async fn enable_request_capture(ctx: &TestContext) {
                 reasoning_envelope_enabled: None,
                 request_capture_mode: Some(monoize::users::RequestCaptureMode::CaptureAll),
                 expires_at: None,
+                daily_limit_nano_usd: None,
             },
             false,
         )

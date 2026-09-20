@@ -274,6 +274,10 @@ pub struct ApiKey {
     pub org_id: Option<String>,
     #[serde(default, skip_serializing)]
     pub created_by: Option<String>,
+    /// AKDL-1: daily spend limit in nano-USD (NULL = unlimited). The window is
+    /// one Asia/Shanghai calendar day; spend aggregates live from request_logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_limit_nano_usd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,6 +353,9 @@ pub struct CreateApiKeyInput {
     pub sub_account_enabled: bool,
     #[serde(default)]
     pub sub_account_balance_nano_usd: Option<String>,
+    /// AKDL-1: daily spend limit, nano-USD string; None/absent = unlimited.
+    #[serde(default)]
+    pub daily_limit_nano_usd: Option<String>,
     #[serde(default)]
     pub model_limits_enabled: bool,
     #[serde(default)]
@@ -615,6 +622,10 @@ pub struct UpdateApiKeyInput {
     pub reasoning_envelope_enabled: Option<bool>,
     pub request_capture_mode: Option<RequestCaptureMode>,
     pub expires_at: Option<String>, // RFC3339 format or null
+    /// AKDL-1: absent keeps the stored limit; Some(None) clears it (unlimited);
+    /// Some(Some(nano)) sets it. Admin-only, like the sub-account balance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_limit_nano_usd: Option<Option<String>>,
 }
 
 #[derive(Clone)]

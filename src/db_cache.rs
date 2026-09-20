@@ -2344,6 +2344,7 @@ mod tests {
             request_capture_mode: RequestCaptureMode::Off,
             org_id: None,
             created_by: None,
+            daily_limit_nano_usd: None,
         }
     }
 

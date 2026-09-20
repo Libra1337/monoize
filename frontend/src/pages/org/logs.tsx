@@ -51,7 +51,8 @@ export function OrgLogsPage() {
   );
   const { data, isLoading } = useSWR(
     orgId ? [`/api/dashboard/orgs/${orgId}/request-logs`, limit, query] : null,
-    () => api.listOrgRequestLogs(orgId!, limit, 0, filters),
+    ([path, pageLimit, pageQuery]: [string, number, string]) =>
+      api.listOrgRequestLogs(orgId!, pageLimit, 0, JSON.parse(pageQuery)),
     { keepPreviousData: true },
   );
 
@@ -141,19 +142,23 @@ export function OrgLogsPage() {
         </div>
       </motion.div>
 
-      <RequestLogsTable
-        affinityTargetNames={emptyAffinityNames}
-        isAdmin={false}
-        isInitialLoading={isLoading && logs.length === 0}
-        logs={logs}
-        onLoadMore={() => {
-          if (logs.length < total && !isLoading) setPages((current) => current + 1);
-        }}
-        onOpenCapture={() => {}}
-        onTooltipOpenChange={() => {}}
-        showIp={false}
-        t={t}
-      />
+      {/* The virtualized table needs a bounded-height flex child, exactly like the
+          personal logs page; without min-h-0 the 100%-height virtuoso collapses. */}
+      <div className="flex-1 min-h-0 overflow-auto rounded-lg border bg-card">
+        <RequestLogsTable
+          affinityTargetNames={emptyAffinityNames}
+          isAdmin={false}
+          isInitialLoading={isLoading && logs.length === 0}
+          logs={logs}
+          onLoadMore={() => {
+            if (logs.length < total && !isLoading) setPages((current) => current + 1);
+          }}
+          onOpenCapture={() => {}}
+          onTooltipOpenChange={() => {}}
+          showIp={false}
+          t={t}
+        />
+      </div>
     </PageWrapper>
   );
 }

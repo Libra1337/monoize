@@ -1844,6 +1844,7 @@ impl UserStore {
                 expires_in_days: expires_at.map(|e| (e - Utc::now()).num_days()),
                 sub_account_enabled: false,
                 sub_account_balance_nano_usd: None,
+                daily_limit_nano_usd: None,
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
@@ -1924,8 +1925,8 @@ impl UserStore {
             .await
             .map_err(|e| e.message)?;
         tx.execute(self.db.stmt(
-                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, group_ids, channel_bindings, model_bindings, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"#,
+                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, group_ids, channel_bindings, model_bindings, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode, daily_limit_nano_usd)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)"#,
                 vec![
                     id.clone().into(),
                     user_id.into(),
@@ -1952,6 +1953,11 @@ impl UserStore {
                         0
                     })),
                     input.request_capture_mode.as_str().into(),
+                    input
+                        .daily_limit_nano_usd
+                        .clone()
+                        .map(|value| SeaValue::String(Some(Box::new(value))))
+                        .unwrap_or(SeaValue::String(None)),
                 ],
             ))
             .await
@@ -1983,6 +1989,7 @@ impl UserStore {
             enabled: true,
             sub_account_enabled: input.sub_account_enabled,
             sub_account_balance_nano: initial_sub_account_balance.to_string(),
+            daily_limit_nano_usd: input.daily_limit_nano_usd.clone(),
             model_limits_enabled: input.model_limits_enabled,
             model_limits: input.model_limits,
             ip_whitelist: input.ip_whitelist,
@@ -2032,7 +2039,7 @@ impl UserStore {
     pub async fn get_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key_prefix = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, a.daily_limit_nano_usd, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key_prefix = $1",
                 vec![prefix.into()],
             ))
             .await
@@ -2050,7 +2057,7 @@ impl UserStore {
             .db
             .read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, a.daily_limit_nano_usd, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key = $1",
                 vec![key.into()],
             ))
             .await
@@ -2897,6 +2904,9 @@ impl UserStore {
             created_by: row
                 .try_get::<Option<String>>("", "created_by")
                 .map_err(|e| e.to_string())?,
+            daily_limit_nano_usd: row
+                .try_get::<Option<String>>("", "daily_limit_nano_usd")
+                .map_err(|e| e.to_string())?,
             sub_account_enabled,
             sub_account_balance_nano,
             model_limits_enabled,
@@ -3100,6 +3110,16 @@ impl UserStore {
         if let Some(expires_at) = &input.expires_at {
             set_clauses.push(format!("expires_at = ${idx}"));
             values.push(expires_at.clone().into());
+            idx += 1;
+        }
+        if let Some(daily_limit) = &input.daily_limit_nano_usd {
+            set_clauses.push(format!("daily_limit_nano_usd = ${idx}"));
+            values.push(
+                daily_limit
+                    .clone()
+                    .map(|value| SeaValue::String(Some(Box::new(value))))
+                    .unwrap_or(SeaValue::String(None)),
+            );
             idx += 1;
         }
 
@@ -4369,6 +4389,7 @@ mod tests {
             model_redirects: Vec::new(),
             reasoning_envelope_enabled: true,
             request_capture_mode: RequestCaptureMode::Off,
+            daily_limit_nano_usd: None,
         }
     }
 
@@ -4497,6 +4518,7 @@ mod tests {
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
                     request_capture_mode: crate::users::RequestCaptureMode::Off,
+                    daily_limit_nano_usd: None,
                 },
                 false,
             )

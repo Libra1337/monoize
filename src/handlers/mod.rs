@@ -1679,6 +1679,7 @@ async fn authenticate_playground_session(
         user_role: user.role,
         account_class: user.account_class,
         api_key_id: None,
+        daily_limit_nano_usd: None,
         api_key_name: None,
         internal_source: Some(crate::auth::InternalRequestSource::Playground),
         max_multiplier: None,
@@ -1734,6 +1735,33 @@ async fn ensure_balance_before_forward(
                 )),
             },
         };
+    }
+    // AKDL-1/2: per-key daily spend limit, one Asia/Shanghai day. Checked before
+    // dispatch so an exhausted key fails fast; the settlement check closes races.
+    if let Some(daily_limit) = auth.daily_limit_nano_usd.as_deref() {
+        if let Ok(limit) = daily_limit.parse::<i128>() {
+            match state
+                .user_store
+                .get_api_key_daily_spend_nano_usd(auth.api_key_id.as_deref().unwrap_or_default())
+                .await
+            {
+                Ok(spent) if spent >= limit => {
+                    return Err(AppError::new(
+                        StatusCode::PAYMENT_REQUIRED,
+                        "api_key_daily_limit_reached",
+                        "this API key has reached its daily spend limit; it resets at Beijing midnight",
+                    ));
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        "daily limit check failed for key {}: {err}",
+                        auth.api_key_id.as_deref().unwrap_or("?")
+                    );
+                    // Fail open: the settlement check still applies.
+                }
+            }
+        }
     }
     // ORGL-5/7: admission preflight for org-key traffic. Same limit set as the
     // settlement check; advisory-fast so a race is closed by settlement.

@@ -1024,6 +1024,7 @@ pub async fn create_org_key(
         model_redirects: Vec::new(),
         reasoning_envelope_enabled: true,
         request_capture_mode: crate::users::RequestCaptureMode::Off,
+        daily_limit_nano_usd: None,
     };
     let (api_key, plaintext) = state
         .user_store
@@ -1336,12 +1337,27 @@ pub async fn org_ledger(
 
 /// ORG-17: removal deletes membership and share rows. Org keys stay owned by the org
 /// (ORG-4), so nothing is migrated to the removed member and org analytics are unchanged.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct RemoveOrgMemberRequest {
+    /// ORG-17c: delete the org keys the member created along with the membership.
+    /// Defaults to true so a removed member leaves nothing usable behind; the
+    /// historical request logs keep their org attribution either way.
+    #[serde(default = "default_delete_keys")]
+    pub delete_keys: bool,
+}
+
+fn default_delete_keys() -> bool {
+    true
+}
+
 pub async fn remove_org_member(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((org_id, member_id)): Path<(String, String)>,
+    body: Option<Json<RemoveOrgMemberRequest>>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
+    let delete_keys = body.map(|Json(body)| body.delete_keys).unwrap_or(true);
     let backend = state.db_pool.read().get_database_backend();
     let tx = state.db_pool.write().await.begin().await.map_err(storage)?;
     let role = member_role(&tx, backend, &org_id, &user.id)
@@ -1374,8 +1390,22 @@ pub async fn remove_org_member(
     ))
     .await
     .map_err(storage)?;
+    let mut deleted_keys = 0i64;
+    if delete_keys {
+        let removed = tx
+            .execute(Statement::from_sql_and_values(
+                backend,
+                "DELETE FROM api_keys WHERE org_id = $1 AND created_by = $2",
+                [org_id.clone().into(), member_id.clone().into()],
+            ))
+            .await
+            .map_err(storage)?;
+        deleted_keys = removed.rows_affected() as i64;
+    }
     tx.commit().await.map_err(storage)?;
-    Ok(Json(json!({ "success": true })))
+    Ok(Json(
+        json!({ "success": true, "deleted_keys": deleted_keys }),
+    ))
 }
 
 /// ORG-17a: a non-owner member leaves the space. Same semantics as ORG-17 removal
@@ -1548,6 +1578,7 @@ pub async fn update_org_key(
         reasoning_envelope_enabled: None,
         request_capture_mode: None,
         expires_at,
+        daily_limit_nano_usd: None,
     };
     let updated = state
         .user_store

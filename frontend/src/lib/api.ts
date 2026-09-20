@@ -371,6 +371,8 @@ export interface ApiKey {
   sub_account_enabled: boolean;
   sub_account_balance_nano_usd: string;
   sub_account_balance_usd: string;
+  /** AKDL-1: daily spend limit, nano-USD; undefined = unlimited. */
+  daily_limit_nano_usd?: string | null;
   model_limits_enabled: boolean;
   model_limits: string[];
   ip_whitelist: string[];
@@ -431,6 +433,8 @@ export interface CreateApiKeyInput {
   expires_in_days?: number;
   sub_account_enabled?: boolean;
   sub_account_balance_nano_usd?: string;
+  /** AKDL-1: daily spend limit, nano-USD; undefined = unlimited. */
+  daily_limit_nano_usd?: string;
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
@@ -449,6 +453,8 @@ export interface UpdateApiKeyInput {
   enabled?: boolean;
   sub_account_enabled?: boolean;
   sub_account_balance_nano_usd?: string;
+  /** AKDL-1: absent keeps the stored limit; empty string clears it; value sets it. */
+  daily_limit_nano_usd?: string;
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
@@ -1915,8 +1921,11 @@ class ApiClient {
     return this.request(`/orgs/${orgId}/request-logs?${params.toString()}`);
   }
 
-  async removeOrgMember(orgId: string, memberUserId: string) {
-    return this.request(`/orgs/${orgId}/members/${memberUserId}`, { method: "DELETE" });
+  async removeOrgMember(orgId: string, memberUserId: string, deleteKeys = true) {
+    return this.request(`/orgs/${orgId}/members/${memberUserId}`, {
+      method: "DELETE",
+      body: JSON.stringify({ delete_keys: deleteKeys }),
+    });
   }
 
   async leaveOrg(orgId: string) {

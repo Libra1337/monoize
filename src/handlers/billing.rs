@@ -2008,6 +2008,33 @@ async fn maybe_charge_usage_with_output(
         });
     }
 
+    // AKDL-2: settlement-time daily-limit check. Like the org check, the upstream
+    // tokens are consumed, so the row is recorded and the wallet debited, but the
+    // response delivery path rejects when the day's spend now exceeds the limit.
+    if let Some(daily_limit) = auth.daily_limit_nano_usd.as_deref() {
+        if let Ok(limit) = daily_limit.parse::<i128>()
+            && charge_nano > 0
+        {
+            match state
+                .user_store
+                .get_api_key_daily_spend_nano_usd(auth.api_key_id.as_deref().unwrap_or_default())
+                .await
+            {
+                Ok(spent) if spent >= limit => {
+                    return Err(AppError::new(
+                        StatusCode::PAYMENT_REQUIRED,
+                        "api_key_daily_limit_reached",
+                        "this API key has reached its daily spend limit; it resets at Beijing midnight",
+                    ));
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!("daily limit settlement check failed: {err}");
+                }
+            }
+        }
+    }
+
     // ORGL-5: settlement-time org spend-limit check. The charge is computed and the
     // upstream tokens are already consumed, so a breach here still records the row and
     // debits the wallet (ORGL-7) but rejects the response delivery path.

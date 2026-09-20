@@ -95,6 +95,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260917_000107_admin_revenue_user_model_rows::Migration),
             Box::new(m20260918_000108_announcements::Migration),
             Box::new(m20260919_000109_org_usage_limits::Migration),
+            Box::new(m20260921_000110_api_key_daily_limit::Migration),
         ]
     }
 }
@@ -319,6 +320,7 @@ mod m20260916_000106_admin_revenue_user_rows;
 mod m20260917_000107_admin_revenue_user_model_rows;
 mod m20260918_000108_announcements;
 mod m20260919_000109_org_usage_limits;
+mod m20260921_000110_api_key_daily_limit;
 
 #[cfg(test)]
 mod tests {

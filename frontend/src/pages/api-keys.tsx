@@ -539,6 +539,23 @@ function ModelRedirectsEditor({ value, onChange }: ModelRedirectsEditorProps) {
   );
 }
 
+function usdToNanoString(usd: string): string | null {
+  const trimmed = usd.trim();
+  if (!trimmed) return null;
+  if (!/^\d+(?:\.\d{1,9})?$/.test(trimmed)) return null;
+  const [whole, frac = ""] = trimmed.split(".");
+  const padded = frac.padEnd(9, "0");
+  return (BigInt(whole) * 10n ** 9n + BigInt(padded)).toString();
+}
+
+function nanoToUsdDisplay(nano: string | null | undefined): string {
+  if (nano == null || nano === "") return "";
+  const value = BigInt(nano);
+  const whole = value / 10n ** 9n;
+  const frac = (value % 10n ** 9n).toString().padStart(9, "0").replace(/0+$/, "");
+  return frac ? `${whole}.${frac}` : `${whole}`;
+}
+
 export function ApiKeysPage() {
   const { t } = useTranslation();
   const { user: currentUser } = useAuth();
@@ -566,10 +583,8 @@ export function ApiKeysPage() {
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyExpires, setNewKeyExpires] = useState("");
   const [newKeySubAccountEnabled, setNewKeySubAccountEnabled] = useState(false);
-  const [newKeySubAccountBalanceNanoUsd, setNewKeySubAccountBalanceNanoUsd] = useState("0");
-  const [transferDialogKey, setTransferDialogKey] = useState<ApiKey | null>(null);
-  const [transferAmount, setTransferAmount] = useState("");
-  const [transferring, setTransferring] = useState(false);
+  /// AKDL-1: daily spend limit typed as USD; empty = unlimited.
+  const [newKeyDailyLimitUsd, setNewKeyDailyLimitUsd] = useState("");
   const [newKeyModelLimitsEnabled, setNewKeyModelLimitsEnabled] = useState(false);
   const [newKeyModelLimits, setNewKeyModelLimits] = useState("");
   const [newKeyIpWhitelist, setNewKeyIpWhitelist] = useState("");
@@ -668,22 +683,16 @@ export function ApiKeysPage() {
     }
     setCreating(true);
     try {
-      const initialSubAccountBalance = canManageSystem
-        ? parseOptionalNanoBalance(newKeySubAccountBalanceNanoUsd, false)
-        : undefined;
-      if (
-        !newKeySubAccountEnabled
-        && initialSubAccountBalance != null
-        && BigInt(initialSubAccountBalance) !== 0n
-      ) {
-        throw new Error("A non-zero initial balance requires sub-account billing to be enabled");
-      }
       const input: CreateApiKeyInput = {
         name: newKeyName.trim(),
         expires_in_days: newKeyExpires ? parseInt(newKeyExpires) : undefined,
         sub_account_enabled: newKeySubAccountEnabled,
-        ...(canManageSystem
-          ? { sub_account_balance_nano_usd: initialSubAccountBalance }
+        ...(canManageSystem && newKeyDailyLimitUsd.trim()
+          ? ((): { daily_limit_nano_usd: string } => {
+              const nano = usdToNanoString(newKeyDailyLimitUsd);
+              if (nano === null) throw new Error("Daily limit must be a non-negative USD amount");
+              return { daily_limit_nano_usd: nano };
+            })()
           : {}),
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelList,
@@ -739,8 +748,14 @@ export function ApiKeysPage() {
       const input: UpdateApiKeyInput = {
         name: newKeyName.trim() || undefined,
         sub_account_enabled: newKeySubAccountEnabled,
-        ...(canManageSystem && newKeySubAccountEnabled
-          ? { sub_account_balance_nano_usd: parseOptionalNanoBalance(newKeySubAccountBalanceNanoUsd) }
+        ...(canManageSystem
+          ? ((): { daily_limit_nano_usd: string } => {
+              // The edit form always submits the field: empty clears, value sets.
+              if (!newKeyDailyLimitUsd.trim()) return { daily_limit_nano_usd: "" };
+              const nano = usdToNanoString(newKeyDailyLimitUsd);
+              if (nano === null) throw new Error("Daily limit must be a non-negative USD amount");
+              return { daily_limit_nano_usd: nano };
+            })()
           : {}),
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelList,
@@ -829,6 +844,7 @@ export function ApiKeysPage() {
     setNewKeyName(key.name);
     setNewKeySubAccountEnabled(key.sub_account_enabled);
     setNewKeySubAccountBalanceNanoUsd(key.sub_account_balance_nano_usd);
+    setNewKeyDailyLimitUsd(nanoToUsdDisplay(key.daily_limit_nano_usd));
     setNewKeyModelLimitsEnabled(key.model_limits_enabled);
     setNewKeyModelLimits(key.model_limits.join(", "));
     setNewKeyIpWhitelist(key.ip_whitelist.join(", "));
@@ -964,16 +980,22 @@ export function ApiKeysPage() {
                 </div>
                 {canManageSystem && (
                   <div className="space-y-2">
-                    <Label htmlFor="subAccountBalanceNanoUsd">
-                      {t("apiKeys.balance")} (nano-USD)
-                    </Label>
-                    <Input
-                      id="subAccountBalanceNanoUsd"
-                      type="text"
-                      inputMode="numeric"
-                      value={newKeySubAccountBalanceNanoUsd}
-                      onChange={(event) => setNewKeySubAccountBalanceNanoUsd(event.target.value)}
-                    />
+                    <Label htmlFor="dailyLimitUsd">{t("apiKeys.dailyLimit")}</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+                      <Input
+                        id="dailyLimitUsd"
+                        type="text"
+                        inputMode="decimal"
+                        className="pl-7"
+                        placeholder={t("apiKeys.dailyLimitPlaceholder")}
+                        value={newKeyDailyLimitUsd}
+                        onChange={(event) => setNewKeyDailyLimitUsd(event.target.value)}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {t("apiKeys.dailyLimitHint")}
+                    </p>
                   </div>
                 )}
                 <div className="space-y-1">
@@ -1256,6 +1278,11 @@ export function ApiKeysPage() {
                       </div>
                     </VirtualTableCell>
                     <VirtualTableCell className="whitespace-nowrap">
+                      {key.daily_limit_nano_usd ? (
+                        <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-xs text-primary" title={t("apiKeys.dailyLimit")}>
+                          {t("apiKeys.dailyLimitBadge", { defaultValue: "DAILY" })} ${nanoToUsdDisplay(key.daily_limit_nano_usd)}
+                        </span>
+                      ) : null}
                       {key.sub_account_enabled ? (
                         <span className="font-mono text-sm">${key.sub_account_balance_usd}</span>
                       ) : (
@@ -1285,20 +1312,6 @@ export function ApiKeysPage() {
                         >
                           <BarChart3 className="h-4 w-4" />
                         </Button>
-                        {key.sub_account_enabled && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-11 touch-manipulation sm:size-9"
-                            aria-label={t("apiKeys.transferBalance", { defaultValue: "Transfer balance" })}
-                            onClick={() => {
-                              setTransferDialogKey(key);
-                              setTransferAmount("");
-                            }}
-                          >
-                            <ArrowRightLeft className="h-4 w-4" />
-                          </Button>
-                        )}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -1388,20 +1401,6 @@ export function ApiKeysPage() {
               />
               <Label htmlFor="editSubAccountEnabled">{t("apiKeys.subAccountEnabled")}</Label>
             </div>
-            {canManageSystem && (
-              <div className="space-y-2">
-                <Label htmlFor="editSubAccountBalanceNanoUsd">
-                  {t("apiKeys.balance")} (nano-USD)
-                </Label>
-                <Input
-                  id="editSubAccountBalanceNanoUsd"
-                  type="text"
-                  inputMode="numeric"
-                  value={newKeySubAccountBalanceNanoUsd}
-                  onChange={(event) => setNewKeySubAccountBalanceNanoUsd(event.target.value)}
-                />
-              </div>
-            )}
             <div className="space-y-1">
               <div className="flex items-center space-x-2">
                 <Switch
@@ -1536,56 +1535,6 @@ export function ApiKeysPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={!!transferDialogKey} onOpenChange={(open) => { if (!open) setTransferDialogKey(null); }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t("apiKeys.transferTitle")}</DialogTitle>
-            <DialogDescription>
-              {t("apiKeys.transferDescription", { name: transferDialogKey?.name })}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>{t("apiKeys.currentBalance")}</Label>
-              <p className="text-sm font-mono">${transferDialogKey?.sub_account_balance_usd}</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="transferAmount">{t("apiKeys.transferAmount")}</Label>
-              <Input
-                id="transferAmount"
-                type="text"
-                value={transferAmount}
-                onChange={(e) => setTransferAmount(e.target.value)}
-                placeholder="1.00"
-              />
-              <p className="text-sm text-muted-foreground">{t("apiKeys.transferAmountHelp")}</p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setTransferDialogKey(null)}>
-              {t("common.cancel")}
-            </Button>
-            <Button
-              disabled={!transferAmount || transferring}
-              onClick={async () => {
-                if (!transferDialogKey || !transferAmount) return;
-                setTransferring(true);
-                try {
-                  await apiClient.transferToSubAccount(transferDialogKey.id, { amount_usd: transferAmount });
-                  toast.success(t("apiKeys.transferSuccess"));
-                  setTransferDialogKey(null);
-                } catch (error) {
-                  toast.error(error instanceof Error ? error.message : t("apiKeys.transferFailed"));
-                } finally {
-                  setTransferring(false);
-                }
-              }}
-            >
-              {t("apiKeys.transfer")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </PageWrapper>
   );
 }

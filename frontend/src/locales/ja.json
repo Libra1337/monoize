@@ -1165,7 +1165,10 @@
     "analyticsWalletBalance": "ウォレット残高に従う",
     "analyticsIndependentBalance": "Key 残高",
     "analyticsLoadFailed": "API Key 使用量を読み込めませんでした",
-    "analyticsEmpty": "この期間の使用量はありません。"
+    "analyticsEmpty": "この期間の使用量はありません。",
+    "dailyLimit": "1日の上限 (USD)",
+    "dailyLimitPlaceholder": "無制限",
+    "dailyLimitHint": "消費は個人ウォレットから直接引き落とされます。このキーの当日の消費が上限に達すると、北京時間の翌日 0 時まで停止します。空欄 = 無制限。"
   },
   "settings": {
     "title": "設定",
@@ -2571,7 +2574,8 @@
     "deleteKeyConfirm": "この組織キーを削除しますか？利用履歴ログは組織に残ります。",
     "leave": "組織を脱退",
     "leaveConfirm": "この組織を脱退しますか？キーへのアクセスを失います。個人ウォレットとキーには影響しません。",
-    "left": "組織を脱退しました"
+    "left": "組織を脱退しました",
+    "removeMemberConfirmKeys": "このメンバーを削除しますか?このスペースで作成したキーも一緒に削除されます。履歴ログは残ります。"
   },
   "adminOrgs": {
     "title": "組織スペース管理",

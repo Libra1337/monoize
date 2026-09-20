@@ -80,6 +80,9 @@ pub struct CreateApiKeyRequest {
     pub sub_account_enabled: bool,
     #[serde(default)]
     pub sub_account_balance_nano_usd: Option<String>,
+    /// AKDL-1: daily spend limit, nano-USD; absent = unlimited.
+    #[serde(default)]
+    pub daily_limit_nano_usd: Option<String>,
     #[serde(default)]
     pub model_limits_enabled: bool,
     #[serde(default)]
@@ -132,6 +135,8 @@ pub struct ApiKeyResponse {
     pub model_redirects: Vec<ModelRedirectRule>,
     pub reasoning_envelope_enabled: bool,
     pub request_capture_mode: RequestCaptureMode,
+    /// AKDL-1: per-key daily spend limit, nano-USD; null = unlimited.
+    pub daily_limit_nano_usd: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,6 +161,8 @@ pub struct ApiKeyCreatedResponse {
     pub model_redirects: Vec<ModelRedirectRule>,
     pub reasoning_envelope_enabled: bool,
     pub request_capture_mode: RequestCaptureMode,
+    /// AKDL-1: per-key daily spend limit, nano-USD; null = unlimited.
+    pub daily_limit_nano_usd: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,6 +183,10 @@ pub struct UpdateApiKeyRequest {
     pub reasoning_envelope_enabled: Option<bool>,
     pub request_capture_mode: Option<RequestCaptureMode>,
     pub expires_at: Option<String>,
+    /// AKDL-1: daily spend limit. Absent keeps the stored limit; an empty string
+    /// clears it (unlimited); a canonical nano-USD integer string sets it.
+    #[serde(default)]
+    pub daily_limit_nano_usd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -501,6 +512,7 @@ pub async fn list_my_api_keys(
                 model_redirects: k.model_redirects,
                 reasoning_envelope_enabled: k.reasoning_envelope_enabled,
                 request_capture_mode: k.request_capture_mode,
+                daily_limit_nano_usd: k.daily_limit_nano_usd.clone(),
             })
         })
         .collect::<Result<Vec<_>, String>>()
@@ -550,6 +562,7 @@ pub async fn create_api_key(
         expires_in_days: body.expires_in_days,
         sub_account_enabled: body.sub_account_enabled,
         sub_account_balance_nano_usd: body.sub_account_balance_nano_usd,
+        daily_limit_nano_usd: body.daily_limit_nano_usd,
         model_limits_enabled: body.model_limits_enabled,
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
@@ -604,6 +617,7 @@ pub async fn create_api_key(
             model_redirects: api_key.model_redirects,
             reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
             request_capture_mode: api_key.request_capture_mode,
+            daily_limit_nano_usd: api_key.daily_limit_nano_usd.clone(),
         }),
     ))
 }
@@ -676,6 +690,7 @@ pub async fn get_api_key(
             model_redirects: api_key.model_redirects,
             reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
             request_capture_mode: api_key.request_capture_mode,
+            daily_limit_nano_usd: api_key.daily_limit_nano_usd.clone(),
         }
     }))
 }
@@ -1142,6 +1157,31 @@ pub async fn update_api_key(
         enabled: body.enabled,
         sub_account_enabled: body.sub_account_enabled,
         sub_account_balance_nano_usd: body.sub_account_balance_nano_usd,
+        daily_limit_nano_usd: if user.role.can_manage_users() {
+            match body.daily_limit_nano_usd.as_deref() {
+                None => None,
+                Some("") => Some(None),
+                Some(raw) => {
+                    let parsed: i128 = raw.parse().map_err(|_| {
+                        AppError::new(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request",
+                            "daily_limit_nano_usd must be a canonical integer string or empty",
+                        )
+                    })?;
+                    if parsed <= 0 || parsed.to_string() != raw {
+                        return Err(AppError::new(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request",
+                            "daily_limit_nano_usd must be a positive canonical integer",
+                        ));
+                    }
+                    Some(Some(parsed.to_string()))
+                }
+            }
+        } else {
+            None
+        },
         model_limits_enabled: body.model_limits_enabled,
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
@@ -1188,6 +1228,7 @@ pub async fn update_api_key(
         model_redirects: updated_key.model_redirects,
         reasoning_envelope_enabled: updated_key.reasoning_envelope_enabled,
         request_capture_mode: updated_key.request_capture_mode,
+        daily_limit_nano_usd: api_key.daily_limit_nano_usd.clone(),
     }))
 }
 

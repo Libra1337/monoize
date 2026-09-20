@@ -5262,6 +5262,7 @@ async fn bind_test_api_key_to_provider(ctx: &TestContext, model: &str, provider_
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
                 expires_at: None,
+                daily_limit_nano_usd: None,
             },
             false,
         )
@@ -5294,6 +5295,7 @@ async fn bind_test_api_key_model(ctx: &TestContext, model: &str, group_id: &str)
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
                 expires_at: None,
+                daily_limit_nano_usd: None,
             },
             false,
         )

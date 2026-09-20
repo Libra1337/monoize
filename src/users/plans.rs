@@ -1343,6 +1343,7 @@ mod tests {
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
                     request_capture_mode: crate::users::RequestCaptureMode::Off,
+                    daily_limit_nano_usd: None,
                 },
                 false,
             )

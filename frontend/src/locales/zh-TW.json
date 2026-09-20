@@ -1165,7 +1165,10 @@
     "analyticsWalletBalance": "跟隨錢包餘額",
     "analyticsIndependentBalance": "Key 餘額",
     "analyticsLoadFailed": "API Key 用量載入失敗",
-    "analyticsEmpty": "此時間範圍內尚無用量。"
+    "analyticsEmpty": "此時間範圍內尚無用量。",
+    "dailyLimit": "每日限額 (USD)",
+    "dailyLimitPlaceholder": "不限",
+    "dailyLimitHint": "消費直接從個人餘額扣除;該 key 當日消費達到限額後停止服務,北京時間次日 0 點自動恢復。留白 = 不限。"
   },
   "settings": {
     "title": "系統設定",
@@ -2572,7 +2575,8 @@
     "deleteKeyConfirm": "刪除這個組織金鑰？歷史用量日誌仍保留在組織中。",
     "leave": "退出組織",
     "leaveConfirm": "退出該組織？你將失去其金鑰的存取權。個人錢包和金鑰不受影響。",
-    "left": "已退出組織"
+    "left": "已退出組織",
+    "removeMemberConfirmKeys": "移除該成員?其在本空間建立的金鑰也會一併刪除。歷史日誌保留。"
   },
   "adminOrgs": {
     "title": "組織空間管理",

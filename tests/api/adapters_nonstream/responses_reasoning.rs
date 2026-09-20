@@ -456,6 +456,7 @@ async fn responses_reasoning_envelope_can_be_disabled_per_api_key() {
                 reasoning_envelope_enabled: Some(false),
                 request_capture_mode: None,
                 expires_at: None,
+                daily_limit_nano_usd: None,
             },
             false,
         )
