@@ -205,13 +205,13 @@ UI3. Page MUST follow standard dashboard layout: `PageWrapper`, `text-3xl` headi
 
 UI4. Page heading: "Model Database" (en) / "模型数据库" (zh).
 
-UI4a. The page MUST contain three tabs in this order:
+UI4a. The page MUST be a single-page master-detail workbench (no tab bar):
 
-1. `Model Database`
-2. `Billing Profiles`
-3. `Advanced Rates`
+- a toolbar: a pricing-profile selector (fed by `GET /api/dashboard/billing-rates/profiles`, each option showing its model count), a model search input, one sync dropdown (Sync models.dev / Sync catalog), a "Match rules" button, a "Manage profiles" button, and a create dropdown (New price / New model metadata);
+- a master list: one virtualized row per model of the selected profile, with the price editor as a right-hand sticky panel (a bottom sheet under `lg`);
+- an "Advanced rates" entry that opens the existing low-level rate table inside a dialog.
 
-UI4b. Each tab MUST use SWR for data loading, skeleton fallback while loading, and optimistic updates for user-triggered mutations.
+UI4b. Every surface MUST use SWR for data loading, skeleton fallback while loading, and optimistic updates for user-triggered mutations.
 
 ### 4.3 Model Database tab: compact virtualized list
 
@@ -274,17 +274,17 @@ UI15. Skeleton placeholders while loading.
 
 ### 4.8 Billing Profiles tab
 
-UI17. The Billing Profiles tab MUST group models.dev rate records by `pricing_profile` and present a master-detail workbench.
+UI17. The master list MUST group rate records by the selected `pricing_profile` and present a master-detail workbench. Data loading follows UI17c unchanged.
 
 UI17c. The Billing Profiles tab MUST load the profile list and per-profile model counts from `GET /api/dashboard/billing-rates/profiles` and the selected profile's rate rows from `GET /api/dashboard/billing-rates?pricing_profile={selected}`. The tab MUST NOT request the unfiltered billing-rate catalog.
 
-UI17a. Desktop (`lg` and above) MUST render a left profile list and a right detail pane. The detail pane MUST show model ID plus input, cache-read, and output token prices formatted as the price per one million tokens, prefixed by the symbol of that row's `unit_price_currency`: `¥` for `CNY` and `$` for `USD`. A price MUST NOT be shown under a currency symbol that does not match its stored `unit_price_currency`. When the effective row has a non-null `peak_unit_price_nano`, that cell MUST show the off-peak price (`unit_price_nano`) and the peak price (`peak_unit_price_nano`) in that order, both converted as CNY-or-USD per one million tokens under the same currency symbol. When `peak_unit_price_nano` is null, the cell MUST show only the off-peak price.
+UI17a. Desktop (`lg` and above) MUST render the master list in the main column and the price editor in a sticky right panel (about one third of the width). The detail pane MUST show model ID plus input, cache-read, and output token prices formatted as the price per one million tokens, prefixed by the symbol of that row's `unit_price_currency`: `¥` for `CNY` and `$` for `USD`. A price MUST NOT be shown under a currency symbol that does not match its stored `unit_price_currency`. When the effective row has a non-null `peak_unit_price_nano`, that cell MUST show the off-peak price (`unit_price_nano`) and the peak price (`peak_unit_price_nano`) in that order, both converted as CNY-or-USD per one million tokens under the same currency symbol. When `peak_unit_price_nano` is null, the cell MUST show only the off-peak price.
 
 UI17b. Mobile (`< lg`) MUST render a horizontally scrollable profile selector and stacked model-price rows. No pricing table may require horizontal page scrolling.
 
 UI18. Billing Profiles MUST provide model search and source/status filters without exposing nano-unit prices or raw JSON in the primary flow.
 
-UI19. Billing Profiles MUST provide:
+UI19. The page MUST provide:
 
 - a `Sync models.dev` action that calls `POST /api/dashboard/model-metadata/sync/models-dev`;
 - a visible last-sync/source status derived from synchronized records;
@@ -318,6 +318,18 @@ UI23. The low-level rate edit dialog MUST allow editing every mutable field expo
 UI24. Empty pricing-profile match-rule `pattern` or `pricing_profile` values MUST be blocked before submitting.
 
 UI24a. The Provider edit dialog MUST source its pricing-profile name list from `GET /api/dashboard/billing-rates/profiles`. The dialog MUST NOT request the full billing-rate catalog to derive profile names.
+
+### 4.10 Profile management
+
+UI25. The "Manage profiles" dialog MUST list every pricing profile (name, model count, `has_models_dev` mark) with copy and delete actions per row.
+
+- Delete MUST call `DELETE /api/dashboard/billing-rates/profiles/{profile}` behind an AlertDialog confirmation that states the number of rate rows to be removed.
+- A 409 `pricing_profile_in_use_patterns` or `pricing_profile_in_use_providers` response MUST render the server message inline in the dialog and keep the row listed.
+- A successful delete MUST remove the profile from the selector and revalidate the billing-rate SWR resources; when the deleted profile was selected, the selector MUST move to the first remaining profile.
+
+### 4.11 Sync result report
+
+UI26. After a models.dev sync completes, the page MUST show a result report with the counts `upserted`, `deleted`, and `retained_manual` (models whose manual metadata kept them out of the sync), each as a labeled number. The report MUST offer a detail action that lists the retained model ids. The catalog sync MUST show its existing upserted/skipped/deleted counts in the same report surface.
 
 ### 4.8 Billing integration note
 

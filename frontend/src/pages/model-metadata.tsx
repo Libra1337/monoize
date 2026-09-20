@@ -46,6 +46,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ModelBadge } from "@/components/ModelBadge";
+import { ModelWorkbench } from "@/pages/model-metadata/model-workbench";
 import {
   useModelMetadata,
   useModelMetadataDetail,
@@ -248,6 +249,7 @@ export function ModelMetadataPage() {
   const [saving, setSaving] = useState(false);
   const [editRecord, setEditRecord] = useState<ModelMetadataRecord | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [form, setForm] = useState<EditFormData>(emptyForm);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
@@ -596,6 +598,35 @@ export function ModelMetadataPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button variant="outline" onClick={() => setAdvancedOpen(true)}>
+          <TableProperties className="mr-2 h-4 w-4" />
+          {t("modelMetadata.tabs.advancedRates", "Advanced Rates")}
+        </Button>
+      </div>
+
+      <ModelWorkbench
+        metadata={records}
+        metadataLoading={isLoading}
+        onEditMetadata={openEdit}
+        onCreateMetadata={openCreate}
+        onDeleteMetadata={handleDelete}
+      />
+
+      <Dialog open={advancedOpen} onOpenChange={setAdvancedOpen}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden rounded-2xl p-0 sm:max-w-6xl">
+          <div className="flex h-[calc(100dvh-4rem)] flex-col p-1">
+            <DialogHeader className="shrink-0 px-5 pt-5 pr-10">
+              <DialogTitle>{t("modelMetadata.tabs.advancedRates", "Advanced Rates")}</DialogTitle>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <BillingRatesTab embedded />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <div className="hidden">
       <Tabs defaultValue="models" className="space-y-4">
         <TabsList className="max-w-full justify-start overflow-x-auto">
           <TabsTrigger value="models">
@@ -791,6 +822,7 @@ export function ModelMetadataPage() {
           <BillingRatesTab />
         </TabsContent>
       </Tabs>
+      </div>
     </PageWrapper>
   );
 }
@@ -939,7 +971,7 @@ function rateMatchesSearch(rate: BillingRateRecord, search: string): boolean {
     .some((value) => String(value).toLowerCase().includes(q));
 }
 
-function BillingRatesTab() {
+function BillingRatesTab({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation();
   const { data: rates = [], isLoading } = useBillingRates();
   const [search, setSearch] = useState("");

@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::billing_rate_store::{
     BillingRateProfileSummary, BillingRateSyncResult, CopyProfileError, DbBillingRateRecord,
-    RenameProfileModelError, UpsertBillingRateInput,
+    DeleteProfileError, RenameProfileModelError, UpsertBillingRateInput,
 };
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
@@ -10,6 +10,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use sea_orm::ConnectionTrait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -70,6 +71,94 @@ pub struct CopyPricingProfileRequest {
 pub struct CopyPricingProfileResponse {
     pub target_profile: String,
     pub copied: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeletePricingProfileResponse {
+    pub deleted_rates: u64,
+    pub deleted_models: u64,
+}
+
+/// Deletes every rate row of one pricing profile (MB-A11).
+///
+/// Reference checks run before the store call so a profile that routes traffic (match
+/// rules) or backs a Provider can never lose its prices while still being selected.
+pub async fn delete_pricing_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(profile): Path<String>,
+) -> AppResult<Json<DeletePricingProfileResponse>> {
+    require_admin(&headers, &state).await?;
+    let profile = profile.trim();
+    if profile.is_empty() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "profile must not be empty",
+        ));
+    }
+    let patterns = state
+        .settings_store
+        .get_pricing_profile_model_patterns()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    if patterns
+        .iter()
+        .any(|pattern: &PricingProfilePattern| pattern.pricing_profile == profile)
+    {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "pricing_profile_in_use_patterns",
+            "profile is referenced by a pricing-profile match rule; remove the rule first",
+        ));
+    }
+    let provider_refs: i64 = state
+        .db_pool
+        .read()
+        .query_one(state.db_pool.stmt(
+            "SELECT ( \
+                (SELECT COUNT(*) FROM monoize_providers WHERE pricing_profile = $1) \
+                + (SELECT COUNT(*) FROM monoize_provider_models WHERE pricing_profile_override = $1) \
+             ) AS refs",
+            vec![profile.to_string().into()],
+        ))
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e.to_string()))?
+        .and_then(|row| row.try_get::<i64>("", "refs").ok())
+        .unwrap_or(0);
+    if provider_refs > 0 {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "pricing_profile_in_use_providers",
+            "profile is referenced by a provider; detach the provider first",
+        ));
+    }
+    let (deleted_rates, deleted_models) = state
+        .billing_rate_store
+        .delete_profile(profile)
+        .await
+        .map_err(|error| match error {
+            DeleteProfileError::NotFound => {
+                AppError::new(StatusCode::NOT_FOUND, "not_found", error.to_string())
+            }
+            DeleteProfileError::PatternsInUse => AppError::new(
+                StatusCode::CONFLICT,
+                "pricing_profile_in_use_patterns",
+                error.to_string(),
+            ),
+            DeleteProfileError::ProvidersInUse => AppError::new(
+                StatusCode::CONFLICT,
+                "pricing_profile_in_use_providers",
+                error.to_string(),
+            ),
+            DeleteProfileError::Storage(message) => {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+            }
+        })?;
+    Ok(Json(DeletePricingProfileResponse {
+        deleted_rates,
+        deleted_models,
+    }))
 }
 
 /// Copies a pricing profile's rates under a new name (MB-A7).

@@ -133,6 +133,8 @@ pub struct ModelMetadataSyncResult {
     pub skipped: usize,
     pub deleted: u64,
     pub fetched_at: String,
+    /// UI26: models whose manual metadata kept them out of the sync, by id.
+    pub retained_manual_models: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -870,6 +872,7 @@ impl ModelRegistryStore {
         let mut metadata_writes = Vec::new();
         let mut rate_writes = Vec::new();
         let mut skipped = 0usize;
+        let mut retained_manual_models = Vec::new();
         let mut grouped_models = grouped.iter().collect::<Vec<_>>();
         grouped_models.sort_by(|(left, _), (right, _)| left.cmp(right));
         for (model_name, variants) in grouped_models {
@@ -878,6 +881,7 @@ impl ModelRegistryStore {
             }
             if manual_ids.contains(model_name) {
                 skipped += 1;
+                retained_manual_models.push(model_name.to_string());
                 continue;
             }
 
@@ -1064,6 +1068,7 @@ impl ModelRegistryStore {
             skipped,
             deleted,
             fetched_at,
+            retained_manual_models,
         })
     }
 }

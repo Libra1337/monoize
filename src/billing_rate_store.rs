@@ -710,6 +710,52 @@ impl BillingRateStore {
         Ok(rows.len())
     }
 
+    /// MB-A11: deletes every rate row of one profile in a single transaction.
+    ///
+    /// Manual and synchronized rows are removed alike; `model_metadata_records` is never
+    /// touched, so the registry can re-mirror prices under the profile name later. The
+    /// handler checks pattern and provider references before calling this.
+    pub async fn delete_profile(&self, profile: &str) -> Result<(u64, u64), DeleteProfileError> {
+        let write_guard = self.db.write().await;
+        let txn = write_guard
+            .begin()
+            .await
+            .map_err(|e| DeleteProfileError::Storage(e.to_string()))?;
+        if self.db.is_postgres() {
+            txn.execute_unprepared("LOCK TABLE billing_rate_records IN SHARE ROW EXCLUSIVE MODE")
+                .await
+                .map_err(|e| DeleteProfileError::Storage(e.to_string()))?;
+        }
+        let row = txn
+            .query_one(self.db.stmt(
+                "SELECT COUNT(*) AS rate_count, COUNT(DISTINCT model_pattern) AS model_count                  FROM billing_rate_records WHERE pricing_profile = $1",
+                vec![profile.into()],
+            ))
+            .await
+            .map_err(|e| DeleteProfileError::Storage(e.to_string()))?
+            .ok_or(DeleteProfileError::NotFound)?;
+        let rate_count: i64 = row
+            .try_get("", "rate_count")
+            .map_err(|e| DeleteProfileError::Storage(e.to_string()))?;
+        let model_count: i64 = row
+            .try_get("", "model_count")
+            .map_err(|e| DeleteProfileError::Storage(e.to_string()))?;
+        if rate_count == 0 {
+            return Err(DeleteProfileError::NotFound);
+        }
+        let deleted = txn
+            .execute(self.db.stmt(
+                "DELETE FROM billing_rate_records WHERE pricing_profile = $1",
+                vec![profile.into()],
+            ))
+            .await
+            .map_err(|e| DeleteProfileError::Storage(e.to_string()))?;
+        txn.commit()
+            .await
+            .map_err(|e| DeleteProfileError::Storage(e.to_string()))?;
+        Ok((deleted.rows_affected(), model_count.max(0) as u64))
+    }
+
     /// MB-A9: renames a model inside one pricing profile.
     ///
     /// Writes one `manual` row per source row under `target_model`, then deletes the source
@@ -1669,6 +1715,18 @@ pub enum CopyProfileError {
     SourceNotFound,
     #[error("target profile already has rates")]
     TargetNotEmpty,
+    #[error("storage failure: {0}")]
+    Storage(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteProfileError {
+    #[error("profile has no rates")]
+    NotFound,
+    #[error("profile is referenced by a pricing-profile match rule")]
+    PatternsInUse,
+    #[error("profile is referenced by a provider")]
+    ProvidersInUse,
     #[error("storage failure: {0}")]
     Storage(String),
 }

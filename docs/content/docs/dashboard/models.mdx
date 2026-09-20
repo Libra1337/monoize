@@ -19,7 +19,7 @@ Example: clients call `my-fast-model`. One Provider redirects it to `gpt-4o-mini
 
 ## Model metadata and pricing
 
-The **Models** page stores model metadata and Billing Profile rate records. Monoize imports metadata and price suggestions from [Models.dev](https://models.dev).
+The **Models** page is a single master-detail workbench. The toolbar selects the Billing Profile, searches models, and opens the sync, match-rule, and profile-management actions. The master list shows one row per model with a compressed price summary. Select a row to edit its prices in the right panel.
 
 Billing uses:
 
@@ -27,12 +27,14 @@ Billing uses:
 2. select a complete rate matrix for the upstream or logical model;
 3. apply the model multiplier override or the Provider multiplier.
 
-Each rate record stores a price and a price currency. A rate you enter by hand is priced in
-`CNY / 1M tokens` by default. A rate imported from Models.dev keeps `USD`.
+Each rate record stores a price and a price currency. The price editor has a `CNY`/`USD`
+selector; the digits you type are interpreted directly in that currency with no exchange-rate
+conversion. A rate imported from Models.dev keeps `USD`.
 
-On the Billing Profiles tab, edit a model to set an off-peak price and an optional peak price.
-The peak price applies only on Monday through Friday, `09:00–12:00` and `14:00–18:00` Beijing
-time (UTC+08:00). Leave the peak field empty to always bill at the off-peak price.
+The editor sets an off-peak price and an optional peak price per usage class, including cache
+write 5m and cache write 1m lanes. The peak price applies only on Monday through Friday,
+`09:00–12:00` and `14:00–18:00` Beijing time (UTC+08:00). Leave the peak field empty to always
+bill at the off-peak price.
 
 Monoize converts a `CNY` price with the current CNY/USD exchange-rate snapshot and
 accumulates charges in nano-dollars in each user's ledger. If a model uses a `CNY` price and
@@ -52,3 +54,17 @@ Transform rules and some restrictions accept model glob patterns:
 - Matching is case-sensitive and anchored to the full model name.
 
 Example: `gpt-4*` matches `gpt-4o` and `gpt-4o-mini`. It does not match `o4-mini`.
+
+
+## Manage pricing profiles
+
+Open **Profiles** in the toolbar. Each profile lists its model and rate counts.
+
+- **Copy** duplicates every rate row under a new profile name.
+- **Delete** removes the profile and all of its rate rows. A profile referenced by a match rule or a Provider refuses deletion with the reason shown inline.
+
+## Sync prices
+
+Open **Sync** in the toolbar and choose **Sync models.dev** or **Sync catalog**. After the sync
+finishes, a report shows how many models were upserted, how many were removed, and which
+models kept their manual prices. Manual prices are never overwritten by a sync.

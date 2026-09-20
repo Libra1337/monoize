@@ -430,6 +430,23 @@ MB-A9d. The endpoint MUST reject, without writing any row:
 - a `target_model` that already has at least one row in `{profile}`, with HTTP `409` and code
   `pricing_profile_model_not_empty`.
 
+MB-A11. `DELETE /api/dashboard/billing-rates/profiles/{profile}` MUST require an admin
+session and delete every `billing_rate_records` row whose `pricing_profile` equals `{profile}`
+(manual and synchronized rows alike) in one transaction. It MUST return `{ "deleted_rates":
+<rows>, "deleted_models": <distinct model_pattern count> }` with HTTP 200. The endpoint MUST
+reject, without deleting anything:
+
+- a `{profile}` with no rate rows, with HTTP `404` and code `not_found`;
+- a `{profile}` referenced by any pricing-profile match rule (`pricing_profile` field), with
+  HTTP `409` and code `pricing_profile_in_use_patterns`;
+- a `{profile}` referenced by any Provider (`monoize_providers.pricing_profile` or
+  `pricing_profile_override`, or `monoize_provider_models.pricing_profile_override`), with
+  HTTP `409` and code `pricing_profile_in_use_providers`.
+
+The endpoint MUST NOT touch `model_metadata_records`. A later models.dev sync or metadata
+edit recreates the `model_metadata:` mirrors under the deleted profile name if the registry
+still maps models to it, so deleting a profile does not orphan the registry.
+
 Refusing a non-empty target keeps the rename from silently repricing a model that is already
 billing traffic, and makes a repeated call fail rather than duplicate.
 

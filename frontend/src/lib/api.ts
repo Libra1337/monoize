@@ -785,7 +785,15 @@ export interface ModelMetadataSyncResult {
   success: boolean;
   upserted: number;
   skipped: number;
+  deleted: number;
   fetched_at: string;
+  /** UI26: model ids whose manual metadata kept them out of the sync. */
+  retained_manual_models: string[];
+}
+
+export interface DeletePricingProfileResult {
+  deleted_rates: number;
+  deleted_models: number;
 }
 
 /** Currency a billing rate is denominated in (MB-D3b). */
@@ -2010,6 +2018,12 @@ class ApiClient {
    * Profile names must stay disjoint across account classes, so serving both classes the
    * same prices requires two named copies of the rate set.
    */
+  async deletePricingProfile(profile: string): Promise<DeletePricingProfileResult> {
+    return this.request(`/billing-rates/profiles/${encodeURIComponent(profile)}`, {
+      method: "DELETE",
+    });
+  }
+
   async copyPricingProfile(
     profile: string,
     targetProfile: string,

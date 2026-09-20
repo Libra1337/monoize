@@ -329,3 +329,109 @@ async fn model_metadata_list_omits_raw_json_and_detail_returns_it() {
     assert_eq!(status, StatusCode::OK);
     assert!(detail["raw_json"].is_object());
 }
+
+#[tokio::test]
+async fn pricing_profile_delete_lifecycle() {
+    let ctx = setup().await;
+
+    // Seed two profiles via the upsert API. Each row needs a distinct id: the upsert
+    // keys on id, so a shared id would move the row between profiles.
+    for (index, (profile, model)) in [
+        ("del-profile-a", "del-model-1"),
+        ("del-profile-b", "del-model-2"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let rate_id = format!("manual:del-test:{index}");
+        let (status, _) = json_request(
+            &ctx,
+            Method::PUT,
+            &format!("/api/dashboard/billing-rates/{rate_id}"),
+            Some(json!({
+                "source": "manual",
+                "pricing_profile": profile,
+                "model_pattern": model,
+                "rate_kind": "token",
+                "usage_class": "input_uncached",
+                "unit": "token",
+                "unit_price_nano": "1000",
+                "unit_price_currency": "CNY",
+                "priority": 1000,
+                "enabled": true
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // MB-A11: an unknown profile 404s.
+    let (status, body) = json_request(
+        &ctx,
+        Method::DELETE,
+        "/api/dashboard/billing-rates/profiles/no-such-profile",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // MB-A11: deleting a referenced profile 409s.
+    let (status, _) = json_request(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/pricing-profile-patterns",
+        Some(json!({ "patterns": [ { "pattern": "del-model-*", "pricing_profile": "del-profile-a" } ] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = json_request(
+        &ctx,
+        Method::DELETE,
+        "/api/dashboard/billing-rates/profiles/del-profile-a",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"]["code"], "pricing_profile_in_use_patterns",
+        "{body}"
+    );
+
+    // Remove the rule; deletion now succeeds and reports the removed rows.
+    let (status, _) = json_request(
+        &ctx,
+        Method::PUT,
+        "/api/dashboard/pricing-profile-patterns",
+        Some(json!({ "patterns": [] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = json_request(
+        &ctx,
+        Method::DELETE,
+        "/api/dashboard/billing-rates/profiles/del-profile-a",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["deleted_rates"], 1, "{body}");
+    assert_eq!(body["deleted_models"], 1, "{body}");
+
+    // The profile list no longer contains it; the other profile survives.
+    let (status, body) = json_request(
+        &ctx,
+        Method::GET,
+        "/api/dashboard/billing-rates/profiles",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<&str> = body["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["pricing_profile"].as_str())
+        .collect();
+    assert!(!names.contains(&"del-profile-a"), "{names:?}");
+    assert!(names.contains(&"del-profile-b"), "{names:?}");
+}

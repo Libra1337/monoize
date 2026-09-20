@@ -2960,6 +2960,10 @@ fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
             post(crate::dashboard_handlers::copy_pricing_profile),
         )
         .route(
+            "/dashboard/billing-rates/profiles/{profile}",
+            axum::routing::delete(crate::dashboard_handlers::delete_pricing_profile),
+        )
+        .route(
             "/dashboard/billing-rates/profiles/{profile}/models/{model}/rename",
             post(crate::dashboard_handlers::rename_pricing_profile_model),
         )

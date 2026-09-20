@@ -56,9 +56,9 @@ pub use billing_plans::{
 pub use billing_rates::{
     BillingRateProfilesResponse, BillingRatesListQuery, PricingProfilePatternsResponse,
     UpdatePricingProfilePatternsRequest, copy_pricing_profile, delete_billing_rate,
-    get_pricing_profile_patterns, list_billing_rate_profiles, list_billing_rates,
-    rename_pricing_profile_model, sync_billing_rates_catalog, update_pricing_profile_patterns,
-    upsert_billing_rate,
+    delete_pricing_profile, get_pricing_profile_patterns, list_billing_rate_profiles,
+    list_billing_rates, rename_pricing_profile_model, sync_billing_rates_catalog,
+    update_pricing_profile_patterns, upsert_billing_rate,
 };
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
 pub use firewall::{FirewallEventsQuery, get_firewall_stats, list_firewall_events};
