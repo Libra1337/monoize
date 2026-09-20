@@ -377,9 +377,11 @@ export function BillingProfilesTab() {
 						usage_class: usageClass,
 						unit: 'token',
 						unit_price_nano: perMillionToNano(value),
-						// UI19c: this dialog is denominated in CNY, so the currency is stated on
-						// every write instead of relying on the server default.
-						unit_price_currency: 'CNY',
+						// UI19c: the selected currency is what the typed digits mean; writing
+						// it explicitly keeps the row off the server's CNY default.
+						unit_price_currency: overrideCurrency,
+						// UI19d: cache-write rows carry their TTL so find_rate matches them.
+						cache_ttl: CACHE_WRITE_TTL[usageClass] ?? null,
 						// UI19d/MB-A8: a blank peak field clears the peak so the row always
 						// bills at the off-peak price.
 						peak_unit_price_nano: peakValue.trim() ? perMillionToNano(peakValue) : null,
