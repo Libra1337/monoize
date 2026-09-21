@@ -620,7 +620,7 @@ export function ModelMetadataPage() {
               <DialogTitle>{t("modelMetadata.tabs.advancedRates", "Advanced Rates")}</DialogTitle>
             </DialogHeader>
             <div className="min-h-0 flex-1 overflow-hidden">
-              <BillingRatesTab embedded />
+              <BillingRatesTab />
             </div>
           </div>
         </DialogContent>
@@ -971,7 +971,7 @@ function rateMatchesSearch(rate: BillingRateRecord, search: string): boolean {
     .some((value) => String(value).toLowerCase().includes(q));
 }
 
-function BillingRatesTab({ embedded = false }: { embedded?: boolean }) {
+function BillingRatesTab() {
   const { t } = useTranslation();
   const { data: rates = [], isLoading } = useBillingRates();
   const [search, setSearch] = useState("");

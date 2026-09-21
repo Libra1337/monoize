@@ -45,7 +45,6 @@ import {
   useTransformRegistry,
 } from "@/lib/swr";
 import type { ApiKey, ApiKeyChannelBinding, ApiKeyChannelConflict, ApiKeyCreated, ApiKeyModelBinding, ApiKeyModelConflict, CreateApiKeyInput, Group, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
-import { api as apiClient } from "@/lib/api";
 import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
@@ -67,23 +66,6 @@ function parseOptionalMultiplier(value: string): string | undefined {
   return normalized;
 }
 
-function parseOptionalNanoBalance(value: string, allowNegative = true): string | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  if (!/^-?(?:0|[1-9]\d*)$/.test(trimmed)) {
-    throw new Error("Balance must be a signed integer nano-USD string");
-  }
-  const parsed = BigInt(trimmed);
-  const minimum = -(1n << 127n);
-  const maximum = (1n << 127n) - 1n;
-  if (parsed < minimum || parsed > maximum) {
-    throw new Error("Balance exceeds the supported signed 128-bit range");
-  }
-  if (!allowNegative && parsed < 0n) {
-    throw new Error("Initial balance must be non-negative");
-  }
-  return parsed.toString();
-}
 
 function requestCaptureBadgeVariant(mode: RequestCaptureMode): "secondary" | "outline" {
   return mode === "capture-only-abnormal" ? "secondary" : "outline";
@@ -643,7 +625,6 @@ export function ApiKeysPage() {
     setNewKeyName("");
     setNewKeyExpires("");
     setNewKeySubAccountEnabled(false);
-    setNewKeySubAccountBalanceNanoUsd("0");
     setNewKeyModelLimitsEnabled(false);
     setNewKeyModelLimits("");
     setNewKeyIpWhitelist("");
@@ -843,7 +824,6 @@ export function ApiKeysPage() {
     setEditKey(key);
     setNewKeyName(key.name);
     setNewKeySubAccountEnabled(key.sub_account_enabled);
-    setNewKeySubAccountBalanceNanoUsd(key.sub_account_balance_nano_usd);
     setNewKeyDailyLimitUsd(nanoToUsdDisplay(key.daily_limit_nano_usd));
     setNewKeyModelLimitsEnabled(key.model_limits_enabled);
     setNewKeyModelLimits(key.model_limits.join(", "));

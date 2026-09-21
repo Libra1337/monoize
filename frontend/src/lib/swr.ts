@@ -33,6 +33,7 @@ import type {
   ModelMetadataRecord,
   UpsertModelMetadataInput,
   BillingRateProfileSummary,
+  DeletePricingProfileResult,
   BillingRateRecord,
   UpsertBillingRateInput,
   PricingProfilePattern,
@@ -1280,17 +1281,18 @@ export async function deleteModelMetadataOptimistic(
 export async function deletePricingProfileOptimistic(
   profile: string,
   currentProfiles: BillingRateProfileSummary[]
-) {
+): Promise<DeletePricingProfileResult> {
   mutate(
     SWR_KEYS.BILLING_RATE_PROFILES,
     currentProfiles.filter((summary) => summary.pricing_profile !== profile),
     false
   );
   try {
-    await api.deletePricingProfile(profile);
+    const result = await api.deletePricingProfile(profile);
     mutate(SWR_KEYS.BILLING_RATE_PROFILES);
     // The per-profile rate cache may hold the deleted profile's rows.
     revalidateBillingRateKeys();
+    return result;
   } catch (error) {
     mutate(SWR_KEYS.BILLING_RATE_PROFILES, currentProfiles, false);
     throw error;

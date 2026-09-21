@@ -78,7 +78,6 @@ export function summarizeModelPrices(
   const output = effective.find((e) => e.usageClass === "output");
   const currency: RateCurrency = (input ?? output ?? effective[0])!.rate
     .unit_price_currency;
-  const symbol = currency === "CNY" ? "¥" : "$";
   const fmt = (rate: BillingRateRecord) =>
     formatNanoPerTokenPerMillion(rate.unit_price_nano, rate.unit_price_currency);
 

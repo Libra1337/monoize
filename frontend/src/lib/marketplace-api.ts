@@ -16,6 +16,7 @@ export interface MarketplaceItem {
 export interface MarketplaceResponse {
   generated_at: string;
   revision: string;
+  cny_per_usd: string;
   next_cursor: string | null;
   items: MarketplaceItem[];
 }

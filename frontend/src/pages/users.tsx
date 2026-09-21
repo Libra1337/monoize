@@ -91,6 +91,30 @@ function parseUsdToNanoBigInt(usd: string): bigint | null {
   }
 }
 
+/**
+ * Converts a typed amount to nano-USD in the selected add currency. A CNY amount
+ * divides by the live cny_per_usd snapshot with BigInt-only arithmetic, so the
+ * credited value matches what a CNY top-up of that amount buys.
+ */
+function amountToNanoForCurrency(
+  amount: string,
+  currency: "USD" | "CNY",
+  cnyPerUsd: string | undefined
+): bigint | null {
+  const nano = parseUsdToNanoBigInt(amount);
+  if (nano === null) return null;
+  if (currency === "USD") return nano;
+  const rate = Number(cnyPerUsd);
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  const scaledRate = BigInt(Math.round(rate * 1e9));
+  const numerator = nano * 1_000_000_000n;
+  const quotient = numerator / scaledRate;
+  const remainder = numerator % scaledRate;
+  const doubled = remainder * 2n;
+  const roundUp = nano < 0n ? doubled <= -scaledRate : doubled >= scaledRate;
+  return roundUp ? quotient + (nano < 0n ? -1n : 1n) : quotient;
+}
+
 function nanoToUsdString(nano: bigint): string {
   const negative = nano < 0n;
   const abs = negative ? -nano : nano;

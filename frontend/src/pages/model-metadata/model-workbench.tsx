@@ -9,7 +9,6 @@ import {
   Plus,
   RefreshCw,
   Settings2,
-  SlidersHorizontal,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -75,8 +74,8 @@ export function ModelWorkbench({
 }: {
   metadata: ModelMetadataRecord[];
   metadataLoading: boolean;
-  onEditMetadata: (record: ModelMetadataRecord) => void;
   onCreateMetadata: () => void;
+  onEditMetadata: (record: ModelMetadataRecord) => void;
   onDeleteMetadata: (modelId: string) => void;
 }) {
   const { t } = useTranslation();
@@ -379,8 +378,7 @@ export function ModelWorkbench({
                             aria-label={t("common.edit")}
                             onClick={(event) => {
                               event.stopPropagation();
-                              setCreatingModel(null);
-                              setSelectedModel(row.model);
+                              if (row.metadata) onEditMetadata(row.metadata);
                             }}
                           >
                             <Pencil className="h-4 w-4" />

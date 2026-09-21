@@ -1,12 +1,34 @@
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowRight, Boxes, CheckCircle2, CircleDollarSign, Code2, Image, MessageSquareText, Radio, ShieldCheck, Sparkles } from "lucide-react";
+import {
+  ArrowRight,
+  BarChart3,
+  CheckCircle2,
+  Code2,
+  Image,
+  KeyRound,
+  ListChecks,
+  MessageSquareText,
+  Radio,
+  Route,
+  ShieldCheck,
+  Sparkles,
+  Store,
+  Wrench,
+  WalletCards,
+} from "lucide-react";
 import { motion } from "framer-motion";
+import useSWR from "swr";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ModelIcon } from "@/components/ModelIcon";
 import { usePublicSiteSettings } from "@/lib/swr";
 import { resolvePublicApiBaseUrl } from "@/lib/public-site";
+import {
+  marketplaceRequest,
+  type MarketplaceItem,
+  type MarketplaceResponse,
+} from "@/lib/marketplace-api";
 
 const families = [
   ["responses", Sparkles],
@@ -16,9 +38,147 @@ const families = [
   ["images", Image],
 ] as const;
 
+const clientExamples = ["Claude Code", "Codex", "OpenAI SDK", "Anthropic SDK", "OpenCode"];
+
+const advantages = [
+  ["connection", KeyRound],
+  ["marketplace", Store],
+  ["routing", Route],
+  ["records", BarChart3],
+] as const;
+
+const operations = [
+  ["status", ShieldCheck],
+  ["logs", ListChecks],
+  ["billing", WalletCards],
+] as const;
+
+const tasks = [
+  ["models", Sparkles],
+  ["clients", Code2],
+  ["keys", KeyRound],
+  ["teams", Route],
+  ["credits", WalletCards],
+  ["inspect", Wrench],
+] as const;
+
+const featuredFamilies = ["claude", "gpt", "deepseek", "glm"] as const;
+type FeaturedFamily = (typeof featuredFamilies)[number];
+
+interface FeaturedMarketplace {
+  cnyPerUsd: string;
+  models: Partial<Record<FeaturedFamily, MarketplaceItem>>;
+}
+
+function decimalParts(value: string): [bigint, bigint] {
+  const [whole, fraction = ""] = value.split(".");
+  const denominator = 10n ** BigInt(fraction.length);
+  return [BigInt(whole) * denominator + BigInt(fraction || "0"), denominator];
+}
+
+function compareDecimal(left: string, right: string): number {
+  const [leftValue, leftScale] = decimalParts(left);
+  const [rightValue, rightScale] = decimalParts(right);
+  const difference = leftValue * rightScale - rightValue * leftScale;
+  return difference < 0n ? -1 : difference > 0n ? 1 : 0;
+}
+
+function compareUtf8(left: string, right: string): number {
+  const encoder = new TextEncoder();
+  const leftBytes = encoder.encode(left);
+  const rightBytes = encoder.encode(right);
+  const length = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    if (leftBytes[index] !== rightBytes[index]) return leftBytes[index]! - rightBytes[index]!;
+  }
+  return leftBytes.length - rightBytes.length;
+}
+
+function modelFamily(model: string): FeaturedFamily | null {
+  const value = model.toLowerCase();
+  if (value.includes("claude")) return "claude";
+  if (value.includes("gpt")) return "gpt";
+  if (value.includes("deepseek")) return "deepseek";
+  if (value.includes("glm")) return "glm";
+  return null;
+}
+
+function formatUsdPerMillion(nanoCny: string, cnyPerUsd: string): string {
+  const [priceValue, priceScale] = decimalParts(nanoCny);
+  const [rateValue, rateScale] = decimalParts(cnyPerUsd);
+  if (rateValue <= 0n) throw new Error("exchange rate must be positive");
+  const displayScale = 10_000n;
+  const numerator = priceValue * rateScale * displayScale;
+  const denominator = priceScale * 1_000n * rateValue;
+  const rounded = (numerator * 2n + denominator) / (denominator * 2n);
+  const whole = rounded / displayScale;
+  const fraction = (rounded % displayScale).toString().padStart(4, "0").replace(/0+$/, "");
+  return `$${whole}${fraction ? `.${fraction.padEnd(2, "0")}` : ".00"} / 1M tokens`;
+}
+
+async function loadLowPriceModels(): Promise<FeaturedMarketplace> {
+  const items: MarketplaceItem[] = [];
+  let cursor: string | null = null;
+  let cnyPerUsd: string | null = null;
+  let revision: string | null = null;
+
+  for (let pageNumber = 0; pageNumber < 19; pageNumber += 1) {
+    const query = new URLSearchParams({ limit: "50" });
+    if (cursor) query.set("cursor", cursor);
+    const page: MarketplaceResponse = await marketplaceRequest(
+      `/api/public/marketplace?${query}`,
+    );
+    if (!page.cny_per_usd) throw new Error("Marketplace exchange rate is unavailable");
+    if (revision !== null && (revision !== page.revision || cnyPerUsd !== page.cny_per_usd)) {
+      throw new Error("Marketplace snapshot changed during pagination");
+    }
+    revision = page.revision;
+    cnyPerUsd = page.cny_per_usd;
+    items.push(...page.items);
+    cursor = page.next_cursor;
+    if (!cursor) break;
+    if (pageNumber === 18) throw new Error("Marketplace exceeds homepage pagination limit");
+  }
+
+  const priced = items
+    .filter((item) => item.input_rate_range?.unit.toLowerCase() === "token")
+    .sort((left, right) => {
+      const priceOrder = compareDecimal(
+        left.input_rate_range!.min,
+        right.input_rate_range!.min,
+      );
+      if (priceOrder !== 0) return priceOrder;
+      const groupOrder = compareUtf8(left.public_group_name, right.public_group_name);
+      return groupOrder || compareUtf8(left.model, right.model);
+    });
+  const models: Partial<Record<FeaturedFamily, MarketplaceItem>> = {};
+  for (const item of priced) {
+    const family = modelFamily(item.model);
+    if (family && !models[family]) models[family] = item;
+  }
+  return { cnyPerUsd: cnyPerUsd!, models };
+}
+
+function modelProviderHint(model: string): string | undefined {
+  const value = model.toLowerCase();
+  if (value.includes("minimax")) return "minimax";
+  if (value.includes("deepseek")) return "deepseek";
+  if (value.includes("glm")) return "glm";
+  if (value.includes("qwen")) return "qwen";
+  if (value.includes("claude")) return "anthropic";
+  if (value.includes("gemini")) return "google";
+  if (value.includes("gpt") || value.includes("openai")) return "openai";
+  return undefined;
+}
+
 export function WelcomePage() {
   const { t } = useTranslation();
-  const { data: site, isLoading } = usePublicSiteSettings();
+  const { data: site, isLoading: siteLoading } = usePublicSiteSettings();
+  const {
+    data: featuredMarketplace,
+    error: lowPriceError,
+    isLoading: lowPriceLoading,
+  } = useSWR<FeaturedMarketplace>("/api/public/marketplace?homepage=featured-usd", loadLowPriceModels);
   const siteName = site?.site_name || "LynShen Console";
   const base = resolvePublicApiBaseUrl(site?.api_base_url || "", window.location.origin);
   const exampleBase = base.baseUrl || "https://lynshen.org/v1";
@@ -26,58 +186,334 @@ export function WelcomePage() {
   return (
     <div>
       <section className="relative isolate overflow-hidden border-b">
-        <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_70%_25%,hsl(var(--primary)/0.14),transparent_32%),linear-gradient(to_right,hsl(var(--border)/0.35)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border)/0.35)_1px,transparent_1px)] bg-[size:auto,32px_32px,32px_32px] [mask-image:linear-gradient(to_bottom,black,transparent)]" />
-        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24 }} className="mx-auto grid max-w-7xl gap-12 px-4 py-20 sm:px-6 sm:py-28 lg:grid-cols-[1.1fr_0.9fr] lg:items-center lg:px-8">
+        <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_72%_22%,hsl(var(--primary)/0.15),transparent_34%),linear-gradient(to_right,hsl(var(--border)/0.35)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border)/0.35)_1px,transparent_1px)] bg-[size:auto,32px_32px,32px_32px] [mask-image:linear-gradient(to_bottom,black,transparent)]" />
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.24 }}
+          className="mx-auto grid max-w-7xl gap-12 px-4 py-20 sm:px-6 sm:py-28 lg:grid-cols-[1.08fr_0.92fr] lg:items-center lg:px-8"
+        >
           <div className="max-w-3xl">
-            <p className="mb-5 font-mono text-sm font-medium text-primary">API GATEWAY · MODEL ROUTING</p>
-            {isLoading ? <><Skeleton className="h-14 w-full max-w-xl" /><Skeleton className="mt-3 h-14 w-4/5 max-w-lg" /><Skeleton className="mt-7 h-6 w-full max-w-2xl" /></> : (
+            {siteLoading ? (
               <>
-                <h1 className="font-display text-4xl font-semibold leading-tight tracking-tight sm:text-6xl">{t("publicSite.welcome.title", { siteName })}</h1>
-                <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">{site?.site_description || t("publicSite.welcome.description")}</p>
+                <Skeleton className="h-14 w-full max-w-xl" />
+                <Skeleton className="mt-3 h-14 w-4/5 max-w-lg" />
+                <Skeleton className="mt-7 h-6 w-full max-w-2xl" />
+              </>
+            ) : (
+              <>
+                <h1 className="whitespace-pre-line font-display text-4xl font-semibold leading-tight tracking-tight sm:text-6xl">
+                  {t("publicSite.welcome.title", { siteName })}
+                </h1>
+                <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
+                  {site?.site_description || t("publicSite.welcome.description")}
+                </p>
               </>
             )}
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Button asChild size="lg" variant="primary" className="min-h-11"><Link to="/marketplace">{t("publicSite.welcome.exploreModels")}<ArrowRight /></Link></Button>
-              <Button asChild size="lg" variant="outline" className="min-h-11"><Link to="/apidocs">{t("publicSite.welcome.readDocs")}</Link></Button>
+              <Button asChild size="lg" variant="primary" className="min-h-12 px-7 text-base">
+                <Link to="/dashboard">
+                  {t("publicSite.welcome.enterConsole")}
+                  <ArrowRight />
+                </Link>
+              </Button>
+              <Button asChild size="lg" variant="outline" className="min-h-12 px-7 text-base">
+                <Link to="/apidocs">{t("publicSite.welcome.readDocs")}</Link>
+              </Button>
             </div>
           </div>
-          <Card className="overflow-hidden bg-card/90 shadow-sm">
-            <div className="flex items-center gap-2 border-b px-4 py-3"><span className="size-2.5 rounded-full bg-destructive/70" /><span className="size-2.5 rounded-full bg-warning/70" /><span className="size-2.5 rounded-full bg-success/70" /><span className="ml-2 font-mono text-xs text-muted-foreground">request.sh</span></div>
-            <pre className="overflow-x-auto p-5 text-sm leading-7"><code>{`curl ${exampleBase}/responses \\\n  -H "Authorization: Bearer $LYNSHEN_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"gpt-5","input":"Hello"}'`}</code></pre>
-          </Card>
+
+          <div className="overflow-hidden rounded-lg border bg-card/90 shadow-sm">
+            <div className="flex items-center gap-2 border-b px-4 py-3">
+              <span className="size-2.5 rounded-full bg-destructive/70" />
+              <span className="size-2.5 rounded-full bg-warning/70" />
+              <span className="size-2.5 rounded-full bg-success/70" />
+              <span className="ml-2 font-mono text-xs text-muted-foreground">request.sh</span>
+            </div>
+            <pre className="overflow-x-auto p-5 text-sm leading-7"><code>{`curl ${exampleBase}/responses \\
+  -H "Authorization: Bearer $LYNSHEN_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"gpt-5","input":"Hello"}'`}</code></pre>
+          </div>
         </motion.div>
       </section>
 
-      <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
-        <div className="max-w-2xl"><p className="font-mono text-sm text-primary">01 · API</p><h2 className="mt-3 font-display text-3xl font-semibold">{t("publicSite.welcome.familiesTitle")}</h2><p className="mt-3 text-base leading-7 text-muted-foreground">{t("publicSite.welcome.familiesDescription")}</p></div>
-        <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          {families.map(([key, Icon]) => <Card key={key} className="p-5 transition-colors duration-200 hover:border-primary/40"><Icon className="size-5 text-primary" /><h3 className="mt-5 font-semibold">{t(`publicSite.families.${key}`)}</h3></Card>)}
+      <section className="border-y bg-card">
+        <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-3xl text-center">
+            <p className="font-mono text-sm text-primary">01 · MARKETPLACE</p>
+            <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
+              {t("publicSite.welcome.lowPriceTitle")}
+            </h2>
+            <p className="mt-4 text-lg leading-8 text-muted-foreground">
+              {t("publicSite.welcome.lowPriceDescription")}
+            </p>
+          </div>
+
+          {lowPriceLoading && !featuredMarketplace ? (
+            <div className="mt-10 grid border-l border-t md:grid-cols-2 lg:grid-cols-4">
+              {Array.from({ length: 4 }, (_, index) => (
+                <div key={index} className="min-h-64 border-b border-r p-6">
+                  <Skeleton className="h-5 w-2/3" />
+                  <Skeleton className="mt-3 h-4 w-1/3" />
+                  <div className="mt-10 grid grid-cols-2 gap-5">
+                    <Skeleton className="h-14" />
+                    <Skeleton className="h-14" />
+                  </div>
+                  <Skeleton className="mt-8 h-10 w-full" />
+                </div>
+              ))}
+            </div>
+          ) : lowPriceError || !featuredMarketplace ? (
+            <div className="mt-10 flex flex-col items-center border-y py-10 text-center">
+              <p className="text-muted-foreground">{t("publicSite.welcome.lowPriceUnavailable")}</p>
+              <Button asChild size="lg" variant="outline" className="mt-5 min-h-11">
+                <Link to="/marketplace">{t("publicSite.welcome.exploreModels")}<ArrowRight /></Link>
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-10 grid border-l border-t md:grid-cols-2 lg:grid-cols-4">
+              {featuredFamilies.map((family) => {
+                const item = featuredMarketplace.models[family];
+                if (!item) {
+                  return (
+                    <div key={family} className="flex min-h-64 flex-col border-b border-r p-6">
+                      <div className="flex items-center gap-3">
+                        <span className="flex size-10 items-center justify-center rounded-full border bg-background text-muted-foreground">
+                          <ModelIcon model={family} provider={modelProviderHint(family)} className="size-6" />
+                        </span>
+                        <h3 className="text-lg font-semibold">{t(`publicSite.featuredFamilies.${family}`)}</h3>
+                      </div>
+                      <p className="my-auto text-sm leading-6 text-muted-foreground">
+                        {t("publicSite.welcome.familyUnavailable")}
+                      </p>
+                    </div>
+                  );
+                }
+                const output = item.output_rate_range?.unit.toLowerCase() === "token"
+                  ? formatUsdPerMillion(item.output_rate_range.min, featuredMarketplace.cnyPerUsd)
+                  : "—";
+                return (
+                  <div key={`${item.public_group_name}:${item.model}`} className="group flex min-h-64 flex-col border-b border-r p-6 transition-colors hover:bg-muted/35">
+                    <div className="flex items-start gap-3">
+                      <span className="flex size-10 shrink-0 items-center justify-center rounded-full border bg-background text-primary shadow-sm">
+                        <ModelIcon model={item.model} provider={modelProviderHint(item.model)} className="size-6" />
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="truncate font-mono text-lg font-semibold" title={item.model}>{item.model}</h3>
+                        <p className="mt-1 text-sm text-muted-foreground">{item.public_group_name}</p>
+                      </div>
+                    </div>
+                    <dl className="mt-8 grid grid-cols-2 gap-5">
+                      <div>
+                        <dt className="text-xs text-muted-foreground">{t("publicSite.marketplace.input")}</dt>
+                        <dd className="mt-2 font-mono text-xl font-semibold tabular-nums text-primary">
+                          {formatUsdPerMillion(item.input_rate_range!.min, featuredMarketplace.cnyPerUsd)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-muted-foreground">{t("publicSite.marketplace.output")}</dt>
+                        <dd className="mt-2 font-mono text-xl font-semibold tabular-nums">{output}</dd>
+                      </div>
+                    </dl>
+                    <div className="mt-auto flex items-center justify-between border-t pt-4 text-sm">
+                      <span className="text-muted-foreground">
+                        {t("publicSite.marketplace.offerCount", { count: item.offer_count })}
+                      </span>
+                      <Link className="font-medium text-primary hover:underline" to="/marketplace">
+                        {t("publicSite.welcome.viewPrice")}
+                      </Link>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <p className="mx-auto mt-5 max-w-3xl text-center text-sm leading-6 text-muted-foreground">
+            {t("publicSite.welcome.lowPriceNote")}
+          </p>
+          <div className="mt-8 flex justify-center">
+            <Button asChild size="lg" variant="outline" className="min-h-11">
+              <Link to="/marketplace">{t("publicSite.welcome.exploreModels")}<ArrowRight /></Link>
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+        <div className="max-w-3xl">
+          <p className="font-mono text-sm text-primary">02 · API</p>
+          <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
+            {t("publicSite.welcome.familiesTitle")}
+          </h2>
+          <p className="mt-4 text-lg leading-8 text-muted-foreground">
+            {t("publicSite.welcome.familiesDescription")}
+          </p>
+        </div>
+        <div className="mt-10 grid border-l border-t sm:grid-cols-2 lg:grid-cols-5">
+          {families.map(([key, Icon]) => (
+            <div key={key} className="min-h-40 border-b border-r p-5">
+              <Icon className="size-5 text-primary" />
+              <h3 className="mt-8 font-semibold">{t(`publicSite.families.${key}`)}</h3>
+            </div>
+          ))}
+        </div>
+        <div className="grid border-x border-b lg:grid-cols-[0.35fr_0.65fr]">
+          <div className="border-b p-6 lg:border-b-0 lg:border-r">
+            <p className="font-mono text-xs text-primary">{t("publicSite.welcome.clientsLabel")}</p>
+            <h3 className="mt-3 text-lg font-semibold">{t("publicSite.welcome.clientsTitle")}</h3>
+            <p className="mt-2 leading-7 text-muted-foreground">{t("publicSite.welcome.clientsDescription")}</p>
+          </div>
+          <div className="flex flex-wrap content-center gap-2 p-6">
+            {clientExamples.map((client) => (
+              <span key={client} className="rounded-md border bg-card px-3 py-2 font-mono text-sm">{client}</span>
+            ))}
+          </div>
         </div>
       </section>
 
       <section className="border-y bg-muted/35">
-        <div className="mx-auto grid max-w-7xl gap-8 px-4 py-16 sm:px-6 lg:grid-cols-2 lg:px-8">
-          <div><p className="font-mono text-sm text-primary">02 · GROUPS</p><h2 className="mt-3 font-display text-3xl font-semibold">{t("publicSite.welcome.pricingTitle")}</h2><p className="mt-4 max-w-xl text-base leading-7 text-muted-foreground">{t("publicSite.welcome.pricingDescription")}</p></div>
-          <div className="grid gap-4 sm:grid-cols-2"><Card className="p-6"><Boxes className="text-primary" /><h3 className="mt-4 font-semibold">{t("publicSite.welcome.groupTitle")}</h3><p className="mt-2 leading-6 text-muted-foreground">{t("publicSite.welcome.groupDescription")}</p></Card><Card className="p-6"><CircleDollarSign className="text-primary" /><h3 className="mt-4 font-semibold">{t("publicSite.welcome.priceTitle")}</h3><p className="mt-2 leading-6 text-muted-foreground">{t("publicSite.welcome.priceDescription")}</p></Card></div>
+        <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+          <div className="grid gap-10 lg:grid-cols-[0.7fr_1.3fr]">
+            <div>
+              <p className="font-mono text-sm text-primary">03 · RELAY</p>
+              <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
+                {t("publicSite.welcome.advantagesTitle")}
+              </h2>
+              <p className="mt-4 max-w-xl text-lg leading-8 text-muted-foreground">
+                {t("publicSite.welcome.advantagesDescription")}
+              </p>
+            </div>
+            <div className="grid border-l border-t sm:grid-cols-2">
+              {advantages.map(([key, Icon]) => (
+                <div key={key} className="border-b border-r p-6 sm:p-7">
+                  <Icon className="size-5 text-primary" />
+                  <h3 className="mt-6 text-lg font-semibold">{t(`publicSite.advantages.${key}Title`)}</h3>
+                  <p className="mt-2 leading-7 text-muted-foreground">{t(`publicSite.advantages.${key}Description`)}</p>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </section>
 
-      <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
-        <p className="font-mono text-sm text-primary">03 · CONNECT</p><h2 className="mt-3 font-display text-3xl font-semibold">{t("publicSite.welcome.stepsTitle")}</h2>
-        <ol className="mt-8 grid gap-5 md:grid-cols-3">
-          {["key", "model", "request"].map((key, index) => <li key={key} className="relative rounded-lg border bg-card p-6"><span className="font-mono text-sm text-primary">0{index + 1}</span><h3 className="mt-5 text-lg font-semibold">{t(`publicSite.steps.${key}Title`)}</h3><p className="mt-2 leading-7 text-muted-foreground">{t(`publicSite.steps.${key}Description`)}</p></li>)}
-        </ol>
+      <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+        <div className="max-w-3xl">
+          <p className="font-mono text-sm text-primary">04 · WHAT YOU CAN DO</p>
+          <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
+            {t("publicSite.welcome.tasksTitle")}
+          </h2>
+          <p className="mt-4 text-lg leading-8 text-muted-foreground">
+            {t("publicSite.welcome.tasksDescription")}
+          </p>
+        </div>
+        <div className="mt-10 grid border-l border-t sm:grid-cols-2 lg:grid-cols-3">
+          {tasks.map(([key, Icon]) => (
+            <div key={key} className="min-h-48 border-b border-r p-6 sm:p-7">
+              <Icon className="size-5 text-primary" />
+              <h3 className="mt-7 text-lg font-semibold">
+                {t(`publicSite.tasks.${key}Title`)}
+              </h3>
+              <p className="mt-2 leading-7 text-muted-foreground">
+                {t(`publicSite.tasks.${key}Description`)}
+              </p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="border-y bg-muted/35">
+        <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+          <p className="font-mono text-sm text-primary">05 · CONNECT</p>
+          <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
+            {t("publicSite.welcome.stepsTitle")}
+          </h2>
+          <ol className="mt-10 grid border-l border-t md:grid-cols-3">
+            {["key", "model", "request"].map((key, index) => (
+              <li key={key} className="min-h-56 border-b border-r p-6 sm:p-7">
+                <span className="font-mono text-sm text-primary">0{index + 1}</span>
+                <h3 className="mt-8 text-xl font-semibold">{t(`publicSite.steps.${key}Title`)}</h3>
+                <p className="mt-3 leading-7 text-muted-foreground">
+                  {t(`publicSite.steps.${key}Description`)}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+        <div className="max-w-3xl">
+          <p className="font-mono text-sm text-primary">06 · OPERATIONS</p>
+          <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
+            {t("publicSite.welcome.operationsTitle")}
+          </h2>
+          <p className="mt-4 text-lg leading-8 text-muted-foreground">
+            {t("publicSite.welcome.operationsDescription")}
+          </p>
+        </div>
+        <div className="mt-10 grid border-l border-t md:grid-cols-3">
+          {operations.map(([key, Icon]) => (
+            <div key={key} className="border-b border-r p-6 sm:p-7">
+              <Icon className="size-5 text-primary" />
+              <h3 className="mt-6 text-lg font-semibold">
+                {t(`publicSite.operations.${key}Title`)}
+              </h3>
+              <p className="mt-2 leading-7 text-muted-foreground">
+                {t(`publicSite.operations.${key}Description`)}
+              </p>
+            </div>
+          ))}
+        </div>
       </section>
 
       <section className="border-y bg-foreground text-background">
-        <div className="mx-auto grid max-w-7xl gap-8 px-4 py-16 sm:px-6 lg:grid-cols-[0.75fr_1.25fr] lg:items-center lg:px-8">
-          <div><p className="font-mono text-sm text-primary">04 · HTTP</p><h2 className="mt-3 font-display text-3xl font-semibold">{t("publicSite.welcome.codeTitle")}</h2><p className="mt-4 leading-7 text-background/70">{t("publicSite.welcome.codeDescription")}</p></div>
-          <pre className="overflow-x-auto rounded-lg border border-background/15 bg-background/5 p-5 text-sm leading-7"><code>{`POST /v1/chat/completions HTTP/1.1\nHost: lynshen.org\nAuthorization: Bearer $LYNSHEN_API_KEY\nContent-Type: application/json\n\n{"model":"gpt-5","messages":[{"role":"user","content":"Hello"}]}`}</code></pre>
+        <div className="mx-auto grid max-w-7xl gap-10 px-4 py-20 sm:px-6 lg:grid-cols-[0.72fr_1.28fr] lg:items-center lg:px-8">
+          <div>
+            <p className="font-mono text-sm text-primary">07 · HTTP</p>
+            <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
+              {t("publicSite.welcome.codeTitle")}
+            </h2>
+            <p className="mt-4 text-lg leading-8 text-background/70">
+              {t("publicSite.welcome.codeDescription")}
+            </p>
+          </div>
+          <pre className="overflow-x-auto rounded-lg border border-background/15 bg-background/5 p-5 text-sm leading-7"><code>{`POST /v1/chat/completions HTTP/1.1
+Host: lynshen.org
+Authorization: Bearer $LYNSHEN_API_KEY
+Content-Type: application/json
+
+{"model":"gpt-5","messages":[{"role":"user","content":"Hello"}]}`}</code></pre>
         </div>
       </section>
 
-      <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
-        <Card className="flex flex-col gap-6 p-7 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-4"><ShieldCheck className="mt-1 size-6 shrink-0 text-success" /><div><h2 className="font-display text-2xl font-semibold">{t("publicSite.welcome.statusTitle")}</h2><p className="mt-2 text-muted-foreground">{t("publicSite.welcome.statusDescription")}</p></div></div><Button asChild variant="outline" className="min-h-11 shrink-0"><Link to="/status">{t("publicSite.welcome.viewStatus")}<CheckCircle2 /></Link></Button></Card>
+      <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+        <div className="grid gap-8 border-y py-10 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div>
+            <p className="font-mono text-sm text-primary">08 · START</p>
+            <h2 className="mt-3 font-display text-3xl font-semibold">
+              {t("publicSite.welcome.finalTitle")}
+            </h2>
+            <p className="mt-3 max-w-2xl leading-7 text-muted-foreground">
+              {t("publicSite.welcome.finalDescription")}
+            </p>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Button asChild size="lg" variant="primary" className="min-h-12 px-6">
+              <Link to="/dashboard">
+                {t("publicSite.welcome.enterConsole")}
+                <ArrowRight />
+              </Link>
+            </Button>
+            <Button asChild size="lg" variant="outline" className="min-h-12 px-6">
+              <Link to="/status">
+                {t("publicSite.welcome.viewStatus")}
+                <CheckCircle2 />
+              </Link>
+            </Button>
+          </div>
+        </div>
       </section>
     </div>
   );

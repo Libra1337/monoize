@@ -113,6 +113,7 @@ struct MarketplaceItem {
 struct MarketplaceResponse {
     generated_at: String,
     revision: String,
+    cny_per_usd: String,
     next_cursor: Option<String>,
     items: Vec<MarketplaceItem>,
 }
@@ -692,7 +693,9 @@ pub async fn list_marketplace(
         .as_deref()
         .map(marketplace_group_filter)
         .transpose()?;
-    let coin_rate = coin_rate_per_usd(&state).await;
+    let coin_rate = coin_rate_per_usd(&state)
+        .await
+        .ok_or_else(|| marketplace_source_error("exchange-rate snapshot unavailable"))?;
     let groups = visible_groups_for_viewer(&state, &headers)
         .await
         .map_err(marketplace_source_error)?;
@@ -765,7 +768,7 @@ pub async fn list_marketplace(
                         provider_type.as_str(),
                         profile,
                         &multiplier,
-                        coin_rate.as_ref(),
+                        Some(&coin_rate),
                     )
                     .await;
                     if rates.is_empty() {
@@ -808,6 +811,7 @@ pub async fn list_marketplace(
     let response = MarketplaceResponse {
         generated_at: snapshot.generated_at,
         revision: snapshot.revision.to_string(),
+        cny_per_usd: coin_rate.to_string(),
         next_cursor: (offset + output.len() < total_items)
             .then(|| format!("o:{}", offset + output.len())),
         items: output,

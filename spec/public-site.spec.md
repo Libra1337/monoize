@@ -126,17 +126,54 @@ Security Policy protections.
 
 PS-W1. The welcome page MUST render these sections in this order:
 
-1. Product statement and two actions.
-2. Supported API families.
-3. Group and pricing explanation.
-4. Three-step connection flow.
-5. API code example.
-6. Status-page action.
+1. Product statement, Console action, API Docs action, and one API request example. The
+   hero MUST NOT render an eyebrow or category label above the product statement.
+2. A live low-price model section.
+3. Supported API families and a statement that clients which accept a custom Base URL and
+   API key can connect without changing their request protocol.
+4. Four relay-service advantages: one account and connection, public Marketplace pricing,
+   Group-scoped routing with fail-forward, and request-level usage and charge records.
+5. Six customer tasks: call text and image models, connect compatible SDKs and coding
+   tools, control API keys, use organization workspaces, purchase balance or plans, and
+   inspect requests and usage.
+6. Three-step connection flow: create an API key, select a Marketplace model, and send a
+   request.
+7. Operations explanation covering public Provider status, request records, and balance
+   accounting.
+8. Raw HTTP API example.
+9. Final Console and public-status actions.
 
 PS-W2. The welcome page MUST NOT display model, Provider, Channel, or Group counts.
 
-PS-W3. The primary actions MUST link to Model Marketplace and API Docs. The status action
-MUST link to `/status`.
+PS-W3. The primary actions MUST link to `/dashboard` and `/apidocs`. The Marketplace
+action MUST link to `/marketplace`. The final actions MUST link to `/dashboard` and
+`/status`.
+
+PS-W4. Welcome-page claims MUST describe LynShen as a hosted AI API relay service. They
+MUST NOT present Monoize internals, self-hosting, Provider administration, Channel
+configuration, URP, transforms, or Rust implementation details as customer benefits.
+
+PS-W5. The welcome page MUST use section-level borders and background changes to separate
+content. It MUST NOT place every advantage in an independent floating Card.
+
+PS-W6. The low-price model section MUST load public Marketplace pages through SWR. It MUST
+request pages of 50 items and follow cursors until the snapshot ends. It MUST stop and show
+the failure fallback if more than 19 Marketplace requests would be required.
+
+PS-W7. The section MUST consider only items whose input rate exists and uses the `token`
+unit. It MUST select exactly one lowest-input-price item for each model family in this
+order: Claude, GPT, DeepSeek, and GLM. A family with no priced item MUST render an explicit
+unavailable cell. Each available item MUST show model, Group, minimum input price, minimum
+output price when its unit is `token`, and offer count.
+
+PS-W8. The section MUST state that prices update in real time and that discounts vary with
+upstream costs. It MUST state that each request is settled using the real-time discount at
+request time. Displayed values use USD per one million tokens. The section MUST convert
+Marketplace nano-CNY values through the response `cny_per_usd` using exact decimal
+arithmetic. It MUST NOT claim a fixed discount percentage or compare with an official list
+price unless the server provides that comparison. Loading MUST render four Skeleton cells.
+Empty or failed loading MUST retain an action to
+`/marketplace`.
 
 ## 5. API documentation page
 

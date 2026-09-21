@@ -443,6 +443,15 @@ SB-EV-24. A successful reprocess response MUST be `{ "event_id": string, "projec
 
 SB-RC-1. Payment projection and fulfillment MUST use separate transactions. A crash between them MUST leave `paid/pending` for reconciliation.
 
+SB-RC-1a. The Store Primary MUST run an isolated fulfillment-recovery pass once per minute
+(the SB-OP-0-permitted subset of `run_once`: no payment queries and no refund operations).
+The pass MUST select `payment_state = 'paid'`, `fulfillment_state IN ('pending','failed')`,
+`payment_hold = 0` orders (up to 100, `paid_at ASC, id ASC`, first run 30 seconds after
+`paid_at`) and attempt fenced fulfillment, scheduling the SB-OP-2 backoff retry row on
+failure. A pass failure MUST be logged and retried on the next tick; it MUST NOT stop the
+loop. Without this pass a payment callback whose inline fulfillment failed transiently
+leaves the order paid/pending forever.
+
 SB-RC-2. Balance fulfillment MUST append one idempotent `store_recharge` ledger credit and update the balance in one transaction.
 
 SB-RC-3. Plan fulfillment MUST insert one entitlement generation and update the current pointer with an expected-generation predicate.

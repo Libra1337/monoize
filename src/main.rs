@@ -36,6 +36,13 @@ async fn run() -> Result<(), AppError> {
     if let Some(lease) = state.store_primary_lease.clone() {
         monoize::store_billing::retention::spawn_daily_retention_job(
             state.db_pool.clone(),
+            lease.clone(),
+            state.background_shutdown.clone(),
+        );
+        // SB-OP-0 isolated fulfillment-recovery run: recovers paid/pending
+        // orders whose inline fulfillment failed at callback time.
+        monoize::store_billing::reconciliation::spawn_fulfillment_recovery_loop(
+            state.db_pool.clone(),
             lease,
             state.background_shutdown.clone(),
         );

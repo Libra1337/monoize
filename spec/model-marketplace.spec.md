@@ -37,6 +37,7 @@ MM-L5. The response MUST contain exactly:
 ```text
 generated_at: RFC3339 UTC with six fractional digits and Z
 revision: unsigned decimal string
+cny_per_usd: positive decimal string
 next_cursor: opaque string | null
 items: Array<{
   public_group_name: string,
@@ -54,6 +55,12 @@ UTF-8 byte order on both databases and in cursor construction.
 MM-L7. The page MUST render one visible Group heading before each Group's first row. A page
 that begins inside a Group MUST repeat its heading. Rows from different Groups MUST NOT
 share a heading.
+
+MM-L8. `cny_per_usd` MUST equal the positive exchange-rate snapshot used to normalize
+Marketplace rates for that response. If no valid snapshot exists, the list endpoint MUST
+return HTTP `503` `marketplace_source_invalid` instead of serializing prices or inventing a
+rate. A client MAY divide `display_rate_nano` values by `cny_per_usd` with exact decimal
+arithmetic to display the same public price in USD.
 
 ## 2. Public offers API
 

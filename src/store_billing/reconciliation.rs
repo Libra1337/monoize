@@ -55,6 +55,54 @@ struct RefundReconciliationCandidate {
     pending_at: DateTime<Utc>,
 }
 
+/// SB-OP-0 permits an isolated fulfillment-recovery run before the full
+/// scheduler gate opens: `StoreReconciler::new` (no payment queries, no refund
+/// operations) makes `run_once` only open stale-refund cases and fulfill
+/// paid/pending orders. Without this loop a payment callback whose inline
+/// fulfillment failed transiently leaves the order paid/pending forever —
+/// the user has paid but never receives the balance.
+pub fn spawn_fulfillment_recovery_loop(
+    db: DbPool,
+    lease: crate::store_billing::availability::StorePrimaryLease,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    tokio::spawn(async move {
+        let reconciler = StoreReconciler::new(db.clone());
+        // SB-OP-2 cadence: one pass per minute. The first pass runs after a
+        // short delay so startup checks finish first.
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            if shutdown.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            if let Err(error) = lease.validate().await {
+                tracing::error!(error = %error, "Fulfillment recovery loop lost the Primary lease");
+                return;
+            }
+            match reconciler
+                .run_once("monoize-fulfillment-recovery", Utc::now())
+                .await
+            {
+                Ok(outcome) => {
+                    if outcome.fulfilled > 0 || outcome.failed > 0 {
+                        tracing::info!(
+                            fulfilled = outcome.fulfilled,
+                            failed = outcome.failed,
+                            "fulfillment recovery pass completed"
+                        );
+                    }
+                }
+                Err(ReconciliationError::LeaseLost) => {
+                    tracing::warn!("Fulfillment recovery pass lost its lease; retrying next tick");
+                }
+                Err(error) => {
+                    tracing::error!(error = %error, "Fulfillment recovery pass failed; retrying next tick");
+                }
+            }
+        }
+    });
+}
+
 impl StoreReconciler {
     pub fn new(db: DbPool) -> Self {
         Self {
