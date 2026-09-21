@@ -169,7 +169,8 @@
       "billingNote": "価格は参考情報です。課金は整数 nano-USD の明細を合計し、正確な 10 進倍率を 1 回適用し、最終スケーリング時に 1 回だけ切り捨てます。",
       "loadMore": "さらに読み込む",
       "loadingMore": "読み込み中…",
-      "loadMoreError": "次のページを利用できません。"
+      "loadMoreError": "次のページを利用できません。",
+      "multiplier": "このオファーの基本単価に適用される実効倍率。"
     },
     "status": {
       "title": "Provider 稼働状況",

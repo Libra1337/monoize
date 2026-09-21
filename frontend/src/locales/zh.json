@@ -169,7 +169,8 @@
       "billingNote": "价格仅供参考。计费先汇总整数 nano-USD 明细，再应用一个精确十进制倍率，并只在最终缩放时截断一次。",
       "loadMore": "加载更多",
       "loadingMore": "正在加载…",
-      "loadMoreError": "下一页暂不可用。"
+      "loadMoreError": "下一页暂不可用。",
+      "multiplier": "该报价基础单价上生效的倍率。"
     },
     "status": {
       "title": "Provider 运行状态",

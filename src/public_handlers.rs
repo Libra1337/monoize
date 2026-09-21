@@ -106,6 +106,9 @@ struct MarketplaceItem {
     capabilities: Vec<String>,
     input_rate_range: Option<RateRange>,
     output_rate_range: Option<RateRange>,
+    /// MM-O5: the effective multiplier of the offer behind the minimum
+    /// `input_uncached` display rate; null when the item has no input rate.
+    input_rate_multiplier: Option<String>,
     offer_count: usize,
 }
 
@@ -450,6 +453,27 @@ fn public_rate(
     })
 }
 
+/// MM-O5: the multiplier of the offer whose cheapest `input_uncached` rate is the
+/// item-wide minimum — the multiplier a visitor reading the minimum price paid for.
+#[allow(clippy::type_complexity)]
+fn min_input_offer_multiplier(
+    offers: &[(String, String, Vec<PublicRate>, String)],
+) -> Option<String> {
+    offers
+        .iter()
+        .filter_map(|offer| {
+            let min_rate = offer
+                .2
+                .iter()
+                .filter(|rate| rate.usage_class == "input_uncached")
+                .filter_map(|rate| Decimal::from_str(&rate.display_rate_nano).ok())
+                .min()?;
+            Some((min_rate, offer.3.clone()))
+        })
+        .min_by(|left, right| left.0.cmp(&right.0))
+        .map(|(_, multiplier)| multiplier)
+}
+
 fn rate_range(rates: &[PublicRate], usage_class: &str) -> Option<RateRange> {
     let mut values = rates
         .iter()
@@ -720,7 +744,7 @@ pub async fn list_marketplace(
             )
         })
         .collect::<HashMap<_, _>>();
-    let mut items: BTreeMap<(String, String), Vec<(String, String, Vec<PublicRate>)>> =
+    let mut items: BTreeMap<(String, String), Vec<(String, String, Vec<PublicRate>, String)>> =
         BTreeMap::new();
     for provider in providers {
         if !provider.enabled {
@@ -781,6 +805,7 @@ pub async fn list_marketplace(
                             public_names.provider.clone(),
                             public_names.channel.clone(),
                             rates,
+                            multiplier.to_string(),
                         ));
                 }
             }
@@ -793,6 +818,7 @@ pub async fn list_marketplace(
             .iter()
             .flat_map(|offer| offer.2.clone())
             .collect::<Vec<_>>();
+        let input_rate_multiplier = min_input_offer_multiplier(&offers);
         let capabilities = model_capabilities.get(&model).cloned().unwrap_or_default();
         output.push(MarketplaceItem {
             public_group_name: group_name,
@@ -800,6 +826,7 @@ pub async fn list_marketplace(
             capabilities,
             input_rate_range: rate_range(&rates, "input_uncached"),
             output_rate_range: rate_range(&rates, "output"),
+            input_rate_multiplier,
             offer_count: offers.len(),
         });
     }
@@ -1204,7 +1231,7 @@ mod tests {
     use http_body_util::BodyExt;
     use sea_orm::{ConnectionTrait, Value as SeaValue};
 
-    async fn make_state() -> AppState {
+    pub(crate) async fn make_state() -> AppState {
         load_state_with_runtime(RuntimeConfig {
             listen: "127.0.0.1:0".to_string(),
             metrics_path: "/metrics".to_string(),
@@ -1928,5 +1955,111 @@ mod tests {
             .expect("cached body reads")
             .to_bytes();
         assert_eq!(cached_body, first_body);
+    }
+}
+
+#[cfg(test)]
+mod multiplier_tests {
+    use super::{HeaderMap, MarketplaceQuery, Query, State, list_marketplace, tests::make_state};
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use crate::billing_rate_store::UpsertBillingRateInput;
+    use http_body_util::BodyExt;
+
+    /// MM-O5: `input_rate_multiplier` is the effective multiplier of the offer
+    /// behind the item's minimum input price, not the cheapest multiplier.
+    #[tokio::test]
+    async fn marketplace_item_exposes_the_minimum_input_offers_multiplier() {
+        let state = make_state().await;
+        let group_id = state
+            .user_store
+            .default_group_id()
+            .await
+            .expect("default group exists");
+
+        // Two offers for the same model: the discounted one (x0.8 over a cheaper
+        // base) undercuts the premium one (x2 over any base), so the minimum
+        // input price — and the exposed multiplier — must be the discount's.
+        for (name, multiplier, input_price) in [
+            ("Premium Provider", "2", "1000"),
+            ("Discount Provider", "0.8", "1000"),
+        ] {
+            let profile = format!("{name}-profile");
+            state
+                .monoize_store
+                .create_provider(
+                    serde_json::from_value(serde_json::json!({
+                        "name": name,
+                        "confirm_public_exposure": true,
+                        "group_id": group_id,
+                        "enabled": true,
+                        "pricing_profile": profile,
+                        "multiplier": multiplier,
+                        "channel": {
+                            "name": format!("{name} Channel"),
+                            "provider_type": "responses",
+                            "base_url": "https://example.invalid",
+                            "api_key": "secret",
+                            "enabled": true,
+                            "models": { "shared-model": { "redirect": null } }
+                        }
+                    }))
+                    .expect("provider payload deserializes"),
+                )
+                .await
+                .expect("provider creates");
+            for (suffix, usage_class) in [("input", "input_uncached"), ("output", "output")] {
+                state
+                    .billing_rate_store
+                    .upsert_billing_rate(
+                        &format!("{name}-{suffix}"),
+                        serde_json::from_value::<UpsertBillingRateInput>(serde_json::json!({
+                            "source": "test",
+                            "pricing_profile": profile,
+                            "model_pattern": "shared-model",
+                            "provider_type": "responses",
+                            "rate_kind": "token",
+                            "usage_class": usage_class,
+                            "unit": "token",
+                            "unit_price_nano": input_price,
+                            "enabled": true
+                        }))
+                        .expect("rate input deserializes"),
+                    )
+                    .await
+                    .expect("rate inserts");
+            }
+        }
+
+        let response = list_marketplace(
+            State(state),
+            HeaderMap::new(),
+            Query(MarketplaceQuery {
+                q: None,
+                group: None,
+                model: None,
+                limit: Some(50),
+                cursor: None,
+            }),
+        )
+        .await
+        .expect("marketplace list succeeds")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body reads")
+            .to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("body is JSON");
+        let item = &json["items"][0];
+        assert_eq!(item["model"].as_str(), Some("shared-model"));
+        assert_eq!(item["offer_count"].as_u64(), Some(2));
+        assert_eq!(
+            item["input_rate_multiplier"].as_str(),
+            Some("0.8"),
+            "the minimum input offer is the x0.8 one"
+        );
     }
 }

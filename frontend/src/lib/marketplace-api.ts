@@ -10,6 +10,8 @@ export interface MarketplaceItem {
   capabilities: string[];
   input_rate_range: MarketplaceRateRange | null;
   output_rate_range: MarketplaceRateRange | null;
+  /** MM-O5: effective multiplier of the offer behind the minimum input rate. */
+  input_rate_multiplier?: string | null;
   offer_count: number;
 }
 

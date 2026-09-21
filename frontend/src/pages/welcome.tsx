@@ -407,7 +407,17 @@ export function WelcomePage() {
                       </span>
                       <div className="min-w-0">
                         <h3 className="truncate font-mono text-lg font-semibold" title={item.model}>{item.model}</h3>
-                        <p className="mt-1 text-sm text-muted-foreground">{item.public_group_name}</p>
+                        <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
+                          <span className="truncate">{item.public_group_name}</span>
+                          {item.input_rate_multiplier && (
+                            <span
+                              className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-xs text-primary"
+                              title={t("publicSite.marketplace.multiplier")}
+                            >
+                              x{item.input_rate_multiplier}
+                            </span>
+                          )}
+                        </p>
                       </div>
                     </div>
                     <dl className="mt-8 grid grid-cols-2 gap-5">

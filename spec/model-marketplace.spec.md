@@ -45,6 +45,7 @@ items: Array<{
   capabilities: string[],
   input_rate_range: { min: decimal string, max: decimal string, unit: string } | null,
   output_rate_range: { min: decimal string, max: decimal string, unit: string } | null,
+  input_rate_multiplier: decimal string | null,
   offer_count: positive integer
 }>
 ```
@@ -99,8 +100,13 @@ offers: Array<{
 MM-O4. Offers MUST order by numeric Provider priority, Provider public-name key, and Channel
 public-name key. Name comparisons use exact UTF-8 byte order.
 
-MM-O5. The response MUST NOT contain Billing Profile names, multipliers, rate row IDs,
+MM-O5. The response MUST NOT contain Billing Profile names, rate row IDs,
 internal IDs or names, Base URLs, API keys, proxy URLs, custom headers, or internal errors.
+The one multiplier a list item exposes is `input_rate_multiplier`: the effective model
+multiplier (plain decimal string, e.g. `"1.5"` or `"0.8"`) of the offer that yields the
+item's minimum `input_uncached` display rate; it is null when the item has no input rate.
+Offer multipliers other than that minimum's, and per-rate multiplier rows, remain internal.
+The homepage live-price strip renders it beside the Group name as `x<multiplier>`.
 
 MM-O6. A Marketplace source read or response serialization failure MUST return HTTP `503`
 with code `marketplace_source_invalid` and a fixed public message. The server MUST log the

@@ -166,8 +166,9 @@ input price ascending (ties broken by Group name, then model name, both by UTF-8
 order). The section MUST display exactly four cells at a time and advance the window by
 one model every 5 seconds, wrapping to the start; a catalog shorter than four renders
 every model with no rotation. Each available item MUST show model, Group, minimum input
-price, minimum output price when its unit is `token`, and offer count. The section MUST
-NOT pin fixed vendors or model families.
+price, minimum output price when its unit is `token`, offer count, and the item's
+`input_rate_multiplier` as an `x<decimal>` chip beside the Group name when present. The
+section MUST NOT pin fixed vendors or model families.
 
 PS-W8. The section MUST state that prices update in real time and that discounts vary with
 upstream costs. It MUST state that each request is settled using the real-time discount at

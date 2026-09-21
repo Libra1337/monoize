@@ -169,7 +169,8 @@
       "billingNote": "價格僅供參考。計費先彙總整數 nano-USD 明細，再套用一個精確十進位倍率，並只在最終縮放時截斷一次。",
       "loadMore": "載入更多",
       "loadingMore": "載入中…",
-      "loadMoreError": "下一頁暫不可用。"
+      "loadMoreError": "下一頁暫不可用。",
+      "multiplier": "該報價基礎單價上生效的倍率。"
     },
     "status": {
       "title": "Provider 運行狀態",

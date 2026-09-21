@@ -169,7 +169,8 @@
       "billingNote": "Prices are informational. Billing sums integer nano-USD line items, applies one exact decimal multiplier, and truncates once at final scaling.",
       "loadMore": "Load more",
       "loadingMore": "Loading more...",
-      "loadMoreError": "The next page is unavailable."
+      "loadMoreError": "The next page is unavailable.",
+      "multiplier": "Effective rate multiplier applied to this offer's base price."
     },
     "status": {
       "title": "Provider status",
