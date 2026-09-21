@@ -378,6 +378,8 @@ export interface ApiKey {
   spend_limit_total_nano_usd?: string | null;
   spend_limit_hourly_nano_usd?: string | null;
   spend_limit_daily_nano_usd?: string | null;
+  /** ORGL-19: spend over the current UTC day, nano-USD. */
+  daily_spent_nano_usd?: string | null;
   model_limits_enabled: boolean;
   model_limits: string[];
   ip_whitelist: string[];

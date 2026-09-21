@@ -3176,7 +3176,11 @@ impl UserStore {
             return Ok(existing_key);
         }
 
-        if group_fields_changed && !effective_group_ids.is_empty() {
+        // Validate on every group_ids update, not only non-empty ones: the
+        // create path rejects unknown ids, and an update must not smuggle
+        // them in (an empty selection stays valid — it means every
+        // accessible Group).
+        if group_fields_changed {
             self.validate_api_key_group_selection_for_user(
                 &existing_key.user_id,
                 &effective_group_ids,

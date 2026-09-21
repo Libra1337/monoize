@@ -94,3 +94,13 @@ D8. If the deploy identifier is still armed and the recorded backup binary still
 D9. If the timeout expires but either the deploy identifier is no longer armed or the recorded backup binary does not exist, the watchdog MUST exit without modifying the deployed binary.
 
 D10. Automatic rollback MUST NOT reverse database migrations. A binary retained as a rollback target for a deployment that can apply newer migrations MUST implement the forward-compatible startup rule in `database-configuration.spec.md` DB16a through DB16d before that migration-bearing deployment begins.
+
+## 6. Daily backups
+
+DW-BK-1. The production host runs `monoize-backup.timer` daily (04:30 server time,
+Persistent). The service executes `/opt/monoize/backup-daily.sh`, which takes a cold
+SQLite backup of `/opt/monoize/data/monoize.db` through the Python `sqlite3` backup
+API, verifies `PRAGMA quick_check`, compresses it with `zstd -10` under
+`/opt/monoize/backups/daily/monoize-<UTC-stamp>.db.zst`, and copies the payment key
+file beside it. Retention is the newest 7 compressed sets; the script deletes older
+ones on each run.

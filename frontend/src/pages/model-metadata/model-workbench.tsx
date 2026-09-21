@@ -290,11 +290,11 @@ export function ModelWorkbench({
           ) : (
             <div className="overflow-hidden rounded-xl border bg-card">
               <TableVirtuoso
-                style={{ height: "calc(100dvh - 300px)", minHeight: 400 }}
+                style={{ height: "calc(100dvh - 300px)", minHeight: 400, overflowX: "auto" }}
                 data={rows}
                 components={{
                   Table: (props) => (
-                    <table {...props} className="w-full caption-bottom text-sm" />
+                    <table {...props} className="w-full min-w-[40rem] caption-bottom text-sm" />
                   ),
                   TableHead: (props) => <thead {...props} className="[&_tr]:border-b" />,
                   TableRow: (props) => (

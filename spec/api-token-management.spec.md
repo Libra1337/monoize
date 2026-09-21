@@ -46,6 +46,10 @@ it defines the routing preference order per `database-provider-routing.spec.md` 
 TM-GRP-3. On API key create/update, the server MUST canonicalize `group_ids` per
 `groups-registry.spec.md` GR-C1 (trim, drop empties, dedupe preserving first-occurrence
 order) and validate it per GR-C2/GR-C3 (at most 32 entries; every id must exist).
+Update MUST validate with the same accessibility rule as create — account-class match
+plus public-or-granted for non-admin callers, evaluated against the key's owning user —
+including an update that only replaces a previously stored selection; an unknown or
+inaccessible id MUST fail the whole update.
 
 TM-GRP-4. On API key create/update, an empty canonicalized `group_ids` value MUST be stored
 as `[]` and MUST NOT be rejected.

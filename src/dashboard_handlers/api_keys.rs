@@ -170,6 +170,8 @@ pub struct ApiKeyResponse {
     pub spend_limit_total_nano_usd: Option<String>,
     pub spend_limit_hourly_nano_usd: Option<String>,
     pub spend_limit_daily_nano_usd: Option<String>,
+    /// ORGL-19: this key's spend over the current UTC day, nano-USD.
+    pub daily_spent_nano_usd: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -523,11 +525,16 @@ pub async fn list_my_api_keys(
         .list_user_api_keys(&user.id)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let daily_spend = user_store
+        .get_user_api_keys_daily_spend(&user.id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     let responses = keys
         .into_iter()
         .map(|k| {
             let (nano, usd) = nano_balance_fields(&k.sub_account_balance_nano)?;
+            let daily_spent = daily_spend.get(&k.id).cloned();
             Ok(ApiKeyResponse {
                 id: k.id,
                 name: k.name,
@@ -554,6 +561,7 @@ pub async fn list_my_api_keys(
                 spend_limit_total_nano_usd: k.spend_limit_total_nano_usd.clone(),
                 spend_limit_hourly_nano_usd: k.spend_limit_hourly_nano_usd.clone(),
                 spend_limit_daily_nano_usd: k.spend_limit_daily_nano_usd.clone(),
+                daily_spent_nano_usd: daily_spent,
             })
         })
         .collect::<Result<Vec<_>, String>>()
@@ -738,6 +746,7 @@ pub async fn get_api_key(
             spend_limit_total_nano_usd: api_key.spend_limit_total_nano_usd.clone(),
             spend_limit_hourly_nano_usd: api_key.spend_limit_hourly_nano_usd.clone(),
             spend_limit_daily_nano_usd: api_key.spend_limit_daily_nano_usd.clone(),
+            daily_spent_nano_usd: None,
         }
     }))
 }
@@ -1262,6 +1271,7 @@ pub async fn update_api_key(
         spend_limit_total_nano_usd: updated_key.spend_limit_total_nano_usd.clone(),
         spend_limit_hourly_nano_usd: updated_key.spend_limit_hourly_nano_usd.clone(),
         spend_limit_daily_nano_usd: updated_key.spend_limit_daily_nano_usd.clone(),
+            daily_spent_nano_usd: None,
     }))
 }
 

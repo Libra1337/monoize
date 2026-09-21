@@ -923,6 +923,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         spend_limit_total_nano_usd: None,
         spend_limit_hourly_nano_usd: None,
         spend_limit_daily_nano_usd: None,
+        daily_spent_nano_usd: None,
     })
     .expect("response serializes");
     assert_eq!(

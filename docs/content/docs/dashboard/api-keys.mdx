@@ -34,8 +34,19 @@ Requests without a valid key receive HTTP `401`.
 | IP whitelist | When set, requests must come from a listed IPv4/IPv6 address or CIDR range. | Empty |
 | Groups | The key routes only to Providers whose groups intersect the key's groups. | Inherit the user's group |
 | Max multiplier | The key skips Provider-model mappings whose effective multiplier exceeds this value. | No cap |
-| Sub-account balance | When on, the key spends its own balance instead of the user balance. | Off |
+| Spend limits | Total, hourly, and daily spend windows in USD. Empty means unlimited. The daily badge shows `spent/limit`. | Unlimited |
 | Request capture | `off`, `capture-all`, or `capture-only-abnormal`. See [Request Logs](/en/docs/request-logs). | `off` |
+
+## Spend limits
+
+Each key carries three spend-limit windows: total (lifetime), hourly (a rolling
+hour), and daily (a UTC calendar day). Charges bill the user wallet as usual;
+a limit stops serving the key with HTTP `402` `api_key_spend_limit_reached`
+once a window is exhausted. The key list shows one badge per configured
+window, and the daily badge shows `spent/limit`. Limits accept USD or CNY
+input; a CNY amount converts through the current exchange rate when you save.
+Legacy keys that still hold an independent balance keep settling against it
+until the balance reaches zero or the key is deleted.
 
 ## Model limits
 
@@ -67,4 +78,4 @@ Choose Today, the last 7 days, the last 30 days, or all retained history. Today 
 
 The dialog reports total Tokens, input Tokens, cache-read Tokens, output Tokens, call count, consumed Coin, the key balance, a trend, and a model breakdown. Model rows sort by total Tokens descending, then by model name ascending.
 
-Consumed Coin is the sum of the recorded charges. Monoize never recomputes a historical charge from a current price. A key with no independent limit shows **Follows wallet balance** instead of a key balance. A disabled or expired key keeps its readable history.
+Consumed Coin is the sum of the recorded charges. Monoize never recomputes a historical charge from a current price. Every key shows **Follows wallet balance**; keys no longer carry their own balance. A disabled or expired key keeps its readable history.

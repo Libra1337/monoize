@@ -1237,7 +1237,9 @@ export function ApiKeysPage() {
                                 className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-xs text-primary"
                                 title={label}
                               >
-                                {tag} ${nanoToUsdInput(nano)}
+                                {tag} ${tag === "1D" && key.daily_spent_nano_usd
+                                  ? `${nanoToUsdInput(key.daily_spent_nano_usd)}/${nanoToUsdInput(nano)}`
+                                  : nanoToUsdInput(nano)}
                               </span>
                             ) : null,
                           )}

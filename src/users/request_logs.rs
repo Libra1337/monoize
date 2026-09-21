@@ -2500,6 +2500,39 @@ impl UserStore {
             .collect()
     }
 
+    /// ORGL-19 display support: this user's keys' spend over the current UTC
+    /// calendar day (the daily-limit window), one aggregate scan keyed by
+    /// api_key_id. Failed requests contribute zero charge by the same
+    /// CASE the list endpoints use.
+    pub async fn get_user_api_keys_daily_spend(
+        &self,
+        user_id: &str,
+    ) -> Result<HashMap<String, String>, String> {
+        let is_postgres = self.db.is_postgres();
+        let day_start_unix_ms = chrono::Utc::now()
+            .date_naive()
+            .and_time(chrono::NaiveTime::MIN)
+            .and_utc()
+            .timestamp_millis();
+        let sql = format!(
+            "SELECT rl.api_key_id AS key_id, {} AS spent              FROM request_logs rl              WHERE rl.user_id = $1 AND rl.created_at_unix_ms >= $2              GROUP BY rl.api_key_id",
+            charge_aggregate_columns(is_postgres)
+        );
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(&sql, vec![user_id.into(), day_start_unix_ms.into()]))
+            .await
+            .map_err(|e| e.to_string())?;
+        rows.into_iter()
+            .map(|row| {
+                let key_id: String = row.try_get("", "key_id").map_err(|e| e.to_string())?;
+                let spent = decode_charge_aggregate(&row, is_postgres)?;
+                Ok((key_id, spent))
+            })
+            .collect()
+    }
+
     /// Channel-management CM-LU1: per-Provider live RPM/TPM over the rolling
     /// one-minute window, computed from the durable request-log attribution.
     pub async fn get_providers_live_usage(
