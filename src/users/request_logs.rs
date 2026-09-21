@@ -220,6 +220,15 @@ fn charge_aggregate_columns(is_postgres: bool) -> String {
     select
 }
 
+/// One aggregate query for the list endpoints: COUNT plus the charge sum in a
+/// single pass over the filtered rows, instead of two heavy scans.
+fn request_log_list_aggregates_select(is_postgres: bool) -> String {
+    format!(
+        "SELECT COUNT(*) AS cnt, {}",
+        charge_aggregate_columns(is_postgres)
+    )
+}
+
 fn charge_aggregate_select(is_postgres: bool) -> String {
     format!("SELECT {}", charge_aggregate_columns(is_postgres))
 }
@@ -1746,8 +1755,10 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         // Count query
-        let mut count_sql =
-            "SELECT COUNT(*) as cnt FROM request_logs rl WHERE rl.user_id = $1".to_string();
+        let mut count_sql = format!(
+            "{} FROM request_logs rl WHERE rl.user_id = $1",
+            request_log_list_aggregates_select(is_postgres)
+        );
         let mut count_values: Vec<SeaValue> = vec![user_id.into()];
         let mut count_idx = 2usize;
         append_request_log_filters(
@@ -1763,41 +1774,15 @@ impl UserStore {
             time_from,
             time_to,
         )?;
-        let count_row = txn
+        let aggregates_row = txn
             .query_one(self.db.stmt(&count_sql, count_values))
             .await
-            .map_err(|e| e.to_string())?;
-        let total: i64 = count_row
-            .ok_or_else(|| "no count row".to_string())?
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "no request log aggregate row".to_string())?;
+        let total: i64 = aggregates_row
             .try_get("", "cnt")
             .map_err(|e| e.to_string())?;
-
-        // Sum query
-        let mut sum_sql = format!(
-            "{} FROM request_logs rl WHERE rl.user_id = $1",
-            charge_aggregate_select(is_postgres)
-        );
-        let mut sum_values: Vec<SeaValue> = vec![user_id.into()];
-        let mut sum_idx = 2usize;
-        append_request_log_filters(
-            &mut sum_sql,
-            &mut sum_values,
-            &mut sum_idx,
-            is_postgres,
-            model.as_deref(),
-            status.as_deref(),
-            api_key_id.as_deref(),
-            None,
-            search.as_deref(),
-            time_from,
-            time_to,
-        )?;
-        let sum_row = txn
-            .query_one(self.db.stmt(&sum_sql, sum_values))
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "no request log charge aggregate row".to_string())?;
-        let total_charge_nano_usd = decode_charge_aggregate(&sum_row, is_postgres)?;
+        let total_charge_nano_usd = decode_charge_aggregate(&aggregates_row, is_postgres)?;
 
         // Rows query
         let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
@@ -1899,9 +1884,10 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         // Count query
-        let mut count_sql = r#"SELECT COUNT(*) as cnt FROM request_logs rl
-               WHERE 1 = 1"#
-            .to_string();
+        let mut count_sql = format!(
+            "{} FROM request_logs rl WHERE 1 = 1",
+            request_log_list_aggregates_select(is_postgres)
+        );
         let mut count_values: Vec<SeaValue> = Vec::new();
         let mut count_idx = 1usize;
         append_request_log_filters(
@@ -1917,41 +1903,15 @@ impl UserStore {
             time_from,
             time_to,
         )?;
-        let count_row = txn
+        let aggregates_row = txn
             .query_one(self.db.stmt(&count_sql, count_values))
             .await
-            .map_err(|e| e.to_string())?;
-        let total: i64 = count_row
-            .ok_or_else(|| "no count row".to_string())?
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "no request log aggregate row".to_string())?;
+        let total: i64 = aggregates_row
             .try_get("", "cnt")
             .map_err(|e| e.to_string())?;
-
-        // Sum query
-        let mut sum_sql = format!(
-            "{} FROM request_logs rl WHERE 1 = 1",
-            charge_aggregate_select(is_postgres)
-        );
-        let mut sum_values: Vec<SeaValue> = Vec::new();
-        let mut sum_idx = 1usize;
-        append_request_log_filters(
-            &mut sum_sql,
-            &mut sum_values,
-            &mut sum_idx,
-            is_postgres,
-            model.as_deref(),
-            status.as_deref(),
-            api_key_id.as_deref(),
-            username.as_deref(),
-            search.as_deref(),
-            time_from,
-            time_to,
-        )?;
-        let sum_row = txn
-            .query_one(self.db.stmt(&sum_sql, sum_values))
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "no request log charge aggregate row".to_string())?;
-        let total_charge_nano_usd = decode_charge_aggregate(&sum_row, is_postgres)?;
+        let total_charge_nano_usd = decode_charge_aggregate(&aggregates_row, is_postgres)?;
 
         // Rows query
         let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
@@ -2053,8 +2013,10 @@ impl UserStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut count_sql =
-            "SELECT COUNT(*) as cnt FROM request_logs rl WHERE rl.user_id = $1".to_string();
+        let mut count_sql = format!(
+            "{} FROM request_logs rl WHERE rl.user_id = $1",
+            request_log_list_aggregates_select(is_postgres)
+        );
         let mut count_values: Vec<SeaValue> = vec![org_id.into()];
         let mut count_idx = 2usize;
         append_request_log_filters(
@@ -2070,40 +2032,15 @@ impl UserStore {
             time_from,
             time_to,
         )?;
-        let count_row = txn
+        let aggregates_row = txn
             .query_one(self.db.stmt(&count_sql, count_values))
             .await
-            .map_err(|e| e.to_string())?;
-        let total: i64 = count_row
-            .ok_or_else(|| "no count row".to_string())?
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "no request log aggregate row".to_string())?;
+        let total: i64 = aggregates_row
             .try_get("", "cnt")
             .map_err(|e| e.to_string())?;
-
-        let mut sum_sql = format!(
-            "{} FROM request_logs rl WHERE rl.user_id = $1",
-            charge_aggregate_select(is_postgres)
-        );
-        let mut sum_values: Vec<SeaValue> = vec![org_id.into()];
-        let mut sum_idx = 2usize;
-        append_request_log_filters(
-            &mut sum_sql,
-            &mut sum_values,
-            &mut sum_idx,
-            is_postgres,
-            model.as_deref(),
-            status.as_deref(),
-            api_key_id.as_deref(),
-            None,
-            search.as_deref(),
-            time_from,
-            time_to,
-        )?;
-        let sum_row = txn
-            .query_one(self.db.stmt(&sum_sql, sum_values))
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "no request log charge aggregate row".to_string())?;
-        let total_charge_nano_usd = decode_charge_aggregate(&sum_row, is_postgres)?;
+        let total_charge_nano_usd = decode_charge_aggregate(&aggregates_row, is_postgres)?;
 
         let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
                       rl.channel_id, rl.is_stream,

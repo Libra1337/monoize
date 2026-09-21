@@ -35,6 +35,7 @@ pub mod reasoning_inject_content_field;
 pub mod reasoning_strip_encrypted;
 pub mod reasoning_strip_input;
 pub mod reasoning_strip_output;
+pub mod reasoning_summary_heading;
 pub mod reasoning_summary_to_raw_cot;
 pub mod reasoning_to_think_xml;
 pub mod role_developer_to_system;
@@ -291,6 +292,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(reasoning_strip_encrypted::ReasoningStripEncryptedTransform),
         Box::new(reasoning_strip_input::ReasoningStripInputTransform),
         Box::new(reasoning_strip_output::ReasoningStripOutputTransform),
+        Box::new(reasoning_summary_heading::ReasoningSummaryHeadingTransform),
         Box::new(reasoning_summary_to_raw_cot::ReasoningSummaryToRawCotTransform),
         Box::new(reasoning_to_think_xml::ReasoningToThinkXmlTransform),
         Box::new(role_developer_to_system::RoleDeveloperToSystemTransform),
@@ -612,6 +614,7 @@ mod registry_tests {
         "reasoning_strip_encrypted",
         "reasoning_strip_input",
         "reasoning_strip_output",
+        "reasoning_summary_heading",
         "reasoning_summary_to_raw_cot",
         "reasoning_to_think_xml",
         "role_developer_to_system",
