@@ -18,7 +18,7 @@ import {
   Wrench,
   WalletCards,
 } from "lucide-react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion, useScroll, useTransform } from "framer-motion";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -175,9 +175,36 @@ function modelProviderHint(model: string): string | undefined {
   return undefined;
 }
 
+/// The mono section label with a drawing accent line: the label slides in
+/// while the line grows left-to-right. Plays once on viewport entry.
+function SectionKicker({ children, center = false }: { children: React.ReactNode; center?: boolean }) {
+  const reduceMotion = useReducedMotion();
+  return (
+    <motion.p
+      className={`flex items-center gap-3 font-mono text-sm text-primary${center ? " justify-center" : ""}`}
+      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -18 }}
+      whileInView={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0 }}
+      viewport={{ once: true, margin: "-64px" }}
+      transition={{ duration: 0.5, ease: [0.25, 1, 0.5, 1] }}
+    >
+      <motion.span
+        aria-hidden
+        className="inline-block h-px w-7 origin-left bg-primary/70"
+        initial={{ scaleX: 0 }}
+        whileInView={{ scaleX: 1 }}
+        viewport={{ once: true, margin: "-64px" }}
+        transition={{ duration: 0.55, delay: 0.1, ease: [0.25, 1, 0.5, 1] }}
+      />
+      {children}
+    </motion.p>
+  );
+}
+
 export function WelcomePage() {
   const { t } = useTranslation();
   const reduceMotion = useReducedMotion();
+  const { scrollY } = useScroll();
+  const heroBackdropY = useTransform(scrollY, [0, 640], [0, reduceMotion ? 0 : 130]);
   const { data: site, isLoading: siteLoading } = usePublicSiteSettings();
   const {
     data: featuredMarketplace,
@@ -210,7 +237,18 @@ export function WelcomePage() {
   return (
     <div>
       <section className="relative isolate overflow-hidden border-b">
-        <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_72%_22%,hsl(var(--primary)/0.15),transparent_34%),linear-gradient(to_right,hsl(var(--border)/0.35)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border)/0.35)_1px,transparent_1px)] bg-[size:auto,32px_32px,32px_32px] [mask-image:linear-gradient(to_bottom,black,transparent)]" />
+        <motion.div
+          aria-hidden
+          style={{ y: heroBackdropY }}
+          className="pointer-events-none absolute inset-0 -z-10"
+        >
+          <div className="hero-grid-drift absolute inset-0 bg-[radial-gradient(circle_at_72%_22%,hsl(var(--primary)/0.15),transparent_34%),linear-gradient(to_right,hsl(var(--border)/0.35)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border)/0.35)_1px,transparent_1px)] bg-[size:auto,32px_32px,32px_32px] [mask-image:linear-gradient(to_bottom,black,transparent)]" />
+          <motion.div
+            className="absolute right-[16%] top-[14%] size-56 rounded-full bg-primary/10 blur-3xl motion-reduce:hidden"
+            animate={reduceMotion ? undefined : { scale: [1, 1.25, 1], opacity: [0.5, 0.9, 0.5] }}
+            transition={reduceMotion ? undefined : { duration: 7, repeat: Infinity, ease: "easeInOut" }}
+          />
+        </motion.div>
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -226,46 +264,93 @@ export function WelcomePage() {
               </>
             ) : (
               <>
-                <h1 className="whitespace-pre-line font-display text-4xl font-semibold leading-tight tracking-tight sm:text-6xl">
+                <motion.h1
+                  className="whitespace-pre-line font-display text-4xl font-semibold leading-tight tracking-tight sm:text-6xl"
+                  initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 26, filter: "blur(10px)" }}
+                  animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, filter: "blur(0px)" }}
+                  transition={{ duration: 0.7, ease: [0.25, 1, 0.5, 1] }}
+                >
                   {t("publicSite.welcome.title", { siteName })}
-                </h1>
-                <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground">
+                </motion.h1>
+                <motion.p
+                  className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground"
+                  initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 16 }}
+                  animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+                  transition={{ duration: 0.6, delay: 0.18, ease: [0.25, 1, 0.5, 1] }}
+                >
                   {site?.site_description || t("publicSite.welcome.description")}
-                </p>
+                </motion.p>
               </>
             )}
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Button asChild size="lg" variant="primary" className="min-h-12 px-7 text-base">
-                <Link to="/dashboard">
-                  {t("publicSite.welcome.enterConsole")}
-                  <ArrowRight />
-                </Link>
-              </Button>
-              <Button asChild size="lg" variant="outline" className="min-h-12 px-7 text-base">
-                <Link to="/apidocs">{t("publicSite.welcome.readDocs")}</Link>
-              </Button>
+              <motion.div
+                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 14 }}
+                animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.34, ease: [0.25, 1, 0.5, 1] }}
+              >
+                <Button asChild size="lg" variant="primary" className="group min-h-12 px-7 text-base">
+                  <Link to="/dashboard">
+                    {t("publicSite.welcome.enterConsole")}
+                    <ArrowRight className="transition-transform duration-200 group-hover:translate-x-1 motion-reduce:transition-none motion-reduce:group-hover:translate-x-0" />
+                  </Link>
+                </Button>
+              </motion.div>
+              <motion.div
+                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 14 }}
+                animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.44, ease: [0.25, 1, 0.5, 1] }}
+              >
+                <Button asChild size="lg" variant="outline" className="min-h-12 px-7 text-base">
+                  <Link to="/apidocs">{t("publicSite.welcome.readDocs")}</Link>
+                </Button>
+              </motion.div>
             </div>
           </div>
 
-          <div className="overflow-hidden rounded-lg border bg-card/90 shadow-sm">
+          <motion.div
+            initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 22, rotate: 0.6 }}
+            animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, rotate: 0 }}
+            transition={{ duration: 0.65, delay: 0.26, ease: [0.25, 1, 0.5, 1] }}
+            whileHover={reduceMotion ? undefined : { y: -4 }}
+            className="overflow-hidden rounded-lg border bg-card/90 shadow-sm"
+          >
             <div className="flex items-center gap-2 border-b px-4 py-3">
-              <span className="size-2.5 rounded-full bg-destructive/70" />
-              <span className="size-2.5 rounded-full bg-warning/70" />
-              <span className="size-2.5 rounded-full bg-success/70" />
+              <span className="terminal-dot size-2.5 rounded-full bg-destructive/70" style={{ animationDelay: "0s" }} />
+              <span className="terminal-dot size-2.5 rounded-full bg-warning/70" style={{ animationDelay: "0.4s" }} />
+              <span className="terminal-dot size-2.5 rounded-full bg-success/70" style={{ animationDelay: "0.8s" }} />
               <span className="ml-2 font-mono text-xs text-muted-foreground">request.sh</span>
             </div>
-            <pre className="overflow-x-auto p-5 text-sm leading-7"><code>{`curl ${exampleBase}/responses \\
-  -H "Authorization: Bearer $LYNSHEN_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"gpt-5","input":"Hello"}'`}</code></pre>
-          </div>
+            <pre className="overflow-x-auto p-5 text-sm leading-7">
+              <code>
+                {[
+                  `curl ${exampleBase}/responses \\`,
+                  `  -H "Authorization: Bearer $LYNSHEN_API_KEY" \\`,
+                  `  -H "Content-Type: application/json" \\`,
+                  `  -d '{"model":"gpt-5","input":"Hello"}'`,
+                ].map((line, index, lines) => (
+                  <motion.span
+                    key={index}
+                    className="block"
+                    initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -10 }}
+                    animate={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0 }}
+                    transition={{ duration: 0.35, delay: 0.5 + index * 0.28, ease: "easeOut" }}
+                  >
+                    {line}
+                    {index === lines.length - 1 && (
+                      <span aria-hidden className="terminal-caret ml-1 inline-block h-4 w-[7px] translate-y-[3px] bg-primary/80 motion-reduce:hidden" />
+                    )}
+                  </motion.span>
+                ))}
+              </code>
+            </pre>
+          </motion.div>
         </motion.div>
       </section>
 
       <section className="border-y bg-card">
         <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
           <ScrollReveal className="mx-auto max-w-3xl text-center">
-            <p className="font-mono text-sm text-primary">01 · MARKETPLACE</p>
+            <SectionKicker center>01 · MARKETPLACE</SectionKicker>
             <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
               {t("publicSite.welcome.lowPriceTitle")}
             </h2>
@@ -365,7 +450,7 @@ export function WelcomePage() {
 
       <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
         <ScrollReveal className="max-w-3xl">
-          <p className="font-mono text-sm text-primary">02 · API</p>
+          <SectionKicker>02 · API</SectionKicker>
           <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
             {t("publicSite.welcome.familiesTitle")}
           </h2>
@@ -375,8 +460,8 @@ export function WelcomePage() {
         </ScrollReveal>
         <ScrollStagger className="mt-10 grid border-l border-t sm:grid-cols-2 lg:grid-cols-5">
           {families.map(([key, Icon]) => (
-            <ScrollStaggerItem key={key} className="min-h-40 border-b border-r p-5">
-              <Icon className="size-5 text-primary" />
+            <ScrollStaggerItem key={key} className="group min-h-40 border-b border-r p-5 transition-colors hover:bg-muted/30">
+              <Icon className="size-5 text-primary transition-transform duration-200 group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100" />
               <h3 className="mt-8 font-semibold">{t(`publicSite.families.${key}`)}</h3>
             </ScrollStaggerItem>
           ))}
@@ -387,11 +472,27 @@ export function WelcomePage() {
             <h3 className="mt-3 text-lg font-semibold">{t("publicSite.welcome.clientsTitle")}</h3>
             <p className="mt-2 leading-7 text-muted-foreground">{t("publicSite.welcome.clientsDescription")}</p>
           </div>
-          <div className="flex flex-wrap content-center gap-2 p-6">
+          <motion.div
+            className="flex flex-wrap content-center gap-2 p-6"
+            initial="initial"
+            whileInView="show"
+            viewport={{ once: true, margin: "-64px" }}
+            variants={{ initial: {}, show: { transition: { staggerChildren: 0.055, delayChildren: 0.1 } } }}
+          >
             {clientExamples.map((client) => (
-              <span key={client} className="rounded-md border bg-card px-3 py-2 font-mono text-sm">{client}</span>
+              <motion.span
+                key={client}
+                className="rounded-md border bg-card px-3 py-2 font-mono text-sm transition-colors hover:border-primary/50 hover:text-primary"
+                variants={
+                  reduceMotion
+                    ? { initial: { opacity: 0 }, show: { opacity: 1 } }
+                    : { initial: { opacity: 0, scale: 0.7, rotate: -4 }, show: { opacity: 1, scale: 1, rotate: 0, transition: { type: "spring", stiffness: 380, damping: 22 } } }
+                }
+              >
+                {client}
+              </motion.span>
             ))}
-          </div>
+          </motion.div>
         </ScrollReveal>
       </section>
 
@@ -399,7 +500,7 @@ export function WelcomePage() {
         <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
           <div className="grid gap-10 lg:grid-cols-[0.7fr_1.3fr]">
             <ScrollReveal>
-              <p className="font-mono text-sm text-primary">03 · RELAY</p>
+              <SectionKicker>03 · RELAY</SectionKicker>
               <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
                 {t("publicSite.welcome.advantagesTitle")}
               </h2>
@@ -409,8 +510,8 @@ export function WelcomePage() {
             </ScrollReveal>
             <ScrollStagger className="grid border-l border-t sm:grid-cols-2">
               {advantages.map(([key, Icon]) => (
-                <ScrollStaggerItem key={key} className="border-b border-r p-6 sm:p-7">
-                  <Icon className="size-5 text-primary" />
+                <ScrollStaggerItem key={key} className="group border-b border-r p-6 transition-colors hover:bg-muted/30 sm:p-7">
+                  <Icon className="size-5 text-primary transition-transform duration-200 group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100" />
                   <h3 className="mt-6 text-lg font-semibold">{t(`publicSite.advantages.${key}Title`)}</h3>
                   <p className="mt-2 leading-7 text-muted-foreground">{t(`publicSite.advantages.${key}Description`)}</p>
                 </ScrollStaggerItem>
@@ -422,7 +523,7 @@ export function WelcomePage() {
 
       <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
         <ScrollReveal className="max-w-3xl">
-          <p className="font-mono text-sm text-primary">04 · WHAT YOU CAN DO</p>
+          <SectionKicker>04 · WHAT YOU CAN DO</SectionKicker>
           <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
             {t("publicSite.welcome.tasksTitle")}
           </h2>
@@ -432,8 +533,8 @@ export function WelcomePage() {
         </ScrollReveal>
         <ScrollStagger className="mt-10 grid border-l border-t sm:grid-cols-2 lg:grid-cols-3">
           {tasks.map(([key, Icon]) => (
-            <ScrollStaggerItem key={key} className="min-h-48 border-b border-r p-6 sm:p-7">
-              <Icon className="size-5 text-primary" />
+            <ScrollStaggerItem key={key} className="group min-h-48 border-b border-r p-6 transition-colors hover:bg-muted/30 sm:p-7">
+              <Icon className="size-5 text-primary transition-transform duration-200 group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100" />
               <h3 className="mt-7 text-lg font-semibold">
                 {t(`publicSite.tasks.${key}Title`)}
               </h3>
@@ -448,15 +549,15 @@ export function WelcomePage() {
       <section className="border-y bg-muted/35">
         <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
           <ScrollReveal>
-            <p className="font-mono text-sm text-primary">05 · CONNECT</p>
+            <SectionKicker>05 · CONNECT</SectionKicker>
             <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
               {t("publicSite.welcome.stepsTitle")}
             </h2>
           </ScrollReveal>
           <ScrollStagger className="mt-10 grid border-l border-t md:grid-cols-3">
             {["key", "model", "request"].map((key, index) => (
-              <ScrollStaggerItem key={key} className="min-h-56 border-b border-r p-6 sm:p-7">
-                <span className="font-mono text-sm text-primary">0{index + 1}</span>
+              <ScrollStaggerItem key={key} className="group min-h-56 border-b border-r p-6 transition-colors hover:bg-muted/30 sm:p-7">
+                <span className="inline-block font-mono text-sm text-primary transition-transform duration-300 group-hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:group-hover:translate-y-0">0{index + 1}</span>
                 <h3 className="mt-8 text-xl font-semibold">{t(`publicSite.steps.${key}Title`)}</h3>
                 <p className="mt-3 leading-7 text-muted-foreground">
                   {t(`publicSite.steps.${key}Description`)}
@@ -469,7 +570,7 @@ export function WelcomePage() {
 
       <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
         <ScrollReveal className="max-w-3xl">
-          <p className="font-mono text-sm text-primary">06 · OPERATIONS</p>
+          <SectionKicker>06 · OPERATIONS</SectionKicker>
           <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
             {t("publicSite.welcome.operationsTitle")}
           </h2>
@@ -479,8 +580,8 @@ export function WelcomePage() {
         </ScrollReveal>
         <ScrollStagger className="mt-10 grid border-l border-t md:grid-cols-3">
           {operations.map(([key, Icon]) => (
-            <ScrollStaggerItem key={key} className="border-b border-r p-6 sm:p-7">
-              <Icon className="size-5 text-primary" />
+            <ScrollStaggerItem key={key} className="group border-b border-r p-6 transition-colors hover:bg-muted/30 sm:p-7">
+              <Icon className="size-5 text-primary transition-transform duration-200 group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100" />
               <h3 className="mt-6 text-lg font-semibold">
                 {t(`publicSite.operations.${key}Title`)}
               </h3>
@@ -495,7 +596,7 @@ export function WelcomePage() {
       <section className="border-y bg-foreground text-background">
         <div className="mx-auto grid max-w-7xl gap-10 px-4 py-20 sm:px-6 lg:grid-cols-[0.72fr_1.28fr] lg:items-center lg:px-8">
           <ScrollReveal>
-            <p className="font-mono text-sm text-primary">07 · HTTP</p>
+            <SectionKicker>07 · HTTP</SectionKicker>
             <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
               {t("publicSite.welcome.codeTitle")}
             </h2>
@@ -503,19 +604,34 @@ export function WelcomePage() {
               {t("publicSite.welcome.codeDescription")}
             </p>
           </ScrollReveal>
-          <pre className="overflow-x-auto rounded-lg border border-background/15 bg-background/5 p-5 text-sm leading-7"><code>{`POST /v1/chat/completions HTTP/1.1
-Host: lynshen.org
-Authorization: Bearer $LYNSHEN_API_KEY
-Content-Type: application/json
-
-{"model":"gpt-5","messages":[{"role":"user","content":"Hello"}]}`}</code></pre>
+          <ScrollReveal delay={0.12} className="overflow-x-auto rounded-lg border border-background/15 bg-background/5 p-5 text-sm leading-7">
+            <pre className="font-inherit"><code>{[
+              "POST /v1/chat/completions HTTP/1.1",
+              "Host: lynshen.org",
+              "Authorization: Bearer $LYNSHEN_API_KEY",
+              "Content-Type: application/json",
+              "",
+              `{"model":"gpt-5","messages":[{"role":"user","content":"Hello"}]}`,
+            ].map((line, index) => (
+              <motion.span
+                key={index}
+                className="block"
+                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -12 }}
+                whileInView={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0 }}
+                viewport={{ once: true, margin: "-48px" }}
+                transition={{ duration: 0.3, delay: index * 0.09, ease: "easeOut" }}
+              >
+                {line || " "}
+              </motion.span>
+            ))}</code></pre>
+          </ScrollReveal>
         </div>
       </section>
 
       <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
         <div className="grid gap-8 border-y py-10 lg:grid-cols-[1fr_auto] lg:items-center">
           <ScrollReveal>
-            <p className="font-mono text-sm text-primary">08 · START</p>
+            <SectionKicker>08 · START</SectionKicker>
             <h2 className="mt-3 font-display text-3xl font-semibold">
               {t("publicSite.welcome.finalTitle")}
             </h2>

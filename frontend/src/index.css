@@ -254,3 +254,41 @@
 		color-scheme: light dark;
 	}
 }
+
+/* Welcome-page hero motion (PS-W9). The drift pans the grid backdrop by one
+   cell so the seams never move; the caret and traffic dots loop only their
+   opacity. All three are disabled under prefers-reduced-motion. */
+@keyframes hero-grid-drift {
+	from { background-position: 72% 22%, 0 0, 0 0; }
+	to { background-position: 72% 22%, 32px 32px, 32px 32px; }
+}
+
+.hero-grid-drift {
+	animation: hero-grid-drift 26s linear infinite;
+}
+
+@keyframes caret-blink {
+	0%, 55% { opacity: 1; }
+	56%, 100% { opacity: 0; }
+}
+
+.terminal-caret {
+	animation: caret-blink 1.1s steps(1) infinite;
+}
+
+@keyframes terminal-dot-pulse {
+	0%, 100% { opacity: 0.55; }
+	50% { opacity: 1; }
+}
+
+.terminal-dot {
+	animation: terminal-dot-pulse 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.hero-grid-drift,
+	.terminal-caret,
+	.terminal-dot {
+		animation: none;
+	}
+}

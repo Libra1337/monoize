@@ -187,6 +187,19 @@ tasks, steps, operations) reveal their cells staggered by about 60ms per cell. U
 reduced motion the reveals animate opacity only, per `DESIGN_SYSTEM.md`. Reveals play once
 per page load and MUST NOT re-run on scroll-up.
 
+PS-W10. The hero choreographs on load: the headline rises with a blur-to-sharp fade, the
+description and the two actions follow with increasing delays, and the terminal card rises
+last with a slight rotation that settles. The terminal reveals its command line by line
+(about 0.28s apart) ending in a blinking block caret; its traffic dots pulse on staggered
+delays. The grid backdrop pans one cell in a slow loop and parallaxes upward at roughly
+0.2x scroll speed; a blurred primary glow orb pulses behind it. Every section label
+(`NN · NAME`) slides in beside an accent line that draws left-to-right. Bordered grid
+cells tint their background and scale their icon on hover; client-example chips pop in
+with a slight rotation and tint on hover; the primary call-to-action nudges its arrow on
+hover. All of these degrade under reduced motion: loops and parallax stop, transforms
+reduce to opacity fades, and CSS animations are disabled by the `prefers-reduced-motion`
+media rule in `index.css`.
+
 ## 5. API documentation page
 
 PS-D1. `/apidocs` MUST document OpenAI Responses, OpenAI Chat Completions, Anthropic
