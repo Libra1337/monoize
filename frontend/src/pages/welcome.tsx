@@ -18,10 +18,16 @@ import {
   Wrench,
   WalletCards,
 } from "lucide-react";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  ScrollReveal,
+  ScrollStagger,
+  ScrollStaggerItem,
+  springs,
+} from "@/components/ui/motion";
 import { ModelIcon } from "@/components/ModelIcon";
 import { usePublicSiteSettings } from "@/lib/swr";
 import { resolvePublicApiBaseUrl } from "@/lib/public-site";
@@ -171,6 +177,7 @@ function modelProviderHint(model: string): string | undefined {
 
 export function WelcomePage() {
   const { t } = useTranslation();
+  const reduceMotion = useReducedMotion();
   const { data: site, isLoading: siteLoading } = usePublicSiteSettings();
   const {
     data: featuredMarketplace,
@@ -257,7 +264,7 @@ export function WelcomePage() {
 
       <section className="border-y bg-card">
         <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-3xl text-center">
+          <ScrollReveal className="mx-auto max-w-3xl text-center">
             <p className="font-mono text-sm text-primary">01 · MARKETPLACE</p>
             <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
               {t("publicSite.welcome.lowPriceTitle")}
@@ -265,7 +272,7 @@ export function WelcomePage() {
             <p className="mt-4 text-lg leading-8 text-muted-foreground">
               {t("publicSite.welcome.lowPriceDescription")}
             </p>
-          </div>
+          </ScrollReveal>
 
           {lowPriceLoading && !featuredMarketplace ? (
             <div className="mt-10 grid border-l border-t md:grid-cols-2 lg:grid-cols-4">
@@ -290,19 +297,23 @@ export function WelcomePage() {
             </div>
           ) : (
             <div className="mt-10 grid border-l border-t md:grid-cols-2 lg:grid-cols-4">
+              <AnimatePresence mode="popLayout" initial={false}>
               {visibleFeatured.map((item) => {
                 const output = item.output_rate_range?.unit.toLowerCase() === "token"
                   ? formatUsdPerMillion(item.output_rate_range.min, featuredMarketplace.cnyPerUsd)
                   : "—";
                 return (
-                  // Keyed by model so the rotation reuses the three unchanged
-                  // cards' DOM and only the entering card fades in — the strip
-                  // never flashes as a whole.
+                  // Keyed by model: the three carried cards glide to their new
+                  // slots (`layout`), the entering card slides in from the
+                  // right, and the leaving one slides out left — one spring,
+                  // no whole-strip flash.
                   <motion.div
                     key={`${item.public_group_name}:${item.model}`}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ duration: 0.4 }}
+                    layout={!reduceMotion}
+                    initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 56, scale: 0.97 }}
+                    animate={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0, scale: 1 }}
+                    exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -56, scale: 0.97 }}
+                    transition={reduceMotion ? { duration: 0.15 } : springs.smooth}
                     className="group flex min-h-64 flex-col border-b border-r p-6 transition-colors hover:bg-muted/35"
                   >
                     <div className="flex items-start gap-3">
@@ -337,22 +348,23 @@ export function WelcomePage() {
                   </motion.div>
                 );
               })}
+              </AnimatePresence>
             </div>
           )}
 
-          <p className="mx-auto mt-5 max-w-3xl text-center text-sm leading-6 text-muted-foreground">
+          <ScrollReveal delay={0.1} className="mx-auto mt-5 max-w-3xl text-center text-sm leading-6 text-muted-foreground">
             {t("publicSite.welcome.lowPriceNote")}
-          </p>
-          <div className="mt-8 flex justify-center">
+          </ScrollReveal>
+          <ScrollReveal delay={0.15} className="mt-8 flex justify-center">
             <Button asChild size="lg" variant="outline" className="min-h-11">
               <Link to="/marketplace">{t("publicSite.welcome.exploreModels")}<ArrowRight /></Link>
             </Button>
-          </div>
+          </ScrollReveal>
         </div>
       </section>
 
       <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-        <div className="max-w-3xl">
+        <ScrollReveal className="max-w-3xl">
           <p className="font-mono text-sm text-primary">02 · API</p>
           <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
             {t("publicSite.welcome.familiesTitle")}
@@ -360,16 +372,16 @@ export function WelcomePage() {
           <p className="mt-4 text-lg leading-8 text-muted-foreground">
             {t("publicSite.welcome.familiesDescription")}
           </p>
-        </div>
-        <div className="mt-10 grid border-l border-t sm:grid-cols-2 lg:grid-cols-5">
+        </ScrollReveal>
+        <ScrollStagger className="mt-10 grid border-l border-t sm:grid-cols-2 lg:grid-cols-5">
           {families.map(([key, Icon]) => (
-            <div key={key} className="min-h-40 border-b border-r p-5">
+            <ScrollStaggerItem key={key} className="min-h-40 border-b border-r p-5">
               <Icon className="size-5 text-primary" />
               <h3 className="mt-8 font-semibold">{t(`publicSite.families.${key}`)}</h3>
-            </div>
+            </ScrollStaggerItem>
           ))}
-        </div>
-        <div className="grid border-x border-b lg:grid-cols-[0.35fr_0.65fr]">
+        </ScrollStagger>
+        <ScrollReveal delay={0.1} className="grid border-x border-b lg:grid-cols-[0.35fr_0.65fr]">
           <div className="border-b p-6 lg:border-b-0 lg:border-r">
             <p className="font-mono text-xs text-primary">{t("publicSite.welcome.clientsLabel")}</p>
             <h3 className="mt-3 text-lg font-semibold">{t("publicSite.welcome.clientsTitle")}</h3>
@@ -380,13 +392,13 @@ export function WelcomePage() {
               <span key={client} className="rounded-md border bg-card px-3 py-2 font-mono text-sm">{client}</span>
             ))}
           </div>
-        </div>
+        </ScrollReveal>
       </section>
 
       <section className="border-y bg-muted/35">
         <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
           <div className="grid gap-10 lg:grid-cols-[0.7fr_1.3fr]">
-            <div>
+            <ScrollReveal>
               <p className="font-mono text-sm text-primary">03 · RELAY</p>
               <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
                 {t("publicSite.welcome.advantagesTitle")}
@@ -394,22 +406,22 @@ export function WelcomePage() {
               <p className="mt-4 max-w-xl text-lg leading-8 text-muted-foreground">
                 {t("publicSite.welcome.advantagesDescription")}
               </p>
-            </div>
-            <div className="grid border-l border-t sm:grid-cols-2">
+            </ScrollReveal>
+            <ScrollStagger className="grid border-l border-t sm:grid-cols-2">
               {advantages.map(([key, Icon]) => (
-                <div key={key} className="border-b border-r p-6 sm:p-7">
+                <ScrollStaggerItem key={key} className="border-b border-r p-6 sm:p-7">
                   <Icon className="size-5 text-primary" />
                   <h3 className="mt-6 text-lg font-semibold">{t(`publicSite.advantages.${key}Title`)}</h3>
                   <p className="mt-2 leading-7 text-muted-foreground">{t(`publicSite.advantages.${key}Description`)}</p>
-                </div>
+                </ScrollStaggerItem>
               ))}
-            </div>
+            </ScrollStagger>
           </div>
         </div>
       </section>
 
       <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-        <div className="max-w-3xl">
+        <ScrollReveal className="max-w-3xl">
           <p className="font-mono text-sm text-primary">04 · WHAT YOU CAN DO</p>
           <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
             {t("publicSite.welcome.tasksTitle")}
@@ -417,10 +429,10 @@ export function WelcomePage() {
           <p className="mt-4 text-lg leading-8 text-muted-foreground">
             {t("publicSite.welcome.tasksDescription")}
           </p>
-        </div>
-        <div className="mt-10 grid border-l border-t sm:grid-cols-2 lg:grid-cols-3">
+        </ScrollReveal>
+        <ScrollStagger className="mt-10 grid border-l border-t sm:grid-cols-2 lg:grid-cols-3">
           {tasks.map(([key, Icon]) => (
-            <div key={key} className="min-h-48 border-b border-r p-6 sm:p-7">
+            <ScrollStaggerItem key={key} className="min-h-48 border-b border-r p-6 sm:p-7">
               <Icon className="size-5 text-primary" />
               <h3 className="mt-7 text-lg font-semibold">
                 {t(`publicSite.tasks.${key}Title`)}
@@ -428,33 +440,35 @@ export function WelcomePage() {
               <p className="mt-2 leading-7 text-muted-foreground">
                 {t(`publicSite.tasks.${key}Description`)}
               </p>
-            </div>
+            </ScrollStaggerItem>
           ))}
-        </div>
+        </ScrollStagger>
       </section>
 
       <section className="border-y bg-muted/35">
         <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-          <p className="font-mono text-sm text-primary">05 · CONNECT</p>
-          <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
-            {t("publicSite.welcome.stepsTitle")}
-          </h2>
-          <ol className="mt-10 grid border-l border-t md:grid-cols-3">
+          <ScrollReveal>
+            <p className="font-mono text-sm text-primary">05 · CONNECT</p>
+            <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
+              {t("publicSite.welcome.stepsTitle")}
+            </h2>
+          </ScrollReveal>
+          <ScrollStagger className="mt-10 grid border-l border-t md:grid-cols-3">
             {["key", "model", "request"].map((key, index) => (
-              <li key={key} className="min-h-56 border-b border-r p-6 sm:p-7">
+              <ScrollStaggerItem key={key} className="min-h-56 border-b border-r p-6 sm:p-7">
                 <span className="font-mono text-sm text-primary">0{index + 1}</span>
                 <h3 className="mt-8 text-xl font-semibold">{t(`publicSite.steps.${key}Title`)}</h3>
                 <p className="mt-3 leading-7 text-muted-foreground">
                   {t(`publicSite.steps.${key}Description`)}
                 </p>
-              </li>
+              </ScrollStaggerItem>
             ))}
-          </ol>
+          </ScrollStagger>
         </div>
       </section>
 
       <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-        <div className="max-w-3xl">
+        <ScrollReveal className="max-w-3xl">
           <p className="font-mono text-sm text-primary">06 · OPERATIONS</p>
           <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
             {t("publicSite.welcome.operationsTitle")}
@@ -462,10 +476,10 @@ export function WelcomePage() {
           <p className="mt-4 text-lg leading-8 text-muted-foreground">
             {t("publicSite.welcome.operationsDescription")}
           </p>
-        </div>
-        <div className="mt-10 grid border-l border-t md:grid-cols-3">
+        </ScrollReveal>
+        <ScrollStagger className="mt-10 grid border-l border-t md:grid-cols-3">
           {operations.map(([key, Icon]) => (
-            <div key={key} className="border-b border-r p-6 sm:p-7">
+            <ScrollStaggerItem key={key} className="border-b border-r p-6 sm:p-7">
               <Icon className="size-5 text-primary" />
               <h3 className="mt-6 text-lg font-semibold">
                 {t(`publicSite.operations.${key}Title`)}
@@ -473,14 +487,14 @@ export function WelcomePage() {
               <p className="mt-2 leading-7 text-muted-foreground">
                 {t(`publicSite.operations.${key}Description`)}
               </p>
-            </div>
+            </ScrollStaggerItem>
           ))}
-        </div>
+        </ScrollStagger>
       </section>
 
       <section className="border-y bg-foreground text-background">
         <div className="mx-auto grid max-w-7xl gap-10 px-4 py-20 sm:px-6 lg:grid-cols-[0.72fr_1.28fr] lg:items-center lg:px-8">
-          <div>
+          <ScrollReveal>
             <p className="font-mono text-sm text-primary">07 · HTTP</p>
             <h2 className="mt-3 font-display text-3xl font-semibold sm:text-4xl">
               {t("publicSite.welcome.codeTitle")}
@@ -488,7 +502,7 @@ export function WelcomePage() {
             <p className="mt-4 text-lg leading-8 text-background/70">
               {t("publicSite.welcome.codeDescription")}
             </p>
-          </div>
+          </ScrollReveal>
           <pre className="overflow-x-auto rounded-lg border border-background/15 bg-background/5 p-5 text-sm leading-7"><code>{`POST /v1/chat/completions HTTP/1.1
 Host: lynshen.org
 Authorization: Bearer $LYNSHEN_API_KEY
@@ -500,7 +514,7 @@ Content-Type: application/json
 
       <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
         <div className="grid gap-8 border-y py-10 lg:grid-cols-[1fr_auto] lg:items-center">
-          <div>
+          <ScrollReveal>
             <p className="font-mono text-sm text-primary">08 · START</p>
             <h2 className="mt-3 font-display text-3xl font-semibold">
               {t("publicSite.welcome.finalTitle")}
@@ -508,8 +522,8 @@ Content-Type: application/json
             <p className="mt-3 max-w-2xl leading-7 text-muted-foreground">
               {t("publicSite.welcome.finalDescription")}
             </p>
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row">
+          </ScrollReveal>
+          <ScrollReveal delay={0.12} className="flex flex-col gap-3 sm:flex-row">
             <Button asChild size="lg" variant="primary" className="min-h-12 px-6">
               <Link to="/dashboard">
                 {t("publicSite.welcome.enterConsole")}
@@ -522,7 +536,7 @@ Content-Type: application/json
                 <CheckCircle2 />
               </Link>
             </Button>
-          </div>
+          </ScrollReveal>
         </div>
       </section>
     </div>

@@ -176,7 +176,16 @@ Marketplace nano-CNY values through the response `cny_per_usd` using exact decim
 arithmetic. It MUST NOT claim a fixed discount percentage or compare with an official list
 price unless the server provides that comparison. Loading MUST render four Skeleton cells.
 Empty or failed loading MUST retain an action to
-`/marketplace`.
+`/marketplace`. The rotation transition MUST be a smooth slide: the entering card slides in
+from the trailing edge, the leaving card slides out at the leading edge, and the carried
+cards glide to their new slots, all in one spring; under reduced motion only opacity
+animates.
+
+PS-W9. Every welcome-page section reveals its content once when it enters the viewport:
+a fade with a small upward rise (about 0.55s, ease-out). Cell grids (families, advantages,
+tasks, steps, operations) reveal their cells staggered by about 60ms per cell. Under
+reduced motion the reveals animate opacity only, per `DESIGN_SYSTEM.md`. Reveals play once
+per page load and MUST NOT re-run on scroll-up.
 
 ## 5. API documentation page
 

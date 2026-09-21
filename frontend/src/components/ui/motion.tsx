@@ -117,6 +117,92 @@ export const PageWrapper = forwardRef<HTMLDivElement, PageWrapperProps>(
 );
 PageWrapper.displayName = "PageWrapper";
 
+// Scroll-reveal component: plays once when the block enters the viewport.
+interface ScrollRevealProps {
+  children: ReactNode;
+  className?: string;
+  delay?: number;
+  /** Upward offset in px before the reveal; ignored under reduced motion. */
+  y?: number;
+}
+
+export const ScrollReveal = forwardRef<HTMLDivElement, ScrollRevealProps>(
+  ({ children, className = "", delay = 0, y = 24 }, ref) => {
+    const shouldReduceMotion = useReducedMotion();
+    return (
+      <motion.div
+        ref={ref}
+        initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y }}
+        whileInView={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: "-64px" }}
+        transition={
+          shouldReduceMotion
+            ? reducedTransition
+            : { duration: 0.55, delay, ease: easings.easeOutQuart }
+        }
+        className={className}
+      >
+        {children}
+      </motion.div>
+    );
+  }
+);
+ScrollReveal.displayName = "ScrollReveal";
+
+// Staggered scroll reveal: the group triggers once on entry and the direct
+// motion children (ScrollStaggerItem) reveal one after another.
+export const scrollStaggerGroupVariants: Variants = {
+  initial: {},
+  show: { transition: { staggerChildren: 0.06 } },
+};
+
+export const scrollStaggerItemVariants: Variants = {
+  initial: { opacity: 0, y: 16 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.45, ease: easings.easeOutQuart } },
+};
+
+const reducedScrollStaggerItemVariants: Variants = {
+  initial: { opacity: 0 },
+  show: { opacity: 1, transition: { duration: 0.01 } },
+};
+
+interface ScrollStaggerProps {
+  children: ReactNode;
+  className?: string;
+}
+
+export const ScrollStagger = forwardRef<HTMLDivElement, ScrollStaggerProps>(
+  ({ children, className = "" }, ref) => (
+    <motion.div
+      ref={ref}
+      variants={scrollStaggerGroupVariants}
+      initial="initial"
+      whileInView="show"
+      viewport={{ once: true, margin: "-64px" }}
+      className={className}
+    >
+      {children}
+    </motion.div>
+  )
+);
+ScrollStagger.displayName = "ScrollStagger";
+
+export const ScrollStaggerItem = forwardRef<HTMLDivElement, HTMLMotionProps<"div">>(
+  ({ children, ...rest }, ref) => {
+    const shouldReduceMotion = useReducedMotion();
+    return (
+      <motion.div
+        ref={ref}
+        variants={shouldReduceMotion ? reducedScrollStaggerItemVariants : scrollStaggerItemVariants}
+        {...rest}
+      >
+        {children}
+      </motion.div>
+    );
+  }
+);
+ScrollStaggerItem.displayName = "ScrollStaggerItem";
+
 // Fade in component
 interface FadeInProps {
   children: ReactNode;
