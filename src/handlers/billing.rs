@@ -2008,29 +2008,31 @@ async fn maybe_charge_usage_with_output(
         });
     }
 
-    // AKDL-2: settlement-time daily-limit check. Like the org check, the upstream
-    // tokens are consumed, so the row is recorded and the wallet debited, but the
-    // response delivery path rejects when the day's spend now exceeds the limit.
-    if let Some(daily_limit) = auth.daily_limit_nano_usd.as_deref() {
-        if let Ok(limit) = daily_limit.parse::<i128>()
-            && charge_nano > 0
-        {
-            match state
-                .user_store
-                .get_api_key_daily_spend_nano_usd(auth.api_key_id.as_deref().unwrap_or_default())
-                .await
-            {
-                Ok(spent) if spent >= limit => {
+    // ORGL-19: settlement-time personal-key spend-limit check, replacing the old
+    // single daily window. Like the org check, the upstream tokens are consumed,
+    // so the row is recorded and the wallet debited, but the response delivery
+    // path rejects when a configured window is now exhausted.
+    if auth.org_key.is_none()
+        && charge_nano > 0
+        && let Some(api_key_id) = auth.api_key_id.as_deref()
+    {
+        match crate::users::org_limits::load_key_windows(&state.user_store, api_key_id).await {
+            Ok(Some(windows)) => {
+                if let Err(breach) = crate::users::org_limits::evaluate_key_windows(&windows) {
                     return Err(AppError::new(
                         StatusCode::PAYMENT_REQUIRED,
-                        "api_key_daily_limit_reached",
-                        "this API key has reached its daily spend limit; it resets at Beijing midnight",
+                        "api_key_spend_limit_reached",
+                        format!(
+                            "api key spend limit reached: {} {}",
+                            breach.level, breach.window
+                        ),
                     ));
                 }
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::warn!("daily limit settlement check failed: {err}");
-                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!("spend limit settlement check failed: {err}");
+                // Fail open: the wallet balance check still applies.
             }
         }
     }

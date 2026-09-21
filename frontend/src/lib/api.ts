@@ -374,8 +374,10 @@ export interface ApiKey {
   sub_account_enabled: boolean;
   sub_account_balance_nano_usd: string;
   sub_account_balance_usd: string;
-  /** AKDL-1: daily spend limit, nano-USD; undefined = unlimited. */
-  daily_limit_nano_usd?: string | null;
+  /** ORGL-18: key-level spend-limit windows, nano-USD; null/undefined = unlimited. */
+  spend_limit_total_nano_usd?: string | null;
+  spend_limit_hourly_nano_usd?: string | null;
+  spend_limit_daily_nano_usd?: string | null;
   model_limits_enabled: boolean;
   model_limits: string[];
   ip_whitelist: string[];
@@ -436,8 +438,10 @@ export interface CreateApiKeyInput {
   expires_in_days?: number;
   sub_account_enabled?: boolean;
   sub_account_balance_nano_usd?: string;
-  /** AKDL-1: daily spend limit, nano-USD; undefined = unlimited. */
-  daily_limit_nano_usd?: string;
+  /** ORGL-18: key-level spend-limit windows, nano-USD; absent = unlimited. */
+  spend_limit_total_nano_usd?: string;
+  spend_limit_hourly_nano_usd?: string;
+  spend_limit_daily_nano_usd?: string;
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
@@ -456,8 +460,10 @@ export interface UpdateApiKeyInput {
   enabled?: boolean;
   sub_account_enabled?: boolean;
   sub_account_balance_nano_usd?: string;
-  /** AKDL-1: absent keeps the stored limit; empty string clears it; value sets it. */
-  daily_limit_nano_usd?: string;
+  /** ORGL-18 tri-state per window: absent keeps; empty string clears; value sets. */
+  spend_limit_total_nano_usd?: string;
+  spend_limit_hourly_nano_usd?: string;
+  spend_limit_daily_nano_usd?: string;
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
@@ -1608,13 +1614,6 @@ class ApiClient {
     return this.request("/tokens/batch-delete", {
       method: "POST",
       body: JSON.stringify({ ids }),
-    });
-  }
-
-  async transferToSubAccount(keyId: string, input: { amount_nano_usd?: string; amount_usd?: string }): Promise<{ success: boolean; api_key_balance_nano_usd: string; user_balance_nano_usd: string }> {
-    return this.request(`/tokens/${keyId}/transfer`, {
-      method: "POST",
-      body: JSON.stringify(input),
     });
   }
 

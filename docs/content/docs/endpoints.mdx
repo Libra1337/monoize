@@ -141,6 +141,7 @@ client = anthropic.Anthropic(
 | --- | --- | --- |
 | `401` | `unauthorized` | The API key is missing, invalid, disabled, or expired |
 | `402` | `insufficient_balance` | The user or sub-account balance is empty |
+| `402` | `api_key_spend_limit_reached` | The key's spend-limit window (total, hourly, or daily) is exhausted |
 | `403` | `model_not_allowed` | The key's model limits reject the requested model |
 | `403` | `ip_not_allowed` | The client IP is not in the key's IP whitelist |
 | `502` | `upstream_error` | No route serves the model, or all eligible routes failed |

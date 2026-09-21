@@ -141,6 +141,7 @@ client = anthropic.Anthropic(
 | --- | --- | --- |
 | `401` | `unauthorized` | API 金鑰缺失、無效、被停用或已過期 |
 | `402` | `insufficient_balance` | 使用者或子帳戶餘額不足 |
+| `402` | `api_key_spend_limit_reached` | 金鑰的消費限額視窗(總額、每小時或每日)已用盡 |
 | `403` | `model_not_allowed` | 金鑰的模型限制拒絕了請求的模型 |
 | `403` | `ip_not_allowed` | 用戶端 IP 不在金鑰的 IP 白名單中 |
 | `502` | `upstream_error` | 沒有路由服務該模型，或所有符合條件的路由都失敗 |

@@ -1343,7 +1343,9 @@ mod tests {
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
                     request_capture_mode: crate::users::RequestCaptureMode::Off,
-                    daily_limit_nano_usd: None,
+                    spend_limit_total_nano_usd: None,
+                    spend_limit_hourly_nano_usd: None,
+                    spend_limit_daily_nano_usd: None,
                 },
                 false,
             )

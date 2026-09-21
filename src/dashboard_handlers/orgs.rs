@@ -1048,7 +1048,9 @@ pub async fn create_org_key(
         model_redirects: Vec::new(),
         reasoning_envelope_enabled: true,
         request_capture_mode: crate::users::RequestCaptureMode::Off,
-        daily_limit_nano_usd: None,
+        spend_limit_total_nano_usd: None,
+        spend_limit_hourly_nano_usd: None,
+        spend_limit_daily_nano_usd: None,
     };
     let (api_key, plaintext) = state
         .user_store
@@ -1602,7 +1604,9 @@ pub async fn update_org_key(
         reasoning_envelope_enabled: None,
         request_capture_mode: None,
         expires_at,
-        daily_limit_nano_usd: None,
+        spend_limit_total_nano_usd: None,
+        spend_limit_hourly_nano_usd: None,
+        spend_limit_daily_nano_usd: None,
     };
     let updated = state
         .user_store

@@ -568,7 +568,6 @@ fn build_test_auth_with_role(
         reasoning_envelope_enabled: true,
         request_capture_mode: RequestCaptureMode::Off,
         org_key: None,
-        daily_limit_nano_usd: None,
     }
 }
 

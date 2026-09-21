@@ -141,6 +141,7 @@ client = anthropic.Anthropic(
 | --- | --- | --- |
 | `401` | `unauthorized` | API キーが未指定、無効、無効化済み、または期限切れ |
 | `402` | `insufficient_balance` | ユーザーまたはサブアカウントの残高が不足 |
+| `402` | `api_key_spend_limit_reached` | キーの利用上限ウィンドウ(合計・時間・日次)を使い切りました |
 | `403` | `model_not_allowed` | キーのモデル制限が要求モデルを拒否 |
 | `403` | `ip_not_allowed` | クライアント IP がキーの IP ホワイトリストにない |
 | `502` | `upstream_error` | モデルを提供するルートがない、または適格なルートがすべて失敗 |

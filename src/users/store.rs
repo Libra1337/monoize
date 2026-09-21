@@ -280,6 +280,25 @@ impl UserStore {
     }
 }
 
+/// ORGL-18: a spend-limit window value is a canonical non-negative integer
+/// nano-USD string; an empty or whitespace-only value clears the limit.
+pub(crate) fn normalize_spend_limit(raw: Option<&str>) -> Result<Option<String>, String> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(None),
+        Some(value) => {
+            let parsed: i128 = value.parse().map_err(|_| {
+                format!("spend limit must be an integer nano-USD string: {value:?}")
+            })?;
+            if parsed < 0 || parsed.to_string() != value {
+                return Err(format!(
+                    "spend limit must be a canonical non-negative integer: {value:?}"
+                ));
+            }
+            Ok(Some(parsed.to_string()))
+        }
+    }
+}
+
 pub(crate) fn serialize_group_ids_json(group_ids: &[String]) -> Result<String, String> {
     serde_json::to_string(&canonicalize_group_ids(group_ids)).map_err(|e| e.to_string())
 }
@@ -1844,7 +1863,9 @@ impl UserStore {
                 expires_in_days: expires_at.map(|e| (e - Utc::now()).num_days()),
                 sub_account_enabled: false,
                 sub_account_balance_nano_usd: None,
-                daily_limit_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
@@ -1894,6 +1915,13 @@ impl UserStore {
                     .to_string(),
             );
         }
+        // ORGL-18: canonical non-negative nano-USD strings; empty clears.
+        input.spend_limit_total_nano_usd =
+            normalize_spend_limit(input.spend_limit_total_nano_usd.as_deref())?;
+        input.spend_limit_hourly_nano_usd =
+            normalize_spend_limit(input.spend_limit_hourly_nano_usd.as_deref())?;
+        input.spend_limit_daily_nano_usd =
+            normalize_spend_limit(input.spend_limit_daily_nano_usd.as_deref())?;
         let group_ids = canonicalize_group_ids(&input.group_ids);
         if !group_ids.is_empty() {
             self.validate_api_key_group_selection_for_user(user_id, &group_ids, is_admin)
@@ -1925,8 +1953,8 @@ impl UserStore {
             .await
             .map_err(|e| e.message)?;
         tx.execute(self.db.stmt(
-                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, group_ids, channel_bindings, model_bindings, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode, daily_limit_nano_usd)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)"#,
+                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, group_ids, channel_bindings, model_bindings, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode, spend_limit_total_nano_usd, spend_limit_hourly_nano_usd, spend_limit_daily_nano_usd)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)"#,
                 vec![
                     id.clone().into(),
                     user_id.into(),
@@ -1953,11 +1981,9 @@ impl UserStore {
                         0
                     })),
                     input.request_capture_mode.as_str().into(),
-                    input
-                        .daily_limit_nano_usd
-                        .clone()
-                        .map(|value| SeaValue::String(Some(Box::new(value))))
-                        .unwrap_or(SeaValue::String(None)),
+                    input.spend_limit_total_nano_usd.clone().into(),
+                    input.spend_limit_hourly_nano_usd.clone().into(),
+                    input.spend_limit_daily_nano_usd.clone().into(),
                 ],
             ))
             .await
@@ -1989,7 +2015,9 @@ impl UserStore {
             enabled: true,
             sub_account_enabled: input.sub_account_enabled,
             sub_account_balance_nano: initial_sub_account_balance.to_string(),
-            daily_limit_nano_usd: input.daily_limit_nano_usd.clone(),
+            spend_limit_total_nano_usd: input.spend_limit_total_nano_usd.clone(),
+            spend_limit_hourly_nano_usd: input.spend_limit_hourly_nano_usd.clone(),
+            spend_limit_daily_nano_usd: input.spend_limit_daily_nano_usd.clone(),
             model_limits_enabled: input.model_limits_enabled,
             model_limits: input.model_limits,
             ip_whitelist: input.ip_whitelist,
@@ -2039,7 +2067,7 @@ impl UserStore {
     pub async fn get_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, a.daily_limit_nano_usd, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key_prefix = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, a.spend_limit_total_nano_usd, a.spend_limit_hourly_nano_usd, a.spend_limit_daily_nano_usd, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key_prefix = $1",
                 vec![prefix.into()],
             ))
             .await
@@ -2057,7 +2085,7 @@ impl UserStore {
             .db
             .read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, a.daily_limit_nano_usd, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, a.spend_limit_total_nano_usd, a.spend_limit_hourly_nano_usd, a.spend_limit_daily_nano_usd, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key = $1",
                 vec![key.into()],
             ))
             .await
@@ -2084,7 +2112,7 @@ impl UserStore {
                         a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms,
                         a.model_redirects, a.reasoning_envelope_enabled,
                         a.request_capture_enabled, a.request_capture_mode,
-                        a.org_id, a.created_by,
+                        a.org_id, a.created_by, a.spend_limit_total_nano_usd, a.spend_limit_hourly_nano_usd, a.spend_limit_daily_nano_usd,
                         u.role AS owner_role,
                         u.account_class AS owner_account_class,
                         u.id AS owner_id, u.username AS owner_username,
@@ -2196,7 +2224,7 @@ impl UserStore {
                         a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits,
                         a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier,
                         a.transforms, a.model_redirects, a.reasoning_envelope_enabled,
-                        a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by,
+                        a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, a.spend_limit_total_nano_usd, a.spend_limit_hourly_nano_usd, a.spend_limit_daily_nano_usd,
                         u.role AS owner_role
                  FROM api_keys a JOIN users u ON u.id = a.user_id
                  WHERE a.user_id = $1 AND a.org_id IS NULL ORDER BY a.created_at DESC",
@@ -2240,7 +2268,7 @@ impl UserStore {
                         a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits,
                         a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier,
                         a.transforms, a.model_redirects, a.reasoning_envelope_enabled,
-                        a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by,
+                        a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, a.spend_limit_total_nano_usd, a.spend_limit_hourly_nano_usd, a.spend_limit_daily_nano_usd,
                         u.role AS owner_role
                  FROM api_keys a JOIN users u ON u.id = a.user_id
                  WHERE a.id = $1 AND a.user_id = $2",
@@ -2904,9 +2932,18 @@ impl UserStore {
             created_by: row
                 .try_get::<Option<String>>("", "created_by")
                 .map_err(|e| e.to_string())?,
-            daily_limit_nano_usd: row
-                .try_get::<Option<String>>("", "daily_limit_nano_usd")
-                .map_err(|e| e.to_string())?,
+            spend_limit_total_nano_usd: row
+                .try_get::<Option<String>>("", "spend_limit_total_nano_usd")
+                .map_err(|e| e.to_string())?
+                .filter(|value| !value.is_empty()),
+            spend_limit_hourly_nano_usd: row
+                .try_get::<Option<String>>("", "spend_limit_hourly_nano_usd")
+                .map_err(|e| e.to_string())?
+                .filter(|value| !value.is_empty()),
+            spend_limit_daily_nano_usd: row
+                .try_get::<Option<String>>("", "spend_limit_daily_nano_usd")
+                .map_err(|e| e.to_string())?
+                .filter(|value| !value.is_empty()),
             sub_account_enabled,
             sub_account_balance_nano,
             model_limits_enabled,
@@ -3112,15 +3149,26 @@ impl UserStore {
             values.push(expires_at.clone().into());
             idx += 1;
         }
-        if let Some(daily_limit) = &input.daily_limit_nano_usd {
-            set_clauses.push(format!("daily_limit_nano_usd = ${idx}"));
-            values.push(
-                daily_limit
-                    .clone()
-                    .map(|value| SeaValue::String(Some(Box::new(value))))
-                    .unwrap_or(SeaValue::String(None)),
-            );
-            idx += 1;
+        for (patch, column) in [
+            (
+                &input.spend_limit_total_nano_usd,
+                "spend_limit_total_nano_usd",
+            ),
+            (
+                &input.spend_limit_hourly_nano_usd,
+                "spend_limit_hourly_nano_usd",
+            ),
+            (
+                &input.spend_limit_daily_nano_usd,
+                "spend_limit_daily_nano_usd",
+            ),
+        ] {
+            if let Some(patch) = patch {
+                let normalized = normalize_spend_limit(patch.as_deref())?;
+                set_clauses.push(format!("{column} = ${idx}"));
+                values.push(normalized.into());
+                idx += 1;
+            }
         }
 
         if set_clauses.is_empty() {
@@ -3294,7 +3342,7 @@ impl UserStore {
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.id = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.group_ids, a.channel_bindings, a.model_bindings, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.org_id, a.created_by, a.spend_limit_total_nano_usd, a.spend_limit_hourly_nano_usd, a.spend_limit_daily_nano_usd, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.id = $1",
                 vec![id.into()],
             ))
             .await
@@ -4389,7 +4437,9 @@ mod tests {
             model_redirects: Vec::new(),
             reasoning_envelope_enabled: true,
             request_capture_mode: RequestCaptureMode::Off,
-            daily_limit_nano_usd: None,
+            spend_limit_total_nano_usd: None,
+            spend_limit_hourly_nano_usd: None,
+            spend_limit_daily_nano_usd: None,
         }
     }
 
@@ -4518,7 +4568,9 @@ mod tests {
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
                     request_capture_mode: crate::users::RequestCaptureMode::Off,
-                    daily_limit_nano_usd: None,
+                    spend_limit_total_nano_usd: None,
+                    spend_limit_hourly_nano_usd: None,
+                    spend_limit_daily_nano_usd: None,
                 },
                 false,
             )

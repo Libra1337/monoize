@@ -1679,7 +1679,6 @@ async fn authenticate_playground_session(
         user_role: user.role,
         account_class: user.account_class,
         api_key_id: None,
-        daily_limit_nano_usd: None,
         api_key_name: None,
         internal_source: Some(crate::auth::InternalRequestSource::Playground),
         max_multiplier: None,
@@ -1711,55 +1710,58 @@ async fn ensure_balance_before_forward(
         let Some(api_key_id) = auth.api_key_id.as_deref() else {
             return Ok(());
         };
-        return match state
+        // The sub-account balance gate comes first (ORGL-8: sub-account rules
+        // first, spend limits on top); on success the key-level windows below
+        // still apply.
+        match state
             .user_store
             .ensure_sub_account_can_spend(api_key_id)
             .await
         {
-            Ok(()) => Ok(()),
-            Err(err) => match err.kind {
-                BillingErrorKind::InsufficientBalance => Err(AppError::new(
-                    StatusCode::PAYMENT_REQUIRED,
-                    "insufficient_balance",
-                    "insufficient balance",
-                )),
-                BillingErrorKind::NotFound => Err(AppError::new(
-                    StatusCode::UNAUTHORIZED,
-                    "unauthorized",
-                    "api key not found",
-                )),
-                _ => Err(AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    err.message,
-                )),
-            },
-        };
+            Ok(()) => {}
+            Err(err) => {
+                return match err.kind {
+                    BillingErrorKind::InsufficientBalance => Err(AppError::new(
+                        StatusCode::PAYMENT_REQUIRED,
+                        "insufficient_balance",
+                        "insufficient balance",
+                    )),
+                    BillingErrorKind::NotFound => Err(AppError::new(
+                        StatusCode::UNAUTHORIZED,
+                        "unauthorized",
+                        "api key not found",
+                    )),
+                    _ => Err(AppError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        err.message,
+                    )),
+                };
+            }
+        }
     }
-    // AKDL-1/2: per-key daily spend limit, one Asia/Shanghai day. Checked before
-    // dispatch so an exhausted key fails fast; the settlement check closes races.
-    if let Some(daily_limit) = auth.daily_limit_nano_usd.as_deref() {
-        if let Ok(limit) = daily_limit.parse::<i128>() {
-            match state
-                .user_store
-                .get_api_key_daily_spend_nano_usd(auth.api_key_id.as_deref().unwrap_or_default())
-                .await
-            {
-                Ok(spent) if spent >= limit => {
+    // ORGL-19: admission preflight for personal-key spend windows. Same limit
+    // set as the settlement check; advisory-fast so a race is closed there.
+    if auth.org_key.is_none()
+        && let Some(api_key_id) = auth.api_key_id.as_deref()
+    {
+        match crate::users::org_limits::load_key_windows(&state.user_store, api_key_id).await {
+            Ok(Some(windows)) => {
+                if let Err(breach) = crate::users::org_limits::evaluate_key_windows(&windows) {
                     return Err(AppError::new(
                         StatusCode::PAYMENT_REQUIRED,
-                        "api_key_daily_limit_reached",
-                        "this API key has reached its daily spend limit; it resets at Beijing midnight",
+                        "api_key_spend_limit_reached",
+                        format!(
+                            "api key spend limit reached: {} {}",
+                            breach.level, breach.window
+                        ),
                     ));
                 }
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::warn!(
-                        "daily limit check failed for key {}: {err}",
-                        auth.api_key_id.as_deref().unwrap_or("?")
-                    );
-                    // Fail open: the settlement check still applies.
-                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!("spend limit preflight failed for key {api_key_id}: {err}");
+                // Fail open: the settlement check still applies.
             }
         }
     }

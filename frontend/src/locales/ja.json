@@ -1145,8 +1145,8 @@
     "editApiKey": "API キーを編集",
     "editDescription": "API キーの設定を更新",
     "balance": "残高",
-    "subAccountEnabled": "独立残高",
-    "inheritsUser": "ユーザーから継承",
+    "spendLimits": "利用上限 (USD)",
+    "spendLimitsHint": "課金はウォレットから直接引き落とされます。時間=直近1時間、日次=UTC暦日、合計=累計。空欄=無制限。",
     "transferTitle": "残高の振替",
     "transferDescription": "あなたのアカウントから {{name}} に振替",
     "transferAmount": "金額 (USD)",
@@ -1219,10 +1219,7 @@
     "analyticsWalletBalance": "ウォレット残高に従う",
     "analyticsIndependentBalance": "Key 残高",
     "analyticsLoadFailed": "API Key 使用量を読み込めませんでした",
-    "analyticsEmpty": "この期間の使用量はありません。",
-    "dailyLimit": "1日の上限 (USD)",
-    "dailyLimitPlaceholder": "無制限",
-    "dailyLimitHint": "消費は個人ウォレットから直接引き落とされます。このキーの当日の消費が上限に達すると、北京時間の翌日 0 時まで停止します。空欄 = 無制限。"
+    "analyticsEmpty": "この期間の使用量はありません。"
   },
   "settings": {
     "title": "設定",

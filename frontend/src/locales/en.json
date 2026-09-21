@@ -1145,8 +1145,8 @@
     "editApiKey": "Edit API Key",
     "editDescription": "Update API key settings",
     "balance": "Balance",
-    "subAccountEnabled": "Independent Balance",
-    "inheritsUser": "Inherits User",
+    "spendLimits": "Spend limits (USD)",
+    "spendLimitsHint": "Charges bill the wallet directly. Hourly = rolling 1 hour; daily = UTC calendar day; total = lifetime. Empty = unlimited.",
     "transferTitle": "Transfer Balance",
     "transferDescription": "Transfer balance from your account to {{name}}",
     "transferAmount": "Amount (USD)",
@@ -1222,10 +1222,7 @@
     "analyticsWalletBalance": "Follows wallet balance",
     "analyticsIndependentBalance": "Key balance",
     "analyticsLoadFailed": "Failed to load API Key usage",
-    "analyticsEmpty": "No usage in this range.",
-    "dailyLimit": "Daily limit (USD)",
-    "dailyLimitPlaceholder": "Unlimited",
-    "dailyLimitHint": "Charges bill the personal wallet directly; once this key's daily spend reaches the limit it stops serving until Beijing midnight. Empty = unlimited."
+    "analyticsEmpty": "No usage in this range."
   },
   "settings": {
     "title": "Settings",

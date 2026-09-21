@@ -239,8 +239,29 @@ pub async fn load_limit_levels(
         })
         .transpose()?;
 
-    // Key limits: idx_request_logs_api_key_created.
-    let key_row = store
+    // Key limits: idx_request_logs_api_key_created. Key-level windows apply to
+    // every key (ORGL-3); org keys additionally sit under the levels above.
+    let key = load_key_windows(store, api_key_id).await?;
+
+    Ok(OrgLimitLevels { space, member, key })
+}
+
+/// ORGL-3: the key-level limit windows for one key, personal or org. Returns
+/// None when the key row does not exist. The window bounds reuse ORGL-6:
+/// hourly = rolling 3600 seconds, daily = current UTC calendar day.
+pub async fn load_key_windows(
+    store: &UserStore,
+    api_key_id: &str,
+) -> Result<Option<OrgSpendWindows>, String> {
+    let is_postgres = store.db.is_postgres();
+    let now_unix_ms = chrono::Utc::now().timestamp_millis();
+    let hour_ago_unix_ms = now_unix_ms - 3_600_000;
+    let day_start_unix_ms = chrono::Utc::now()
+        .date_naive()
+        .and_time(chrono::NaiveTime::MIN)
+        .and_utc()
+        .timestamp_millis();
+    let row = store
         .db
         .read()
         .query_one(store.db.stmt(
@@ -248,7 +269,7 @@ pub async fn load_limit_levels(
                     (SELECT {sum} FROM request_logs rl WHERE rl.api_key_id = $1) AS spent_total,
                     (SELECT {sum} FROM request_logs rl WHERE rl.api_key_id = $1 AND rl.created_at_unix_ms >= $2) AS spent_hourly,
                     (SELECT {sum} FROM request_logs rl WHERE rl.api_key_id = $1 AND rl.created_at_unix_ms >= $3) AS spent_daily
-             FROM api_keys k WHERE k.id = $1 AND k.org_id IS NOT NULL")
+             FROM api_keys k WHERE k.id = $1")
                 .replace("{sum}", &sum_charge_expr(is_postgres, "rl")),
             vec![
                 api_key_id.into(),
@@ -258,7 +279,7 @@ pub async fn load_limit_levels(
         ))
         .await
         .map_err(|e| e.to_string())?;
-    let key = key_row
+    Ok(row
         .map(|row| {
             let limits = [
                 row.try_get::<Option<String>>("", "spend_limit_total_nano_usd")
@@ -297,9 +318,18 @@ pub async fn load_limit_levels(
                 },
             })
         })
-        .transpose()?;
+        .transpose()?)
+}
 
-    Ok(OrgLimitLevels { space, member, key })
+/// ORGL-19: key-level evaluation for a personal key. Delegates to
+/// `evaluate_limits` with empty space/member levels, so the breach ordering
+/// and the `key` level name stay identical to the org path.
+pub fn evaluate_key_windows(windows: &OrgSpendWindows) -> Result<(), OrgLimitBreach> {
+    evaluate_limits(&OrgLimitLevels {
+        space: OrgSpendWindows::default(),
+        member: None,
+        key: Some(windows.clone()),
+    })
 }
 
 /// ORGL-5: evaluate every configured window. The first breach wins; levels are

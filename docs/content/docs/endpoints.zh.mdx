@@ -141,6 +141,7 @@ client = anthropic.Anthropic(
 | --- | --- | --- |
 | `401` | `unauthorized` | API 密钥缺失、无效、被禁用或已过期 |
 | `402` | `insufficient_balance` | 用户或子账户余额不足 |
+| `402` | `api_key_spend_limit_reached` | 密钥的消费限额窗口(总额、每小时或每日)已用尽 |
 | `403` | `model_not_allowed` | 密钥的模型限制拒绝了请求的模型 |
 | `403` | `ip_not_allowed` | 客户端 IP 不在密钥的 IP 白名单中 |
 | `502` | `upstream_error` | 没有路由服务该模型，或所有符合条件的路由都失败 |

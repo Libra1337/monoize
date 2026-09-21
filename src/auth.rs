@@ -43,8 +43,6 @@ pub struct AuthResult {
     pub request_capture_mode: RequestCaptureMode,
     /// ORGL-8: set only for org-key traffic; drives the org spend-limit checks.
     pub org_key: Option<crate::users::OrgKeyContext>,
-    /// AKDL-1: the key's daily spend limit in nano-USD (None = unlimited).
-    pub daily_limit_nano_usd: Option<String>,
 }
 
 #[derive(Clone)]
@@ -98,7 +96,6 @@ impl AuthState {
                         return Some(AuthResult {
                             tenant_id: user.id.clone(),
                             user_id: Some(user.id),
-                            daily_limit_nano_usd: api_key.daily_limit_nano_usd.clone(),
                             username: Some(user.username.clone()),
                             user_role: user.role,
                             account_class: user.account_class,
@@ -167,6 +164,9 @@ mod tests {
             expires_in_days: None,
             sub_account_enabled: false,
             sub_account_balance_nano_usd: None,
+            spend_limit_total_nano_usd: None,
+            spend_limit_hourly_nano_usd: None,
+            spend_limit_daily_nano_usd: None,
             model_limits_enabled: false,
             model_limits: Vec::new(),
             ip_whitelist: Vec::new(),
@@ -178,7 +178,6 @@ mod tests {
             model_redirects: Vec::new(),
             reasoning_envelope_enabled: true,
             request_capture_mode: RequestCaptureMode::Off,
-            daily_limit_nano_usd: None,
         }
     }
 

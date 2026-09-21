@@ -1145,8 +1145,8 @@
     "editApiKey": "编辑 API 密钥",
     "editDescription": "更新 API 密钥设置",
     "balance": "余额",
-    "subAccountEnabled": "独立余额",
-    "inheritsUser": "继承用户",
+    "spendLimits": "消费限额 (USD)",
+    "spendLimitsHint": "费用直接从钱包扣款。小时=滚动 1 小时;每日=UTC 自然日;总额=累计。留空 = 不限制。",
     "transferTitle": "转账",
     "transferDescription": "从你的账户转账到 {{name}}",
     "transferAmount": "金额 (USD)",
@@ -1222,10 +1222,7 @@
     "analyticsWalletBalance": "跟随钱包余额",
     "analyticsIndependentBalance": "Key 余额",
     "analyticsLoadFailed": "API Key 用量加载失败",
-    "analyticsEmpty": "此时间范围内暂无用量。",
-    "dailyLimit": "每日限额 (USD)",
-    "dailyLimitPlaceholder": "不限",
-    "dailyLimitHint": "消费直接从个人余额扣除;该 key 当日消费达到限额后停止服务,北京时间次日 0 点自动恢复。留空 = 不限。"
+    "analyticsEmpty": "此时间范围内暂无用量。"
   },
   "settings": {
     "title": "系统设置",

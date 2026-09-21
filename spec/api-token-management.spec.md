@@ -375,34 +375,34 @@ TM-ENT4. The transaction MUST preserve wallet balance after required Key settlem
 
 TM-ENT5. After commit, the process MUST invalidate API Key authentication, Group access, Marketplace, routing, and pricing caches affected by the user. A deleted Key MUST fail its next authentication attempt.
 
-## Daily spend limit per key
+## Spend limits per key
 
-AKDL-1. `api_keys` MUST carry `daily_limit_nano_usd TEXT NULL` (migration
-`m20260921_000110_api_key_daily_limit`). NULL = unlimited. A create or update
-request sets it as a canonical positive integer nano-USD string; the update
-request treats an empty string as clearing the limit and an absent field as
-keeping the stored value. Only `admin`/`super_admin` requests may set it; a
-non-admin update MUST ignore the field.
+AKDL-1. (Superseded by ORGL-18/ORGL-19 in `org-usage-limits.spec.md`.) The
+single-window `daily_limit_nano_usd` column (migration
+`m20260921_000110_api_key_daily_limit`) is REMOVED (migration
+`m20260921_000120_drop_api_key_daily_limit`); the column had no stored values
+at removal time. A personal key instead uses the shared key-level windows
+`spend_limit_total_nano_usd`, `spend_limit_hourly_nano_usd`, and
+`spend_limit_daily_nano_usd`: rolling 3600-second hourly, UTC calendar-day
+daily, and lifetime total. Spend is aggregated live from `request_logs` by
+`api_key_id` over the window — there is no counter table and no scheduled
+reset. Charges bill the owner's personal wallet exactly as an unlimited key;
+a limit never moves balance to the key.
 
-AKDL-2. The limit window is one Asia/Shanghai calendar day (00:00–24:00, the
-same boundary as the analytics today windows). Spend is aggregated live from
-`request_logs` by `api_key_id` over the window — there is no counter table and
-no scheduled reset; the day flip empties the window by construction. Charges
-bill the owner's personal wallet exactly as an unlimited key; the limit never
-moves balance to the key.
+AKDL-2. Create and update accept the three fields under the ORGL-18 tri-state
+rules (create: absent/null = unlimited; update: absent = keep, null or "" =
+clear, value = set). The key's owner and admins may set them. Enforcement is
+ORGL-19: HTTP `402 api_key_spend_limit_reached` naming the window, at the
+admission preflight and at settlement with fail-open tail semantics.
 
-AKDL-3. Enforcement runs at two points: before upstream dispatch (fail fast
-with HTTP 402 and code `api_key_daily_limit_reached`) and at settlement (the
-same code on the response path after the row is recorded and the wallet
-debited). Both checks read the live aggregate; a race between them can admit
-at most one request past the limit.
+AKDL-3. The key list/detail responses expose the three `spend_limit_*` fields.
+The Token Management create/edit dialog renders three USD inputs labeled
+total / hourly / daily with an empty field meaning unlimited — the same
+control design as the org Limits view (ORGL-14).
 
-AKDL-4. The key list/detail responses MUST include `daily_limit_nano_usd`.
-The Token Management dialog exposes it as a USD amount ("Daily limit");
-empty = unlimited.
-
-AKDL-5. The initial-balance and transfer UI is removed: the create dialog no
-longer offers an initial sub-account balance and the edit dialog no longer
-offers the balance field or the transfer action. Existing sub-account keys
-keep settling against their stored balance; the backend endpoints remain for
-back-compatibility.
+AKDL-4. The sub-account feature is removed from the Token Management dialogs:
+the create dialog no longer offers the independent-balance switch or an
+initial balance, the edit dialog no longer offers the switch, and the key
+list no longer renders a per-key balance. Existing sub-account keys keep
+settling against their stored balance until drained or deleted; the backend
+settlement and transfer endpoints remain for those keys.

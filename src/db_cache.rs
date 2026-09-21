@@ -2330,6 +2330,9 @@ mod tests {
             enabled: true,
             sub_account_enabled: false,
             sub_account_balance_nano: "0".to_string(),
+            spend_limit_total_nano_usd: None,
+            spend_limit_hourly_nano_usd: None,
+            spend_limit_daily_nano_usd: None,
             model_limits_enabled: false,
             model_limits: Vec::new(),
             ip_whitelist: Vec::new(),
@@ -2344,7 +2347,6 @@ mod tests {
             request_capture_mode: RequestCaptureMode::Off,
             org_id: None,
             created_by: None,
-            daily_limit_nano_usd: None,
         }
     }
 

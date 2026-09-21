@@ -27,9 +27,12 @@ ORGL-2. `org_members` gains the same three nullable limit columns
 member inside this space: request-log rows with `user_id = org_id` and
 `api_key_id IN (keys whose org_id = this org AND created_by = this member)`.
 
-ORGL-3. `api_keys` gains the same three nullable limit columns for org keys
-(`org_id IS NOT NULL`). A key limit constrains request-log rows with
-`api_key_id = this key`. The columns are ignored for personal keys.
+ORGL-3. `api_keys` carries the same three nullable limit columns
+(`spend_limit_total_nano_usd`, `spend_limit_hourly_nano_usd`,
+`spend_limit_daily_nano_usd`) for every key. A key limit constrains
+request-log rows with `api_key_id = this key`. For org keys the key level
+sits under the space and member levels (ORGL-4); for personal keys
+(`org_id IS NULL`) the key level is the only level that applies.
 
 ORGL-4. All three levels evaluate independently. A request is admitted only when every
 configured limit at every applicable level passes. Example: a key with a 1 USD hourly
@@ -59,9 +62,11 @@ charge; the wallet is still debited; subsequent requests are rejected until the 
 rolls over. (Fail-open at the tail is deliberate: an upstream token already consumed
 cannot be returned.)
 
-ORGL-8. Limit checks run only for org-key traffic (`api_keys.org_id IS NOT NULL`).
-Personal-key traffic is untouched. Sub-account keys inside an org follow the existing
-sub-account rules first; org limits apply on top.
+ORGL-8. Space- and member-level limit checks run only for org-key traffic
+(`api_keys.org_id IS NOT NULL`). Key-level checks run for every key that has
+at least one configured window, personal keys included. Personal-key traffic
+is otherwise untouched. Sub-account keys follow the existing sub-account
+rules first; spend limits apply on top.
 
 ORGL-9. `spend_limit_daily_reset_at` records the UTC midnight the daily window last
 rolled over for display purposes ("resets at ..."). It is derived from `created_at` and
@@ -149,3 +154,20 @@ immediately: the next request breaches and is rejected.
 ORGL-17. Limit queries MUST use the read pool and the existing
 `idx_request_logs_org` (user_id, created_at_unix_ms) / `idx_request_logs_api_key_created` (api_key_id, created_at_unix_ms) indexes; a limit check adds at most three indexed
 aggregations per request and MUST NOT add a write on the request path.
+
+## 6. Personal keys
+
+ORGL-18. A personal key (`org_id IS NULL`) sets its three key-level windows through
+the ordinary Token Management create and update endpoints
+(`POST /api/dashboard/keys`, `PUT /api/dashboard/keys/{key_id}`) with the fields
+`spend_limit_total_nano_usd`, `spend_limit_hourly_nano_usd`,
+`spend_limit_daily_nano_usd`. Values are canonical non-negative integer nano-USD
+strings. On create, an absent or null field means unlimited. On update the fields are
+tri-state: absent keeps the stored value; null or the empty string clears it (SQL
+NULL, never an empty string); a value sets it. The key's owner and admins may set
+them; an org key's windows are set only through ORGL-11.
+
+ORGL-19. A personal-key breach aborts with HTTP `402 api_key_spend_limit_reached`
+and a message naming the window (`total` | `hourly` | `daily`), at the same two
+enforcement points and with the same fail-open settlement semantics as ORGL-5 and
+ORGL-7. The key list/detail responses expose the three fields.

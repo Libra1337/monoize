@@ -39,7 +39,11 @@ All eligible routes failed, or no route serves the model. Check in this order:
 
 ### `402 insufficient_balance`
 
-The user balance, or the key's sub-account balance, is zero or negative. Top up the balance in **Users**, or disable the sub-account option on the key.
+The user balance, or the key's sub-account balance, is zero or negative. Top up the balance in **Users**. Legacy keys with an independent balance keep settling against it until drained or deleted; new keys have no sub-account option.
+
+### `402 api_key_spend_limit_reached`
+
+A spend-limit window on the key is exhausted. Open the key's edit dialog and raise or clear the limit. The hourly window rolls over continuously; the daily window resets at UTC midnight.
 
 ### Charges look wrong
 

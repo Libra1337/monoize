@@ -761,7 +761,9 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 model_redirects: create_body.model_redirects,
                 reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
                 request_capture_mode: create_body.request_capture_mode,
-                daily_limit_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
             },
             false,
         )
@@ -794,7 +796,9 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         model_redirects: created.model_redirects.clone(),
         reasoning_envelope_enabled: created.reasoning_envelope_enabled,
         request_capture_mode: created.request_capture_mode,
-        daily_limit_nano_usd: None,
+        spend_limit_total_nano_usd: None,
+        spend_limit_hourly_nano_usd: None,
+        spend_limit_daily_nano_usd: None,
     })
     .expect("created response serializes");
     assert!(created_value.get("use_user_group").is_none());
@@ -829,7 +833,9 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 reasoning_envelope_enabled: None,
                 request_capture_mode: update_body.request_capture_mode,
                 expires_at: None,
-                daily_limit_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
             },
             false,
         )
@@ -879,7 +885,9 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
                 expires_at: None,
-                daily_limit_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
             },
             false,
         )
@@ -912,7 +920,9 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         model_redirects: fetched.model_redirects,
         reasoning_envelope_enabled: fetched.reasoning_envelope_enabled,
         request_capture_mode: fetched.request_capture_mode,
-        daily_limit_nano_usd: None,
+        spend_limit_total_nano_usd: None,
+        spend_limit_hourly_nano_usd: None,
+        spend_limit_daily_nano_usd: None,
     })
     .expect("response serializes");
     assert_eq!(
@@ -963,7 +973,9 @@ async fn admin_sub_account_adjustment_records_initial_credit_and_refund() {
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
                 request_capture_mode: crate::users::RequestCaptureMode::Off,
-                daily_limit_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
             },
             true,
         )
@@ -991,7 +1003,9 @@ async fn admin_sub_account_adjustment_records_initial_credit_and_refund() {
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
                 expires_at: None,
-                daily_limit_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
             },
             true,
         )
@@ -1106,7 +1120,9 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_visibility() {
             model_redirects: Vec::new(),
             reasoning_envelope_enabled: true,
             request_capture_mode: crate::users::RequestCaptureMode::Off,
-            daily_limit_nano_usd: None,
+            spend_limit_total_nano_usd: None,
+            spend_limit_hourly_nano_usd: None,
+            spend_limit_daily_nano_usd: None,
         }
     }
 
@@ -1146,7 +1162,9 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_visibility() {
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
                 expires_at: None,
-                daily_limit_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
             },
             false,
         )
@@ -1212,7 +1230,9 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 model_redirects: create_body.model_redirects,
                 reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
                 request_capture_mode: create_body.request_capture_mode,
-                daily_limit_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
             },
             false,
         )
@@ -1246,7 +1266,9 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
                 expires_at: None,
-                daily_limit_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
             },
             false,
         )
@@ -1278,7 +1300,9 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 }],
                 reasoning_envelope_enabled: true,
                 request_capture_mode: crate::users::RequestCaptureMode::Off,
-                daily_limit_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
             },
             false,
         )
@@ -1578,4 +1602,138 @@ async fn settings_store_round_trips_global_transforms_and_model_redirects() {
     assert!(store.is_registration_enabled().await.is_err());
     assert!(store.get_public_settings().await.is_err());
     assert!(store.get_all().await.is_err());
+}
+
+#[tokio::test]
+async fn personal_key_spend_limit_windows_round_trip_and_enforce() {
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("db connects");
+    {
+        let write = db.write().await;
+        Migrator::up(&*write, None).await.expect("migrates");
+    }
+
+    let (log_tx, _) = tokio::sync::broadcast::channel(1);
+    let store = UserStore::new(db, log_tx).await.expect("store creates");
+    let user = store
+        .create_user("limiter", "password123", UserRole::User, None)
+        .await
+        .expect("user created");
+
+    // ORGL-18 create: absent = unlimited; value = canonical non-negative string.
+    let (created, _) = store
+        .create_api_key_extended(
+            &user.id,
+            CreateApiKeyInput {
+                name: "capped".to_string(),
+                expires_in_days: None,
+                sub_account_enabled: false,
+                sub_account_balance_nano_usd: None,
+                spend_limit_total_nano_usd: None,
+                spend_limit_hourly_nano_usd: Some("0".to_string()),
+                spend_limit_daily_nano_usd: Some("5000000000".to_string()),
+                model_limits_enabled: false,
+                model_limits: Vec::new(),
+                ip_whitelist: Vec::new(),
+                group_ids: Vec::new(),
+                channel_bindings: Vec::new(),
+                model_bindings: Vec::new(),
+                max_multiplier: None,
+                transforms: Vec::new(),
+                model_redirects: Vec::new(),
+                reasoning_envelope_enabled: true,
+                request_capture_mode: crate::users::RequestCaptureMode::Off,
+            },
+            false,
+        )
+        .await
+        .expect("key with spend limits creates");
+    assert_eq!(created.spend_limit_hourly_nano_usd.as_deref(), Some("0"));
+    assert_eq!(
+        created.spend_limit_daily_nano_usd.as_deref(),
+        Some("5000000000")
+    );
+    assert_eq!(created.spend_limit_total_nano_usd, None);
+
+    // ORGL-19: a zero window breaches immediately (spent 0 >= limit 0).
+    let windows = crate::users::org_limits::load_key_windows(&store, &created.id)
+        .await
+        .expect("windows load")
+        .expect("key exists");
+    let breach = crate::users::org_limits::evaluate_key_windows(&windows)
+        .expect_err("zero hourly limit must breach");
+    assert_eq!((breach.level, breach.window), ("key", "hourly"));
+
+    // Tri-state update: keep hourly (absent), clear daily, set total.
+    store
+        .update_api_key(
+            &created.id,
+            UpdateApiKeyInput {
+                name: None,
+                enabled: None,
+                sub_account_enabled: None,
+                sub_account_balance_nano_usd: None,
+                spend_limit_total_nano_usd: Some(Some("10000000000".to_string())),
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: Some(None),
+                model_limits_enabled: None,
+                model_limits: None,
+                ip_whitelist: None,
+                group_ids: None,
+                channel_bindings: None,
+                model_bindings: None,
+                max_multiplier: None,
+                transforms: None,
+                model_redirects: None,
+                reasoning_envelope_enabled: None,
+                request_capture_mode: None,
+                expires_at: None,
+            },
+            false,
+        )
+        .await
+        .expect("tri-state update applies");
+    let updated = store
+        .get_api_key_by_id(&created.id)
+        .await
+        .expect("reload")
+        .expect("key exists");
+    assert_eq!(
+        updated.spend_limit_total_nano_usd.as_deref(),
+        Some("10000000000")
+    );
+    assert_eq!(updated.spend_limit_hourly_nano_usd.as_deref(), Some("0"));
+    assert_eq!(updated.spend_limit_daily_nano_usd, None);
+
+    // A non-canonical or negative value is rejected and changes no row.
+    let rejected = store
+        .update_api_key(
+            &created.id,
+            UpdateApiKeyInput {
+                name: None,
+                enabled: None,
+                sub_account_enabled: None,
+                sub_account_balance_nano_usd: None,
+                spend_limit_total_nano_usd: Some(Some("-5".to_string())),
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
+                model_limits_enabled: None,
+                model_limits: None,
+                ip_whitelist: None,
+                group_ids: None,
+                channel_bindings: None,
+                model_bindings: None,
+                max_multiplier: None,
+                transforms: None,
+                model_redirects: None,
+                reasoning_envelope_enabled: None,
+                request_capture_mode: None,
+                expires_at: None,
+            },
+            false,
+        )
+        .await
+        .expect_err("negative limit must fail");
+    assert!(rejected.contains("non-negative"), "{rejected}");
 }

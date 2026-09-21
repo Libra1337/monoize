@@ -4,6 +4,12 @@ import { useTranslation } from "react-i18next";
 import { mutate } from "swr";
 import { Gauge } from "lucide-react";
 import { api, type OrgLimitsResponse, type OrgSpendLimitSet } from "@/lib/api";
+import {
+  SPEND_WINDOWS,
+  nanoToUsdInput,
+  usdToNanoLimit,
+  type SpendWindowKey,
+} from "@/lib/spend-limits";
 import { formatCost } from "../request-logs/utils";
 import { useMyOrgs } from "./shared";
 import { Button } from "@/components/ui/button";
@@ -18,31 +24,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-type WindowKey = "total_nano_usd" | "hourly_nano_usd" | "daily_nano_usd";
+type WindowKey = SpendWindowKey;
 
-const WINDOWS: { key: WindowKey; labelKey: string }[] = [
-  { key: "total_nano_usd", labelKey: "orgLimits.windowTotal" },
-  { key: "hourly_nano_usd", labelKey: "orgLimits.windowHourly" },
-  { key: "daily_nano_usd", labelKey: "orgLimits.windowDaily" },
-];
-
-/** USD input -> nano-USD string; empty or invalid -> null (clear the limit). */
-function usdToNano(raw: string): string | null | undefined {
-  const trimmed = raw.trim();
-  if (trimmed === "") return null;
-  const usd = Number(trimmed);
-  if (!Number.isFinite(usd) || usd < 0) return undefined;
-  return String(Math.round(usd * 1_000_000_000));
-}
-
-function nanoToUsdInput(nano: string | null | undefined): string {
-  if (!nano) return "";
-  try {
-    return String(Number(BigInt(nano)) / 1_000_000_000);
-  } catch {
-    return "";
-  }
-}
+const WINDOWS = SPEND_WINDOWS;
 
 function LimitInputs({
   limits,
@@ -187,7 +171,7 @@ export function OrgLimitsPage() {
           limits={spaceDraft}
           labels={windowLabel}
           onChange={(w, raw) => {
-            const nano = usdToNano(raw);
+            const nano = usdToNanoLimit(raw);
             if (nano === undefined) return;
             setSpaceDraft((prev) => ({ ...prev, [w]: nano }));
           }}
@@ -219,7 +203,7 @@ export function OrgLimitsPage() {
                       limits={memberDrafts[m.user_id] ?? {}}
                       labels={windowLabel}
                       onChange={(w, raw) => {
-                        const nano = usdToNano(raw);
+                        const nano = usdToNanoLimit(raw);
                         if (nano === undefined) return;
                         setMemberDrafts((prev) => ({
                           ...prev,
@@ -262,7 +246,7 @@ export function OrgLimitsPage() {
                     limits={keyDrafts[k.key_id] ?? {}}
                     labels={windowLabel}
                     onChange={(w, raw) => {
-                      const nano = usdToNano(raw);
+                      const nano = usdToNanoLimit(raw);
                       if (nano === undefined) return;
                       setKeyDrafts((prev) => ({
                         ...prev,

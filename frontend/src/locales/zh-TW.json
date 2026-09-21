@@ -1145,8 +1145,8 @@
     "editApiKey": "編輯 API 金鑰",
     "editDescription": "更新 API 金鑰設定",
     "balance": "餘額",
-    "subAccountEnabled": "獨立餘額",
-    "inheritsUser": "繼承用戶",
+    "spendLimits": "消費限額 (USD)",
+    "spendLimitsHint": "費用直接從錢包扣款。小時=滾動 1 小時;每日=UTC 自然日;總額=累計。留空 = 不限制。",
     "transferTitle": "轉帳",
     "transferDescription": "從你的帳戶轉帳到 {{name}}",
     "transferAmount": "金額 (USD)",
@@ -1219,10 +1219,7 @@
     "analyticsWalletBalance": "跟隨錢包餘額",
     "analyticsIndependentBalance": "Key 餘額",
     "analyticsLoadFailed": "API Key 用量載入失敗",
-    "analyticsEmpty": "此時間範圍內尚無用量。",
-    "dailyLimit": "每日限額 (USD)",
-    "dailyLimitPlaceholder": "不限",
-    "dailyLimitHint": "消費直接從個人餘額扣除;該 key 當日消費達到限額後停止服務,北京時間次日 0 點自動恢復。留白 = 不限。"
+    "analyticsEmpty": "此時間範圍內尚無用量。"
   },
   "settings": {
     "title": "系統設定",

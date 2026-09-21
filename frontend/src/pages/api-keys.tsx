@@ -56,6 +56,7 @@ import { findFirstInvalidTransformRule } from "@/components/transforms/transform
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { normalizeMultiplier } from "@/lib/exact-decimal";
+import { SPEND_WINDOWS, nanoToUsdInput, usdToNanoLimit } from "@/lib/spend-limits";
 
 function parseOptionalMultiplier(value: string): string | undefined {
   if (!value.trim()) return undefined;
@@ -521,21 +522,74 @@ function ModelRedirectsEditor({ value, onChange }: ModelRedirectsEditorProps) {
   );
 }
 
-function usdToNanoString(usd: string): string | null {
-  const trimmed = usd.trim();
-  if (!trimmed) return null;
-  if (!/^\d+(?:\.\d{1,9})?$/.test(trimmed)) return null;
-  const [whole, frac = ""] = trimmed.split(".");
-  const padded = frac.padEnd(9, "0");
-  return (BigInt(whole) * 10n ** 9n + BigInt(padded)).toString();
+type SpendLimitDraft = { total: string; hourly: string; daily: string };
+
+/**
+ * ORGL-18 payload: on create only non-empty windows are sent (absent =
+ * unlimited); on update all three are always submitted so an emptied field
+ * clears the stored limit.
+ */
+function buildSpendLimitPayload(
+  draft: SpendLimitDraft,
+  alwaysSubmit: boolean,
+): Pick<CreateApiKeyInput, "spend_limit_total_nano_usd" | "spend_limit_hourly_nano_usd" | "spend_limit_daily_nano_usd"> {
+  const payload: Record<string, string> = {};
+  for (const window of ["total", "hourly", "daily"] as const) {
+    const nano = usdToNanoLimit(draft[window]);
+    if (nano === undefined) {
+      throw new Error(tLimitError(window));
+    }
+    if (nano !== null || alwaysSubmit) {
+      payload[`spend_limit_${window}_nano_usd`] = nano ?? "";
+    }
+  }
+  return payload as Pick<
+    CreateApiKeyInput,
+    "spend_limit_total_nano_usd" | "spend_limit_hourly_nano_usd" | "spend_limit_daily_nano_usd"
+  >;
 }
 
-function nanoToUsdDisplay(nano: string | null | undefined): string {
-  if (nano == null || nano === "") return "";
-  const value = BigInt(nano);
-  const whole = value / 10n ** 9n;
-  const frac = (value % 10n ** 9n).toString().padStart(9, "0").replace(/0+$/, "");
-  return frac ? `${whole}.${frac}` : `${whole}`;
+function tLimitError(window: string): string {
+  return `Spend limit (${window}) must be a non-negative USD amount`;
+}
+
+/** Three USD inputs mirroring the org-space Limits control (ORGL-14 design). */
+function SpendLimitsSection({
+  idPrefix,
+  value,
+  onChange,
+}: {
+  idPrefix: string;
+  value: SpendLimitDraft;
+  onChange: (next: SpendLimitDraft) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-2 rounded-lg border p-3">
+      <Label htmlFor={`${idPrefix}-spend-total`}>{t("apiKeys.spendLimits")}</Label>
+      <div className="flex flex-wrap items-center gap-2">
+        {SPEND_WINDOWS.map(({ key }) => (
+          <label key={key} htmlFor={`${idPrefix}-spend-${key}`} className="flex items-center gap-1 text-xs text-muted-foreground">
+            {t(`orgLimits.window${key === "total_nano_usd" ? "Total" : key === "hourly_nano_usd" ? "Hourly" : "Daily"}`)}
+            <Input
+              id={`${idPrefix}-spend-${key}`}
+              className="h-7 w-24 text-xs"
+              placeholder="∞"
+              inputMode="decimal"
+              value={value[key === "total_nano_usd" ? "total" : key === "hourly_nano_usd" ? "hourly" : "daily"]}
+              onChange={(e) =>
+                onChange({
+                  ...value,
+                  [key === "total_nano_usd" ? "total" : key === "hourly_nano_usd" ? "hourly" : "daily"]: e.target.value,
+                })
+              }
+            />
+          </label>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">{t("apiKeys.spendLimitsHint")}</p>
+    </div>
+  );
 }
 
 export function ApiKeysPage() {
@@ -564,9 +618,9 @@ export function ApiKeysPage() {
   // Create form state
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyExpires, setNewKeyExpires] = useState("");
-  const [newKeySubAccountEnabled, setNewKeySubAccountEnabled] = useState(false);
-  /// AKDL-1: daily spend limit typed as USD; empty = unlimited.
-  const [newKeyDailyLimitUsd, setNewKeyDailyLimitUsd] = useState("");
+  /// ORGL-18: per-key spend limits typed as USD; empty = unlimited. The same
+  /// three windows as the org-space Limits view.
+  const [newKeySpendLimits, setNewKeySpendLimits] = useState({ total: "", hourly: "", daily: "" });
   const [newKeyModelLimitsEnabled, setNewKeyModelLimitsEnabled] = useState(false);
   const [newKeyModelLimits, setNewKeyModelLimits] = useState("");
   const [newKeyIpWhitelist, setNewKeyIpWhitelist] = useState("");
@@ -624,7 +678,7 @@ export function ApiKeysPage() {
   const resetCreateForm = () => {
     setNewKeyName("");
     setNewKeyExpires("");
-    setNewKeySubAccountEnabled(false);
+    setNewKeySpendLimits({ total: "", hourly: "", daily: "" });
     setNewKeyModelLimitsEnabled(false);
     setNewKeyModelLimits("");
     setNewKeyIpWhitelist("");
@@ -667,14 +721,7 @@ export function ApiKeysPage() {
       const input: CreateApiKeyInput = {
         name: newKeyName.trim(),
         expires_in_days: newKeyExpires ? parseInt(newKeyExpires) : undefined,
-        sub_account_enabled: newKeySubAccountEnabled,
-        ...(canManageSystem && newKeyDailyLimitUsd.trim()
-          ? ((): { daily_limit_nano_usd: string } => {
-              const nano = usdToNanoString(newKeyDailyLimitUsd);
-              if (nano === null) throw new Error("Daily limit must be a non-negative USD amount");
-              return { daily_limit_nano_usd: nano };
-            })()
-          : {}),
+        ...buildSpendLimitPayload(newKeySpendLimits, false),
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelList,
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
@@ -728,16 +775,7 @@ export function ApiKeysPage() {
     try {
       const input: UpdateApiKeyInput = {
         name: newKeyName.trim() || undefined,
-        sub_account_enabled: newKeySubAccountEnabled,
-        ...(canManageSystem
-          ? ((): { daily_limit_nano_usd: string } => {
-              // The edit form always submits the field: empty clears, value sets.
-              if (!newKeyDailyLimitUsd.trim()) return { daily_limit_nano_usd: "" };
-              const nano = usdToNanoString(newKeyDailyLimitUsd);
-              if (nano === null) throw new Error("Daily limit must be a non-negative USD amount");
-              return { daily_limit_nano_usd: nano };
-            })()
-          : {}),
+        ...buildSpendLimitPayload(newKeySpendLimits, true),
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelList,
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
@@ -823,8 +861,11 @@ export function ApiKeysPage() {
   const openEditDialog = (key: ApiKey) => {
     setEditKey(key);
     setNewKeyName(key.name);
-    setNewKeySubAccountEnabled(key.sub_account_enabled);
-    setNewKeyDailyLimitUsd(nanoToUsdDisplay(key.daily_limit_nano_usd));
+    setNewKeySpendLimits({
+      total: nanoToUsdInput(key.spend_limit_total_nano_usd),
+      hourly: nanoToUsdInput(key.spend_limit_hourly_nano_usd),
+      daily: nanoToUsdInput(key.spend_limit_daily_nano_usd),
+    });
     setNewKeyModelLimitsEnabled(key.model_limits_enabled);
     setNewKeyModelLimits(key.model_limits.join(", "));
     setNewKeyIpWhitelist(key.ip_whitelist.join(", "));
@@ -950,34 +991,11 @@ export function ApiKeysPage() {
                   onChange={setNewKeyChannelBindings}
                   failed={Boolean(channelConflictsError)}
                 />
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="subAccountEnabled"
-                    checked={newKeySubAccountEnabled}
-                    onCheckedChange={setNewKeySubAccountEnabled}
-                  />
-                  <Label htmlFor="subAccountEnabled">{t("apiKeys.subAccountEnabled")}</Label>
-                </div>
-                {canManageSystem && (
-                  <div className="space-y-2">
-                    <Label htmlFor="dailyLimitUsd">{t("apiKeys.dailyLimit")}</Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
-                      <Input
-                        id="dailyLimitUsd"
-                        type="text"
-                        inputMode="decimal"
-                        className="pl-7"
-                        placeholder={t("apiKeys.dailyLimitPlaceholder")}
-                        value={newKeyDailyLimitUsd}
-                        onChange={(event) => setNewKeyDailyLimitUsd(event.target.value)}
-                      />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {t("apiKeys.dailyLimitHint")}
-                    </p>
-                  </div>
-                )}
+                <SpendLimitsSection
+                  idPrefix="create"
+                  value={newKeySpendLimits}
+                  onChange={setNewKeySpendLimits}
+                />
                 <div className="space-y-1">
                   <div className="flex items-center space-x-2">
                     <Switch
@@ -1194,7 +1212,7 @@ export function ApiKeysPage() {
                       {t("apiKeys.keyPrefix")}
                     </VirtualTableHeaderCell>
                     <VirtualTableHeaderCell className="whitespace-nowrap">
-                      {t("apiKeys.balance")}
+                      {t("apiKeys.spendLimits")}
                     </VirtualTableHeaderCell>
                     <VirtualTableHeaderCell className="whitespace-nowrap">
                       {t("apiKeys.restrictions")}
@@ -1258,15 +1276,26 @@ export function ApiKeysPage() {
                       </div>
                     </VirtualTableCell>
                     <VirtualTableCell className="whitespace-nowrap">
-                      {key.daily_limit_nano_usd ? (
-                        <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-xs text-primary" title={t("apiKeys.dailyLimit")}>
-                          {t("apiKeys.dailyLimitBadge", { defaultValue: "DAILY" })} ${nanoToUsdDisplay(key.daily_limit_nano_usd)}
-                        </span>
-                      ) : null}
-                      {key.sub_account_enabled ? (
-                        <span className="font-mono text-sm">${key.sub_account_balance_usd}</span>
+                      {key.spend_limit_total_nano_usd || key.spend_limit_hourly_nano_usd || key.spend_limit_daily_nano_usd ? (
+                        <div className="flex flex-wrap items-center gap-1">
+                          {([
+                            ["ALL", key.spend_limit_total_nano_usd, t("orgLimits.windowTotal")],
+                            ["1H", key.spend_limit_hourly_nano_usd, t("orgLimits.windowHourly")],
+                            ["1D", key.spend_limit_daily_nano_usd, t("orgLimits.windowDaily")],
+                          ] as const).map(([tag, nano, label]) =>
+                            nano ? (
+                              <span
+                                key={tag}
+                                className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-xs text-primary"
+                                title={label}
+                              >
+                                {tag} ${nanoToUsdInput(nano)}
+                              </span>
+                            ) : null,
+                          )}
+                        </div>
                       ) : (
-                        <Badge variant="secondary" className="whitespace-nowrap">{t("apiKeys.inheritsUser")}</Badge>
+                        <span className="text-xs text-muted-foreground">∞</span>
                       )}
                     </VirtualTableCell>
                     <VirtualTableCell className="whitespace-nowrap">
@@ -1373,14 +1402,11 @@ export function ApiKeysPage() {
               onChange={setNewKeyChannelBindings}
               failed={Boolean(channelConflictsError)}
             />
-            <div className="flex items-center space-x-2">
-              <Switch
-                id="editSubAccountEnabled"
-                checked={newKeySubAccountEnabled}
-                onCheckedChange={setNewKeySubAccountEnabled}
-              />
-              <Label htmlFor="editSubAccountEnabled">{t("apiKeys.subAccountEnabled")}</Label>
-            </div>
+            <SpendLimitsSection
+              idPrefix="edit"
+              value={newKeySpendLimits}
+              onChange={setNewKeySpendLimits}
+            />
             <div className="space-y-1">
               <div className="flex items-center space-x-2">
                 <Switch

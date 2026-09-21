@@ -1026,7 +1026,6 @@ mod tests {
             reasoning_envelope_enabled: true,
             request_capture_mode,
             org_key: None,
-            daily_limit_nano_usd: None,
         }
     }
 
