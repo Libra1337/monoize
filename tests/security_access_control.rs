@@ -33,6 +33,9 @@ fn empty_api_key_update(expires_at: Option<&str>) -> UpdateApiKeyInput {
         model_redirects: None,
         reasoning_envelope_enabled: None,
         request_capture_mode: None,
+        spend_limit_daily_nano_usd: None,
+        spend_limit_hourly_nano_usd: None,
+        spend_limit_total_nano_usd: None,
         expires_at: expires_at.map(str::to_string),
     }
 }

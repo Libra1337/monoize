@@ -1,0 +1,25 @@
+---
+title: 影片 API
+description: 透過 /v1/videos 中轉介面生成影片。
+---
+
+`POST /v1/videos` 提交一個影片任務。介面遵循 OpenAI Videos 形態。使用 API key 作為 Bearer 權杖。
+
+```json
+{
+  "model": "sora-2",
+  "prompt": "白鶴掠過冬日晨霧，電影感",
+  "seconds": "8",
+  "size": "1280x720"
+}
+```
+
+回應回傳包含 `id` 與 `status` 的任務物件。
+
+輪詢 `GET /v1/videos/{id}`，直到 `status` 變為 `succeeded` 或 `failed`。任務物件帶 `progress`（0-100）與 `error` 欄位。
+
+執行中的任務可呼叫 `POST /v1/videos/{id}/cancel` 取消。取消與失敗的任務全額退款。
+
+透過 `GET /v1/videos/{id}/content` 取得成片。回應以串流回傳影片位元組。
+
+錯誤格式為 `{"error": {"message", "type": "studio_error", "code"}}`。狀態碼：`model_not_found`、`invalid_params`、`insufficient_balance`、`studio_busy`、`firewall_blocked`。

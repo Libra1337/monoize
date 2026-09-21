@@ -1,0 +1,25 @@
+---
+title: 動画 API
+description: /v1/videos リレー API で動画を生成する。
+---
+
+`POST /v1/videos` は動画ジョブを投入します。OpenAI Videos と同じ形状です。API キーを Bearer トークンとして送ります。
+
+```json
+{
+  "model": "sora-2",
+  "prompt": "冬の霧を舞う鶴、シネマティック",
+  "seconds": "8",
+  "size": "1280x720"
+}
+```
+
+レスポンスは `id` と `status` を持つジョブオブジェクトです。
+
+`status` が `succeeded` または `failed` になるまで `GET /v1/videos/{id}` をポーリングします。ジョブオブジェクトは `progress`（0-100）と `error` を持ちます。
+
+実行中のジョブは `POST /v1/videos/{id}/cancel` でキャンセルできます。キャンセルと失敗のジョブは全額返金されます。
+
+`GET /v1/videos/{id}/content` で完成映像を取得します。レスポンスは動画バイトをストリームします。
+
+エラーは `{"error": {"message", "type": "studio_error", "code"}}` 形式です。コード：`model_not_found`、`invalid_params`、`insufficient_balance`、`studio_busy`、`firewall_blocked`。

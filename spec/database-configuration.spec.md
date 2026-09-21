@@ -240,3 +240,5 @@ DB25. `monoize_providers` MUST persist nullable embedded-Channel columns
 `channel_affinity_enabled_override`, `channel_affinity_idle_ttl_seconds_override`,
 `channel_affinity_failback_mode_override`, and
 `channel_affinity_failback_delay_seconds_override`.
+
+DB26. SQLite connection pragmas and pool shape MUST be env-tunable, parsed per RRB-C1: `MONOIZE_SQLITE_CACHE_KIB` (default 16384, negative `cache_size` pragma in KiB), `MONOIZE_SQLITE_MMAP_BYTES` (default 67108864, `mmap_size` pragma), `MONOIZE_SQLITE_READ_CONNECTIONS` (default 4, read-pool size). The prior hardcoded values were 65536 KiB per connection across 10 read connections plus a 256 MiB mmap window; the defaults change to a co-location profile that bounds the page cache to roughly 80 MiB across the pool while remaining individually overridable.

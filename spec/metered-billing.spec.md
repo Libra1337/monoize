@@ -483,3 +483,11 @@ MB-CONC5. When the request's cost ceiling is unknown, Monoize MUST fall back to 
 MB-CONC6. The reservation store MUST live in memory and MAY be lost on restart. Losing it MUST NOT permit spending, because it only ever makes the preflight stricter.
 
 MB-CONC7. The reservation MUST NOT be exposed as a balance, a ledger entry, or a billing field. It is an admission bound, not money.
+
+## Studio workflow charging
+
+MB-ST1. Studio `image`/`video` steps charge a fixed per-run price: `ceil(base_nano_usd × channel_multiplier)` where `channel_multiplier` is the selected provider's `multiplier` (default 1). The charge posts when the step transitions `pending → running`; terminal `failed`/`canceled` steps refund in full, idempotently per step. Ledger reasons: `studio_image_charge`, `studio_video_charge`, `studio_image_refund`, `studio_video_refund`, with `meta.request_id = "studio_step_<step_id>"`.
+
+MB-ST2. Studio `llm` steps charge by actual token usage from the rate snapshot resolved for `studio_agent_model`: `input_tokens × in_rate + output_tokens × out_rate`, settled on completion, ledger reason `studio_llm_charge`.
+
+MB-ST3. Public API `/v1/videos` jobs bill the key owner's wallet via MB-ST1; key window limits do not apply in this version.

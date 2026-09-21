@@ -865,7 +865,15 @@ impl LibJxlParallelRunner {
     fn new() -> Result<Self, TransformError> {
         // SAFETY: the query has no preconditions and a null memory manager requests the default
         // allocator for the runner.
-        let worker_threads = unsafe { jxl_sys::JxlThreadParallelRunnerDefaultNumWorkerThreads() };
+        // RRB-R1: cap native encoder threads so image work cannot grab every core
+        // on a box shared with other workloads.
+        let capped_threads = std::env::var("MONOIZE_IMAGE_TRANSFORM_JXL_THREADS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(4);
+        let default_workers = unsafe { jxl_sys::JxlThreadParallelRunnerDefaultNumWorkerThreads() };
+        let worker_threads = default_workers.min(capped_threads);
         let handle =
             unsafe { jxl_sys::JxlThreadParallelRunnerCreate(std::ptr::null(), worker_threads) };
         if handle.is_null() {

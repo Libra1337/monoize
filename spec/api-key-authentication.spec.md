@@ -190,3 +190,9 @@ AKL1. If `model_limits_enabled = true` and `model_limits` is non-empty on the au
 AKL2. AKL1 enforcement MUST occur on forwarding endpoints themselves, not only on `/v1/models` listing responses.
 
 AKL3. Requests rejected by AKL1 MUST return HTTP `403` with code `model_not_allowed`.
+
+## 8. Group id cache placement
+
+AKC1. The API key cache entry MUST include the key's accessible group ids, resolved once at cache fill. Request authentication MUST read group ids from the cache entry instead of re-querying group membership per request.
+
+AKC2. Group mutations that change membership or grants MUST invalidate the whole API key cache (generation bump), preserving the existing invalidation hooks; a stale group id set MUST NOT outlive one cache TTL (60 s) plus one generation.

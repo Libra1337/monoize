@@ -1212,6 +1212,7 @@ fn default_extra_whitelist(provider_type: ProviderType) -> &'static [&'static st
         ProviderType::Messages => EXTRA_WHITELIST_ANTHROPIC,
         ProviderType::Gemini => EXTRA_WHITELIST_GEMINI,
         ProviderType::OpenaiImage => EXTRA_WHITELIST_OPENAI_IMAGE,
+        ProviderType::OpenaiVideo | ProviderType::FalVideo => &[],
         ProviderType::Group => &[],
         // Replicate model input schemas are model-specific; whitelist is
         // handled inside the encoder by routing fields into `input`.

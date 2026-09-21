@@ -873,3 +873,15 @@ matches of the active scope and search.
 AU4. The public site header offers a GitHub icon action linking to
 `https://github.com/Ikaleio/monoize` in a new tab, placed before the language toggle;
 the footer repeats the link beside the tagline.
+
+## Studio pages
+
+STU-1. The user sidebar contains `nav.studio` → `/dashboard/studio` (icon `Clapperboard`), placed after the playground entry. The admin sidebar contains `nav.studioAdmin` → `/dashboard/studio-admin` (icon `Clapperboard`). Neither entry appears in the enterprise reduced sidebar set (DL5c).
+
+STU-2. `/dashboard/studio` lists project cards (title, cover placeholder from the first image node, updated time, cumulative cost) with create-from-template and create-blank actions, following the standard PageHeader + PageWrapper + skeleton pattern.
+
+STU-3. `/dashboard/studio/p/:id` is the canvas workbench: a React Flow infinite canvas (muted dot-grid background, minimap, zoom controls) occupying the full content area; a right-side collapsible Sheet with two tabs (Agent conversation, Node inspector); a top toolbar with work-order buttons (generate image / generate video) and stage actions on the selected `script` node. All node cards use the `card` token with status-color borders; no new colors or fonts are introduced.
+
+STU-4. `/dashboard/studio/assets` renders an asset grid (image thumbnails, video posters with play overlay, kind filter, source-project link). `/dashboard/studio-admin` renders template management (table + JSON editor dialog), a runs monitor table, and studio settings form, following the admin page conventions.
+
+STU-5. All studio user-visible strings MUST resolve through `react-i18next` under the `nav.studio`, `nav.studioAdmin`, and `studio.*` namespaces in all four locales.

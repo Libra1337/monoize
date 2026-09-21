@@ -1231,6 +1231,13 @@ pub(super) fn encode_request_for_provider(
         ProviderType::Gemini => urp::encode::gemini::encode_request(req, &model),
         ProviderType::OpenaiImage => urp::encode::openai_image::encode_request(req, &model),
         ProviderType::Replicate => urp::encode::replicate::encode_request(req, &model),
+        ProviderType::OpenaiVideo | ProviderType::FalVideo => {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "provider_type_not_supported",
+                "video channel types support only the studio executor",
+            ));
+        }
         ProviderType::Group => {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -1276,6 +1283,9 @@ pub(super) fn decode_response_from_provider(
         ProviderType::OpenaiImage => urp::decode::openai_image::decode_response(value, model),
         ProviderType::Replicate => urp::decode::replicate::decode_response(value),
         ProviderType::Group => Err("provider_type group is virtual".to_string()),
+        ProviderType::OpenaiVideo | ProviderType::FalVideo => {
+            Err("video channel types support only the studio executor".to_string())
+        }
     }
     .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "invalid_upstream_response", e))?;
     if provider_type == ProviderType::Messages {

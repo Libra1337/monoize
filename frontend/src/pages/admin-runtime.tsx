@@ -29,7 +29,7 @@ function formatBytes(bytes: number): string {
 
 export function AdminRuntimePage() {
   const { t } = useTranslation();
-  const { data, error, isLoading, isValidating, mutate } = useAdminOverview({ refreshInterval: 2000 });
+  const { data, error, isLoading, isValidating, mutate } = useAdminOverview({ refreshInterval: 5000 });
   if (isLoading && !data) return <PageWrapper><CardsPageSkeleton count={4} /></PageWrapper>;
   if (error && !data) {
     return (

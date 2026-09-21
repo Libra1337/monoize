@@ -350,3 +350,5 @@ GR-E4. A Provider, Channel, model mapping, and Provider price inherit the accoun
 GR-E5. Admin Group and Provider list endpoints MUST accept an optional `account_class` filter. When present, every returned row MUST have that class. A response MUST NOT combine both classes when the filter is present.
 
 GR-E6. An account-class mismatch MUST use the same unavailable response as an absent Group. The response MUST NOT reveal a Group from the other account class.
+
+GR-E7. Group eligibility applies unchanged to studio execution surfaces: `/v1/videos` jobs and studio image/video steps select channels only through channels the key's (or dashboard user's) groups permit, per the existing eligibility rules of `monoize-upstream-routing.spec.md`.

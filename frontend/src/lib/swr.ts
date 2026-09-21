@@ -193,7 +193,7 @@ export function useApiKeyAnalytics(
     {
       ...defaultConfig,
       keepPreviousData: true,
-      refreshInterval: 2_000,
+      refreshInterval: 10_000,
       ...config,
     },
   );
@@ -453,7 +453,7 @@ export function useAdminOverview(config?: SWRConfiguration) {
 export function useAdminUsageRanking(range: UsageRankingRange = "today", config?: SWRConfiguration) {
   return useSWR<AdminUsageRanking>(`${SWR_KEYS.ADMIN_USAGE}?range=${range}`, () => api.getAdminUsageRanking(range), {
     ...defaultConfig,
-    refreshInterval: 2000,
+    refreshInterval: 10000,
     ...config,
   });
 }
@@ -497,7 +497,7 @@ export function usePublicUsageRanking(range: UsageRankingRange, config?: SWRConf
   const key = `${SWR_KEYS.PUBLIC_USAGE_RANKING}?range=${range}`;
   return useSWR<PublicUsageRanking>(key, () => api.getPublicUsageRanking(range), {
     ...defaultConfig,
-    refreshInterval: 2000,
+    refreshInterval: 10000,
     keepPreviousData: true,
     ...config,
   });

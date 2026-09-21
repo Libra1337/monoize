@@ -1271,7 +1271,7 @@ pub async fn update_api_key(
         spend_limit_total_nano_usd: updated_key.spend_limit_total_nano_usd.clone(),
         spend_limit_hourly_nano_usd: updated_key.spend_limit_hourly_nano_usd.clone(),
         spend_limit_daily_nano_usd: updated_key.spend_limit_daily_nano_usd.clone(),
-            daily_spent_nano_usd: None,
+        daily_spent_nano_usd: None,
     }))
 }
 

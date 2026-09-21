@@ -297,7 +297,9 @@
     "workspace": "Workspace",
     "modeSwitch": "Switch workspace",
     "orgsAdmin": "Org spaces",
-    "announcements": "Announcements"
+    "announcements": "Announcements",
+    "studio": "Studio",
+    "studioAdmin": "Studio Admin"
   },
   "wallet": {
     "title": "Wallet",
@@ -2728,5 +2730,85 @@
     "rateHint": "1 USD = ¥{{rate}}",
     "rateUnavailable": "Exchange rate unavailable; CNY entry is disabled.",
     "cnyHint": "CNY amounts convert to USD through this rate when you save; stored limits stay in USD."
+  },
+  "studio": {
+    "title": "Creation Studio",
+    "description": "Infinite-canvas agent workbench for image and video creation.",
+    "newProject": "New project",
+    "projectTitle": "Project title",
+    "blankCanvas": "Blank canvas",
+    "empty": "No projects yet. Create one from a template or start blank.",
+    "updatedAt": "Updated {time}",
+    "versionLabel": "Version {version}",
+    "projectMissing": "Project not found.",
+    "node": {
+      "script": "Script",
+      "shot": "Shot",
+      "image": "Image",
+      "video": "Video",
+      "note": "Note",
+      "scriptEmpty": "Empty script — ask the agent to draft one."
+    },
+    "stage": {
+      "idle": "Idle",
+      "drafted": "Drafted",
+      "split": "Split",
+      "synthesized": "Synthesized",
+      "frames": "Frames",
+      "videos": "Videos"
+    },
+    "status": {
+      "idle": "Idle",
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Done",
+      "failed": "Failed"
+    },
+    "workOrder": {
+      "image": "Image",
+      "video": "Video",
+      "imagePrompt": "Image prompt",
+      "videoPrompt": "Video prompt"
+    },
+    "agent": {
+      "hint": "Describe the film you want; the agent drafts, storyboards, and renders.",
+      "placeholder": "Tell the agent what to create…"
+    },
+    "toast": {
+      "queued": "Queued",
+      "agentQueued": "Agent run queued — the canvas will grow as it works.",
+      "runSucceeded": "Run finished",
+      "runFailed": "Run failed"
+    },
+    "assets": {
+      "title": "Assets",
+      "description": "Generated images and videos across projects.",
+      "all": "All",
+      "images": "Images",
+      "videos": "Videos",
+      "empty": "No assets yet."
+    },
+    "admin": {
+      "title": "Studio Admin",
+      "description": "Templates, run monitor, and engine settings.",
+      "runs": "Runs",
+      "templates": "Templates",
+      "settings": "Settings",
+      "runId": "Run",
+      "kind": "Kind",
+      "status": "Status",
+      "createdAt": "Created",
+      "cancel": "Cancel",
+      "templateId": "Template id",
+      "templateName": "Template name",
+      "source": "Source",
+      "enabled": "Enabled",
+      "createTemplate": "Create",
+      "templateCreated": "Template created",
+      "agentModel": "Agent LLM model",
+      "videoUpstream": "Default video upstream (openai_video / fal_video / replicate)",
+      "imageModel": "Default image model",
+      "settingsHint": "Changes save when a field loses focus."
+    }
   }
 }

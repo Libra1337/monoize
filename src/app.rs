@@ -231,6 +231,7 @@ pub struct AppState {
     pub sse_connections: Arc<DashMap<String, Arc<AtomicUsize>>>,
     pub image_transform_cache: Arc<ImageTransformCache>,
     pub request_capture: RequestCaptureStore,
+    pub studio: std::sync::Arc<crate::studio::StudioState>,
     pub trusted_proxies: TrustedProxyConfig,
 }
 
@@ -242,6 +243,7 @@ impl AppState {
         Self {
             node: Arc::new(node),
             store_billing: self.store_billing.with_read_only(is_replica),
+            studio: self.studio,
             metering_token_digest: if is_replica {
                 None
             } else {
@@ -614,35 +616,41 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             // PRP11: replicas never run the active-probe scheduler.
             return;
         };
+        // RTA-PS1/RTA-PS2: tick and candidate caching keep the idle scheduler at
+        // zero queries; candidates refresh on config revision change or a 300 s
+        // TTL floor, and the pricing snapshot builds only once a probe fires.
+        let probe_tick_seconds: u64 = std::env::var("MONOIZE_ACTIVE_PROBE_TICK_SECONDS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(5);
+        let mut cached_revision: Option<u64> = None;
+        let mut cached_providers_at: Option<std::time::Instant> = None;
+        let mut cached_providers = Vec::new();
+        let mut pricing_snapshot: Option<ActiveProbePricingSnapshot> = None;
         'scheduler: loop {
             if probe_shutdown.load(Ordering::Acquire) {
                 break;
             }
-            sleep(std::time::Duration::from_secs(1)).await;
+            sleep(std::time::Duration::from_secs(probe_tick_seconds)).await;
             if probe_shutdown.load(Ordering::Acquire) {
                 break;
             }
             let routing_config_revision = probe_routing_config_revision.load(Ordering::Acquire);
-            let providers = match probe_store.list_active_probe_candidates().await {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
+            let refresh_due = cached_providers_at.is_none_or(|at| at.elapsed().as_secs() >= 300);
+            if cached_revision != Some(routing_config_revision) || refresh_due {
+                match probe_store.list_active_probe_candidates().await {
+                    Ok(v) => {
+                        cached_providers = v;
+                        cached_revision = Some(routing_config_revision);
+                        cached_providers_at = Some(std::time::Instant::now());
+                    }
+                    Err(_) => continue,
+                }
+            }
+            let providers = &cached_providers;
             let now = chrono::Utc::now().timestamp();
             let rt_snap = probe_runtime.read().await.clone();
-            let pricing_snapshot = match build_active_probe_pricing_snapshot(
-                &probe_billing_rate_store,
-                &probe_exchange_rate_service,
-                &providers,
-                &rt_snap,
-            )
-            .await
-            {
-                Ok(snapshot) => snapshot,
-                Err(err) => {
-                    tracing::warn!(error = %err, "active probe pricing snapshot failed");
-                    ActiveProbePricingSnapshot::default()
-                }
-            };
             for provider in providers {
                 if probe_shutdown.load(Ordering::Acquire) {
                     break 'scheduler;
@@ -854,8 +862,29 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                             continue;
                         }
                     }
-                    if ok
-                        && let Err(error) = persist_active_probe_request_log(
+                    if ok {
+                        if pricing_snapshot.is_none() {
+                            pricing_snapshot = Some(
+                                match build_active_probe_pricing_snapshot(
+                                    &probe_billing_rate_store,
+                                    &probe_exchange_rate_service,
+                                    providers,
+                                    &rt_snap,
+                                )
+                                .await
+                                {
+                                    Ok(snapshot) => snapshot,
+                                    Err(err) => {
+                                        tracing::warn!(error = %err, "active probe pricing snapshot failed");
+                                        ActiveProbePricingSnapshot::default()
+                                    }
+                                },
+                            );
+                        }
+                        let pricing_snapshot = pricing_snapshot
+                            .as_ref()
+                            .expect("pricing snapshot initialized before persist");
+                        if let Err(error) = persist_active_probe_request_log(
                             &probe_user_store,
                             &probe_user_id,
                             provider.id.clone(),
@@ -879,15 +908,16 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                             request_log_reservation,
                         )
                         .await
-                    {
-                        tracing::error!(
-                            channel_id = %channel.id,
-                            channel_name = %channel.name,
-                            provider = %provider.name,
-                            probe_model = %model_name,
-                            "active probe request log could not be durably enqueued: {error}"
-                        );
-                        continue;
+                        {
+                            tracing::error!(
+                                channel_id = %channel.id,
+                                channel_name = %channel.name,
+                                provider = %provider.name,
+                                probe_model = %model_name,
+                                "active probe request log could not be durably enqueued: {error}"
+                            );
+                            continue;
+                        }
                     }
                     tracing::debug!(
                         channel_id = %channel.id,
@@ -1095,6 +1125,24 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         );
     }
 
+    let (studio_events, _) = tokio::sync::broadcast::channel(256);
+    let studio_state = std::sync::Arc::new(crate::studio::StudioState {
+        db: db.clone(),
+        user_store: user_store.clone(),
+        monoize_store: monoize_store.clone(),
+        billing_rate_store: billing_rate_store.clone(),
+        settings_store: settings_store.clone(),
+        http_clients: http_clients.clone(),
+        events: studio_events,
+        shutdown: background_shutdown.clone(),
+    });
+    if !is_replica {
+        if let Err(error) = crate::studio::templates::seed_builtin_templates(&studio_state.db).await
+        {
+            tracing::warn!(%error, "failed to seed studio templates");
+        }
+        crate::studio::engine::spawn(studio_state.clone());
+    }
     Ok(AppState {
         runtime: Arc::new(runtime),
         started_at,
@@ -1144,6 +1192,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         image_transform_cache,
         request_capture,
         trusted_proxies,
+        studio: studio_state,
     })
 }
 
@@ -2279,6 +2328,32 @@ fn build_v1_router() -> Router<AppState> {
         )
         .route("/v1/completions", post(crate::handlers::create_completions))
         .route("/completions", post(crate::handlers::create_completions))
+        .route(
+            "/v1/videos",
+            post(crate::studio::handlers::create_video_job),
+        )
+        .route("/videos", post(crate::studio::handlers::create_video_job))
+        .route(
+            "/v1/videos/{id}",
+            get(crate::studio::handlers::get_video_job),
+        )
+        .route("/videos/{id}", get(crate::studio::handlers::get_video_job))
+        .route(
+            "/v1/videos/{id}/cancel",
+            post(crate::studio::handlers::cancel_video_job),
+        )
+        .route(
+            "/videos/{id}/cancel",
+            post(crate::studio::handlers::cancel_video_job),
+        )
+        .route(
+            "/v1/videos/{id}/content",
+            get(crate::studio::handlers::get_video_content),
+        )
+        .route(
+            "/videos/{id}/content",
+            get(crate::studio::handlers::get_video_content),
+        )
         .route("/v1/embeddings", post(crate::handlers::create_embeddings))
         .route("/embeddings", post(crate::handlers::create_embeddings))
         .route("/v1/messages", post(crate::handlers::create_messages))
@@ -2500,6 +2575,83 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
 
 fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
     Router::new()
+        .route(
+            "/dashboard/studio/projects",
+            get(crate::studio::handlers::list_projects)
+                .post(crate::studio::handlers::create_project),
+        )
+        .route(
+            "/dashboard/studio/projects/{id}",
+            get(crate::studio::handlers::get_project)
+                .delete(crate::studio::handlers::delete_project),
+        )
+        .route(
+            "/dashboard/studio/projects/{id}/graph",
+            axum::routing::put(crate::studio::handlers::save_project_graph),
+        )
+        .route(
+            "/dashboard/studio/projects/{id}/agent",
+            post(crate::studio::handlers::submit_agent),
+        )
+        .route(
+            "/dashboard/studio/runs",
+            get(crate::studio::handlers::list_runs),
+        )
+        .route(
+            "/dashboard/studio/runs/{id}",
+            get(crate::studio::handlers::get_run),
+        )
+        .route(
+            "/dashboard/studio/runs/{id}/cancel",
+            post(crate::studio::handlers::cancel_run),
+        )
+        .route(
+            "/dashboard/studio/work-order",
+            post(crate::studio::handlers::submit_work_order),
+        )
+        .route(
+            "/dashboard/studio/assets",
+            get(crate::studio::handlers::list_assets),
+        )
+        .route(
+            "/dashboard/studio/assets/{id}/content",
+            get(crate::studio::handlers::get_asset_content),
+        )
+        .route(
+            "/dashboard/studio/uploads",
+            post(crate::studio::handlers::upload_reference),
+        )
+        .route(
+            "/dashboard/studio/templates",
+            get(crate::studio::handlers::list_templates),
+        )
+        .route(
+            "/dashboard/studio/events",
+            get(crate::studio::handlers::studio_events),
+        )
+        .route(
+            "/dashboard/admin/studio/templates",
+            get(crate::studio::handlers::admin_list_templates)
+                .post(crate::studio::handlers::admin_create_template),
+        )
+        .route(
+            "/dashboard/admin/studio/templates/{id}",
+            axum::routing::put(crate::studio::handlers::admin_update_template)
+                .delete(crate::studio::handlers::admin_delete_template),
+        )
+        .route(
+            "/dashboard/admin/studio/runs",
+            get(crate::studio::handlers::admin_list_runs),
+        )
+        .route(
+            "/dashboard/admin/studio/runs/{id}/cancel",
+            post(crate::studio::handlers::admin_cancel_run),
+        )
+        .route(
+            "/dashboard/admin/studio/settings",
+            get(crate::studio::handlers::admin_get_settings)
+                .put(crate::studio::handlers::admin_update_settings),
+        )
         .route(
             "/public/site",
             get(crate::dashboard_handlers::get_public_site_settings),

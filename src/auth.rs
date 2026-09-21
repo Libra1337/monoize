@@ -70,19 +70,13 @@ impl AuthState {
         if token.starts_with("sk-") && token.len() >= 12 {
             if let Some(store) = user_store {
                 match store.validate_api_key(token).await {
-                    Ok(Some((api_key, user, plan_group_ids))) => {
+                    Ok(Some((api_key, user, plan_group_ids, accessible_groups))) => {
                         // GR-I4: API-key auth always yields a concrete ordered list;
                         // `None` is reserved for internal system traffic.
                         let resolved_groups =
                             resolve_effective_groups(&api_key.group_ids, plan_group_ids.as_deref());
-                        let accessible_groups =
-                            match store.accessible_group_ids(&user.id, user.role).await {
-                                Ok(groups) => groups,
-                                Err(error) => {
-                                    tracing::error!(%error, "failed to resolve Group visibility");
-                                    return None;
-                                }
-                            };
+                        // AKC1: `accessible_groups` arrives from the key cache; group
+                        // mutations invalidate it via the cache generation bump.
                         // AKG5b: an empty restriction result means the key selects
                         // only Groups the owner cannot access. Attaching `[]` here
                         // would make every Provider group-eligible under R-GRP-1a,

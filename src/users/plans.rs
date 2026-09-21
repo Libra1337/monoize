@@ -1352,7 +1352,7 @@ mod tests {
             .await
             .expect("key creates");
 
-        let (api_key, _owner, plan_groups) = store
+        let (api_key, _owner, plan_groups, _accessible) = store
             .validate_api_key(&token)
             .await
             .expect("validates")

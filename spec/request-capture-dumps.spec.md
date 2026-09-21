@@ -194,3 +194,9 @@ RCD-M3. Immediately after a dump file write succeeds (RCD-S11), and only when th
 RCD-M4. Metadata insert failure MUST be logged and MUST NOT delete the dump file and MUST NOT change the HTTP response returned to the downstream client.
 
 RCD-M5. `request_capture_records` rows have no foreign keys. Deleting a user, an API key, or a request-log row MUST NOT delete capture metadata rows; only retention cleanup (RCD-R6) and stale-record cleanup (`request-capture-viewer.spec.md` RCV-A8) delete them.
+
+## 6. Aggregate directory cap
+
+RCD-A1. The dumps directory MUST have an aggregate byte cap selected by `MONOIZE_REQUEST_CAPTURE_MAX_TOTAL_BYTES` (default 1073741824, parsed per RRB-C1).
+
+RCD-A2. When a dump persist would push the directory over the cap, the hourly cleanup task MUST first delete the oldest dump files (and their metadata rows) until the projected total is at or below the cap; if still over, the new dump MUST be dropped (logged, response unaffected).

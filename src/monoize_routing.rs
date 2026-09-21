@@ -66,6 +66,8 @@ pub enum MonoizeProviderType {
     Gemini,
     OpenaiImage,
     Replicate,
+    OpenaiVideo,
+    FalVideo,
 }
 
 impl MonoizeProviderType {
@@ -78,6 +80,8 @@ impl MonoizeProviderType {
             "gemini" => Some(Self::Gemini),
             "openai_image" => Some(Self::OpenaiImage),
             "replicate" => Some(Self::Replicate),
+            "openai_video" => Some(Self::OpenaiVideo),
+            "fal_video" => Some(Self::FalVideo),
             _ => None,
         }
     }
@@ -90,6 +94,8 @@ impl MonoizeProviderType {
             Self::Gemini => "gemini",
             Self::OpenaiImage => "openai_image",
             Self::Replicate => "replicate",
+            Self::OpenaiVideo => "openai_video",
+            Self::FalVideo => "fal_video",
         }
     }
 
@@ -101,6 +107,8 @@ impl MonoizeProviderType {
             Self::Gemini => crate::config::ProviderType::Gemini,
             Self::OpenaiImage => crate::config::ProviderType::OpenaiImage,
             Self::Replicate => crate::config::ProviderType::Replicate,
+            Self::OpenaiVideo => crate::config::ProviderType::OpenaiVideo,
+            Self::FalVideo => crate::config::ProviderType::FalVideo,
         }
     }
 }
@@ -3179,7 +3187,10 @@ async fn read_probe_stream(
                     };
                 }
             }
-            MonoizeProviderType::OpenaiImage | MonoizeProviderType::Replicate => {}
+            MonoizeProviderType::OpenaiImage
+            | MonoizeProviderType::Replicate
+            | MonoizeProviderType::OpenaiVideo
+            | MonoizeProviderType::FalVideo => {}
         }
     }
 
@@ -3335,6 +3346,15 @@ fn build_probe_request(
                 "n": 1,
             });
             (url, body, &[][..], false)
+        }
+        MonoizeProviderType::OpenaiVideo | MonoizeProviderType::FalVideo => {
+            // ST-E4: video channels are never chat-probed; fail like a transport error.
+            (
+                String::new(),
+                serde_json::json!({}),
+                &[("content-type", "application/json")][..],
+                false,
+            )
         }
         MonoizeProviderType::Replicate => {
             // Replicate providers are excluded from active probing; this is a

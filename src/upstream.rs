@@ -170,10 +170,31 @@ pub async fn call_upstream(
 ) -> Result<Value, UpstreamCallError> {
     let resp =
         call_upstream_raw_with_timeout(client, provider, auth_value, path, body, 30_000).await?;
+    read_json_response_capped(resp).await
+}
+
+// RRB-R1: non-stream upstream bodies are read incrementally with a hard byte cap
+// instead of `Response::text()`, so a hostile or broken upstream cannot balloon RAM.
+fn upstream_response_max_bytes() -> usize {
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        std::env::var("MONOIZE_UPSTREAM_RESPONSE_MAX_BYTES")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(67_108_864)
+    })
+}
+
+async fn read_json_response_capped(resp: reqwest::Response) -> Result<Value, UpstreamCallError> {
     let status = resp.status();
-    let text = resp.text().await.map_err(|err| {
-        UpstreamCallError::new(UpstreamErrorKind::Network, Some(status), err.to_string())
-    })?;
+    let bytes =
+        crate::bounded_response::read_response_body_with_limit(resp, upstream_response_max_bytes())
+            .await
+            .map_err(|err| {
+                UpstreamCallError::new(UpstreamErrorKind::Network, Some(status), err.to_string())
+            })?;
+    let text = String::from_utf8_lossy(&bytes);
     let value: Value = serde_json::from_str(&text).map_err(|err| {
         UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), err.to_string())
     })?;
@@ -229,14 +250,7 @@ pub async fn call_upstream_with_timeout_and_headers(
         extra_headers,
     )
     .await?;
-    let status = resp.status();
-    let text = resp.text().await.map_err(|err| {
-        UpstreamCallError::new(UpstreamErrorKind::Network, Some(status), err.to_string())
-    })?;
-    let value: Value = serde_json::from_str(&text).map_err(|err| {
-        UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), err.to_string())
-    })?;
-    Ok(value)
+    read_json_response_capped(resp).await
 }
 
 pub async fn call_upstream_raw_with_timeout(

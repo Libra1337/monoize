@@ -117,3 +117,13 @@ Provider-level and API-key-level transforms apply normally through the URP pipel
 ## 9. Billing
 
 Token-based billing applies if `metrics.input_token_count` and `metrics.output_token_count` are present in the Replicate response. Otherwise, `charge_nano_usd` is `None`.
+
+## 10. Video job surface (studio executor)
+
+Studio video steps (`studio-workflow.spec.md` ST-E2) MAY execute on Replicate channels. This surface is independent of the URP chat codec:
+
+- Submit: `POST /v1/predictions` (or the model-key form of §4) with input `{prompt, image?, video_length?/duration?, aspect_ratio?}`. A 2xx prediction with `id` marks acceptance; failure classification follows OV-3 of `openai-video-upstream.spec.md`.
+- Poll: `GET /v1/predictions/{id}` at the ST-S5 cadence. `status` `starting`/`processing` → running; `succeeded` → extract the first media URL from `output` (string or array, video extensions); `failed`/`canceled` → terminal.
+- Cancel: `POST /v1/predictions/{id}/cancel`, best-effort per ST-S7.
+- Content: streamed from the extracted `replicate.delivery` URL through the gateway proxy (ST-E5); SSRF guards apply; credentials are not sent to delivery hosts.
+- Poll timeout equals the step timeout (ST-S4 video default 1800 s); timeout → step `failed` + refund.

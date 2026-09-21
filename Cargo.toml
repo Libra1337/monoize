@@ -81,5 +81,11 @@ tower = "0.5.2"
 default = ["jpegxl"]
 jpegxl = ["dep:jxl-sys"]
 
+# RRB-R1: smaller binary and better peak performance for release artifacts.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

@@ -106,11 +106,11 @@ export function DashboardPage() {
   const rangeConfig = DASHBOARD_RANGES[range];
   const summary = useDashboardAnalytics(8, 720, "self", {
     keepPreviousData: true,
-    refreshInterval: 2000,
+    refreshInterval: 10000,
   });
   const usage = useDashboardAnalytics(rangeConfig.buckets, rangeConfig.hours, "self", {
     keepPreviousData: true,
-    refreshInterval: 2000,
+    refreshInterval: 10000,
   });
   const usageSelectionLoading = usage.isLoading
     || usage.data?.buckets.length !== rangeConfig.buckets;

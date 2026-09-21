@@ -2401,7 +2401,9 @@ mod tests {
         join_org(
             State(state.clone()),
             member_headers.clone(),
-            Json(super::JoinOrgRequest { token: invite_token }),
+            Json(super::JoinOrgRequest {
+                token: invite_token,
+            }),
         )
         .await
         .expect("member joined");

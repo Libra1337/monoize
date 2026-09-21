@@ -2683,13 +2683,14 @@ impl UserStore {
     pub async fn validate_api_key(
         &self,
         key: &str,
-    ) -> Result<Option<(ApiKey, User, Option<Vec<String>>)>, String> {
+    ) -> Result<Option<(ApiKey, User, Option<Vec<String>>, Vec<String>)>, String> {
         if key.len() < 12 || key.len() > MAX_FORWARDING_API_KEY_BYTES {
             return Ok(None);
         }
 
         loop {
-            if let Some((cached_key, cached_user, cached_plan_groups)) = self.api_key_cache.get(key)
+            if let Some((cached_key, cached_user, cached_plan_groups, cached_accessible_groups)) =
+                self.api_key_cache.get(key)
             {
                 let now = Utc::now();
                 let not_expired = cached_key
@@ -2701,7 +2702,12 @@ impl UserStore {
                     && key == cached_key.key;
                 if is_valid {
                     self.last_used_batcher.record(cached_key.id.clone(), now);
-                    return Ok(Some((cached_key, cached_user, cached_plan_groups)));
+                    return Ok(Some((
+                        cached_key,
+                        cached_user,
+                        cached_plan_groups,
+                        cached_accessible_groups,
+                    )));
                 }
 
                 self.api_key_cache.invalidate(key);
@@ -2732,12 +2738,19 @@ impl UserStore {
                 return Ok(None);
             }
 
+            // AKC1: resolve group visibility once per cache fill instead of per request.
+            let accessible_groups = self
+                .accessible_group_ids(&user.id, user.role)
+                .await
+                .map_err(|error| format!("failed to resolve Group visibility: {error}"))?;
+
             if !self.api_key_cache.insert_if_current(
                 key.to_string(),
                 generation,
                 api_key.clone(),
                 user.clone(),
                 plan_allowed_groups.clone(),
+                accessible_groups.clone(),
             ) {
                 continue;
             }
@@ -2745,7 +2758,12 @@ impl UserStore {
             self.last_used_batcher
                 .record(api_key.id.clone(), Utc::now());
 
-            return Ok(Some((api_key, user, plan_allowed_groups)));
+            return Ok(Some((
+                api_key,
+                user,
+                plan_allowed_groups,
+                accessible_groups,
+            )));
         }
     }
 
@@ -3526,6 +3544,109 @@ impl UserStore {
             .await
     }
 
+    /// MB-ST1: studio per-run charge with a studio ledger reason. Returns
+    /// Err("insufficient_balance") instead of an overflow kind so callers can
+    /// map it to a 4xx without sniffing internal error classes.
+    pub async fn studio_charge_balance(
+        &self,
+        user_id: &str,
+        amount_nano_usd: i128,
+        reason: &str,
+        meta: &Value,
+    ) -> Result<(), String> {
+        if amount_nano_usd <= 0 {
+            return Ok(());
+        }
+        let _write_guard = self.db.write().await;
+        let tx = _write_guard.begin().await.map_err(|e| e.to_string())?;
+        let user = self
+            .lock_user_balance_tx(&tx, user_id)
+            .await
+            .map_err(|e| e.message)?;
+        if user.unlimited {
+            tx.commit().await.map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        let next_balance = user
+            .balance
+            .checked_sub(amount_nano_usd)
+            .ok_or_else(|| "insufficient_balance".to_string())?;
+        let now = Utc::now().to_rfc3339();
+        tx.execute(self.db.stmt(
+            "UPDATE users SET balance_nano_usd = $1, updated_at = $2 WHERE id = $3",
+            vec![
+                next_balance.to_string().into(),
+                now.clone().into(),
+                user_id.into(),
+            ],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+        self.insert_billing_ledger_tx(
+            &tx,
+            user_id,
+            reason,
+            -amount_nano_usd,
+            Some(next_balance),
+            meta,
+            &now,
+        )
+        .await
+        .map_err(|e| e.message)?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        self.balance_cache.invalidate(user_id);
+        Ok(())
+    }
+
+    /// MB-ST3: idempotency is enforced by the caller (one refund per step);
+    /// the ledger row makes every refund auditable.
+    pub async fn studio_refund_balance(
+        &self,
+        user_id: &str,
+        amount_nano_usd: i128,
+        reason: &str,
+        meta: &Value,
+    ) -> Result<(), String> {
+        if amount_nano_usd <= 0 {
+            return Ok(());
+        }
+        let _write_guard = self.db.write().await;
+        let tx = _write_guard.begin().await.map_err(|e| e.to_string())?;
+        let user = self
+            .lock_user_balance_tx(&tx, user_id)
+            .await
+            .map_err(|e| e.message)?;
+        let next_balance = user
+            .balance
+            .checked_add(amount_nano_usd)
+            .ok_or_else(|| "balance addition overflow".to_string())?;
+        let now = Utc::now().to_rfc3339();
+        tx.execute(self.db.stmt(
+            "UPDATE users SET balance_nano_usd = $1, updated_at = $2 WHERE id = $3",
+            vec![
+                next_balance.to_string().into(),
+                now.clone().into(),
+                user_id.into(),
+            ],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+        self.insert_billing_ledger_tx(
+            &tx,
+            user_id,
+            reason,
+            amount_nano_usd,
+            Some(next_balance),
+            meta,
+            &now,
+        )
+        .await
+        .map_err(|e| e.message)?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        self.balance_cache.invalidate(user_id);
+        Ok(())
+    }
+
     async fn charge_user_balance_nano_inner(
         &self,
         user_id: &str,
@@ -4085,7 +4206,7 @@ mod tests {
             .await
             .expect("key creates");
 
-        let (_, cached_user, _) = store
+        let (_, cached_user, _, _) = store
             .validate_api_key(&token)
             .await
             .expect("initial validation succeeds")
@@ -4098,7 +4219,7 @@ mod tests {
             .await
             .expect("last login updates");
         assert!(store.api_key_cache.get(&token).is_none());
-        let (_, refreshed_user, _) = store
+        let (_, refreshed_user, _, _) = store
             .validate_api_key(&token)
             .await
             .expect("refreshed validation succeeds")

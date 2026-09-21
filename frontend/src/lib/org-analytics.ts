@@ -39,6 +39,6 @@ export function useUsageAnalytics(
       orgId
         ? api.getOrgAnalytics(orgId, buckets, rangeHours)
         : api.getDashboardAnalytics(buckets, rangeHours, workspaceScope),
-    { keepPreviousData: true, refreshInterval: 2000, ...config },
+    { keepPreviousData: true, refreshInterval: 10000, ...config },
   );
 }

@@ -1341,6 +1341,8 @@ fn reasoning_envelope_provider_type(provider_type: ProviderType) -> &'static str
         ProviderType::Gemini => "gemini",
         ProviderType::OpenaiImage => "openai_image",
         ProviderType::Replicate => "replicate",
+        ProviderType::OpenaiVideo => "openai_video",
+        ProviderType::FalVideo => "fal_video",
         ProviderType::Group => "group",
     }
 }
@@ -1529,6 +1531,7 @@ pub(crate) fn provider_type_protocol(provider_type: ProviderType) -> Option<urp:
         ProviderType::Gemini => Some(urp::ProviderProtocol::Gemini),
         ProviderType::OpenaiImage => Some(urp::ProviderProtocol::OpenaiImage),
         ProviderType::Replicate => Some(urp::ProviderProtocol::Replicate),
+        ProviderType::OpenaiVideo | ProviderType::FalVideo => None,
         ProviderType::Group => None,
     }
 }
@@ -1565,7 +1568,10 @@ pub(crate) struct StreamRuntimeMetrics {
     visible_output_bytes: u64,
 }
 
-async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::auth::AuthResult> {
+pub(crate) async fn auth_tenant(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> AppResult<crate::auth::AuthResult> {
     let token = if let Some(auth_header) = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())

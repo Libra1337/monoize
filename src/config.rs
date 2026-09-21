@@ -27,6 +27,8 @@ pub enum ProviderType {
     Gemini,
     OpenaiImage,
     Replicate,
+    OpenaiVideo,
+    FalVideo,
     Group,
 }
 

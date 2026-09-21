@@ -1438,6 +1438,8 @@ struct CachedApiKeyEntry {
     api_key: ApiKey,
     user: User,
     plan_group_ids: Option<Vec<String>>,
+    // AKC1: group visibility resolved once at fill; auth no longer re-queries it.
+    accessible_group_ids: Vec<String>,
     cached_at: Instant,
     generation: u64,
 }
@@ -1484,7 +1486,7 @@ impl ApiKeyCache {
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<(ApiKey, User, Option<Vec<String>>)> {
+    pub fn get(&self, key: &str) -> Option<(ApiKey, User, Option<Vec<String>>, Vec<String>)> {
         let entry = self.cache.get(key)?;
         let generation = self.current_generation();
         if entry.generation != generation {
@@ -1509,6 +1511,7 @@ impl ApiKeyCache {
             entry.api_key.clone(),
             entry.user.clone(),
             entry.plan_group_ids.clone(),
+            entry.accessible_group_ids.clone(),
         );
         if self.current_generation() != generation {
             return None;
@@ -1527,6 +1530,7 @@ impl ApiKeyCache {
         api_key: ApiKey,
         user: User,
         plan_group_ids: Option<Vec<String>>,
+        accessible_group_ids: Vec<String>,
     ) -> bool {
         if self.current_generation() != generation {
             return false;
@@ -1556,6 +1560,7 @@ impl ApiKeyCache {
                 api_key,
                 user,
                 plan_group_ids,
+                accessible_group_ids,
                 cached_at: Instant::now(),
                 generation,
             },
@@ -2423,6 +2428,7 @@ mod tests {
             cached_api_key("key-1", "user-1", "token-1"),
             cached_user("user-1"),
             None,
+            Vec::new(),
         ));
         assert!(cache.insert_if_current(
             "token-2".to_string(),
@@ -2430,6 +2436,7 @@ mod tests {
             cached_api_key("key-2", "user-2", "token-2"),
             cached_user("user-2"),
             None,
+            Vec::new(),
         ));
         assert_eq!(cache.len(), 1);
         assert!(cache.get("token-2").is_some());
@@ -2448,6 +2455,7 @@ mod tests {
             cached_api_key("key-1", "user-1", "token-1"),
             cached_user("user-1"),
             None,
+            Vec::new(),
         ));
 
         cache.begin_invalidation();

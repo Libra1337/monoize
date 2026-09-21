@@ -81,7 +81,7 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
   const cacheUsers = useSWR(
     isSuperAdmin ? `/api/dashboard/usage/cache/users?range_hours=${config.hours}` : null,
     () => api.getCacheHitRateUsers(config.hours),
-    { keepPreviousData: true, refreshInterval: 2000 },
+    { keepPreviousData: true, refreshInterval: 10000 },
   );
   // UA-36: the routable catalog is admin-only, so a member sees the models it used.
   // Org space is always member-level: the table lists the models the org actually used.

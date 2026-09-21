@@ -256,8 +256,15 @@ pub(crate) fn ensure_rustls_crypto_provider() -> Result<(), String> {
 
 fn build_client(proxy_url: Option<&str>) -> Result<reqwest::Client, String> {
     ensure_rustls_crypto_provider()?;
+    // RRB-R1: pool shape is env-tunable; defaults bound idle FDs/RAM per host.
+    let pool_idle_secs = positive_env_u64("MONOIZE_HTTP_CLIENT_POOL_IDLE", 90);
+    let pool_max_idle_per_host =
+        positive_env_u64("MONOIZE_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST", 32) as usize;
     let mut builder = reqwest::Client::builder()
         .user_agent("monoize/0.1")
+        .pool_idle_timeout(std::time::Duration::from_secs(pool_idle_secs))
+        .pool_max_idle_per_host(pool_max_idle_per_host)
+        .connect_timeout(std::time::Duration::from_secs(15))
         // PX4: internal callers rely on this builder bypassing environment-inherited proxies;
         // external callers get exactly one explicit proxy from configuration below.
         .no_proxy();
@@ -266,6 +273,14 @@ fn build_client(proxy_url: Option<&str>) -> Result<reqwest::Client, String> {
         builder = builder.proxy(proxy);
     }
     builder.build().map_err(|error| error.to_string())
+}
+
+fn positive_env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
 }
 
 /// Per-process HTTP client registry implementing PX3/PX6/PX7:
@@ -309,6 +324,18 @@ impl HttpClients {
         };
         if let Some(entry) = self.per_proxy.get(proxy_url) {
             return Ok(entry.value().as_ref().clone());
+        }
+        // RRB-R1: the proxy-client cache is bounded; overflow evicts one stale entry.
+        const PER_PROXY_CLIENT_CAP: usize = 64;
+        if self.per_proxy.len() >= PER_PROXY_CLIENT_CAP {
+            if let Some(oldest_key) = self
+                .per_proxy
+                .iter()
+                .next()
+                .map(|entry| entry.key().clone())
+            {
+                self.per_proxy.remove(&oldest_key);
+            }
         }
         let client = build_client(Some(proxy_url))?;
         let client = std::sync::Arc::new(client);

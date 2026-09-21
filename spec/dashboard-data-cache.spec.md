@@ -41,3 +41,9 @@ DC12. Global revalidation MUST target every key currently present in the SWR cac
 DC13. Global cache deletion MUST target every key currently present in the SWR cache and MUST disable revalidation for that operation.
 
 DC14. Every dashboard consumer of one server resource MUST use that resource's exported canonical SWR key and hook. A page MUST NOT create an alias key for `MODEL_METADATA` or another exported resource because mutation invalidation would leave the alias stale.
+
+## 5. Polling cadence
+
+DC15. Dashboard SWR polls whose handler executes a multi-query aggregate over `request_logs` (usage analysis, admin usage ranking, public usage ranking, org analytics, cache hit-rate) MUST use a refresh interval of at least 10000 ms. The status page MAY use 5000 ms. Live request logs remain SSE-driven with the existing 3000 ms disconnect fallback.
+
+DC16. Studio canvas updates MUST arrive through the studio SSE stream (ST-X1); studio pages MUST NOT poll run/step state.

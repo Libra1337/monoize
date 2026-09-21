@@ -26,6 +26,12 @@ pub(crate) async fn stream_upstream_to_urp_events(
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
     match provider_type {
+        // ST-E4: video channel types never enter the chat stream path.
+        ProviderType::OpenaiVideo | ProviderType::FalVideo => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "provider_type_not_supported",
+            "video channel types support only the studio executor",
+        )),
         ProviderType::Responses => {
             openai_responses::stream_responses_to_urp_events(
                 urp,

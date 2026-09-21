@@ -523,3 +523,11 @@ UI-5. Nullable boolean overrides MUST use a three-value selector (inherit / enab
 UI-6. Provider model fetching MUST NOT exist as a provider-level action. Each channel editor MUST expose model fetching using the channel's type, base URL, and API key.
 
 UI-7. A Channel model fetch confirmation MUST add selected models to that Channel `models` object with `redirect = null` and `multiplier = "1"`. It MUST preserve existing entries that remain selected and MUST NOT mutate sibling Channels.
+
+## 8. Active-probe scheduler economy
+
+RTA-PS1. The active-probe scheduler tick interval MUST be `MONOIZE_ACTIVE_PROBE_TICK_SECONDS` (default 5, parsed per RRB-C1).
+
+RTA-PS2. The candidate list the scheduler uses MUST be cached keyed by the routing config revision plus a 300-second TTL floor; within one TTL window an unchanged revision MUST NOT re-query providers or channels. The pricing snapshot MUST be built lazily, only after a tick finds a probe actually due.
+
+RTA-PS3. With no unhealthy channel and an unchanged config revision, a tick MUST issue zero database queries beyond the revision check, and at most one candidate refresh per 300-second window.

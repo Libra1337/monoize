@@ -623,6 +623,15 @@ fn max_sse_connections_per_user() -> usize {
         .unwrap_or(5)
 }
 
+// RRB-R1: process-wide ceiling across every dashboard log-stream subscriber.
+fn max_sse_connections_total() -> usize {
+    std::env::var("MONOIZE_SSE_MAX_CONNECTIONS_TOTAL")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(64)
+}
+
 pub async fn stream_request_logs(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -649,6 +658,23 @@ pub async fn stream_request_logs(
             StatusCode::TOO_MANY_REQUESTS,
             "too_many_sse_connections",
             "Too many concurrent SSE connections",
+        ));
+    }
+    let global_total: usize = state
+        .sse_connections
+        .iter()
+        .map(|entry| entry.value().load(Ordering::Acquire))
+        .sum();
+    if global_total > max_sse_connections_total() {
+        if counter.fetch_sub(1, Ordering::AcqRel) == 1 {
+            state.sse_connections.remove_if(&user_id, |_, current| {
+                Arc::ptr_eq(current, &counter) && current.load(Ordering::Acquire) == 0
+            });
+        }
+        return Err(AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_sse_connections",
+            "Server SSE connection budget exhausted",
         ));
     }
 

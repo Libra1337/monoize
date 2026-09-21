@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "id": "blank-canvas",
+      "name": "Blank canvas",
+      "description": "Empty infinite canvas with a script node.",
+      "graph": {
+        "nodes": [
+          {
+            "id": "script-root",
+            "kind": "script",
+            "position": { "x": 80, "y": 80 },
+            "data": { "text": "", "stage": "idle" }
+          }
+        ],
+        "edges": []
+      },
+      "params": {},
+      "price_nano_usd_map": {}
+    },
+    {
+      "id": "six-shot-promo",
+      "name": "Six-shot promo film",
+      "description": "Agent pipeline: draft a 6-shot promo script, storyboard frames, then per-shot videos.",
+      "graph": {
+        "nodes": [
+          {
+            "id": "script-root",
+            "kind": "script",
+            "position": { "x": 80, "y": 80 },
+            "data": { "text": "", "stage": "idle", "shot_count": 6 }
+          }
+        ],
+        "edges": []
+      },
+      "params": { "shot_count": 6, "duration_sec": 4 },
+      "price_nano_usd_map": {}
+    },
+    {
+      "id": "twelve-shot-short-drama",
+      "name": "Twelve-shot short drama",
+      "description": "Agent pipeline for a 12-shot short drama with dialogue and consistent characters.",
+      "graph": {
+        "nodes": [
+          {
+            "id": "script-root",
+            "kind": "script",
+            "position": { "x": 80, "y": 80 },
+            "data": { "text": "", "stage": "idle", "shot_count": 12 }
+          }
+        ],
+        "edges": []
+      },
+      "params": { "shot_count": 12, "duration_sec": 5 },
+      "price_nano_usd_map": {}
+    }
+  ]
+}

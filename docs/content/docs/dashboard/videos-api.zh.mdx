@@ -1,0 +1,25 @@
+---
+title: 视频 API
+description: 通过 /v1/videos 中转接口生成视频。
+---
+
+`POST /v1/videos` 提交一个视频任务。接口遵循 OpenAI Videos 形态。使用 API key 作为 Bearer 令牌。
+
+```json
+{
+  "model": "sora-2",
+  "prompt": "白鹤掠过冬日晨雾，电影感",
+  "seconds": "8",
+  "size": "1280x720"
+}
+```
+
+响应返回包含 `id` 与 `status` 的任务对象。
+
+轮询 `GET /v1/videos/{id}`，直到 `status` 变为 `succeeded` 或 `failed`。任务对象带 `progress`（0-100）与 `error` 字段。
+
+运行中的任务可调用 `POST /v1/videos/{id}/cancel` 取消。取消与失败的任务全额退款。
+
+通过 `GET /v1/videos/{id}/content` 获取成片。响应以流式返回视频字节。
+
+错误格式为 `{"error": {"message", "type": "studio_error", "code"}}`。状态码：`model_not_found`、`invalid_params`、`insufficient_balance`、`studio_busy`、`firewall_blocked`。

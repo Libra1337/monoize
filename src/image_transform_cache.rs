@@ -487,9 +487,9 @@ where
 }
 
 fn default_cache_root() -> PathBuf {
-    std::env::temp_dir()
-        .join("monoize")
-        .join("image-transform-cache")
+    // RRB-R1: keep the disk-backed cache out of the OS temp dir, which is often
+    // tmpfs (RAM-backed) on small co-located servers.
+    PathBuf::from("data").join("image-transform-cache")
 }
 
 fn validate_cache_key(key: &str) -> Result<(), String> {

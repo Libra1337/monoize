@@ -19,6 +19,11 @@ pub mod monoize_providers;
 pub mod request_logs;
 pub mod sessions;
 pub mod state_records;
+pub mod studio_assets;
+pub mod studio_projects;
+pub mod studio_runs;
+pub mod studio_steps;
+pub mod studio_templates;
 pub mod system_settings;
 pub mod users;
 

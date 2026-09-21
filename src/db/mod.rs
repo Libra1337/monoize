@@ -66,6 +66,18 @@ pub struct DbPool {
     sqlite_filesystem_id: Option<Arc<str>>,
 }
 
+fn positive_env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn positive_env_u32(name: &str, default: u32) -> u32 {
+    positive_env_u64(name, default as u64) as u32
+}
+
 impl DbPool {
     /// Create a new DbPool from a database DSN.
     ///
@@ -111,8 +123,9 @@ impl DbPool {
             format!("{dsn}?mode=rwc")
         };
 
+        let read_connections = positive_env_u32("MONOIZE_SQLITE_READ_CONNECTIONS", 4);
         let write_opts = Self::sqlite_connect_options(&base_dsn, 1);
-        let read_opts = Self::sqlite_connect_options(&base_dsn, 10);
+        let read_opts = Self::sqlite_connect_options(&base_dsn, read_connections);
 
         let write = Database::connect(write_opts).await?;
         let read = Database::connect(read_opts).await?;
@@ -133,13 +146,17 @@ impl DbPool {
             .acquire_timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5))
             .sqlx_logging(false);
-        opts.map_sqlx_sqlite_opts(|opts| {
+        // DB26: per-connection page cache and mmap window are env-tunable so a
+        // co-located deployment can bound the pool's aggregate memory.
+        let cache_kib = positive_env_u64("MONOIZE_SQLITE_CACHE_KIB", 16384);
+        let mmap_bytes = positive_env_u64("MONOIZE_SQLITE_MMAP_BYTES", 67108864);
+        opts.map_sqlx_sqlite_opts(move |opts| {
             opts.journal_mode(SqliteJournalMode::Wal)
                 .synchronous(SqliteSynchronous::Normal)
                 .busy_timeout(Duration::from_secs(15))
                 .foreign_keys(true)
-                .pragma("cache_size", "-65536")
-                .pragma("mmap_size", "268435456")
+                .pragma("cache_size", format!("-{cache_kib}"))
+                .pragma("mmap_size", mmap_bytes.to_string())
         });
         opts
     }
@@ -486,10 +503,28 @@ mod tests {
             .join(format!("pragma-{}.sqlite", uuid::Uuid::new_v4()));
         let dsn = format!("sqlite://{}", db_path.display());
         let db = DbPool::connect(&dsn).await.unwrap();
+        // DB26: the pool shape is env-tuned; force exactly the configured number
+        // of pinned transactions so every pooled connection is observed.
+        let expected_cache_size: i64 = -(std::env::var("MONOIZE_SQLITE_CACHE_KIB")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<i64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(16384));
+        let expected_mmap: i64 = std::env::var("MONOIZE_SQLITE_MMAP_BYTES")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<i64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(67_108_864);
+        let pool_size =
+            std::env::var("MONOIZE_SQLITE_READ_CONNECTIONS")
+                .ok()
+                .and_then(|raw| raw.trim().parse::<i64>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(4);
         let mut transactions = Vec::new();
         let mut observed = Vec::new();
 
-        for _ in 0..10 {
+        for _ in 0..pool_size {
             let txn = db.read().begin().await.unwrap();
             let journal: String = txn
                 .query_one(db.stmt("PRAGMA journal_mode", vec![]))
@@ -549,8 +584,8 @@ mod tests {
             assert_eq!(busy_timeout, 15_000);
             assert_eq!(foreign_keys, 1);
             assert_eq!(synchronous, 1);
-            assert_eq!(cache_size, -65_536);
-            assert_eq!(mmap_size, 268_435_456);
+            assert_eq!(cache_size, expected_cache_size);
+            assert_eq!(mmap_size, expected_mmap);
         }
         for txn in transactions {
             txn.rollback().await.unwrap();

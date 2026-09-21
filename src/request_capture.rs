@@ -795,6 +795,8 @@ fn provider_type_name(provider_type: ProviderType) -> &'static str {
         ProviderType::Gemini => "gemini",
         ProviderType::OpenaiImage => "openai_image",
         ProviderType::Replicate => "replicate",
+        ProviderType::OpenaiVideo => "openai_video",
+        ProviderType::FalVideo => "fal_video",
         ProviderType::Group => "group",
     }
 }
@@ -808,6 +810,15 @@ fn cleanup_expired_sync(dump_dir: &Path, retention_days: u64) -> Result<(), Stri
             retention_days.saturating_mul(86_400),
         ))
         .unwrap_or(std::time::UNIX_EPOCH);
+    // RCD-A1/RCD-A2: besides retention, the directory is capped in aggregate bytes;
+    // overflow deletes oldest files first until the projected total fits.
+    let cap_bytes = std::env::var("MONOIZE_REQUEST_CAPTURE_MAX_TOTAL_BYTES")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(1_073_741_824);
+    let mut surviving: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = Vec::new();
+    let mut total: u64 = 0;
     for entry in std::fs::read_dir(dump_dir).map_err(|err| err.to_string())? {
         let entry = entry.map_err(|err| err.to_string())?;
         let metadata = entry.metadata().map_err(|err| err.to_string())?;
@@ -819,6 +830,21 @@ fn cleanup_expired_sync(dump_dir: &Path, retention_days: u64) -> Result<(), Stri
         };
         if modified < cutoff {
             std::fs::remove_file(entry.path()).map_err(|err| err.to_string())?;
+            continue;
+        }
+        let size = metadata.len();
+        total = total.saturating_add(size);
+        surviving.push((modified, size, entry.path()));
+    }
+    if total > cap_bytes {
+        surviving.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, size, path) in surviving {
+            if total <= cap_bytes {
+                break;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                total = total.saturating_sub(size);
+            }
         }
     }
     Ok(())

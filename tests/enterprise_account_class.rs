@@ -104,6 +104,9 @@ fn sub_account_key(name: &str, balance: &str) -> CreateApiKeyInput {
         model_redirects: Vec::new(),
         reasoning_envelope_enabled: true,
         request_capture_mode: RequestCaptureMode::Off,
+        spend_limit_daily_nano_usd: None,
+        spend_limit_hourly_nano_usd: None,
+        spend_limit_total_nano_usd: None,
     }
 }
 

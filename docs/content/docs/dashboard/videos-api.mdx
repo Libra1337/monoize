@@ -1,0 +1,25 @@
+---
+title: Videos API
+description: Generate videos through the /v1/videos relay API.
+---
+
+`POST /v1/videos` queues a video job. The endpoint follows the OpenAI Videos shape. Send an API key as a bearer token.
+
+```json
+{
+  "model": "sora-2",
+  "prompt": "A crane flies over winter mist, cinematic",
+  "seconds": "8",
+  "size": "1280x720"
+}
+```
+
+The response returns a job object with `id` and `status`.
+
+Poll `GET /v1/videos/{id}` until `status` is `succeeded` or `failed`. The job object carries `progress` (0-100) and `error`.
+
+Cancel a running job with `POST /v1/videos/{id}/cancel`. Canceled and failed jobs refund in full.
+
+Fetch the clip with `GET /v1/videos/{id}/content`. The response streams the video bytes.
+
+Errors use `{"error": {"message", "type": "studio_error", "code"}}`. Codes: `model_not_found`, `invalid_params`, `insufficient_balance`, `studio_busy`, `firewall_blocked`.

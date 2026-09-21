@@ -10,8 +10,17 @@ use sea_orm::{AccessMode, ConnectionTrait, IsolationLevel, TransactionTrait};
 use serde_json::Value;
 use std::collections::HashMap;
 
-const REQUEST_LOG_RETENTION_DAYS: i64 = 365;
+const REQUEST_LOG_RETENTION_DAYS_DEFAULT: i64 = 365;
 pub(super) const REQUEST_LOG_RETENTION_INTERVAL_SECS: u64 = 3600;
+
+// FL58: retention is env-tunable for co-located deployments.
+fn request_log_retention_days() -> i64 {
+    std::env::var("MONOIZE_REQUEST_LOG_RETENTION_DAYS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(REQUEST_LOG_RETENTION_DAYS_DEFAULT)
+}
 const REQUEST_LOG_MODEL_FILTER_DEFAULT_MAX_TERMS: usize = 32;
 const REQUEST_LOG_MODEL_FILTER_HARD_MAX_TERMS: usize = 32;
 const REQUEST_LOG_MODEL_FILTER_MAX_TERMS_ENV: &str = "MONOIZE_REQUEST_LOG_MODEL_FILTER_MAX_TERMS";
@@ -437,10 +446,14 @@ mod tests {
             .expect("db connects");
         {
             let write = db.write().await;
-            crate::migration::Migrator::up(&*write, None).await.expect("migrates");
+            crate::migration::Migrator::up(&*write, None)
+                .await
+                .expect("migrates");
         }
         let (log_tx, _) = tokio::sync::broadcast::channel(1);
-        let store = super::UserStore::new(db, log_tx).await.expect("store creates");
+        let store = super::UserStore::new(db, log_tx)
+            .await
+            .expect("store creates");
         let user = store
             .create_user("spendy", "password123", crate::users::UserRole::User, None)
             .await
@@ -1663,7 +1676,7 @@ impl UserStore {
 
     pub async fn cleanup_expired_request_logs(&self) -> Result<u64, String> {
         let cutoff_unix_ms =
-            (Utc::now() - Duration::days(REQUEST_LOG_RETENTION_DAYS)).timestamp_millis();
+            (Utc::now() - Duration::days(request_log_retention_days())).timestamp_millis();
         let result = self.db.write().await
             .execute(self.db.stmt(
                 "DELETE FROM request_logs WHERE created_at_unix_ms IS NOT NULL AND created_at_unix_ms < $1",
@@ -2600,7 +2613,10 @@ impl UserStore {
         let rows = self
             .db
             .read()
-            .query_all(self.db.stmt(&sql, vec![user_id.into(), day_start_unix_ms.into()]))
+            .query_all(
+                self.db
+                    .stmt(&sql, vec![user_id.into(), day_start_unix_ms.into()]),
+            )
             .await
             .map_err(|e| e.to_string())?;
         rows.into_iter()
@@ -2634,8 +2650,9 @@ impl UserStore {
                 let rpm = row.try_get("", "rpm").map_err(|e| e.to_string())?;
                 let input_tokens: i64 =
                     row.try_get("", "input_tokens").map_err(|e| e.to_string())?;
-                let output_tokens: i64 =
-                    row.try_get("", "output_tokens").map_err(|e| e.to_string())?;
+                let output_tokens: i64 = row
+                    .try_get("", "output_tokens")
+                    .map_err(|e| e.to_string())?;
                 let tpm = input_tokens
                     .checked_add(output_tokens)
                     .ok_or_else(|| "live usage token aggregate overflow".to_string())?;

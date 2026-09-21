@@ -1,0 +1,35 @@
+---
+title: Creation Studio
+description: Create images and videos on an agent-driven infinite canvas.
+---
+
+Open **Studio** at `/dashboard/studio`. The page lists your canvas projects. Select **New project** to start from a blank canvas or a template.
+
+## Canvas
+
+Each project is an infinite canvas. Nodes carry the work:
+
+- **Script**: the screenplay. The agent writes drafts here.
+- **Shot**: one storyboard row with description, camera, and duration.
+- **Image**: a generated first frame.
+- **Video**: a generated clip. Connect an image node to use it as the first frame.
+
+Drag nodes, zoom, and pan freely. The minimap shows the whole canvas.
+
+## Agent
+
+Type a request in the agent bar, then press send. The agent can write the script, split shots, write shot prompts, and start image or video jobs. One sentence is enough for a full short film: ask for the complete pipeline.
+
+Each action becomes a billable step. Failed and canceled steps refund in full.
+
+## Work orders
+
+Use **Image** or **Video** in the toolbar for a single generation without the agent.
+
+## Assets
+
+Open `/dashboard/studio/assets` to browse every generated image and video.
+
+## Administration
+
+Open `/dashboard/studio-admin` to manage templates, monitor runs, and set the agent model and default video upstream. Video channels use the provider types `openai_video`, `fal_video`, or `replicate`. Add them on the Providers page like any other channel.

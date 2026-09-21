@@ -881,9 +881,10 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     // terminal snapshot's output list.
                     if let Node::ToolCall { call_id, .. } = node
                         && node_states.values().any(|state| {
-                            state.tool_call.as_ref().is_some_and(|call| {
-                                call.header_sent && call.call_id == *call_id
-                            })
+                            state
+                                .tool_call
+                                .as_ref()
+                                .is_some_and(|call| call.header_sent && call.call_id == *call_id)
                         })
                     {
                         continue;

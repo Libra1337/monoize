@@ -24,3 +24,31 @@ RRB-UD4. A response whose yielded body length equals the selected limit MUST be 
 RRB-UD5. Discovery code MUST parse JSON or construct error text only from bytes returned by the bounded response reader. Discovery code MUST NOT call `reqwest::Response::json`, `reqwest::Response::text`, or `reqwest::Response::bytes` directly.
 
 RRB-UD6. A body rejected by RRB-UD2 or RRB-UD3 MUST produce an error whose message states the configured byte limit. Dashboard provider-model discovery MUST return HTTP `502` with code `upstream_discovery_response_too_large`. A body transport failure within the limit MUST return the subsystem's existing upstream-fetch error.
+
+## 3. Registered environment limits
+
+RRB-R1. The following process-local limits parse per RRB-C1 with the listed defaults:
+
+| Env | Default | Controls |
+|---|---|---|
+| `MONOIZE_SQLITE_CACHE_KIB` | 16384 | SQLite per-connection page cache (KiB) |
+| `MONOIZE_SQLITE_MMAP_BYTES` | 67108864 | SQLite `mmap_size` |
+| `MONOIZE_SQLITE_READ_CONNECTIONS` | 4 | SQLite read pool size |
+| `MONOIZE_TOKIO_WORKER_THREADS` | 6 | async runtime worker threads |
+| `MONOIZE_TOKIO_MAX_BLOCKING_THREADS` | 64 | async runtime blocking pool bound |
+| `MONOIZE_UPSTREAM_RESPONSE_MAX_BYTES` | 67108864 | bounded read of non-stream upstream response bodies |
+| `MONOIZE_REQUEST_LOG_RETENTION_DAYS` | 365 | request-log retention |
+| `MONOIZE_REQUEST_CAPTURE_MAX_TOTAL_BYTES` | 1073741824 | capture dumps aggregate cap |
+| `MONOIZE_SSE_MAX_CONNECTIONS_TOTAL` | 64 | global dashboard SSE connection cap |
+| `MONOIZE_IMAGE_TRANSFORM_JXL_THREADS` | 4 | libjxl encoder native threads per encode |
+| `MONOIZE_ACTIVE_PROBE_TICK_SECONDS` | 5 | active-probe scheduler tick |
+| `MONOIZE_HTTP_CLIENT_POOL_IDLE` | 90 | reqwest idle-connection timeout (seconds) |
+| `MONOIZE_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST` | 32 | reqwest idle connections per host |
+| `MONOIZE_STUDIO_USER_ACTIVE_RUNS` | 2 | per-user active studio runs |
+| `MONOIZE_STUDIO_GLOBAL_ACTIVE_RUNS` | 16 | process-wide active studio runs |
+| `MONOIZE_STUDIO_LLM_TIMEOUT_MS` | 60000 | studio llm step timeout |
+| `MONOIZE_STUDIO_IMAGE_TIMEOUT_MS` | 300000 | studio image step timeout |
+| `MONOIZE_STUDIO_VIDEO_TIMEOUT_MS` | 1800000 | studio video step timeout |
+| `MONOIZE_STUDIO_UPLOAD_MAX_BYTES` | 20971520 | reference-image upload cap |
+| `MONOIZE_STUDIO_ASSET_MAX_BYTES` | 209715200 | streamed asset cap |
+| `MONOIZE_STUDIO_SSE_MAX_CONNECTIONS_PER_USER` | 5 | studio SSE per-user cap |

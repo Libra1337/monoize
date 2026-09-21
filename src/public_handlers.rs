@@ -1961,9 +1961,9 @@ mod tests {
 #[cfg(test)]
 mod multiplier_tests {
     use super::{HeaderMap, MarketplaceQuery, Query, State, list_marketplace, tests::make_state};
+    use crate::billing_rate_store::UpsertBillingRateInput;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use crate::billing_rate_store::UpsertBillingRateInput;
     use http_body_util::BodyExt;
 
     /// MM-O5: `input_rate_multiplier` is the effective multiplier of the offer

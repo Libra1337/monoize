@@ -13,8 +13,29 @@ use std::time::Duration;
 /// keeps a remaining budget for those steps.
 const HTTP_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // RRB-R1: runtime shape is env-tunable so a co-located deployment can leave
+    // cores for neighbor workloads; reqwest/hyper honor the same pool.
+    let worker_threads = positive_env_usize("MONOIZE_TOKIO_WORKER_THREADS", 6);
+    let max_blocking_threads = positive_env_usize("MONOIZE_TOKIO_MAX_BLOCKING_THREADS", 64);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .max_blocking_threads(max_blocking_threads)
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+    runtime.block_on(run_main());
+}
+
+fn positive_env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+async fn run_main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -103,7 +124,9 @@ async fn run() -> Result<(), AppError> {
 
     // RL1g1: the drain is bounded from the signal, not from process start, so the timer must
     // only begin once the shutdown flag is set. Polling the same flag the signal future sets
-    // keeps this independent of which shutdown source fired.
+    // keeps this independent of which shutdown source fired. The `loop` is select ergonomics:
+    // every arm breaks, it never spins.
+    #[allow(clippy::never_loop)]
     let drained = loop {
         tokio::select! {
             result = &mut serve => break result.map(|()| true),

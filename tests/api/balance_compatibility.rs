@@ -153,7 +153,9 @@ async fn sub_account_key_reports_its_balance_instead_of_unlimited_owner_balance(
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
                 request_capture_mode: monoize::users::RequestCaptureMode::Off,
-                daily_limit_nano_usd: None,
+                spend_limit_daily_nano_usd: None,
+                spend_limit_hourly_nano_usd: None,
+                spend_limit_total_nano_usd: None,
             },
             true,
         )

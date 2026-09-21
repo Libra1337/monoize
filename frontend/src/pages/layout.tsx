@@ -29,6 +29,7 @@ import {
   ShieldAlert,
   TrendingUp,
   Megaphone,
+  Clapperboard,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -155,6 +156,7 @@ function Sidebar({
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
+    { to: "/dashboard/studio", icon: Clapperboard, label: t("nav.studio") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
     { to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") },
@@ -189,6 +191,7 @@ function Sidebar({
     { to: "/dashboard/admin/runtime", icon: HeartPulse, label: t("nav.adminRuntime") },
     { to: "/dashboard/admin/revenue", icon: TrendingUp, label: t("nav.adminRevenue") },
     { to: "/dashboard/announcements-admin", icon: Megaphone, label: t("nav.announcements") },
+    { to: "/dashboard/studio-admin", icon: Clapperboard, label: t("nav.studioAdmin") },
     { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
     { to: "/dashboard/models", icon: Database, label: t("nav.models") },
     { to: "/dashboard/plans", icon: CalendarClock, label: t("nav.billingPlans") },
