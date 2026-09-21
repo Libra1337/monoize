@@ -6,7 +6,8 @@ use uuid::Uuid;
 
 use super::crypto::{EncryptedSecret, PaymentKeyRing};
 use super::money::{
-    Currency, ExchangeRateRational, cny_fen_to_nano_usd, parse_minor, quoted_received_to_nano_usd,
+    Currency, ExchangeRateRational, cny_fen_to_nano_usd, parse_minor, parse_signed_minor,
+    quoted_received_to_nano_usd,
 };
 use super::sales_store::SalesStoreError;
 use crate::db::DbPool;
@@ -1094,7 +1095,9 @@ impl PaymentCallbackStore {
             .await
             .map_err(storage)?
             .ok_or_else(|| CallbackStoreError::Fulfillment("reward user is missing".to_string()))?;
-        let previous = parse_minor(&row_string(&user, "balance_nano_usd")?)
+        // SB-RC-B6/B6a: settlement may leave a negative balance, so the current
+        // balance parses signed; only the credit delta must be nonnegative.
+        let previous = parse_signed_minor(&row_string(&user, "balance_nano_usd")?)
             .map_err(|error| CallbackStoreError::Fulfillment(error.to_string()))?;
         let balance = previous
             .checked_add(delta)

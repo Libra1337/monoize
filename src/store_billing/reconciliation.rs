@@ -220,7 +220,9 @@ impl StoreReconciler {
                                     .await
                                 {
                                     Ok(()) => outcome.fulfilled += 1,
-                                    Err(CallbackStoreError::Fulfillment(_)) => {
+                                    Err(CallbackStoreError::Fulfillment(reason)) => {
+                                        tracing::warn!(order_id = %query.order_id, reason = %reason,
+                                            "payment-query fulfillment failed; retry scheduled");
                                         let retry_now = reconciliation_now(now, started_at)?;
                                         self.schedule_fulfillment_retry(
                                             &query.order_id,
@@ -382,7 +384,9 @@ impl StoreReconciler {
                 .await
             {
                 Ok(()) => outcome.fulfilled += 1,
-                Err(CallbackStoreError::Fulfillment(_)) => {
+                Err(CallbackStoreError::Fulfillment(reason)) => {
+                    tracing::warn!(order_id = %order_id, reason = %reason,
+                        "fulfillment recovery attempt failed; retry scheduled");
                     let retry_now = reconciliation_now(now, started_at)?;
                     self.schedule_fulfillment_retry(&order_id, owner_id, epoch, retry_now)
                         .await?;
