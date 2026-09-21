@@ -1541,7 +1541,11 @@
     "apiTypeOverridesDesc": "特定のモデルパターンを異なる API タイプにルーティングします。ルールは順に評価され、最初にマッチしたものが適用されます。未マッチのモデルは上のデフォルトタイプを使用します。",
     "addOverride": "ルールを追加",
     "accountClass": "カタログ範囲",
-    "accountClassDescription": "1 つのアカウント種別の Group に属する Provider のみを表示します。"
+    "accountClassDescription": "1 つのアカウント種別の Group に属する Provider のみを表示します。",
+    "liveRpm": "RPM",
+    "liveTpm": "TPM",
+    "liveUsageLabel": "{{name}} のライブ使用量",
+    "liveUsageHelp": "リクエストログから集計した直近 1 分間のリクエスト数とトークン数。"
   },
   "transforms": {
     "titleProvider": "上流 Transform",

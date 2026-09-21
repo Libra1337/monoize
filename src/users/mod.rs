@@ -1011,6 +1011,12 @@ pub const LIVE_USAGE_WINDOW_SECONDS: i64 = 60;
 
 /// Rolling 60-second per-user request-log aggregate
 /// (`user-live-usage.spec.md` LU-6).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ProviderLiveUsage {
+    pub rpm: i64,
+    pub tpm: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UserLiveUsage {
     pub rpm: i64,

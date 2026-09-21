@@ -1541,7 +1541,11 @@
     "apiTypeOverridesDesc": "將特定模型模式路由至不同的 API 類型。規則依序比對，首個匹配生效。未匹配的模型使用上方預設類型。",
     "addOverride": "新增規則",
     "accountClass": "目錄範圍",
-    "accountClassDescription": "只顯示屬於目前帳戶類型 Group 的 Provider。"
+    "accountClassDescription": "只顯示屬於目前帳戶類型 Group 的 Provider。",
+    "liveRpm": "RPM",
+    "liveTpm": "TPM",
+    "liveUsageLabel": "{{name}} 的即時用量",
+    "liveUsageHelp": "按請求日誌聚合的最近一個滾動分鐘的請求數與 Token 數。"
   },
   "transforms": {
     "titleProvider": "上游 Transform",

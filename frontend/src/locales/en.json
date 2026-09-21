@@ -1544,7 +1544,11 @@
     "apiTypeOverridesDesc": "Route specific model patterns to different API types. Rules are evaluated in order; first match wins. Unmatched models use the default Type above.",
     "addOverride": "Add Rule",
     "accountClass": "Catalog scope",
-    "accountClassDescription": "Show Providers that belong to Groups in one account class."
+    "accountClassDescription": "Show Providers that belong to Groups in one account class.",
+    "liveRpm": "RPM",
+    "liveTpm": "TPM",
+    "liveUsageLabel": "Live usage of {{name}}",
+    "liveUsageHelp": "Requests and tokens served over the last rolling minute, aggregated from request logs."
   },
   "transforms": {
     "titleProvider": "Upstream Transforms",

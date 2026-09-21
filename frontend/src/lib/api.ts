@@ -667,6 +667,11 @@ export interface Provider {
   created_at: string;
   updated_at: string;
   unpriced_model_count?: number;
+  live_usage?: {
+    window_seconds: 60;
+    rpm: number;
+    tpm: number;
+  };
   unpriced_model_ids?: string[];
   model_runtime_statuses?: ProviderModelRuntimeStatus[];
   pricing_warnings?: ProviderPricingWarning[];
