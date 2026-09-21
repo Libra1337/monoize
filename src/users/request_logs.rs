@@ -398,16 +398,16 @@ fn token_aggregate_columns(is_sqlite: bool) -> &'static str {
         "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
          CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS TEXT) AS cache_read_tokens, \
          CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS TEXT) AS output_tokens, \
-         SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END) AS input_tokens_negative, \
-         SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END) AS cache_read_tokens_negative, \
-         SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END) AS output_tokens_negative"
+         COALESCE(SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END), 0) AS input_tokens_negative, \
+         COALESCE(SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END), 0) AS cache_read_tokens_negative, \
+         COALESCE(SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END), 0) AS output_tokens_negative"
     } else {
         "COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0)::TEXT AS input_tokens, \
          COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0)::TEXT AS cache_read_tokens, \
          COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0)::TEXT AS output_tokens, \
-         SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS input_tokens_negative, \
-         SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS cache_read_tokens_negative, \
-         SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
+         COALESCE(SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS input_tokens_negative, \
+         COALESCE(SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS cache_read_tokens_negative, \
+         COALESCE(SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS output_tokens_negative"
     }
 }
 
@@ -2748,16 +2748,16 @@ impl UserStore {
             "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
              CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS TEXT) AS cache_read_tokens, \
              CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS TEXT) AS output_tokens, \
-             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END) AS input_tokens_negative, \
-             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END) AS cache_read_tokens_negative, \
-             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END) AS output_tokens_negative"
+             COALESCE(SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END), 0) AS input_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END), 0) AS cache_read_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END), 0) AS output_tokens_negative"
         } else {
             "COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0)::TEXT AS input_tokens, \
              COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0)::TEXT AS cache_read_tokens, \
              COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0)::TEXT AS output_tokens, \
-             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS input_tokens_negative, \
-             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS cache_read_tokens_negative, \
-             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
+             COALESCE(SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS input_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS cache_read_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS output_tokens_negative"
         };
         let model_expr =
             "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')";
@@ -2851,16 +2851,16 @@ impl UserStore {
             "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
              CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS TEXT) AS cache_read_tokens, \
              CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS TEXT) AS output_tokens, \
-             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END) AS input_tokens_negative, \
-             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END) AS cache_read_tokens_negative, \
-             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END) AS output_tokens_negative"
+             COALESCE(SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END), 0) AS input_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END), 0) AS cache_read_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END), 0) AS output_tokens_negative"
         } else {
             "COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0)::TEXT AS input_tokens, \
              COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0)::TEXT AS cache_read_tokens, \
              COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0)::TEXT AS output_tokens, \
-             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS input_tokens_negative, \
-             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS cache_read_tokens_negative, \
-             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
+             COALESCE(SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS input_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS cache_read_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS output_tokens_negative"
         };
         let model_expr =
             "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')";
@@ -2933,16 +2933,16 @@ impl UserStore {
             "CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS TEXT) AS input_tokens, \
              CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS TEXT) AS cache_read_tokens, \
              CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS TEXT) AS output_tokens, \
-             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END) AS input_tokens_negative, \
-             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END) AS cache_read_tokens_negative, \
-             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END) AS output_tokens_negative"
+             COALESCE(SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END), 0) AS input_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END), 0) AS cache_read_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END), 0) AS output_tokens_negative"
         } else {
             "COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0)::TEXT AS input_tokens, \
              COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0)::TEXT AS cache_read_tokens, \
              COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0)::TEXT AS output_tokens, \
-             SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS input_tokens_negative, \
-             SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS cache_read_tokens_negative, \
-             SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END)::BIGINT AS output_tokens_negative"
+             COALESCE(SUM(CASE WHEN rl.input_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS input_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.cache_read_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS cache_read_tokens_negative, \
+             COALESCE(SUM(CASE WHEN rl.output_tokens < 0 THEN 1 ELSE 0 END), 0)::BIGINT AS output_tokens_negative"
         };
         let sql = format!(
             "SELECT {}, {token_columns}, COUNT(*) AS call_count \
