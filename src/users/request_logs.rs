@@ -426,6 +426,82 @@ fn decode_token_aggregate(row: &sea_orm::QueryResult, column: &str) -> Result<i1
 
 #[cfg(test)]
 mod tests {
+    /// The daily-spend aggregate must decode through the standard limb
+    /// columns; an outer "AS spent" alias used to rebind the trailing
+    /// out_of_range_count column and fail every /tokens request.
+    #[tokio::test]
+    async fn user_api_key_daily_spend_decodes_without_alias_errors() {
+        use sea_orm_migration::MigratorTrait;
+        let db = crate::db::DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            crate::migration::Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let (log_tx, _) = tokio::sync::broadcast::channel(1);
+        let store = super::UserStore::new(db, log_tx).await.expect("store creates");
+        let user = store
+            .create_user("spendy", "password123", crate::users::UserRole::User, None)
+            .await
+            .expect("user creates");
+        let (key, _) = store
+            .create_api_key_extended(
+                &user.id,
+                crate::users::CreateApiKeyInput {
+                    name: "k".to_string(),
+                    expires_in_days: None,
+                    sub_account_enabled: false,
+                    sub_account_balance_nano_usd: None,
+                    spend_limit_total_nano_usd: None,
+                    spend_limit_hourly_nano_usd: None,
+                    spend_limit_daily_nano_usd: None,
+                    model_limits_enabled: false,
+                    model_limits: Vec::new(),
+                    ip_whitelist: Vec::new(),
+                    group_ids: Vec::new(),
+                    channel_bindings: Vec::new(),
+                    model_bindings: Vec::new(),
+                    max_multiplier: None,
+                    transforms: Vec::new(),
+                    model_redirects: Vec::new(),
+                    reasoning_envelope_enabled: true,
+                    request_capture_mode: crate::users::RequestCaptureMode::Off,
+                },
+                false,
+            )
+            .await
+            .expect("key creates");
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for (suffix, charge) in [("r1", "1000000000"), ("r2", "2500000000")] {
+            let write = store.db.write().await;
+            write
+                .execute(
+                    store.db.stmt(
+                        "INSERT INTO request_logs (id, request_id, created_at, created_at_unix_ms, model, upstream_model,
+                            charge_nano_usd, user_id, api_key_id, input_tokens, cache_read_tokens, output_tokens, status)
+                         VALUES ($1, $2, $7, $3, 'm', '', $4, $5, $6, 1, 0, 1, 'success')",
+                        vec![
+                            format!("log-{suffix}").into(),
+                            suffix.into(),
+                            now_ms.into(),
+                            charge.into(),
+                            user.id.clone().into(),
+                            key.id.clone().into(),
+                            chrono::Utc::now().to_rfc3339().into(),
+                        ],
+                    ),
+                )
+                .await
+                .expect("log row inserts");
+        }
+        let spend = store
+            .get_user_api_keys_daily_spend(&user.id)
+            .await
+            .expect("daily spend decodes");
+        assert_eq!(spend.get(&key.id).map(String::as_str), Some("3500000000"));
+    }
+
     use super::{
         AnalyticsBucketing, analytics_bucket_expr, analytics_model_bucket_sql,
         analytics_month_index, append_request_log_filters, ascii_folded_like_pattern,
@@ -2514,8 +2590,11 @@ impl UserStore {
             .and_time(chrono::NaiveTime::MIN)
             .and_utc()
             .timestamp_millis();
+        // charge_aggregate_columns self-aliases its columns (charge_limb_N /
+        // out_of_range_count on SQLite); appending an outer alias would
+        // rebind the trailing column and break decode_charge_aggregate.
         let sql = format!(
-            "SELECT rl.api_key_id AS key_id, {} AS spent              FROM request_logs rl              WHERE rl.user_id = $1 AND rl.created_at_unix_ms >= $2              GROUP BY rl.api_key_id",
+            "SELECT rl.api_key_id AS key_id, {}              FROM request_logs rl              WHERE rl.user_id = $1 AND rl.created_at_unix_ms >= $2              GROUP BY rl.api_key_id",
             charge_aggregate_columns(is_postgres)
         );
         let rows = self
