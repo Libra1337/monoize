@@ -289,19 +289,22 @@ export function WelcomePage() {
               </Button>
             </div>
           ) : (
-            <motion.div
-              key={featuredOffset}
-              initial={{ opacity: 0.35 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.45 }}
-              className="mt-10 grid border-l border-t md:grid-cols-2 lg:grid-cols-4"
-            >
+            <div className="mt-10 grid border-l border-t md:grid-cols-2 lg:grid-cols-4">
               {visibleFeatured.map((item) => {
                 const output = item.output_rate_range?.unit.toLowerCase() === "token"
                   ? formatUsdPerMillion(item.output_rate_range.min, featuredMarketplace.cnyPerUsd)
                   : "—";
                 return (
-                  <div key={`${item.public_group_name}:${item.model}`} className="group flex min-h-64 flex-col border-b border-r p-6 transition-colors hover:bg-muted/35">
+                  // Keyed by model so the rotation reuses the three unchanged
+                  // cards' DOM and only the entering card fades in — the strip
+                  // never flashes as a whole.
+                  <motion.div
+                    key={`${item.public_group_name}:${item.model}`}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.4 }}
+                    className="group flex min-h-64 flex-col border-b border-r p-6 transition-colors hover:bg-muted/35"
+                  >
                     <div className="flex items-start gap-3">
                       <span className="flex size-10 shrink-0 items-center justify-center rounded-full border bg-background text-primary shadow-sm">
                         <ModelIcon model={item.model} provider={modelProviderHint(item.model)} className="size-6" />
@@ -331,10 +334,10 @@ export function WelcomePage() {
                         {t("publicSite.welcome.viewPrice")}
                       </Link>
                     </div>
-                  </div>
+                  </motion.div>
                 );
               })}
-            </motion.div>
+            </div>
           )}
 
           <p className="mx-auto mt-5 max-w-3xl text-center text-sm leading-6 text-muted-foreground">
