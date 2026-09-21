@@ -1215,6 +1215,11 @@ pub(super) fn encode_request_for_provider(
     if !stateful_same_responses {
         strip_orphaned_tool_calls(req);
     }
+    if attempt.provider_type == ProviderType::Messages {
+        urp::encode::anthropic::prepare_schema_custom_tools(req).map_err(|message| {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+        })?;
+    }
     let model = req.model.clone();
     let value = match attempt.provider_type {
         ProviderType::Responses => urp::encode::openai_responses::encode_request(req, &model),

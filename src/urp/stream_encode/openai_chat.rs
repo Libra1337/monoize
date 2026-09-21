@@ -876,6 +876,18 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     if emitted_node_indices.contains(&(node_index as u32)) {
                         continue;
                     }
+                    // Upstream 2a52d8b0: a tool call that already streamed its
+                    // header and arguments must not be re-emitted from the
+                    // terminal snapshot's output list.
+                    if let Node::ToolCall { call_id, .. } = node
+                        && node_states.values().any(|state| {
+                            state.tool_call.as_ref().is_some_and(|call| {
+                                call.header_sent && call.call_id == *call_id
+                            })
+                        })
+                    {
+                        continue;
+                    }
                     match node {
                         Node::Reasoning {
                             content,

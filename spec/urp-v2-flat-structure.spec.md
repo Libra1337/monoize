@@ -600,3 +600,19 @@ VALID-3. `ToolResult` remains a distinct top-level node variant and MUST NOT be 
 VALID-4. Terminal stream state is authoritative. `ResponseDone.output` is the final flat node sequence.
 
 VALID-5. Decoder complexity is minimized by emitting flat nodes only. Encoder complexity owns all logical envelope reconstruction.
+
+MSG-7a. The request encoder for a Messages upstream MUST convert a custom tool definition that carries `input_schema` into a function definition before applying MSG-7.
+The schema MUST be a JSON object with `type: "object"`; otherwise encoding MUST fail.
+Matching custom calls in the request history MUST contain complete JSON objects and MUST become function calls with unchanged `call_id` and arguments.
+Correlated custom results MUST become function results with unchanged `call_id` and content.
+Invalid arguments MUST fail encoding instead of removing history. Custom tools without `input_schema` retain the existing freeform bridge.
+
+CHAT-4d. In Chat streams, text and summary reasoning-detail deltas with the same non-empty `id` or integer `index` MUST accumulate in one node.
+The detail type and every supplied identity field MUST agree. Distinct identities and entries without stable identity MUST remain separate nodes.
+A terminal snapshot MUST update the matching accumulated node and emit only its unsent text or summary suffix.
+Equal text alone MUST NOT identify a detail.
+
+SEM-3a. A non-stream Responses object with a non-null error and missing or invalid status MUST fail decoding.
+The `object: "response"` discriminator MUST NOT bypass this rule.
+An object without a recognized status MUST contain an output array; otherwise decoding MUST fail.
+Compatible responses with an output array MAY omit status when error is absent or null.

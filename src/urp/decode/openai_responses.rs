@@ -1019,6 +1019,27 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .as_object()
         .ok_or_else(|| "responses response must be object".to_string())?;
 
+    // Upstream 2a52d8b0: a non-null error without a valid response status is
+    // an error surface, not a response; an object with neither a status nor
+    // an output array is rejected instead of decoding as an empty response.
+    let has_valid_status = obj.get("object").and_then(Value::as_str) == Some("response")
+        || matches!(
+            obj.get("status").and_then(Value::as_str),
+            Some("completed" | "incomplete" | "failed" | "cancelled" | "queued" | "in_progress"),
+        );
+    if let Some(error) = obj.get("error").filter(|error| !error.is_null())
+        && !has_valid_status
+    {
+        return Err(error
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| "upstream responses error".to_string()));
+    }
+    if !has_valid_status && !obj.get("output").is_some_and(Value::is_array) {
+        return Err("Responses response requires a valid status or an output array".to_string());
+    }
+
     let output_nodes = decode_response_nodes(obj);
     let has_tool_calls = output_nodes
         .iter()

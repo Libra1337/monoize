@@ -771,6 +771,12 @@ PR3c. When an upstream Responses SSE event has `type = "response.image_generatio
 
 PR3d. Responses SSE event-name resolution MUST use a non-empty `event` field other than `message` when present. Otherwise, the decoder MUST use the JSON payload's non-empty string `type` field. The decoder MUST resolve the name before content validation, lifecycle tracking, output accumulation, error handling, and terminal detection. If neither field supplies a name, the frame MUST retain unknown-event behavior under PR6b. This rule MUST NOT treat EOF or `[DONE]` as a terminal response event under PR6c.
 
+PR3d. Responses SSE event-name resolution MUST use a non-empty `event` field other than `message` when present.
+Otherwise, the decoder MUST use the JSON payload's non-empty string `type` field.
+The decoder MUST resolve the name before content validation, lifecycle tracking, output accumulation, error handling, and terminal detection.
+If neither field supplies a name, the frame MUST retain unknown-event behavior under PR6b.
+This rule MUST NOT treat EOF or `[DONE]` as a terminal response event under PR6c.
+
 PR4. When constructing upstream `POST /v1/responses` requests, Monoize MUST emit `tools[]` in Responses-style function-tool shape even if the downstream request used another tool schema.
 
 PR4a. Responses `phase` mapping:

@@ -75,7 +75,19 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         };
         let done_after_events = parsed.done;
-        for (event_name, data_val) in parsed.events {
+        for (mut event_name, data_val) in parsed.events {
+            // PR3d: some upstreams send Responses SSE frames without an event
+            // field (or with the generic "message"), carrying the real event
+            // name in the payload's `type`. Resolve before any classification.
+            if (event_name.is_empty() || event_name == "message")
+                && let Some(payload_type) = data_val
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty())
+            {
+                event_name.clear();
+                event_name.push_str(payload_type);
+            }
             record_stream_response_service_tier(&runtime_metrics, &data_val).await;
             if let Some(native_response_id) = data_val
                 .get("response")

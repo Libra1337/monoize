@@ -1,3 +1,95 @@
+/// Upstream 2a52d8b0: a custom tool that carries an object `input_schema`
+/// (Responses-style freeform-with-schema) converts to a plain function tool
+/// before encoding for a Messages upstream, together with its history calls
+/// (which must be complete JSON objects), results, and a specific tool
+/// choice. Native text-format custom tools pass through untouched.
+pub(crate) fn prepare_schema_custom_tools(req: &mut UrpRequest) -> Result<(), String> {
+    let mut identities = std::collections::HashSet::new();
+    for tool in req.tools.iter_mut().flatten() {
+        if tool.tool_type != "custom" {
+            continue;
+        }
+        let Some(custom) = &mut tool.custom else {
+            continue;
+        };
+        let Some(schema) = custom
+            .extra_body
+            .remove("input_schema")
+            .or_else(|| tool.extra_body.remove("input_schema"))
+        else {
+            continue;
+        };
+        if !schema.is_object() || schema.get("type").and_then(Value::as_str) != Some("object") {
+            return Err(format!(
+                "Messages custom tool {} requires an object input_schema",
+                custom.name
+            ));
+        }
+        identities.insert(custom.name.clone());
+        let custom = tool.custom.take().unwrap();
+        tool.tool_type = "function".to_string();
+        tool.name = Some(custom.name.clone());
+        tool.function = Some(crate::urp::FunctionDefinition {
+            name: custom.name,
+            description: custom.description,
+            parameters: Some(schema),
+            strict: None,
+            extra_body: custom.extra_body,
+        });
+    }
+    if identities.is_empty() {
+        return Ok(());
+    }
+    let mut call_ids = std::collections::HashSet::new();
+    for node in &mut req.input {
+        if let Node::ToolCall {
+            tool_type,
+            name,
+            call_id,
+            arguments,
+            ..
+        } = node
+            && *tool_type == ToolCallType::Custom
+            && identities.contains(name)
+        {
+            if !serde_json::from_str::<Value>(arguments).is_ok_and(|value| value.is_object()) {
+                return Err(format!(
+                    "Messages custom tool {name} input must be a complete JSON object"
+                ));
+            }
+            *tool_type = ToolCallType::Function;
+            call_ids.insert(call_id.clone());
+        }
+    }
+    for node in &mut req.input {
+        if let Node::ToolResult {
+            tool_type, call_id, ..
+        } = node
+            && *tool_type == ToolCallType::Custom
+            && call_ids.contains(call_id)
+        {
+            *tool_type = ToolCallType::Function;
+        }
+    }
+    if let Some(crate::urp::ToolChoice::Specific(Value::Object(choice))) = &mut req.tool_choice
+        && choice.get("type").and_then(Value::as_str) == Some("custom")
+    {
+        let name = choice
+            .get("name")
+            .or_else(|| choice.get("custom").and_then(|custom| custom.get("name")))
+            .and_then(Value::as_str);
+        if let Some(name) = name
+            && identities.contains(name)
+        {
+            *choice = serde_json::Map::from_iter([
+                ("type".to_string(), json!("function")),
+                ("function".to_string(), json!({"name": name})),
+            ]);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -14,6 +106,145 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn schema_custom_tools_convert_with_history_and_choice() {
+        let mut req = UrpRequest {
+            model: "claude-sonnet".to_string(),
+            input: vec![],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            response_format: None,
+            tool_choice: None,
+            tools: None,
+            parallel_tool_calls: None,
+            stop: None,
+            user: None,
+            verbosity: None,
+            extra_body: HashMap::new(),
+        };
+        let mut custom_extra = HashMap::new();
+        custom_extra.insert(
+            "input_schema".to_string(),
+            json!({ "type": "object", "properties": { "city": { "type": "string" } } }),
+        );
+        req.tools = Some(vec![crate::urp::ToolDefinition {
+            tool_type: "custom".to_string(),
+            name: None,
+            description: None,
+            function: None,
+            custom: Some(crate::urp::CustomToolDefinition {
+                name: "lookup".to_string(),
+                description: Some("look things up".to_string()),
+                format: None,
+                extra_body: custom_extra,
+            }),
+            extra_body: HashMap::new(),
+        }]);
+        req.input = vec![
+            Node::ToolCall {
+                id: None,
+                tool_type: ToolCallType::Custom,
+                call_id: "toolu_1".to_string(),
+                name: "lookup".to_string(),
+                arguments: "{\"city\": \"Paris\"}".to_string(),
+                extra_body: HashMap::new(),
+            },
+            Node::ToolResult {
+                id: None,
+                tool_type: ToolCallType::Custom,
+                call_id: "toolu_1".to_string(),
+                is_error: false,
+                content: vec![],
+                extra_body: HashMap::new(),
+            },
+        ];
+        req.tool_choice = Some(crate::urp::ToolChoice::Specific(
+            json!({ "type": "custom", "name": "lookup" }),
+        ));
+
+        super::prepare_schema_custom_tools(&mut req).expect("converts");
+
+        let tool = &req.tools.as_ref().unwrap()[0];
+        assert_eq!(tool.tool_type, "function");
+        let function = tool.function.as_ref().expect("function definition");
+        assert_eq!(function.name, "lookup");
+        assert_eq!(
+            function.parameters.as_ref().and_then(|p| p.get("type")),
+            Some(&json!("object"))
+        );
+        let Node::ToolCall { tool_type, call_id, arguments, .. } = &req.input[0] else {
+            panic!("history call must stay a tool call");
+        };
+        assert_eq!(*tool_type, ToolCallType::Function);
+        assert_eq!(call_id, "toolu_1");
+        assert!(serde_json::from_str::<Value>(arguments).unwrap().is_object());
+        let Node::ToolResult { tool_type, call_id, .. } = &req.input[1] else {
+            panic!("history result must stay a tool result");
+        };
+        assert_eq!(*tool_type, ToolCallType::Function);
+        match &req.tool_choice {
+            Some(crate::urp::ToolChoice::Specific(choice)) => {
+                assert_eq!(
+                    serde_json::to_value(choice).unwrap(),
+                    json!({ "type": "function", "function": { "name": "lookup" } })
+                );
+            }
+            other => panic!("tool choice must be rewritten to a function choice, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn schema_custom_tools_reject_fragmented_history_arguments() {
+        let mut req = UrpRequest {
+            model: "claude-sonnet".to_string(),
+            input: vec![Node::ToolCall {
+                id: None,
+                tool_type: ToolCallType::Custom,
+                call_id: "toolu_2".to_string(),
+                name: "lookup".to_string(),
+                arguments: "{\"city\":".to_string(),
+                extra_body: HashMap::new(),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            response_format: None,
+            tool_choice: None,
+            tools: None,
+            parallel_tool_calls: None,
+            stop: None,
+            user: None,
+            verbosity: None,
+            extra_body: HashMap::new(),
+        };
+        let mut custom_extra = HashMap::new();
+        custom_extra.insert(
+            "input_schema".to_string(),
+            json!({ "type": "object", "properties": {} }),
+        );
+        req.tools = Some(vec![crate::urp::ToolDefinition {
+            tool_type: "custom".to_string(),
+            name: None,
+            description: None,
+            function: None,
+            custom: Some(crate::urp::CustomToolDefinition {
+                name: "lookup".to_string(),
+                description: None,
+                format: None,
+                extra_body: custom_extra,
+            }),
+            extra_body: HashMap::new(),
+        }]);
+
+        let error = super::prepare_schema_custom_tools(&mut req).expect_err("must reject");
+        assert!(error.contains("complete JSON object"), "{error}");
+    }
+
     fn anthropic_function_tool_preserves_extras_and_strict() {
         let mut function_extra = HashMap::new();
         function_extra.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
