@@ -35,10 +35,9 @@ import { PageWrapper } from "@/components/ui/motion";
 import { ApiKeyAnalyticsDialog } from "@/components/api-key-analytics-dialog";
 import { GroupMultiSelect } from "@/components/groups/GroupPicker";
 import { GroupsBadge } from "@/components/GroupsBadge";
-import type { ApiKey, Group } from "@/lib/api";
+import type { ApiKey } from "@/lib/api";
 import { api, type OrgDetail, type OrgKeyEntry, type OrgShareMode } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
-import { useDashboardGroups } from "@/lib/swr";
 import { cn } from "@/lib/utils";
 
 const MODES = [
@@ -205,11 +204,10 @@ export function OrgKeys() {
   const [editBusy, setEditBusy] = useState(false);
 
   const { user } = useAuth();
-  const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
-  // The org wallet is an enterprise account, so the key may select only public
-  // selectable enterprise groups (the backend applies the same rule).
-  const selectableOrgGroup = (group: Group) =>
-    group.user_selectable && group.account_class === "enterprise";
+  // ORG-14a: the picker is fed from the org wallet's groups, so every member
+  // sees the same options regardless of their own account class.
+  const walletGroups = detail.data?.wallet_groups ?? [];
+  const walletGroupsLoading = detail.isLoading;
   const isOwner = detail.data?.my_role === "owner";
   const defaultMode: OrgShareMode = isOwner ? "public" : "private";
   const modelsList = useMemo(
@@ -274,7 +272,7 @@ export function OrgKeys() {
                         {t("org.modelLimits", { count: key.model_limits?.length ?? 0 })}
                       </Badge>
                     )}
-                    <GroupsBadge groupIds={key.group_ids ?? []} />
+                    <GroupsBadge groupIds={key.group_ids ?? []} groups={walletGroups} />
                   </div>
                   <button
                     type="button"
@@ -374,13 +372,13 @@ export function OrgKeys() {
                   </button>
                 </div>
                 <div className="flex items-center gap-2">
-                  <ShareModeBadge mode={key.share_mode} />
-                  {key.model_limits_enabled && (
-                    <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
-                      {t("org.modelLimits", { count: key.model_limits?.length ?? 0 })}
-                    </Badge>
-                  )}
-                  <GroupsBadge groupIds={key.group_ids ?? []} />
+                    <ShareModeBadge mode={key.share_mode} />
+                    {key.model_limits_enabled && (
+                      <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
+                        {t("org.modelLimits", { count: key.model_limits?.length ?? 0 })}
+                      </Badge>
+                    )}
+                    <GroupsBadge groupIds={key.group_ids ?? []} groups={walletGroups} />
                   {isOwner && (
                     <Button
                       variant="ghost"
@@ -493,9 +491,8 @@ export function OrgKeys() {
                 <Label>{t("apiKeys.groups")}</Label>
                 <GroupMultiSelect
                   value={groupIds}
-                  groups={groups}
-                  loading={groupsLoading}
-                  optionFilter={selectableOrgGroup}
+                  groups={walletGroups}
+                  loading={walletGroupsLoading}
                   onChange={setGroupIds}
                 />
                 <p className="text-sm text-muted-foreground">{t("org.keyGroupsHelp")}</p>
@@ -621,9 +618,8 @@ export function OrgKeys() {
                 <Label>{t("apiKeys.groups")}</Label>
                 <GroupMultiSelect
                   value={editGroupIds}
-                  groups={groups}
-                  loading={groupsLoading}
-                  optionFilter={selectableOrgGroup}
+                  groups={walletGroups}
+                  loading={walletGroupsLoading}
                   onChange={setEditGroupIds}
                 />
                 <p className="text-sm text-muted-foreground">{t("org.keyGroupsHelp")}</p>

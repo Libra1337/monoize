@@ -473,7 +473,7 @@ pub async fn create_org(
         backend,
         "INSERT INTO orgs (id, owner_user_id, display_name, avatar_emoji, avatar_color, avatar_image,
                            invite_token, invite_code, invite_expires_at, invite_created_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $9, $9)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10)",
         [
             org_id.clone().into(),
             user.id.clone().into(),
@@ -653,7 +653,7 @@ pub async fn org_detail(
         ))
         .await
         .map_err(storage)?;
-    let balance = read
+    let wallet = read
         .query_one(Statement::from_sql_and_values(
             backend,
             "SELECT balance_nano_usd FROM users WHERE id = $1",
@@ -661,9 +661,32 @@ pub async fn org_detail(
         ))
         .await
         .map_err(storage)?
-        .ok_or_else(|| storage("org wallet row missing"))?
-        .try_get::<String>("", "balance_nano_usd")
-        .map_err(storage)?;
+        .ok_or_else(|| storage("org wallet row missing"))?;
+    let balance: String = wallet.try_get("", "balance_nano_usd").map_err(storage)?;
+    // ORG-14a: the key picker is fed from the wallet, never the acting member. The
+    // base set mirrors the non-admin accessibility rule (public or granted to the
+    // wallet); the picker convention additionally keeps user_selectable rows and
+    // the wallet's own group.
+    let wallet_groups = read
+        .query_all(Statement::from_sql_and_values(
+            backend,
+            "SELECT g.id, g.name, g.description, g.is_default, g.user_selectable, g.is_public,
+                    g.account_class, g.sort_order, g.created_at, g.updated_at
+             FROM monoize_groups g
+             JOIN users u ON u.id = $1 AND u.account_class = g.account_class
+             WHERE (g.is_public = 1 OR g.id = u.group_id
+                    OR EXISTS (SELECT 1 FROM user_group_grants ug
+                               WHERE ug.user_id = u.id AND ug.group_id = g.id))
+               AND (g.user_selectable = 1 OR g.id = u.group_id)
+             ORDER BY g.sort_order ASC, g.created_at ASC, g.id ASC",
+            [org_id.clone().into()],
+        ))
+        .await
+        .map_err(storage)?
+        .iter()
+        .map(crate::users::row_to_group)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(format!("{error:?}")))?;
 
     let avatar_image: Option<String> = org.try_get("", "avatar_image").map_err(storage)?;
     let is_owner = role == "owner";
@@ -675,6 +698,7 @@ pub async fn org_detail(
         "avatar_image": avatar_image,
         "my_role": role,
         "balance_nano_usd": balance,
+        "wallet_groups": wallet_groups,
         "members": members
             .iter()
             .map(|row| OrgMemberView {
@@ -2212,4 +2236,220 @@ pub async fn org_member_usage(
             .await
             .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     Ok(Json(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CreateOrgKeyRequest, create_org, create_org_key, join_org, org_detail};
+    use crate::app::{AppState, RuntimeConfig, load_state_with_runtime};
+    use crate::users::{AccountClass, CreateGroupInput, UserRole};
+    use axum::Json;
+    use axum::extract::{Path, State};
+    use axum::http::{HeaderMap, HeaderValue, StatusCode};
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt;
+    use serde_json::Value;
+
+    async fn make_state() -> AppState {
+        load_state_with_runtime(RuntimeConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_path: "/metrics".to_string(),
+            database_dsn: "sqlite::memory:".to_string(),
+            request_log_spool_dir: None,
+            node: crate::node_config::NodeSettings::primary_default(),
+        })
+        .await
+        .expect("state loads")
+    }
+
+    async fn session_headers(state: &AppState, username: &str, role: UserRole) -> HeaderMap {
+        let user = state
+            .user_store
+            .create_user(username, "password123", role, None)
+            .await
+            .expect("user created");
+        let session = state
+            .user_store
+            .create_session(&user.id, 7)
+            .await
+            .expect("session created");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {}", session.token)).expect("header value"),
+        );
+        headers
+    }
+
+    async fn session_headers_in_group(
+        state: &AppState,
+        username: &str,
+        group_id: &str,
+    ) -> HeaderMap {
+        let user = state
+            .user_store
+            .create_user(username, "password123", UserRole::User, Some(group_id))
+            .await
+            .expect("user created");
+        let session = state
+            .user_store
+            .create_session(&user.id, 7)
+            .await
+            .expect("session created");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {}", session.token)).expect("header value"),
+        );
+        headers
+    }
+
+    async fn body_json(response: axum::response::Response) -> Value {
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
+        serde_json::from_slice(&bytes).expect("json body")
+    }
+
+    /// ORG-14a: the key picker feeds every member from the wallet's own Groups, so a
+    /// member whose account class differs from the wallet's still sees — and may select —
+    /// the wallet-class Groups; the member's personal Groups never leak into the list.
+    #[tokio::test]
+    async fn org_detail_wallet_groups_serve_every_member_class() {
+        let state = make_state().await;
+        let admin_headers = session_headers(&state, "org_admin", UserRole::Admin).await;
+
+        let (_, Json(enterprise_group)) = crate::dashboard_handlers::create_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Json(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "ent-pick".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 5,
+                account_class: AccountClass::Enterprise,
+            }),
+        )
+        .await
+        .expect("enterprise group created");
+        let (_, Json(private_group)) = crate::dashboard_handlers::create_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Json(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "priv-pick".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 6,
+                account_class: AccountClass::Private,
+            }),
+        )
+        .await
+        .expect("private group created");
+
+        // The wallet lands in the first public enterprise group, so the owner is
+        // created inside enterprise_group to qualify (ORG-5).
+        let owner_headers =
+            session_headers_in_group(&state, "org_owner", &enterprise_group.id).await;
+        let created = body_json(
+            create_org(
+                State(state.clone()),
+                owner_headers.clone(),
+                Json(super::CreateOrgRequest {
+                    display_name: "Wallet Fed".to_string(),
+                    avatar_emoji: None,
+                    avatar_color: None,
+                    avatar_image: None,
+                    invite_expiry: "never".to_string(),
+                }),
+            )
+            .await
+            .expect("org created")
+            .into_response(),
+        )
+        .await;
+        let org_id: String = created["id"].as_str().expect("org id").to_string();
+        let invite_token: String = created["invite_token"]
+            .as_str()
+            .expect("owner receives the invite token")
+            .to_string();
+
+        // A private-class member joins; their own dashboard-group list holds only
+        // private-class Groups, so the pre-ORG-14a picker rendered zero options.
+        let member_headers =
+            session_headers_in_group(&state, "org_member", &private_group.id).await;
+        join_org(
+            State(state.clone()),
+            member_headers.clone(),
+            Json(super::JoinOrgRequest {
+                token: invite_token,
+            }),
+        )
+        .await
+        .expect("member joined");
+
+        for headers in [&owner_headers, &member_headers] {
+            let body = body_json(
+                org_detail(State(state.clone()), headers.clone(), Path(org_id.clone()))
+                    .await
+                    .expect("detail succeeds")
+                    .into_response(),
+            )
+            .await;
+            let wallet_groups = body["wallet_groups"].as_array().expect("wallet_groups");
+            let names: Vec<&str> = wallet_groups
+                .iter()
+                .map(|group| group["name"].as_str().expect("name"))
+                .collect();
+            assert_eq!(names, ["ent-pick"]);
+        }
+
+        // The member can create a key on the wallet-class group: the backend has
+        // always validated against the wallet, and now the picker offers exactly
+        // these ids.
+        let response = create_org_key(
+            State(state.clone()),
+            member_headers.clone(),
+            Path(org_id.clone()),
+            Json(CreateOrgKeyRequest {
+                name: "wallet-fed key".to_string(),
+                share_mode: None,
+                model_limits_enabled: None,
+                model_limits: Vec::new(),
+                group_ids: vec![enterprise_group.id.clone()],
+                expires_in_days: None,
+                ip_whitelist: Vec::new(),
+            }),
+        )
+        .await
+        .expect("member creates an org key on a wallet-class group")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // A member-class group is rejected for the wallet exactly as before. The
+        // map(|_| ()) keeps expect_err usable: the handler's opaque Ok type is not
+        // Debug but () is.
+        let rejected = create_org_key(
+            State(state.clone()),
+            member_headers.clone(),
+            Path(org_id.clone()),
+            Json(CreateOrgKeyRequest {
+                name: "cross-class key".to_string(),
+                share_mode: None,
+                model_limits_enabled: None,
+                model_limits: Vec::new(),
+                group_ids: vec![private_group.id.clone()],
+                expires_in_days: None,
+                ip_whitelist: Vec::new(),
+            }),
+        )
+        .await
+        .map(|_| ())
+        .expect_err("cross-class group must fail validation");
+        assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    }
 }

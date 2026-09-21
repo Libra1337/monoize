@@ -98,7 +98,7 @@ fn parse_time(row: &QueryResult, column: &str) -> Result<DateTime<Utc>, GroupSto
         .map_err(storage)
 }
 
-fn row_to_group(row: &QueryResult) -> Result<Group, GroupStoreError> {
+pub(crate) fn row_to_group(row: &QueryResult) -> Result<Group, GroupStoreError> {
     let account_class_raw: String = row.try_get("", "account_class").map_err(storage)?;
     let account_class = AccountClass::from_str(&account_class_raw).ok_or_else(|| {
         GroupStoreError::Storage(format!(

@@ -57,6 +57,9 @@ export interface OrgDetail {
   avatar_image?: string | null;
   my_role: string;
   balance_nano_usd: string;
+  /** ORG-14a: Groups the org wallet may select for its keys; identical for every
+   * member regardless of the member's own account class. */
+  wallet_groups: Group[];
   max_members: number;
   members: OrgMember[];
   invite: { token: string; code: string; expires_at: string } | null;

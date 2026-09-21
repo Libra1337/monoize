@@ -4,21 +4,29 @@ import { BadgeOverflowList } from '@/components/BadgeOverflowList'
 import { Badge } from '@/components/ui/badge'
 import { useDashboardGroups } from '@/lib/swr'
 import { cn } from '@/lib/utils'
+import type { Group } from '@/lib/api'
 
 interface GroupsBadgeProps {
 	/** Ordered registry ids; unknown ids fall back to a truncated id label. */
 	groupIds: string[]
 	variant?: 'outline' | 'secondary'
 	className?: string
+	/** Resolves ids from a caller-supplied registry (e.g. the org wallet's groups)
+	 * instead of the viewer's own dashboard-group list. */
+	groups?: Group[]
 }
 
 export function GroupsBadge({
 	groupIds,
 	variant = 'outline',
-	className
+	className,
+	groups: groupsProp
 }: GroupsBadgeProps) {
 	const { t } = useTranslation()
-	const { data: groups = [] } = useDashboardGroups(groupIds.length > 0)
+	const { data: fetchedGroups = [] } = useDashboardGroups(
+		groupsProp === undefined && groupIds.length > 0
+	)
+	const groups = groupsProp ?? fetchedGroups
 	const nameById = useMemo(
 		() => new Map(groups.map(group => [group.id, group.name])),
 		[groups]

@@ -11,6 +11,7 @@ pub use announcements::{
     Announcement, AnnouncementListResult, AnnouncementStoreError, CreateAnnouncementInput,
     MarkAnnouncementsReadInput, UpdateAnnouncementInput,
 };
+pub(crate) use groups::row_to_group;
 pub use groups::{CreateGroupInput, Group, GroupStoreError, ReorderGroupsInput, UpdateGroupInput};
 pub use plans::{BillingPlan, BillingPlanInput};
 pub use request_logs::AnalyticsBucketing;

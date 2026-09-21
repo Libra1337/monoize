@@ -98,6 +98,15 @@ selection against its human owner: every id must exist, match the wallet's
 absent or empty `group_ids` means every Group the org wallet can access.
 `api_keys.org_id` equals the org id.
 
+ORG-14a. The org-key Group picker is fed from the org wallet, never from the acting
+member. `GET /api/dashboard/orgs/{org_id}` returns `wallet_groups`: the Group rows
+whose `account_class` equals the wallet's, that are public to the wallet (or granted
+to it), and that are `user_selectable` or equal the wallet's own `group_id`, in
+canonical registry order (GR-D5). Every member receives the same `wallet_groups`
+list regardless of the member's own `account_class`, because an org key
+authenticates as and bills the wallet; the member's personal Group accessibility is
+irrelevant to the picker.
+
 ORG-15. `GET /api/dashboard/orgs/{org_id}/keys` returns (a) the caller's keys in the space
 with their sharing state and FULL key material and (b) keys usable by the caller (mode
 `public`; or `allow` with a share row for the caller; or `deny` without one) including
