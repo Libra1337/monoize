@@ -2717,5 +2717,10 @@
     "range24h": "24h",
     "range7d": "7d",
     "range30d": "30d"
+  },
+  "spendLimitsEditor": {
+    "rateHint": "1 USD = ¥{{rate}}",
+    "rateUnavailable": "Exchange rate unavailable; CNY entry is disabled.",
+    "cnyHint": "CNY amounts convert to USD through this rate when you save; stored limits stay in USD."
   }
 }

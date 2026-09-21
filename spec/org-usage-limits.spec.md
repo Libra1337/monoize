@@ -155,7 +155,20 @@ ORGL-17. Limit queries MUST use the read pool and the existing
 `idx_request_logs_org` (user_id, created_at_unix_ms) / `idx_request_logs_api_key_created` (api_key_id, created_at_unix_ms) indexes; a limit check adds at most three indexed
 aggregations per request and MUST NOT add a write on the request path.
 
-## 6. Personal keys
+## 6. Editor currency
+
+ORGL-20. Every limit editor — the org Limits view (ORGL-14) at the space, member, and
+key levels, and the personal-key create/edit dialog — offers a USD/CNY input toggle.
+Drafts hold display strings in the chosen currency; conversion to the canonical
+nano-USD storage happens once, at save time: a USD amount maps directly, a CNY amount
+divides by the live `cny_per_usd` snapshot (the same exact-decimal contract as the
+wallet CNY top-up) and the editor shows the rate it will use. Stored windows remain
+nano-USD; enforcement (ORGL-5..7, ORGL-19) is unchanged. Switching the toggle
+re-derives the displayed drafts from the stored nano values through the current rate.
+When no rate snapshot is available the CNY option is disabled with an explanatory
+message.
+
+## 7. Personal keys
 
 ORGL-18. A personal key (`org_id IS NULL`) sets its three key-level windows through
 the ordinary Token Management create and update endpoints

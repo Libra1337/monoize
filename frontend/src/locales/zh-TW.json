@@ -2713,5 +2713,10 @@
     "range24h": "24小時",
     "range7d": "7天",
     "range30d": "30天"
+  },
+  "spendLimitsEditor": {
+    "rateHint": "1 USD = ¥{{rate}}",
+    "rateUnavailable": "匯率不可用,暫不能按人民幣輸入。",
+    "cnyHint": "人民幣金額在儲存時按此匯率換算為美元;儲存限額保持美元。"
   }
 }

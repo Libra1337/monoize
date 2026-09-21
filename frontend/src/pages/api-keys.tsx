@@ -56,7 +56,9 @@ import { findFirstInvalidTransformRule } from "@/components/transforms/transform
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { normalizeMultiplier } from "@/lib/exact-decimal";
-import { SPEND_WINDOWS, nanoToUsdInput, usdToNanoLimit } from "@/lib/spend-limits";
+import { nanoToLimitInput, nanoToUsdInput, type SpendLimitDraft } from "@/lib/spend-limits";
+import { SpendLimitsEditor, buildSpendLimitPayloadIn } from "@/components/SpendLimitsEditor";
+import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 
 function parseOptionalMultiplier(value: string): string | undefined {
   if (!value.trim()) return undefined;
@@ -522,76 +524,6 @@ function ModelRedirectsEditor({ value, onChange }: ModelRedirectsEditorProps) {
   );
 }
 
-type SpendLimitDraft = { total: string; hourly: string; daily: string };
-
-/**
- * ORGL-18 payload: on create only non-empty windows are sent (absent =
- * unlimited); on update all three are always submitted so an emptied field
- * clears the stored limit.
- */
-function buildSpendLimitPayload(
-  draft: SpendLimitDraft,
-  alwaysSubmit: boolean,
-): Pick<CreateApiKeyInput, "spend_limit_total_nano_usd" | "spend_limit_hourly_nano_usd" | "spend_limit_daily_nano_usd"> {
-  const payload: Record<string, string> = {};
-  for (const window of ["total", "hourly", "daily"] as const) {
-    const nano = usdToNanoLimit(draft[window]);
-    if (nano === undefined) {
-      throw new Error(tLimitError(window));
-    }
-    if (nano !== null || alwaysSubmit) {
-      payload[`spend_limit_${window}_nano_usd`] = nano ?? "";
-    }
-  }
-  return payload as Pick<
-    CreateApiKeyInput,
-    "spend_limit_total_nano_usd" | "spend_limit_hourly_nano_usd" | "spend_limit_daily_nano_usd"
-  >;
-}
-
-function tLimitError(window: string): string {
-  return `Spend limit (${window}) must be a non-negative USD amount`;
-}
-
-/** Three USD inputs mirroring the org-space Limits control (ORGL-14 design). */
-function SpendLimitsSection({
-  idPrefix,
-  value,
-  onChange,
-}: {
-  idPrefix: string;
-  value: SpendLimitDraft;
-  onChange: (next: SpendLimitDraft) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="space-y-2 rounded-lg border p-3">
-      <Label htmlFor={`${idPrefix}-spend-total`}>{t("apiKeys.spendLimits")}</Label>
-      <div className="flex flex-wrap items-center gap-2">
-        {SPEND_WINDOWS.map(({ key }) => (
-          <label key={key} htmlFor={`${idPrefix}-spend-${key}`} className="flex items-center gap-1 text-xs text-muted-foreground">
-            {t(`orgLimits.window${key === "total_nano_usd" ? "Total" : key === "hourly_nano_usd" ? "Hourly" : "Daily"}`)}
-            <Input
-              id={`${idPrefix}-spend-${key}`}
-              className="h-7 w-24 text-xs"
-              placeholder="∞"
-              inputMode="decimal"
-              value={value[key === "total_nano_usd" ? "total" : key === "hourly_nano_usd" ? "hourly" : "daily"]}
-              onChange={(e) =>
-                onChange({
-                  ...value,
-                  [key === "total_nano_usd" ? "total" : key === "hourly_nano_usd" ? "hourly" : "daily"]: e.target.value,
-                })
-              }
-            />
-          </label>
-        ))}
-      </div>
-      <p className="text-xs text-muted-foreground">{t("apiKeys.spendLimitsHint")}</p>
-    </div>
-  );
-}
-
 export function ApiKeysPage() {
   const { t } = useTranslation();
   const { user: currentUser } = useAuth();
@@ -620,7 +552,9 @@ export function ApiKeysPage() {
   const [newKeyExpires, setNewKeyExpires] = useState("");
   /// ORGL-18: per-key spend limits typed as USD; empty = unlimited. The same
   /// three windows as the org-space Limits view.
-  const [newKeySpendLimits, setNewKeySpendLimits] = useState({ total: "", hourly: "", daily: "" });
+  const [newKeySpendLimits, setNewKeySpendLimits] = useState<SpendLimitDraft>({ total: "", hourly: "", daily: "" });
+  const [newKeyLimitCurrency, setNewKeyLimitCurrency] = useState<"USD" | "CNY">("USD");
+  const { data: exchangeRate } = useStoreExchangeRate();
   const [newKeyModelLimitsEnabled, setNewKeyModelLimitsEnabled] = useState(false);
   const [newKeyModelLimits, setNewKeyModelLimits] = useState("");
   const [newKeyIpWhitelist, setNewKeyIpWhitelist] = useState("");
@@ -721,7 +655,12 @@ export function ApiKeysPage() {
       const input: CreateApiKeyInput = {
         name: newKeyName.trim(),
         expires_in_days: newKeyExpires ? parseInt(newKeyExpires) : undefined,
-        ...buildSpendLimitPayload(newKeySpendLimits, false),
+        ...buildSpendLimitPayloadIn(
+          newKeySpendLimits,
+          newKeyLimitCurrency,
+          exchangeRate?.cny_per_usd,
+          false,
+        ),
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelList,
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
@@ -775,7 +714,12 @@ export function ApiKeysPage() {
     try {
       const input: UpdateApiKeyInput = {
         name: newKeyName.trim() || undefined,
-        ...buildSpendLimitPayload(newKeySpendLimits, true),
+        ...buildSpendLimitPayloadIn(
+          newKeySpendLimits,
+          newKeyLimitCurrency,
+          exchangeRate?.cny_per_usd,
+          true,
+        ),
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelList,
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
@@ -862,10 +806,11 @@ export function ApiKeysPage() {
     setEditKey(key);
     setNewKeyName(key.name);
     setNewKeySpendLimits({
-      total: nanoToUsdInput(key.spend_limit_total_nano_usd),
-      hourly: nanoToUsdInput(key.spend_limit_hourly_nano_usd),
-      daily: nanoToUsdInput(key.spend_limit_daily_nano_usd),
+      total: nanoToLimitInput(key.spend_limit_total_nano_usd, "USD", undefined),
+      hourly: nanoToLimitInput(key.spend_limit_hourly_nano_usd, "USD", undefined),
+      daily: nanoToLimitInput(key.spend_limit_daily_nano_usd, "USD", undefined),
     });
+    setNewKeyLimitCurrency("USD");
     setNewKeyModelLimitsEnabled(key.model_limits_enabled);
     setNewKeyModelLimits(key.model_limits.join(", "));
     setNewKeyIpWhitelist(key.ip_whitelist.join(", "));
@@ -991,10 +936,13 @@ export function ApiKeysPage() {
                   onChange={setNewKeyChannelBindings}
                   failed={Boolean(channelConflictsError)}
                 />
-                <SpendLimitsSection
+                <SpendLimitsEditor
                   idPrefix="create"
-                  value={newKeySpendLimits}
+                  draft={newKeySpendLimits}
+                  currency={newKeyLimitCurrency}
+                  onCurrencyChange={setNewKeyLimitCurrency}
                   onChange={setNewKeySpendLimits}
+                  cnyPerUsd={exchangeRate?.cny_per_usd}
                 />
                 <div className="space-y-1">
                   <div className="flex items-center space-x-2">
@@ -1402,10 +1350,18 @@ export function ApiKeysPage() {
               onChange={setNewKeyChannelBindings}
               failed={Boolean(channelConflictsError)}
             />
-            <SpendLimitsSection
+            <SpendLimitsEditor
               idPrefix="edit"
-              value={newKeySpendLimits}
+              draft={newKeySpendLimits}
+              currency={newKeyLimitCurrency}
+              onCurrencyChange={setNewKeyLimitCurrency}
               onChange={setNewKeySpendLimits}
+              cnyPerUsd={exchangeRate?.cny_per_usd}
+              storedNano={{
+                total: editKey?.spend_limit_total_nano_usd,
+                hourly: editKey?.spend_limit_hourly_nano_usd,
+                daily: editKey?.spend_limit_daily_nano_usd,
+              }}
             />
             <div className="space-y-1">
               <div className="flex items-center space-x-2">

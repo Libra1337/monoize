@@ -6,14 +6,15 @@ import { Gauge } from "lucide-react";
 import { api, type OrgLimitsResponse, type OrgSpendLimitSet } from "@/lib/api";
 import {
   SPEND_WINDOWS,
-  nanoToUsdInput,
-  usdToNanoLimit,
-  type SpendWindowKey,
+  amountToNanoLimit,
+  nanoToLimitInput,
+  type SpendLimitDraft,
 } from "@/lib/spend-limits";
+import { SpendLimitsEditor } from "@/components/SpendLimitsEditor";
+import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { formatCost } from "../request-logs/utils";
 import { useMyOrgs } from "./shared";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -24,35 +25,35 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-type WindowKey = SpendWindowKey;
+type WindowKey = (typeof SPEND_WINDOWS)[number]["key"];
 
 const WINDOWS = SPEND_WINDOWS;
 
-function LimitInputs({
-  limits,
-  labels,
-  onChange,
-}: {
-  limits: OrgSpendLimitSet;
-  labels: (key: WindowKey) => string;
-  onChange: (window: WindowKey, raw: string) => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {WINDOWS.map(({ key }) => (
-        <label key={key} className="flex items-center gap-1 text-xs text-muted-foreground">
-          {labels(key)}
-          <Input
-            className="h-7 w-24 text-xs"
-            placeholder="∞"
-            inputMode="decimal"
-            value={nanoToUsdInput(limits[key])}
-            onChange={(e) => onChange(key, e.target.value)}
-          />
-        </label>
-      ))}
-    </div>
-  );
+/** ORGL-20: drafts hold display strings in the editor's current currency;
+ * conversion to canonical nano-USD happens once, at save time. */
+function draftFromLimits(
+  limits: OrgSpendLimitSet,
+  currency: "USD" | "CNY",
+  cnyPerUsd: string | undefined,
+): SpendLimitDraft {
+  return {
+    total: nanoToLimitInput(limits.total_nano_usd, currency, cnyPerUsd),
+    hourly: nanoToLimitInput(limits.hourly_nano_usd, currency, cnyPerUsd),
+    daily: nanoToLimitInput(limits.daily_nano_usd, currency, cnyPerUsd),
+  };
+}
+
+function limitsFromDraft(
+  draft: SpendLimitDraft,
+  currency: "USD" | "CNY",
+  cnyPerUsd: string | undefined,
+): OrgSpendLimitSet {
+  const convert = (raw: string) => amountToNanoLimit(raw, currency, cnyPerUsd) ?? null;
+  return {
+    total_nano_usd: convert(draft.total),
+    hourly_nano_usd: convert(draft.hourly),
+    daily_nano_usd: convert(draft.daily),
+  };
 }
 
 export function OrgLimitsPage() {
@@ -63,9 +64,13 @@ export function OrgLimitsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [spaceDraft, setSpaceDraft] = useState<OrgSpendLimitSet>({});
-  const [memberDrafts, setMemberDrafts] = useState<Record<string, OrgSpendLimitSet>>({});
-  const [keyDrafts, setKeyDrafts] = useState<Record<string, OrgSpendLimitSet>>({});
+  const [limitCurrency, setLimitCurrency] = useState<"USD" | "CNY">("USD");
+  const { data: exchangeRate } = useStoreExchangeRate();
+  const cnyPerUsd = exchangeRate?.cny_per_usd;
+  const rate = cnyPerUsd;
+  const [spaceDraft, setSpaceDraft] = useState<SpendLimitDraft>({ total: "", hourly: "", daily: "" });
+  const [memberDrafts, setMemberDrafts] = useState<Record<string, SpendLimitDraft>>({});
+  const [keyDrafts, setKeyDrafts] = useState<Record<string, SpendLimitDraft>>({});
 
   const role = overview?.orgs?.find((o) => o.id === orgId)?.role;
   const isOwner = role === "owner";
@@ -78,12 +83,12 @@ export function OrgLimitsPage() {
       .then((res) => {
         if (cancelled) return;
         setData(res);
-        setSpaceDraft(res.space.limits);
-        const md: Record<string, OrgSpendLimitSet> = {};
-        for (const m of res.members) md[m.user_id] = m.limits;
+        setSpaceDraft(draftFromLimits(res.space.limits, limitCurrency, rate));
+        const md: Record<string, SpendLimitDraft> = {};
+        for (const m of res.members) md[m.user_id] = draftFromLimits(m.limits, limitCurrency, rate);
         setMemberDrafts(md);
-        const kd: Record<string, OrgSpendLimitSet> = {};
-        for (const k of res.keys) kd[k.key_id] = k.limits;
+        const kd: Record<string, SpendLimitDraft> = {};
+        for (const k of res.keys) kd[k.key_id] = draftFromLimits(k.limits, limitCurrency, rate);
         setKeyDrafts(kd);
         setError(null);
       })
@@ -92,16 +97,18 @@ export function OrgLimitsPage() {
     return () => {
       cancelled = true;
     };
+    // Re-seed only on org change; currency switches re-derive through the editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId]);
 
   if (!isOwner) {
     return (
-      <div className="p-6 text-sm text-muted-foreground">{t("orgLimits.ownerOnly")}</div>
+      <div className="p-4 text-sm text-muted-foreground sm:p-6">{t("orgLimits.ownerOnly")}</div>
     );
   }
   if (loading) {
     return (
-      <div className="space-y-3 p-6">
+      <div className="space-y-3 p-4 sm:p-6">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-40 w-full" />
         <Skeleton className="h-40 w-full" />
@@ -109,17 +116,37 @@ export function OrgLimitsPage() {
     );
   }
   if (error || !data) {
-    return <div className="p-6 text-sm text-destructive">{error ?? t("orgLimits.loadFailed")}</div>;
+    return <div className="p-4 text-sm text-destructive sm:p-6">{error ?? t("orgLimits.loadFailed")}</div>;
   }
 
   const windowLabel = (key: WindowKey) =>
     t(WINDOWS.find((w) => w.key === key)?.labelKey ?? "");
 
+  const rederiveAll = (nextCurrency: "USD" | "CNY") => {
+    setLimitCurrency(nextCurrency);
+    setSpaceDraft(draftFromLimits(data.space.limits, nextCurrency, rate));
+    const md: Record<string, SpendLimitDraft> = {};
+    for (const m of data.members) md[m.user_id] = draftFromLimits(m.limits, nextCurrency, rate);
+    setMemberDrafts(md);
+    const kd: Record<string, SpendLimitDraft> = {};
+    for (const k of data.keys) kd[k.key_id] = draftFromLimits(k.limits, nextCurrency, rate);
+    setKeyDrafts(kd);
+  };
+
   const save = async () => {
     setSaving(true);
     setError(null);
     try {
-      await api.updateOrgLimits(orgId ?? "", spaceDraft, memberDrafts);
+      await api.updateOrgLimits(
+        orgId ?? "",
+        limitsFromDraft(spaceDraft, limitCurrency, rate),
+        Object.fromEntries(
+          Object.entries(memberDrafts).map(([id, draft]) => [
+            id,
+            limitsFromDraft(draft, limitCurrency, rate),
+          ]),
+        ),
+      );
       const refreshed = await api.getOrgLimits(orgId ?? "");
       setData(refreshed);
       await mutate(`/api/dashboard/orgs/${orgId}/limits`);
@@ -133,7 +160,11 @@ export function OrgLimitsPage() {
   const saveKeyLimits = async (keyId: string) => {
     setSaving(true);
     try {
-      await api.updateOrgKeyLimits(orgId ?? "", keyId, keyDrafts[keyId] ?? {});
+      await api.updateOrgKeyLimits(
+        orgId ?? "",
+        keyId,
+        limitsFromDraft(keyDrafts[keyId] ?? {}, limitCurrency, rate),
+      );
       const refreshed = await api.getOrgLimits(orgId ?? "");
       setData(refreshed);
     } catch (e) {
@@ -148,7 +179,7 @@ export function OrgLimitsPage() {
   );
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-4 sm:p-6">
       <div className="flex items-center gap-2">
         <Gauge className="h-5 w-5 text-muted-foreground" />
         <h1 className="text-lg font-semibold tracking-tight">{t("orgLimits.title")}</h1>
@@ -167,14 +198,14 @@ export function OrgLimitsPage() {
             ))}
           </div>
         </div>
-        <LimitInputs
-          limits={spaceDraft}
-          labels={windowLabel}
-          onChange={(w, raw) => {
-            const nano = usdToNanoLimit(raw);
-            if (nano === undefined) return;
-            setSpaceDraft((prev) => ({ ...prev, [w]: nano }));
-          }}
+        <SpendLimitsEditor
+          compact
+          idPrefix="space"
+          draft={spaceDraft}
+          currency={limitCurrency}
+          onCurrencyChange={rederiveAll}
+          onChange={setSpaceDraft}
+          cnyPerUsd={cnyPerUsd}
         />
       </section>
 
@@ -184,39 +215,36 @@ export function OrgLimitsPage() {
           <h2 className="text-sm font-semibold">{t("orgLimits.membersTitle")}</h2>
         </div>
         <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t("orgLimits.member")}</TableHead>
-              <TableHead>{t("orgLimits.spentTotal")}</TableHead>
-              <TableHead>{t("orgLimits.limits")}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data.members
-              .filter((m) => m.role !== "owner")
-              .map((m) => (
-                <TableRow key={m.user_id}>
-                  <TableCell className="font-medium">{m.username ?? m.user_id}</TableCell>
-                  <TableCell>{spentCell(m.spent.total_nano_usd)}</TableCell>
-                  <TableCell>
-                    <LimitInputs
-                      limits={memberDrafts[m.user_id] ?? {}}
-                      labels={windowLabel}
-                      onChange={(w, raw) => {
-                        const nano = usdToNanoLimit(raw);
-                        if (nano === undefined) return;
-                        setMemberDrafts((prev) => ({
-                          ...prev,
-                          [m.user_id]: { ...prev[m.user_id], [w]: nano },
-                        }));
-                      }}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
-          </TableBody>
-        </Table>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("orgLimits.member")}</TableHead>
+                <TableHead>{t("orgLimits.spentTotal")}</TableHead>
+                <TableHead>{t("orgLimits.limits")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.members
+                .filter((m) => m.role !== "owner")
+                .map((m) => (
+                  <TableRow key={m.user_id}>
+                    <TableCell className="font-medium">{m.username ?? m.user_id}</TableCell>
+                    <TableCell>{spentCell(m.spent.total_nano_usd)}</TableCell>
+                    <TableCell>
+                      <SpendLimitsEditor
+                        compact
+                        idPrefix={`member-${m.user_id}`}
+                        draft={memberDrafts[m.user_id] ?? { total: "", hourly: "", daily: "" }}
+                        currency={limitCurrency}
+                        onCurrencyChange={rederiveAll}
+                        onChange={(next) => setMemberDrafts((prev) => ({ ...prev, [m.user_id]: next }))}
+                        cnyPerUsd={cnyPerUsd}
+                      />
+                    </TableCell>
+                  </TableRow>
+                ))}
+            </TableBody>
+          </Table>
         </div>
       </section>
 
@@ -226,52 +254,49 @@ export function OrgLimitsPage() {
           <h2 className="text-sm font-semibold">{t("orgLimits.keysTitle")}</h2>
         </div>
         <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t("orgLimits.keyName")}</TableHead>
-              <TableHead>{t("orgLimits.creator")}</TableHead>
-              <TableHead>{t("orgLimits.spentTotal")}</TableHead>
-              <TableHead>{t("orgLimits.limits")}</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data.keys.map((k) => (
-              <TableRow key={k.key_id}>
-                <TableCell className="font-medium">{k.name}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {k.creator_username ?? k.created_by ?? "-"}
-                </TableCell>
-                <TableCell>{spentCell(k.spent.total_nano_usd)}</TableCell>
-                <TableCell>
-                  <LimitInputs
-                    limits={keyDrafts[k.key_id] ?? {}}
-                    labels={windowLabel}
-                    onChange={(w, raw) => {
-                      const nano = usdToNanoLimit(raw);
-                      if (nano === undefined) return;
-                      setKeyDrafts((prev) => ({
-                        ...prev,
-                        [k.key_id]: { ...prev[k.key_id], [w]: nano },
-                      }));
-                    }}
-                  />
-                </TableCell>
-                <TableCell>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={saving}
-                    onClick={() => saveKeyLimits(k.key_id)}
-                  >
-                    {t("orgLimits.save")}
-                  </Button>
-                </TableCell>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("orgLimits.keyName")}</TableHead>
+                <TableHead>{t("orgLimits.creator")}</TableHead>
+                <TableHead>{t("orgLimits.spentTotal")}</TableHead>
+                <TableHead>{t("orgLimits.limits")}</TableHead>
+                <TableHead />
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {data.keys.map((k) => (
+                <TableRow key={k.key_id}>
+                  <TableCell className="font-medium">{k.name}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {k.creator_username ?? k.created_by ?? "-"}
+                  </TableCell>
+                  <TableCell>{spentCell(k.spent.total_nano_usd)}</TableCell>
+                  <TableCell>
+                    <SpendLimitsEditor
+                      compact
+                      idPrefix={`key-${k.key_id}`}
+                      draft={keyDrafts[k.key_id] ?? { total: "", hourly: "", daily: "" }}
+                      currency={limitCurrency}
+                      onCurrencyChange={rederiveAll}
+                      onChange={(next) => setKeyDrafts((prev) => ({ ...prev, [k.key_id]: next }))}
+                      cnyPerUsd={cnyPerUsd}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={saving}
+                      onClick={() => saveKeyLimits(k.key_id)}
+                    >
+                      {t("orgLimits.save")}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       </section>
 

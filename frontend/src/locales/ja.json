@@ -2712,5 +2712,10 @@
     "range24h": "24時間",
     "range7d": "7日",
     "range30d": "30日"
+  },
+  "spendLimitsEditor": {
+    "rateHint": "1 USD = ¥{{rate}}",
+    "rateUnavailable": "為替レートを取得できないため、CNY 入力は利用できません。",
+    "cnyHint": "CNY 金額は保存時にこのレートで USD に換算されます。保存された上限は USD のままです。"
   }
 }

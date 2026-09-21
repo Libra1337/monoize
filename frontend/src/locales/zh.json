@@ -2716,5 +2716,10 @@
     "range24h": "24小时",
     "range7d": "7天",
     "range30d": "30天"
+  },
+  "spendLimitsEditor": {
+    "rateHint": "1 USD = ¥{{rate}}",
+    "rateUnavailable": "汇率不可用,暂不能按人民币输入。",
+    "cnyHint": "人民币金额在保存时按此汇率换算为美元;存储限额保持美元。"
   }
 }
