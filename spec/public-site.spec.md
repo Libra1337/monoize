@@ -161,10 +161,13 @@ request pages of 50 items and follow cursors until the snapshot ends. It MUST st
 the failure fallback if more than 19 Marketplace requests would be required.
 
 PS-W7. The section MUST consider only items whose input rate exists and uses the `token`
-unit. It MUST select exactly one lowest-input-price item for each model family in this
-order: Claude, GPT, DeepSeek, and GLM. A family with no priced item MUST render an explicit
-unavailable cell. Each available item MUST show model, Group, minimum input price, minimum
-output price when its unit is `token`, and offer count.
+unit. It MUST keep the cheapest input-price item per model name and sort the result by
+input price ascending (ties broken by Group name, then model name, both by UTF-8 byte
+order). The section MUST display exactly four cells at a time and advance the window by
+one model every 5 seconds, wrapping to the start; a catalog shorter than four renders
+every model with no rotation. Each available item MUST show model, Group, minimum input
+price, minimum output price when its unit is `token`, and offer count. The section MUST
+NOT pin fixed vendors or model families.
 
 PS-W8. The section MUST state that prices update in real time and that discounts vary with
 upstream costs. It MUST state that each request is settled using the real-time discount at

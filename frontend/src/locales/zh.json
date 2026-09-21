@@ -54,10 +54,9 @@
       "tasksTitle": "开发、协作、充值和查账，都在一套控制台里。",
       "tasksDescription": "个人开发者可以快速接入模型。团队可以共用余额和密钥，并分别查看成员用量与控制预算。",
       "lowPriceTitle": "实时价格 · 当前低价模型",
-      "lowPriceDescription": "分别展示 Claude、GPT、DeepSeek 和 GLM 当前最低输入价的可用模型。价格单位：USD / 1M Tokens。",
+      "lowPriceDescription": "分别展示可用模型的当前价格。价格单位：USD / 1M Tokens。",
       "lowPriceNote": "价格实时更新，折扣随上游成本波动；每次调用按请求时的实时折扣结算。USD 价格按同一价格快照和汇率快照精确换算。",
       "lowPriceUnavailable": "暂时无法读取当前模型价格。请进入模型广场查看完整目录。",
-      "familyUnavailable": "当前公开模型广场没有该系列的可用报价。",
       "viewPrice": "查看报价",
       "pricingTitle": "先看模型和价格，再决定把流量发到哪里。",
       "pricingDescription": "模型广场按 Group 展示可用模型、Provider 报价与输入输出价格区间。价格信息公开展示，发送请求前即可比较。",
@@ -97,12 +96,6 @@
       "creditsDescription": "在控制台查看余额商品和套餐，选择当前可用的支付方式下单，并跟踪订单处理状态。",
       "inspectTitle": "每次调用都能查清楚",
       "inspectDescription": "逐条查看成功或失败、首字节时间、总耗时、Token 和费用。用量分析帮助找到主要消耗。"
-    },
-    "featuredFamilies": {
-      "claude": "Claude",
-      "gpt": "GPT",
-      "deepseek": "DeepSeek",
-      "glm": "GLM"
     },
     "operations": {
       "statusTitle": "公开 Provider 状态",

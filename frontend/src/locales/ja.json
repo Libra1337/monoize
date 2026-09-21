@@ -54,10 +54,9 @@
       "tasksTitle": "開発、共同作業、入金、確認を 1 つのコンソールで行います。",
       "tasksDescription": "開発者はモデルへすぐ接続できます。チームは残高とキーを共有し、メンバー使用量と予算を個別に管理できます。",
       "lowPriceTitle": "リアルタイム価格 · 現在の低価格モデル",
-      "lowPriceDescription": "Claude、GPT、DeepSeek、GLM の各ファミリーで、現在の入力価格が最も低い利用可能モデルを表示します。単位：USD / 1M Tokens。",
+      "lowPriceDescription": "利用可能なモデルの現在の価格を表示します。単位：USD / 1M Tokens。",
       "lowPriceNote": "価格はリアルタイムで更新され、割引は上流コストに応じて変動します。各リクエストは送信時のリアルタイム割引で精算します。USD 価格は同じ価格スナップショットと為替スナップショットから正確に換算します。",
       "lowPriceUnavailable": "現在のモデル価格を取得できません。モデルマーケットで全カタログを確認してください。",
-      "familyUnavailable": "このモデルファミリーの公開オファーは現在ありません。",
       "viewPrice": "オファーを見る",
       "pricingTitle": "トラフィックを送る前にモデルと価格を確認します。",
       "pricingDescription": "モデルマーケットは Group ごとに利用可能なモデル、Provider オファー、入力と出力の価格範囲を表示します。リクエスト前に比較できます。",
@@ -97,12 +96,6 @@
       "creditsDescription": "コンソールで残高商品とプランを確認し、現在利用可能な決済方法で注文して処理状態を追跡します。",
       "inspectTitle": "すべての呼び出しを確認",
       "inspectDescription": "成功・失敗、最初のバイトまでの時間、総時間、Token、料金を確認します。使用量分析で主な消費を特定します。"
-    },
-    "featuredFamilies": {
-      "claude": "Claude",
-      "gpt": "GPT",
-      "deepseek": "DeepSeek",
-      "glm": "GLM"
     },
     "operations": {
       "statusTitle": "公開 Provider 状態",

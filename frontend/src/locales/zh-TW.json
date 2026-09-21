@@ -54,10 +54,9 @@
       "tasksTitle": "開發、協作、儲值和查帳，都在一套控制台裡。",
       "tasksDescription": "個人開發者可以快速接入模型。團隊可以共用餘額和金鑰，並分別查看成員用量與控制預算。",
       "lowPriceTitle": "即時價格 · 目前低價模型",
-      "lowPriceDescription": "分別顯示 Claude、GPT、DeepSeek 和 GLM 目前最低輸入價的可用模型。價格單位：USD / 1M Tokens。",
+      "lowPriceDescription": "分別顯示可用模型的目前價格。價格單位：USD / 1M Tokens。",
       "lowPriceNote": "價格即時更新，折扣隨上游成本波動；每次呼叫按請求時的即時折扣結算。USD 價格按同一價格快照和匯率快照精確換算。",
       "lowPriceUnavailable": "暫時無法讀取目前模型價格。請進入模型廣場查看完整目錄。",
-      "familyUnavailable": "目前公開模型廣場沒有該系列的可用報價。",
       "viewPrice": "查看報價",
       "pricingTitle": "先看模型和價格，再決定把流量送到哪裡。",
       "pricingDescription": "模型廣場按 Group 顯示可用模型、Provider 報價與輸入輸出價格區間。傳送請求前即可比較。",
@@ -97,12 +96,6 @@
       "creditsDescription": "在控制台查看餘額商品和方案，選擇目前可用的付款方式下單，並追蹤訂單處理狀態。",
       "inspectTitle": "每次呼叫都能查清楚",
       "inspectDescription": "逐條查看成功或失敗、首位元組時間、總耗時、Token 和費用。用量分析協助找到主要消耗。"
-    },
-    "featuredFamilies": {
-      "claude": "Claude",
-      "gpt": "GPT",
-      "deepseek": "DeepSeek",
-      "glm": "GLM"
     },
     "operations": {
       "statusTitle": "公開 Provider 狀態",

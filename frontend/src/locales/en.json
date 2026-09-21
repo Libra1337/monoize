@@ -54,10 +54,9 @@
       "tasksTitle": "Build, collaborate, fund, and audit from one Console.",
       "tasksDescription": "Developers can connect models quickly. Teams can share balance and keys while tracking member usage and controlling budgets separately.",
       "lowPriceTitle": "Live prices · Current low-price models",
-      "lowPriceDescription": "See the available Claude, GPT, DeepSeek, and GLM model with the lowest current input price in each family. Unit: USD / 1M Tokens.",
+      "lowPriceDescription": "Shows the current prices of available models, rotating through the catalog. Unit: USD / 1M Tokens.",
       "lowPriceNote": "Prices update in real time, and discounts vary with upstream costs. Each request is settled using the real-time discount at request time. USD values use the same price and exchange-rate snapshots.",
       "lowPriceUnavailable": "Current model prices are unavailable. Open Model Marketplace to review the full catalog.",
-      "familyUnavailable": "No public offer is currently available for this model family.",
       "viewPrice": "View offers",
       "pricingTitle": "Review models and prices before you send traffic.",
       "pricingDescription": "Model Marketplace shows available models, Provider offers, and input and output price ranges by Group. Compare them before making a request.",
@@ -97,12 +96,6 @@
       "creditsDescription": "Review balance products and plans, pay with a currently available method, and track order processing in Console.",
       "inspectTitle": "Account for every request",
       "inspectDescription": "Review success or failure, time to first byte, duration, tokens, and charge. Usage analysis identifies major consumption."
-    },
-    "featuredFamilies": {
-      "claude": "Claude",
-      "gpt": "GPT",
-      "deepseek": "DeepSeek",
-      "glm": "GLM"
     },
     "operations": {
       "statusTitle": "Public Provider status",

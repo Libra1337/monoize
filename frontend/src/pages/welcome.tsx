@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -62,12 +63,14 @@ const tasks = [
   ["inspect", Wrench],
 ] as const;
 
-const featuredFamilies = ["claude", "gpt", "deepseek", "glm"] as const;
-type FeaturedFamily = (typeof featuredFamilies)[number];
+/// How many priced models the live-price strip shows at once; the window
+/// rotates through the price-sorted catalog (PS-W7).
+const FEATURED_CELL_COUNT = 4;
+const FEATURED_ROTATION_MS = 5000;
 
 interface FeaturedMarketplace {
   cnyPerUsd: string;
-  models: Partial<Record<FeaturedFamily, MarketplaceItem>>;
+  models: MarketplaceItem[];
 }
 
 function decimalParts(value: string): [bigint, bigint] {
@@ -92,15 +95,6 @@ function compareUtf8(left: string, right: string): number {
     if (leftBytes[index] !== rightBytes[index]) return leftBytes[index]! - rightBytes[index]!;
   }
   return leftBytes.length - rightBytes.length;
-}
-
-function modelFamily(model: string): FeaturedFamily | null {
-  const value = model.toLowerCase();
-  if (value.includes("claude")) return "claude";
-  if (value.includes("gpt")) return "gpt";
-  if (value.includes("deepseek")) return "deepseek";
-  if (value.includes("glm")) return "glm";
-  return null;
 }
 
 function formatUsdPerMillion(nanoCny: string, cnyPerUsd: string): string {
@@ -151,10 +145,14 @@ async function loadLowPriceModels(): Promise<FeaturedMarketplace> {
       const groupOrder = compareUtf8(left.public_group_name, right.public_group_name);
       return groupOrder || compareUtf8(left.model, right.model);
     });
-  const models: Partial<Record<FeaturedFamily, MarketplaceItem>> = {};
+  // Cheapest offer per model name: the list is price-sorted, so the first
+  // occurrence of a model wins and later Group duplicates drop out.
+  const models: MarketplaceItem[] = [];
+  const seen = new Set<string>();
   for (const item of priced) {
-    const family = modelFamily(item.model);
-    if (family && !models[family]) models[family] = item;
+    if (seen.has(item.model)) continue;
+    seen.add(item.model);
+    models.push(item);
   }
   return { cnyPerUsd: cnyPerUsd!, models };
 }
@@ -179,6 +177,25 @@ export function WelcomePage() {
     error: lowPriceError,
     isLoading: lowPriceLoading,
   } = useSWR<FeaturedMarketplace>("/api/public/marketplace?homepage=featured-usd", loadLowPriceModels);
+  // PS-W7: the strip rotates through the catalog instead of pinning fixed
+  // vendors; the window advances by one model every few seconds.
+  const [featuredOffset, setFeaturedOffset] = useState(0);
+  const featuredTotal = featuredMarketplace?.models.length ?? 0;
+  useEffect(() => {
+    if (featuredTotal <= FEATURED_CELL_COUNT) return;
+    const timer = window.setInterval(() => {
+      setFeaturedOffset((current) => (current + 1) % featuredTotal);
+    }, FEATURED_ROTATION_MS);
+    return () => window.clearInterval(timer);
+  }, [featuredTotal]);
+  const visibleFeatured = useMemo(() => {
+    const list = featuredMarketplace?.models ?? [];
+    if (list.length <= FEATURED_CELL_COUNT) return list;
+    return Array.from({ length: FEATURED_CELL_COUNT }, (_, index) => {
+      const item = list[(featuredOffset + index) % list.length]!;
+      return item;
+    });
+  }, [featuredMarketplace, featuredOffset]);
   const siteName = site?.site_name || "LynShen Console";
   const base = resolvePublicApiBaseUrl(site?.api_base_url || "", window.location.origin);
   const exampleBase = base.baseUrl || "https://lynshen.org/v1";
@@ -272,24 +289,14 @@ export function WelcomePage() {
               </Button>
             </div>
           ) : (
-            <div className="mt-10 grid border-l border-t md:grid-cols-2 lg:grid-cols-4">
-              {featuredFamilies.map((family) => {
-                const item = featuredMarketplace.models[family];
-                if (!item) {
-                  return (
-                    <div key={family} className="flex min-h-64 flex-col border-b border-r p-6">
-                      <div className="flex items-center gap-3">
-                        <span className="flex size-10 items-center justify-center rounded-full border bg-background text-muted-foreground">
-                          <ModelIcon model={family} provider={modelProviderHint(family)} className="size-6" />
-                        </span>
-                        <h3 className="text-lg font-semibold">{t(`publicSite.featuredFamilies.${family}`)}</h3>
-                      </div>
-                      <p className="my-auto text-sm leading-6 text-muted-foreground">
-                        {t("publicSite.welcome.familyUnavailable")}
-                      </p>
-                    </div>
-                  );
-                }
+            <motion.div
+              key={featuredOffset}
+              initial={{ opacity: 0.35 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.45 }}
+              className="mt-10 grid border-l border-t md:grid-cols-2 lg:grid-cols-4"
+            >
+              {visibleFeatured.map((item) => {
                 const output = item.output_rate_range?.unit.toLowerCase() === "token"
                   ? formatUsdPerMillion(item.output_rate_range.min, featuredMarketplace.cnyPerUsd)
                   : "—";
@@ -327,7 +334,7 @@ export function WelcomePage() {
                   </div>
                 );
               })}
-            </div>
+            </motion.div>
           )}
 
           <p className="mx-auto mt-5 max-w-3xl text-center text-sm leading-6 text-muted-foreground">
