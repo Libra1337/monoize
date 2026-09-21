@@ -1113,7 +1113,9 @@
     "callsUnit": "次",
     "balanceAddInvalid": "请输入有效金额",
     "balanceAddNoRate": "当前没有汇率快照,请改用美元金额",
-    "balanceAddRate": "汇率 CNY/USD {{rate}}"
+    "balanceAddRate": "汇率 CNY/USD {{rate}}",
+    "searchPlaceholder": "搜索用户名或邮箱",
+    "balanceToday": "余额 / 今日"
   },
   "apiKeys": {
     "title": "令牌管理",

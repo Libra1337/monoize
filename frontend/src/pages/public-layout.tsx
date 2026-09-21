@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Languages, Menu, Moon, Sun, X } from "lucide-react";
+import { Github, Languages, Menu, Moon, Sun, X } from "lucide-react";
 import { MonoizeLogo } from "@/components/MonoizeLogo";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -60,6 +60,18 @@ export function PublicLayout() {
                 {t(`publicSite.nav.${key}`)}
               </NavLink>
             ))}
+            <Button
+              asChild
+              variant="ghost"
+              size="icon"
+              className="size-11"
+              aria-label="GitHub"
+              title="GitHub"
+            >
+              <a href="https://github.com/Ikaleio/monoize" target="_blank" rel="noreferrer noopener">
+                <Github />
+              </a>
+            </Button>
             <Button variant="ghost" size="icon" className="size-11" onClick={toggleLanguage} aria-label={t("language.switchLanguage")}>
               <Languages />
             </Button>
@@ -117,7 +129,18 @@ export function PublicLayout() {
       <footer className="border-t">
         <div className="mx-auto flex max-w-7xl flex-col gap-2 px-4 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
           <span>{siteName}</span>
-          <span>{t("publicSite.footer")}</span>
+          <span className="flex items-center gap-3">
+            {t("publicSite.footer")}
+            <a
+              href="https://github.com/Ikaleio/monoize"
+              target="_blank"
+              rel="noreferrer noopener"
+              aria-label="GitHub"
+              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Github className="size-4" />
+            </a>
+          </span>
         </div>
       </footer>
     </div>

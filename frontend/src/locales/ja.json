@@ -1113,7 +1113,9 @@
     "callsUnit": "回",
     "balanceAddInvalid": "有効な金額を入力してください",
     "balanceAddNoRate": "為替スナップショットがないため、USD 金額を入力してください",
-    "balanceAddRate": "レート CNY/USD {{rate}}"
+    "balanceAddRate": "レート CNY/USD {{rate}}",
+    "searchPlaceholder": "ユーザー名またはメールを検索",
+    "balanceToday": "残高 / 今日"
   },
   "apiKeys": {
     "title": "トークン管理",

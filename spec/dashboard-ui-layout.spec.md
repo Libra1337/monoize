@@ -850,3 +850,26 @@ SH1. `/dashboard/status` MUST render its refresh-status mark in the same full-wi
 header row as the status title block. The mark MUST align with the upper-right edge
 of that row. It MUST NOT occupy a separate row above the title. The public `/status`
 route MUST NOT render the refresh-status mark.
+
+### 11.4 Admin users page
+
+AU1. `/dashboard/users` renders, per selected scope grouping (UM-S1: standard,
+enterprise, private, agent, sales), a username-or-email search field and the scope
+summary (user count plus today's total spend and calls). The scope tab strip scrolls
+horizontally below `sm` instead of compressing its five tabs.
+
+AU2. At `lg` and above the list is a six-column virtualized table: user (avatar,
+username, Group badge, billing-plan badge), role, balance with today's spend and call
+count beneath it, created/last-login dates, an enable Switch, and row actions (logs,
+edit, delete). The Plan column of the previous eight-column layout merges into the
+user cell and the status column drops its text label.
+
+AU3. Below `lg` the table is replaced by one card per user: header row with avatar,
+username, role badge, and a disabled badge when off; Group and plan badges; a
+two-column balance/today summary; created · last-login line; and a footer row with the
+enable Switch and the logs/edit/delete actions. Cards render for at most the first 200
+matches of the active scope and search.
+
+AU4. The public site header offers a GitHub icon action linking to
+`https://github.com/Ikaleio/monoize` in a new tab, placed before the language toggle;
+the footer repeats the link beside the tagline.

@@ -1113,7 +1113,9 @@
     "callsUnit": "次",
     "balanceAddInvalid": "請輸入有效金額",
     "balanceAddNoRate": "目前沒有匯率快照,請改用美元金額",
-    "balanceAddRate": "匯率 CNY/USD {{rate}}"
+    "balanceAddRate": "匯率 CNY/USD {{rate}}",
+    "searchPlaceholder": "搜尋使用者名稱或信箱",
+    "balanceToday": "餘額 / 今日"
   },
   "apiKeys": {
     "title": "Token 管理",

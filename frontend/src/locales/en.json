@@ -1113,7 +1113,9 @@
     "callsUnit": "calls",
     "balanceAddInvalid": "Enter a valid amount",
     "balanceAddNoRate": "No exchange-rate snapshot is available; add a USD amount instead",
-    "balanceAddRate": "rate CNY/USD {{rate}}"
+    "balanceAddRate": "rate CNY/USD {{rate}}",
+    "searchPlaceholder": "Search username or email",
+    "balanceToday": "Balance / today"
   },
   "apiKeys": {
     "title": "Token Management",

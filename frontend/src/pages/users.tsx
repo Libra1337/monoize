@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Pencil, Shield, ShieldCheck, User as UserIcon, Mail, PlusCircle, ScrollText } from "lucide-react";
+import { Plus, Trash2, Pencil, Search, Shield, ShieldCheck, User as UserIcon, Mail, PlusCircle, ScrollText } from "lucide-react";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { GroupSingleSelect } from "@/components/groups/GroupPicker";
 import { Button } from "@/components/ui/button";
@@ -171,6 +171,18 @@ export function UsersPage() {
   const scopedUsers = useMemo(
     () => users.filter((user) => scopeOf(user) === scope),
     [users, scope],
+  );
+  const [search, setSearch] = useState("");
+  const normalizedSearch = search.trim().toLowerCase();
+  const visibleUsers = useMemo(
+    () =>
+      scopedUsers.filter(
+        (user) =>
+          !normalizedSearch ||
+          user.username.toLowerCase().includes(normalizedSearch) ||
+          (user.email ?? "").toLowerCase().includes(normalizedSearch),
+      ),
+    [scopedUsers, normalizedSearch],
   );
   const scopeCounts = useMemo(() => {
     const counts: Record<UserScope, number> = {
@@ -845,39 +857,52 @@ export function UsersPage() {
         <DataTableShell
           toolbar={(
             <div className="flex flex-col gap-3">
-              <Tabs value={scope} onValueChange={(value) => setScope(value as UserScope)}>
-                <TabsList className="grid h-10 w-full grid-cols-5 rounded-lg sm:w-[40rem]">
-                  {USER_SCOPES.map((value) => (
-                    <TabsTrigger key={value} value={value} className="gap-1.5">
-                      {t(`users.scopes.${value}`)}
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {scopeCounts[value]}
-                      </span>
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-              <div>
-              <h2 className="text-base font-semibold">{t(`users.scopes.${scope}`)}</h2>
-              <p className="text-sm text-muted-foreground">
-                {t("users.usersTotal", { count: scopedUsers.length })}
-                {" · "}
-                {t("users.todaySummary", {
-                  spend:
-                    currency === "CNY" && exchangeRate?.cny_per_usd
-                      ? formatCoinFromNanoUsdExact(
-                          todayTotals.cost.toString(),
-                          exchangeRate.cny_per_usd,
-                          6,
-                        )
-                      : formatNanoUsd(todayTotals.cost, 2),
-                  calls: todayTotals.calls.toLocaleString(),
-                })}
-              </p>
+              <div className="-mx-1 overflow-x-auto px-1 pb-1">
+                <Tabs value={scope} onValueChange={(value) => setScope(value as UserScope)}>
+                  <TabsList className="grid h-10 w-full min-w-[32rem] grid-cols-5 rounded-lg sm:w-[40rem]">
+                    {USER_SCOPES.map((value) => (
+                      <TabsTrigger key={value} value={value} className="gap-1.5">
+                        {t(`users.scopes.${value}`)}
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {scopeCounts[value]}
+                        </span>
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-semibold">{t(`users.scopes.${scope}`)}</h2>
+                  <p className="text-sm text-muted-foreground">
+                    {t("users.usersTotal", { count: visibleUsers.length })}
+                    {" · "}
+                    {t("users.todaySummary", {
+                      spend:
+                        currency === "CNY" && exchangeRate?.cny_per_usd
+                          ? formatCoinFromNanoUsdExact(
+                              todayTotals.cost.toString(),
+                              exchangeRate.cny_per_usd,
+                              6,
+                            )
+                          : formatNanoUsd(todayTotals.cost, 2),
+                      calls: todayTotals.calls.toLocaleString(),
+                    })}
+                  </p>
+                </div>
+                <div className="relative w-full sm:w-72">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    className="h-9 pl-10"
+                    placeholder={t("users.searchPlaceholder")}
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+                </div>
               </div>
             </div>
           )}
-          isEmpty={scopedUsers.length === 0}
+          isEmpty={visibleUsers.length === 0}
           emptyState={(
             <EmptyState
               icon={<UserIcon className="h-12 w-12" />}
@@ -886,9 +911,115 @@ export function UsersPage() {
             />
           )}
         >
+          {/* Mobile: one card per user. The eight-column table cannot fit a
+              phone width without collapsing into itself. */}
+          <div className="flex flex-col gap-2 lg:hidden">
+            {visibleUsers.slice(0, 200).map((user) => {
+              const RoleIcon = roleIcons[user.role];
+              return (
+                <div key={user.id} className="rounded-lg border bg-card p-3">
+                  <div className="flex items-start gap-3">
+                    <Avatar className="size-9 shrink-0">
+                      {user.email && <AvatarImage src={getGravatarUrl(user.email, 64) ?? undefined} alt={user.username} />}
+                      <AvatarFallback>{user.username[0].toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <span className="truncate font-medium">{user.username}</span>
+                        <Badge variant={roleVariants[user.role]} className="h-6 gap-1 whitespace-nowrap px-1.5 text-xs">
+                          <RoleIcon className="h-3 w-3" />
+                          {t(`roles.${user.role}`)}
+                        </Badge>
+                        {!user.enabled && (
+                          <Badge variant="outline" className="h-6 whitespace-nowrap px-1.5 text-xs text-muted-foreground">
+                            {t("common.disabled")}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {user.group_id && <GroupsBadge groupIds={[user.group_id]} />}
+                        {user.billing_plan && (
+                          <Badge variant={user.billing_plan.enabled ? "secondary" : "outline"} className="max-w-[10rem] truncate text-xs">
+                            {user.billing_plan.name}
+                          </Badge>
+                        )}
+                      </div>
+                      <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                        <div>
+                          <dt className="text-xs text-muted-foreground">{t("users.balance")}</dt>
+                          <dd className="tabular-nums">
+                            {user.balance_unlimited
+                              ? t("users.unlimited")
+                              : currency === "CNY" && exchangeRate?.cny_per_usd
+                                ? formatCoinFromNanoUsdForCurrency(user.balance_nano_usd, "CNY", exchangeRate.cny_per_usd)
+                                : formatUsdDecimal(user.balance_usd, 2)}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-muted-foreground">{t("users.todayUsage")}</dt>
+                          <dd className="tabular-nums">
+                            {currency === "CNY" && exchangeRate?.cny_per_usd
+                              ? formatCoinFromNanoUsdExact(user.today_cost_nano_usd ?? "0", exchangeRate.cny_per_usd, 6)
+                              : formatNanoUsd(user.today_cost_nano_usd, 2)}
+                            <span className="ml-1 text-xs text-muted-foreground">
+                              · {(user.today_calls ?? 0).toLocaleString()} {t("users.callsUnit")}
+                            </span>
+                          </dd>
+                        </div>
+                        <div className="col-span-2">
+                          <dt className="text-xs text-muted-foreground">{t("users.createdLogin")}</dt>
+                          <dd className="text-xs text-muted-foreground">
+                            {formatDate(user.created_at)} · {user.last_login_at ? formatDate(user.last_login_at) : t("common.never")}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between border-t pt-2">
+                    <Switch
+                      checked={user.enabled}
+                      onCheckedChange={() => handleToggleEnabled(user)}
+                      disabled={!canEdit(user)}
+                      aria-label={t("common.status")}
+                    />
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 gap-1.5 px-2.5"
+                        onClick={() => navigate(`/dashboard/logs?username=${encodeURIComponent(user.username)}`)}
+                      >
+                        <ScrollText className="h-4 w-4" />
+                        {t("users.viewLogs")}
+                      </Button>
+                      {canEdit(user) && (
+                        <Button variant="ghost" size="icon" className="size-9" aria-label={t("common.edit")} onClick={() => openEdit(user)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {canDelete(user) && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={t("common.delete")}
+                          onClick={() => handleDelete(user.id)}
+                          className="size-9 text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Desktop: six consolidated columns instead of the old eight. */}
+          <div className="hidden lg:block">
             <TableVirtuoso
-              style={{ height: "calc(100dvh - 280px)", minHeight: 400, overflowX: "hidden" }}
-              data={scopedUsers}
+              style={{ height: "calc(100dvh - 300px)", minHeight: 400 }}
+              data={visibleUsers}
               components={{
                 Table: (props) => (
                   <table
@@ -917,22 +1048,16 @@ export function UsersPage() {
                   <VirtualTableHeaderCell className="w-[7rem] whitespace-nowrap">
                     {t("users.role")}
                   </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell>
-                    {t("users.plan")}
+                  <VirtualTableHeaderCell className="w-[11rem]">
+                    {t("users.balanceToday")}
                   </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell>
-                    {t("users.balance")}
-                  </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell className="min-w-[6.5rem]">
-                    {t("users.todayUsage")}
-                  </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell className="min-w-[7rem]">
+                  <VirtualTableHeaderCell className="w-[9.5rem]">
                     {t("users.createdLogin")}
                   </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell className="w-[4rem]">
                     {t("common.status")}
                   </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell className="w-[100px]">
+                  <VirtualTableHeaderCell className="w-[8rem]">
                     {t("common.actions")}
                   </VirtualTableHeaderCell>
                 </tr>
@@ -942,57 +1067,47 @@ export function UsersPage() {
                 return (
                   <>
                     <VirtualTableCell className="whitespace-nowrap">
-                      <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+                      <div className="flex min-w-0 items-center gap-2 py-1">
                         <Avatar className="size-8 shrink-0">
                           {user.email && <AvatarImage src={getGravatarUrl(user.email, 64) ?? undefined} alt={user.username} />}
                           <AvatarFallback>{user.username[0].toUpperCase()}</AvatarFallback>
                         </Avatar>
-                        <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                           <span className="min-w-0 truncate font-medium">{user.username}</span>
                           {user.group_id && (
                             <GroupsBadge groupIds={[user.group_id]} className="shrink-0 whitespace-nowrap" />
                           )}
+                          {user.billing_plan && (
+                            <Badge
+                              variant={user.billing_plan.enabled ? "secondary" : "outline"}
+                              className="max-w-[10rem] truncate text-xs"
+                            >
+                              {user.billing_plan.name}
+                            </Badge>
+                          )}
                         </div>
                       </div>
                     </VirtualTableCell>
-                    <VirtualTableCell className="w-[8.5rem] whitespace-nowrap">
-                      <div className="flex h-8 max-w-full items-center overflow-x-auto overflow-y-hidden whitespace-nowrap">
-                        <Badge
-                          variant={roleVariants[user.role]}
-                          className="h-7 min-w-max shrink-0 flex-nowrap gap-1 whitespace-nowrap"
-                        >
-                          <RoleIcon className="h-3 w-3 shrink-0" />
-                          {t(`roles.${user.role}`)}
-                        </Badge>
-                      </div>
-                    </VirtualTableCell>
-                    <VirtualTableCell>
-                      {user.billing_plan ? (
-                        <Badge
-                          variant={user.billing_plan.enabled ? "secondary" : "outline"}
-                          className="max-w-[12rem] truncate"
-                        >
-                          {user.billing_plan.name}
-                          {!user.billing_plan.enabled ? ` (${t("common.disabled")})` : ""}
-                        </Badge>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">{t("users.noPlan")}</span>
-                      )}
-                    </VirtualTableCell>
-                    <VirtualTableCell className="tabular-nums">
-                      {user.balance_unlimited
-                        ? t("users.unlimited")
-                        : currency === "CNY" && exchangeRate?.cny_per_usd
-                          ? formatCoinFromNanoUsdForCurrency(
-                              user.balance_nano_usd,
-                              "CNY",
-                              exchangeRate.cny_per_usd,
-                            )
-                          : formatUsdDecimal(user.balance_usd, 2)}
+                    <VirtualTableCell className="whitespace-nowrap">
+                      <Badge variant={roleVariants[user.role]} className="h-7 gap-1 whitespace-nowrap">
+                        <RoleIcon className="h-3 w-3 shrink-0" />
+                        {t(`roles.${user.role}`)}
+                      </Badge>
                     </VirtualTableCell>
                     <VirtualTableCell className="tabular-nums">
                       <div className="whitespace-nowrap">
                         <div>
+                          {user.balance_unlimited
+                            ? t("users.unlimited")
+                            : currency === "CNY" && exchangeRate?.cny_per_usd
+                              ? formatCoinFromNanoUsdForCurrency(
+                                  user.balance_nano_usd,
+                                  "CNY",
+                                  exchangeRate.cny_per_usd,
+                                )
+                              : formatUsdDecimal(user.balance_usd, 2)}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
                           {currency === "CNY" && exchangeRate?.cny_per_usd
                             ? formatCoinFromNanoUsdExact(
                                 user.today_cost_nano_usd ?? "0",
@@ -1000,8 +1115,7 @@ export function UsersPage() {
                                 6,
                               )
                             : formatNanoUsd(user.today_cost_nano_usd, 2)}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
+                          {" · "}
                           {(user.today_calls ?? 0).toLocaleString()} {t("users.callsUnit")}
                         </div>
                       </div>
@@ -1017,23 +1131,19 @@ export function UsersPage() {
                       </div>
                     </VirtualTableCell>
                     <VirtualTableCell>
-                      <div className="flex items-center gap-2">
-                        <Switch
-                          checked={user.enabled}
-                          onCheckedChange={() => handleToggleEnabled(user)}
-                          disabled={!canEdit(user)}
-                        />
-                        <span className="text-sm text-muted-foreground">
-                          {user.enabled ? t("common.enabled") : t("common.disabled")}
-                        </span>
-                      </div>
+                      <Switch
+                        checked={user.enabled}
+                        onCheckedChange={() => handleToggleEnabled(user)}
+                        disabled={!canEdit(user)}
+                        aria-label={t("common.status")}
+                      />
                     </VirtualTableCell>
                     <VirtualTableCell>
                       <div className="flex items-center gap-1">
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="size-11 touch-manipulation sm:size-9"
+                          className="size-9"
                           title={t("users.viewLogs")}
                           aria-label={t("users.viewLogs")}
                           onClick={() =>
@@ -1046,7 +1156,7 @@ export function UsersPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="size-11 touch-manipulation sm:size-9"
+                            className="size-9"
                             aria-label={t("common.edit")}
                             onClick={() => openEdit(user)}
                           >
@@ -1059,7 +1169,7 @@ export function UsersPage() {
                             size="icon"
                             aria-label={t("common.delete")}
                             onClick={() => handleDelete(user.id)}
-                            className="size-11 touch-manipulation sm:size-9 text-destructive hover:text-destructive"
+                            className="size-9 text-destructive hover:text-destructive"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -1070,7 +1180,9 @@ export function UsersPage() {
                 );
               }}
             />
+          </div>
         </DataTableShell>
+
       </motion.div>
     </PageWrapper>
   );
