@@ -86,7 +86,7 @@ export function OrgMemberUsagePage() {
 
   if (!isOwner) {
     return (
-      <div className="p-6 text-sm text-muted-foreground">{t("orgLimits.ownerOnly")}</div>
+      <div className="p-4 text-sm text-muted-foreground sm:p-6">{t("orgLimits.ownerOnly")}</div>
     );
   }
 
@@ -95,7 +95,7 @@ export function OrgMemberUsagePage() {
   );
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-4 p-4 sm:space-y-6 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <UsersRound className="h-5 w-5 text-muted-foreground" />
@@ -139,6 +139,7 @@ export function OrgMemberUsagePage() {
 
       {!loading && !error && members.length > 0 && (
         <div className="rounded-lg border">
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -222,6 +223,7 @@ export function OrgMemberUsagePage() {
               })}
             </TableBody>
           </Table>
+          </div>
         </div>
       )}
     </div>

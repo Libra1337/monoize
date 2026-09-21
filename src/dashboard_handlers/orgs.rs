@@ -1134,6 +1134,8 @@ pub async fn list_org_keys(
          FROM api_keys k
          LEFT JOIN users u ON u.id = k.created_by
          WHERE k.org_id = $1 AND k.created_by != $2
+           AND (k.created_by IS NULL OR k.created_by IN
+                (SELECT user_id FROM org_members WHERE org_id = $1))
          ORDER BY k.created_at DESC"
     } else {
         "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled,
@@ -1464,6 +1466,15 @@ pub async fn leave_org(
         "DELETE FROM org_key_shares WHERE member_user_id = $1 AND api_key_id IN
             (SELECT id FROM api_keys WHERE org_id = $2)",
         [user.id.clone().into(), org_id.clone().into()],
+    ))
+    .await
+    .map_err(storage)?;
+    // ORG-17a: leaving ends membership, so the leaver's org keys go with them —
+    // a saved key string must stop billing the org wallet. Log history stays.
+    tx.execute(Statement::from_sql_and_values(
+        backend,
+        "DELETE FROM api_keys WHERE org_id = $1 AND created_by = $2",
+        [org_id.clone().into(), user.id.clone().into()],
     ))
     .await
     .map_err(storage)?;
@@ -2106,7 +2117,10 @@ pub async fn org_limits(
             "SELECT k.id, k.name, k.created_by, u.username AS creator_username,
                     k.spend_limit_total_nano_usd, k.spend_limit_hourly_nano_usd, k.spend_limit_daily_nano_usd
              FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
-             WHERE k.org_id = $1 ORDER BY k.created_at",
+             WHERE k.org_id = $1
+               AND (k.created_by IS NULL OR k.created_by IN
+                    (SELECT user_id FROM org_members WHERE org_id = $1))
+             ORDER BY k.created_at",
             [org_id.clone().into()],
         ))
         .await
@@ -2244,7 +2258,10 @@ pub async fn org_member_usage(
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateOrgKeyRequest, create_org, create_org_key, join_org, org_detail};
+    use super::{
+        CreateOrgKeyRequest, create_org, create_org_key, join_org, leave_org, list_org_keys,
+        org_detail,
+    };
     use crate::app::{AppState, RuntimeConfig, load_state_with_runtime};
     use crate::users::{AccountClass, CreateGroupInput, UserRole};
     use axum::Json;
@@ -2316,6 +2333,125 @@ mod tests {
             .expect("response body")
             .to_bytes();
         serde_json::from_slice(&bytes).expect("json body")
+    }
+
+    /// ORG-17a: leaving deletes the leaver's org keys in the same transaction;
+    /// a saved key string stops billing the org wallet immediately.
+    #[tokio::test]
+    async fn leaving_the_space_deletes_the_leavers_org_keys() {
+        let state = make_state().await;
+        let admin_headers = session_headers(&state, "leave_admin", UserRole::Admin).await;
+
+        let (_, Json(enterprise_group)) = crate::dashboard_handlers::create_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Json(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "ent-leave".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 5,
+                account_class: AccountClass::Enterprise,
+            }),
+        )
+        .await
+        .expect("enterprise group created");
+
+        let owner_headers =
+            session_headers_in_group(&state, "leave_owner", &enterprise_group.id).await;
+        let created = body_json(
+            create_org(
+                State(state.clone()),
+                owner_headers.clone(),
+                Json(super::CreateOrgRequest {
+                    display_name: "Leave Flow".to_string(),
+                    avatar_emoji: None,
+                    avatar_color: None,
+                    avatar_image: None,
+                    invite_expiry: "never".to_string(),
+                }),
+            )
+            .await
+            .expect("org created")
+            .into_response(),
+        )
+        .await;
+        let org_id: String = created["id"].as_str().expect("org id").to_string();
+        let invite_token: String = created["invite_token"]
+            .as_str()
+            .expect("invite token")
+            .to_string();
+
+        let (_, Json(private_group)) = crate::dashboard_handlers::create_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Json(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "priv-leave".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 6,
+                account_class: AccountClass::Private,
+            }),
+        )
+        .await
+        .expect("private group created");
+        let member_headers =
+            session_headers_in_group(&state, "leave_member", &private_group.id).await;
+        join_org(
+            State(state.clone()),
+            member_headers.clone(),
+            Json(super::JoinOrgRequest { token: invite_token }),
+        )
+        .await
+        .expect("member joined");
+
+        let created_key = body_json(
+            create_org_key(
+                State(state.clone()),
+                member_headers.clone(),
+                Path(org_id.clone()),
+                Json(CreateOrgKeyRequest {
+                    name: "leaver key".to_string(),
+                    share_mode: None,
+                    model_limits_enabled: None,
+                    model_limits: Vec::new(),
+                    group_ids: Vec::new(),
+                    expires_in_days: None,
+                    ip_whitelist: Vec::new(),
+                }),
+            )
+            .await
+            .expect("member key creates")
+            .into_response(),
+        )
+        .await;
+        let key_id: String = created_key["id"].as_str().expect("key id").to_string();
+
+        leave_org(State(state.clone()), member_headers, Path(org_id.clone()))
+            .await
+            .expect("member leaves");
+
+        let gone = state
+            .user_store
+            .get_api_key_by_id(&key_id)
+            .await
+            .expect("lookup succeeds");
+        assert!(gone.is_none(), "the leaver's org key must be deleted");
+
+        // The owner's shared-key list (b) never surfaces keys of non-members.
+        let keys = body_json(
+            list_org_keys(State(state.clone()), owner_headers, Path(org_id))
+                .await
+                .expect("owner list succeeds")
+                .into_response(),
+        )
+        .await;
+        let shared = keys["shared"].as_array().expect("shared array");
+        assert!(
+            shared.is_empty(),
+            "non-member keys must not appear in the owner's list"
+        );
     }
 
     /// ORG-14a: the key picker feeds every member from the wallet's own Groups, so a

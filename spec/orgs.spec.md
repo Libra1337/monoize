@@ -115,7 +115,9 @@ EVERY other key of the space regardless of share mode, because those keys bill t
 wallet the owner funds and ORG-17 keeps keys of removed members alive while no member
 surface can see them; the owner is the only surface that can manage them. Both lists
 carry each key's `group_ids` and `model_limits`; list (a) carries `created_at`, list (b)
-carries `created_by`, so the edit dialog can present the saved state. Key material in
+carries `created_by`, so the edit dialog can present the saved state. List (b) and the
+ORGL-12 key list include only keys whose `created_by` is NULL or belongs to a current
+member; keys left behind by ended memberships never surface. Key material in
 the space is always visible, never once-only. Each of the caller's own key entries with
 mode `allow` or `deny` also carries `shared_with`: the `user_id` list of its current
 `org_key_shares` rows, so the sharing editor can present the saved selection.
@@ -138,9 +140,11 @@ remain org keys that keep working and keep billing the org wallet, visible to th
 action always sends the default and confirms that the member's keys are deleted.
 
 ORG-17a. `DELETE /api/dashboard/orgs/{org_id}/leave` lets a non-owner member leave the
-space. It behaves exactly like ORG-17 removal of the caller: membership and share rows
-are deleted, org keys are untouched, and no balance moves. The owner cannot leave
-(400 `invalid_request`).
+space. It behaves like ORG-17 removal of the caller with `delete_keys = true`:
+membership and share rows are deleted and every org key the leaver created is deleted
+in the same transaction, so a saved key string stops billing the org wallet
+immediately. Historical request-log rows keep their org attribution. No balance moves.
+The owner cannot leave (400 `invalid_request`).
 
 ORG-17b. `DELETE /api/dashboard/orgs/{org_id}/keys/{key_id}` deletes one org key
 (`created_by = caller`, or the owner for any key). The org's historical request-log
@@ -165,6 +169,13 @@ overview (wallet balance, deposit/distribute, invite link card), members (list, 
 keys (mine + shared to me, create, sharing editor, edit dialog with name/groups/model
 restriction per ORG-17c), and the org ledger. Creation and
 joining are reachable from the same page.
+
+ORG-18a. The org-space shell is one viewport-height flex row: a 240px sidebar at `lg`
+and above, and below `lg` a fixed floating menu button opening the same navigation in a
+left sheet. The main column is a flex column whose single content wrapper is
+`min-height: 0; flex: 1`, so full-height children — the ORG-24 logs table — receive a
+bounded height; the wrapper carries top padding for the floating button below `lg`.
+Wide tables (limits, member usage) scroll horizontally inside their bordered sections.
 
 ORG-19. `/join/{token}` is a centered landing: org avatar, display name, owner username,
 member count, and Accept/Decline buttons. Accept enters the space; Decline returns to the

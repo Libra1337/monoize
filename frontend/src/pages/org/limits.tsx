@@ -183,6 +183,7 @@ export function OrgLimitsPage() {
         <div className="border-b px-4 py-3">
           <h2 className="text-sm font-semibold">{t("orgLimits.membersTitle")}</h2>
         </div>
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -216,6 +217,7 @@ export function OrgLimitsPage() {
               ))}
           </TableBody>
         </Table>
+        </div>
       </section>
 
       {/* Key level */}
@@ -223,6 +225,7 @@ export function OrgLimitsPage() {
         <div className="border-b px-4 py-3">
           <h2 className="text-sm font-semibold">{t("orgLimits.keysTitle")}</h2>
         </div>
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -269,6 +272,7 @@ export function OrgLimitsPage() {
             ))}
           </TableBody>
         </Table>
+        </div>
       </section>
 
       <div className="flex justify-end">
