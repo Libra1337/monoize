@@ -593,13 +593,16 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
             arguments: if *left_tool_type == ToolCallType::Function
                 && *right_tool_type == ToolCallType::Function
                 && left_arguments != right_arguments
-                && matches!(
+                && (matches!(
                     (
                         serde_json::from_str::<Value>(left_arguments),
                         serde_json::from_str::<Value>(right_arguments),
                     ),
                     (Ok(left), Ok(right)) if left == right
-                )
+                ) || function_arguments_match_projected_field(
+                    left_arguments,
+                    right_arguments,
+                ))
             {
                 right_arguments.clone()
             } else {
@@ -616,6 +619,41 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
         }
         _ => Err("completed output item type differs from accumulated stream state".to_string()),
     }
+}
+
+/// A streamed snapshot may omit the JSON wrapper around arguments that the
+/// accumulated deltas already built; a non-empty snapshot always wins.
+fn replace_nonempty_tool_arguments(current: &mut String, snapshot: &str) {
+    if !snapshot.is_empty() {
+        *current = snapshot.to_string();
+    }
+}
+
+/// A terminal snapshot may wrap the accumulated argument string into an
+/// object field instead of echoing it verbatim — Codex apply_patch snapshots
+/// do this with `input`/`patch`/`command`/`content`. The pair then reconciles:
+/// the completed snapshot wins.
+fn function_arguments_match_projected_field(accumulated: &str, terminal: &str) -> bool {
+    if accumulated.is_empty() {
+        return false;
+    }
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(terminal) else {
+        return false;
+    };
+    if let Some(Value::String(value)) = map.get("input")
+        && value == accumulated
+    {
+        return true;
+    }
+    for key in ["patch", "command", "content"] {
+        if let Some(Value::String(value)) = map.get(key)
+            && value.contains("Begin Patch")
+            && value == accumulated
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn merge_string_field(field: &str, left: &str, right: &str) -> Result<String, String> {
