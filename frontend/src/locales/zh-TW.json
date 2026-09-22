@@ -298,7 +298,7 @@
     "modeSwitch": "切換空間",
     "orgsAdmin": "組織空間管理",
     "announcements": "公告管理",
-    "studio": "創作工作台",
+    "studio": "Apeiron",
     "studioAdmin": "創作管理"
   },
   "wallet": {
@@ -2728,8 +2728,8 @@
     "cnyHint": "人民幣金額在儲存時按此匯率換算為美元;儲存限額保持美元。"
   },
   "studio": {
-    "title": "創作工作台",
-    "description": "無限畫布智能體工作台，一站式生圖與生影片。",
+    "title": "Apeiron",
+    "description": "公元前六世紀，阿那克西曼德說，萬物生於無限定。兩千六百年後，無限終於有了自己的畫布。",
     "newProject": "新建專案",
     "projectTitle": "專案標題",
     "blankCanvas": "空白畫布",

@@ -298,7 +298,7 @@
     "modeSwitch": "スペース切替",
     "orgsAdmin": "組織スペース",
     "announcements": "お知らせ管理",
-    "studio": "スタジオ",
+    "studio": "Apeiron",
     "studioAdmin": "スタジオ管理"
   },
   "wallet": {
@@ -2727,8 +2727,8 @@
     "cnyHint": "CNY 金額は保存時にこのレートで USD に換算されます。保存された上限は USD のままです。"
   },
   "studio": {
-    "title": "スタジオ",
-    "description": "画像と動画をワンストップで創作する無限キャンバスのエージェントワークベンチ。",
+    "title": "Apeiron",
+    "description": "紀元前6世紀、アナクシマンドロスは万物は無限定（アペイロン）から生まれると言った。2600年後、無限はついに自分のキャンバスを得た。",
     "newProject": "新規プロジェクト",
     "projectTitle": "プロジェクト名",
     "blankCanvas": "空白キャンバス",

@@ -298,7 +298,7 @@
     "modeSwitch": "Switch workspace",
     "orgsAdmin": "Org spaces",
     "announcements": "Announcements",
-    "studio": "Studio",
+    "studio": "Apeiron",
     "studioAdmin": "Studio Admin"
   },
   "wallet": {
@@ -2732,8 +2732,8 @@
     "cnyHint": "CNY amounts convert to USD through this rate when you save; stored limits stay in USD."
   },
   "studio": {
-    "title": "Creation Studio",
-    "description": "Infinite-canvas agent workbench for image and video creation.",
+    "title": "Apeiron",
+    "description": "In the sixth century BCE, Anaximander said all things arise from the apeiron, the unbounded. Twenty-six centuries later, the infinite finally has its canvas.",
     "newProject": "New project",
     "projectTitle": "Project title",
     "blankCanvas": "Blank canvas",

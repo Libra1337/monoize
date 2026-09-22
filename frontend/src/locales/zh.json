@@ -298,7 +298,7 @@
     "modeSwitch": "切换空间",
     "orgsAdmin": "组织空间管理",
     "announcements": "公告管理",
-    "studio": "创作工作台",
+    "studio": "Apeiron",
     "studioAdmin": "创作管理"
   },
   "wallet": {
@@ -2731,8 +2731,8 @@
     "cnyHint": "人民币金额在保存时按此汇率换算为美元;存储限额保持美元。"
   },
   "studio": {
-    "title": "创作工作台",
-    "description": "无限画布智能体工作台，一站式生图与生视频。",
+    "title": "Apeiron",
+    "description": "公元前六世纪，阿那克西曼德说，万物生于无限定。两千六百年后，无限终于有了自己的画布。",
     "newProject": "新建项目",
     "projectTitle": "项目标题",
     "blankCanvas": "空白画布",
