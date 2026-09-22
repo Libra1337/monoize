@@ -34,9 +34,9 @@ export function LandingPage() {
       <SiteHeader />
       <main>
         <Hero />
+        <TemplateFeed />
         <Pipeline />
         <CanvasShowcase />
-        <TemplateFeed />
         <Features />
       </main>
       <SiteFooter />

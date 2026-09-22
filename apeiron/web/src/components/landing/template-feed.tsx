@@ -20,7 +20,7 @@ export function TemplateFeed() {
     <section className="border-y border-border/60 bg-card/40">
       <div className="mx-auto max-w-5xl px-4 py-16 sm:px-6">
         <ScrollReveal className="mb-8 space-y-3">
-          <SectionKicker index="03" label={t("landing.sectionTemplatesTitle")} />
+          <SectionKicker index="01" label={t("landing.sectionTemplatesTitle")} />
           <h2 className="font-display text-2xl font-semibold tracking-tight text-balance sm:text-3xl">
             {t("landing.sectionTemplatesTitle")}
           </h2>

@@ -17,7 +17,7 @@ export function Pipeline() {
     <section className="border-y border-border/60">
       <div className="mx-auto max-w-5xl px-4 py-16 sm:px-6">
         <ScrollReveal className="mb-8 space-y-3">
-          <SectionKicker index="01" label={t("landing.pipelineTitle")} />
+          <SectionKicker index="02" label={t("landing.pipelineTitle")} />
           <h2 className="font-display text-2xl font-semibold tracking-tight text-balance sm:text-3xl">
             {t("landing.pipelineTitle")}
           </h2>

@@ -44,28 +44,29 @@ export function Hero() {
 
   return (
     <section className={GRID_TEXTURE}>
-      <div className="mx-auto flex max-w-4xl flex-col items-center gap-8 px-4 py-24 text-center sm:px-6 sm:py-32">
+      <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-16 sm:px-6 sm:py-24 lg:grid-cols-[1.02fr_0.98fr]">
+        <div className="flex flex-col items-start gap-6">
         <motion.div {...rise(0)} className="font-mono text-xs tracking-[0.3em] text-primary/90">
           {"ἄπειρον — THE BOUNDLESS"}
         </motion.div>
 
         <motion.p
           {...rise(0.15)}
-          className="max-w-2xl font-display text-lg font-medium leading-relaxed text-muted-foreground text-balance sm:text-xl"
+          className="max-w-xl font-display text-lg font-medium leading-relaxed text-muted-foreground text-balance sm:text-xl"
         >
           {t("landing.anaximander1")}
         </motion.p>
 
         <motion.h1
           {...rise(0.3)}
-          className="max-w-3xl font-display text-4xl font-semibold leading-tight tracking-tight text-balance sm:text-6xl"
+          className="max-w-xl font-display text-4xl font-semibold leading-tight tracking-tight text-balance sm:text-5xl lg:text-6xl"
         >
           {t("landing.anaximander2")}
         </motion.h1>
 
         <motion.form
           {...rise(0.45)}
-          className="flex w-full max-w-2xl items-center gap-2 rounded-lg border bg-card/90 p-2 pl-4 shadow-sm"
+          className="flex w-full max-w-xl items-center gap-2 rounded-lg border bg-card/90 p-2 pl-4 shadow-sm"
           onSubmit={(event) => {
             event.preventDefault();
             submit(topic);
@@ -85,7 +86,7 @@ export function Hero() {
           </Button>
         </motion.form>
 
-        <motion.div {...rise(0.55)} className="flex flex-wrap items-center justify-center gap-1.5">
+        <motion.div {...rise(0.55)} className="flex flex-wrap items-center gap-1.5">
           {(["stock", "ai_image"] as const).map((option) => (
             <button
               key={option}
@@ -130,6 +131,27 @@ export function Hero() {
               {idea}
             </button>
           ))}
+        </motion.div>
+        </div>
+
+        <motion.div {...rise(0.5)} className="relative">
+          <figure className="overflow-hidden rounded-lg border bg-card shadow-sm">
+            <div className="flex items-center gap-1.5 border-b px-4 py-2.5">
+              <span className="size-2.5 rounded-full bg-destructive/70" />
+              <span className="size-2.5 rounded-full bg-warning/70" />
+              <span className="size-2.5 rounded-full bg-success/70" />
+              <span className="ml-3 font-mono text-xs text-muted-foreground">
+                apeiron.lynshen.org/canvas
+              </span>
+            </div>
+            <img
+              src="/images/canvas-workbench.png"
+              alt="Apeiron node canvas workbench"
+              className="w-full"
+              width={1440}
+              height={900}
+            />
+          </figure>
         </motion.div>
       </div>
     </section>
