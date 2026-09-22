@@ -5,8 +5,8 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import { Film, Plus, Trash2 } from "lucide-react";
 import { api, type ProjectSummary, type Template } from "@/lib/api";
-import { PageWrapper } from "@/components/ui/motion";
-import { EmptyState, PageHeader } from "@/components/ui/page";
+import { EmptyState } from "@/components/ui/page";
+import { BalanceChip, TopUpButton, WorkHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Select } from "@/components/ui/input";
@@ -56,17 +56,22 @@ export function ProjectsPage() {
   const projects = data?.projects ?? [];
 
   return (
-    <PageWrapper className="gap-6">
-      <PageHeader
+    <div className="flex min-h-0 flex-1 flex-col">
+      <WorkHeader
         title={t("projects.title")}
         description={t("projects.description")}
         actions={
-          <Button variant="primary" onClick={() => setOpen(true)}>
-            <Plus />
-            {t("projects.new")}
-          </Button>
+          <>
+            <BalanceChip />
+            <TopUpButton />
+            <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
+              <Plus />
+              {t("projects.new")}
+            </Button>
+          </>
         }
       />
+      <div className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
       {isLoading ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {[0, 1, 2].map((index) => (
@@ -123,6 +128,8 @@ export function ProjectsPage() {
         </div>
       )}
 
+      </div>
+
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
@@ -165,6 +172,6 @@ export function ProjectsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </PageWrapper>
+    </div>
   );
 }

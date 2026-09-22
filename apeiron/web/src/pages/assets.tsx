@@ -4,8 +4,8 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import { FolderOpen, Trash2 } from "lucide-react";
 import { api, assetContentUrl, type Asset } from "@/lib/api";
-import { PageWrapper } from "@/components/ui/motion";
-import { EmptyState, PageHeader } from "@/components/ui/page";
+import { EmptyState } from "@/components/ui/page";
+import { BalanceChip, TopUpButton, WorkHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -63,8 +63,18 @@ export function AssetsPage() {
   const assets = data?.assets ?? [];
 
   return (
-    <PageWrapper className="gap-6">
-      <PageHeader title={t("assets.title")} description={t("assets.description")} />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <WorkHeader
+        title={t("assets.title")}
+        description={t("assets.description")}
+        actions={
+          <>
+            <BalanceChip />
+            <TopUpButton />
+          </>
+        }
+      />
+      <div className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
       <div className="flex flex-wrap gap-1">
         {FILTERS.map((filter) => (
           <button
@@ -124,6 +134,7 @@ export function AssetsPage() {
           ))}
         </div>
       )}
-    </PageWrapper>
+      </div>
+    </div>
   );
 }

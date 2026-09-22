@@ -4,8 +4,8 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { api, type Provider, type Run } from "@/lib/api";
-import { PageWrapper } from "@/components/ui/motion";
-import { PageHeader, StatusDot } from "@/components/ui/page";
+import { StatusDot } from "@/components/ui/page";
+import { BalanceChip, TopUpButton, WorkHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input, Select } from "@/components/ui/input";
@@ -118,8 +118,18 @@ export function AdminPage() {
   }
 
   return (
-    <PageWrapper className="gap-6">
-      <PageHeader title={t("admin.title")} description={t("admin.description")} />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <WorkHeader
+        title={t("admin.title")}
+        description={t("admin.description")}
+        actions={
+          <>
+            <BalanceChip />
+            <TopUpButton />
+          </>
+        }
+      />
+      <div className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
       <div className="flex flex-wrap gap-1">
         {tabs.map((item) => (
           <button
@@ -376,6 +386,7 @@ export function AdminPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </PageWrapper>
+    </div>
+  </div>
   );
 }

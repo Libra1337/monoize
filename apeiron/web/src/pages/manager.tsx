@@ -2,9 +2,8 @@ import { useTranslation } from "react-i18next";
 import useSWR from "swr";
 import { Boxes, HardDrive, Server } from "lucide-react";
 import { api, type Provider } from "@/lib/api";
-import { PageWrapper } from "@/components/ui/motion";
-import { PageHeader } from "@/components/ui/page";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { BalanceChip, TopUpButton, WorkHeader } from "@/components/app-shell";
 import { Badge, Skeleton } from "@/components/ui/badge";
 import { formatTime } from "@/lib/format";
 
@@ -28,8 +27,18 @@ export function ManagerPage() {
   );
 
   return (
-    <PageWrapper className="gap-6">
-      <PageHeader title={t("manager.title")} description={t("manager.description")} />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <WorkHeader
+        title={t("manager.title")}
+        description={t("manager.description")}
+        actions={
+          <>
+            <BalanceChip />
+            <TopUpButton />
+          </>
+        }
+      />
+      <div className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
 
       <section className="space-y-3">
         <h2 className="flex items-center gap-2 font-display text-lg font-semibold tracking-tight">
@@ -116,6 +125,7 @@ export function ManagerPage() {
           </CardContent>
         </Card>
       </section>
-    </PageWrapper>
+    </div>
+  </div>
   );
 }

@@ -21,11 +21,10 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Loader2, Play, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, PanelLeft, Play, Trash2 } from "lucide-react";
 import { api, assetContentUrl, type Graph, type Project, type Run, type Step } from "@/lib/api";
 import { useEventStream, useRun } from "@/lib/sse";
 import { NODE_META } from "@/lib/nodes";
-import { PageWrapper } from "@/components/ui/motion";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Select, Textarea } from "@/components/ui/input";
@@ -184,6 +183,7 @@ export function CanvasPage() {
   const [version, setVersion] = useState(1);
   const [saveState, setSaveState] = useState<"idle" | "pending" | "saved">("idle");
   const [inspectId, setInspectId] = useState<string | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(true);
   const [runId, setRunId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const instanceRef = useRef<ReactFlowInstance<FlowNode> | null>(null);
@@ -430,29 +430,44 @@ export function CanvasPage() {
   }
 
   return (
-    <PageWrapper className="min-h-0 gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/projects")}>
-            ←
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {/* Floating toolbar (ComfyUI-style) over the full-bleed canvas */}
+      <div className="pointer-events-none absolute inset-x-3 top-3 z-20 flex items-center gap-2">
+        <div className="pointer-events-auto flex min-w-0 items-center gap-2 rounded-lg border bg-card/95 px-2.5 py-1.5 shadow-sm backdrop-blur">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => navigate("/projects")}
+            aria-label="back"
+          >
+            <ArrowLeft className="h-4 w-4" />
           </Button>
-          <h1 className="truncate font-display text-xl font-semibold tracking-tight">
-            {project.title}
-          </h1>
+          <span className="truncate text-sm font-medium">{project.title}</span>
           <span className="font-mono text-xs text-muted-foreground">
-            {saveState === "pending" ? t("canvas.savePending") : `v${version}`}
+            {saveState === "pending" ? t("canvas.savePending") : `v{version}`}
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={runGraph} disabled={running}>
+        <div className="pointer-events-auto ml-auto flex items-center gap-1.5 rounded-lg border bg-card/95 px-2 py-1.5 shadow-sm backdrop-blur">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setPaletteOpen((open) => !open)}
+            aria-label={t("canvas.palette")}
+          >
+            <PanelLeft className="h-4 w-4" />
+          </Button>
+          <Button variant="primary" size="sm" className="h-7" onClick={runGraph} disabled={running}>
             {running ? <Loader2 className="animate-spin" /> : <Play />}
             {running ? t("canvas.running") : t("canvas.run")}
           </Button>
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[168px_1fr] gap-3">
-        <aside className="hidden min-h-0 flex-col gap-1 overflow-y-auto rounded-lg border bg-card p-2 md:flex">
+      {/* Node palette */}
+      {paletteOpen ? (
+        <aside className="absolute left-3 top-16 z-20 flex w-44 flex-col gap-1 rounded-lg border bg-card/95 p-2 shadow-sm backdrop-blur">
           <div className="px-2 pb-1 font-mono text-xs uppercase tracking-wider text-muted-foreground">
             {t("canvas.palette")}
           </div>
@@ -466,43 +481,44 @@ export function CanvasPage() {
               {meta.kind}
             </button>
           ))}
-          <div className="mt-auto px-2 pt-3 text-[10px] leading-relaxed text-muted-foreground/70">
+          <div className="px-2 pt-2 text-[10px] leading-relaxed text-muted-foreground/70">
             {t("canvas.hint")}
           </div>
         </aside>
+      ) : null}
 
-        <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border bg-background">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            onNodesChange={(changes) => {
-              onNodesChange(changes);
-              if (changes.some((change) => change.type !== "select")) scheduleSave();
-            }}
-            onEdgesChange={(changes) => {
-              onEdgesChange(changes);
-              if (changes.some((change) => change.type !== "select")) scheduleSave();
-            }}
-            onConnect={onConnect}
-            onInit={(instance) => {
-              instanceRef.current = instance;
-            }}
-            onNodeDoubleClick={(_, node) => setInspectId(node.id)}
-            onNodesDelete={() => scheduleSave()}
-            fitView
-            proOptions={{ hideAttribution: true }}
-          >
-            <Background variant={BackgroundVariant.Dots} gap={20} className="bg-muted/40" />
-            <Controls showInteractive={false} />
-            <MiniMap pannable zoomable />
-          </ReactFlow>
-          {running && !terminal ? (
-            <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full border bg-card px-3 py-1 font-mono text-xs text-primary shadow-sm">
-              {t("canvas.running")}
-            </div>
-          ) : null}
-        </div>
+      {/* Full-bleed canvas */}
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-background">
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          onNodesChange={(changes) => {
+            onNodesChange(changes);
+            if (changes.some((change) => change.type !== "select")) scheduleSave();
+          }}
+          onEdgesChange={(changes) => {
+            onEdgesChange(changes);
+            if (changes.some((change) => change.type !== "select")) scheduleSave();
+          }}
+          onConnect={onConnect}
+          onInit={(instance) => {
+            instanceRef.current = instance;
+          }}
+          onNodeDoubleClick={(_, node) => setInspectId(node.id)}
+          onNodesDelete={() => scheduleSave()}
+          fitView
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={20} className="bg-muted/40" />
+          <Controls showInteractive={false} />
+          <MiniMap pannable zoomable />
+        </ReactFlow>
+        {running && !terminal ? (
+          <div className="absolute left-1/2 top-16 z-10 -translate-x-1/2 rounded-full border bg-card px-3 py-1 font-mono text-xs text-primary shadow-sm">
+            {t("canvas.running")}
+          </div>
+        ) : null}
       </div>
 
       <Dialog open={!!inspectId} onOpenChange={(open) => !open && setInspectId(null)}>
@@ -531,9 +547,7 @@ export function CanvasPage() {
                       onChange={(event) => updateParam(field.key, event.target.value)}
                     >
                       {(field.options ?? []).map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
+                        <option key={option}>{option}</option>
                       ))}
                     </Select>
                   ) : field.type === "size" ? (
@@ -543,9 +557,7 @@ export function CanvasPage() {
                       onChange={(event) => updateParam(field.key, event.target.value)}
                     >
                       {["1280x720", "1920x1080", "720x1280", "1080x1920"].map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
+                        <option key={option}>{option}</option>
                       ))}
                     </Select>
                   ) : (
@@ -604,6 +616,6 @@ export function CanvasPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </PageWrapper>
+    </div>
   );
 }

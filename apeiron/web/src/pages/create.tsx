@@ -6,10 +6,8 @@ import useSWR from "swr";
 import { CheckCircle2, CircleDashed, Download, Loader2, Sparkles, XCircle } from "lucide-react";
 import { api, assetContentUrl, type Run } from "@/lib/api";
 import { useEventStream, useRun } from "@/lib/sse";
-import { PageWrapper } from "@/components/ui/motion";
-import { PageHeader } from "@/components/ui/page";
+import { BalanceChip, TopUpButton, WorkHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { Label, Switch } from "@/components/ui/controls";
 import { Skeleton } from "@/components/ui/badge";
@@ -35,31 +33,30 @@ function StageRow({
   state: "done" | "active" | "todo" | "failed";
 }) {
   return (
-    <div className="flex items-center gap-3 py-2">
+    <div className="flex items-center gap-3 py-2.5">
       {state === "done" ? (
-        <CheckCircle2 className="h-4 w-4 text-success" />
+        <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
       ) : state === "active" ? (
-        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
       ) : state === "failed" ? (
-        <XCircle className="h-4 w-4 text-destructive" />
+        <XCircle className="h-4 w-4 shrink-0 text-destructive" />
       ) : (
-        <CircleDashed className="h-4 w-4 text-muted-foreground/40" />
+        <CircleDashed className="h-4 w-4 shrink-0 text-muted-foreground/40" />
       )}
-      <span className="font-mono text-xs text-muted-foreground">
+      <span className="w-6 font-mono text-xs text-muted-foreground">
         {String(index + 1).padStart(2, "0")}
       </span>
-      <span
-        className={cn(
-          "text-sm",
-          state === "todo" ? "text-muted-foreground/60" : "text-foreground",
-        )}
-      >
+      <span className={cn("text-sm", state === "todo" ? "text-muted-foreground/60" : "text-foreground")}>
         {label}
       </span>
     </div>
   );
 }
 
+/**
+ * Pro-tool layout (Jimeng creation page pattern): fixed parameter panel on
+ * the left, the render stage fills the rest.
+ */
 export function CreatePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -82,14 +79,12 @@ export function CreatePage() {
 
   const { data: runData } = useRun(runId);
   const run = runData as Run | undefined;
+  const terminal = run ? ["succeeded", "failed", "canceled", "partial"].includes(run.status) : false;
 
   const { data: estimate } = useSWR(
     ["estimate", duration, materialMode] as const,
-    ([, seconds, mode]) =>
-      api.get<Estimate>(`/estimate/oneclick?seconds=${seconds}&mode=${mode}`),
+    ([, seconds, mode]) => api.get<Estimate>(`/estimate/oneclick?seconds=${seconds}&mode=${mode}`),
   );
-
-  const terminal = run ? ["succeeded", "failed", "canceled", "partial"].includes(run.status) : false;
 
   const stages = useMemo(() => {
     const steps = run?.steps ?? [];
@@ -137,170 +132,157 @@ export function CreatePage() {
   }
 
   return (
-    <PageWrapper className="gap-6">
-      <PageHeader title={t("create.title")} description={t("create.description")} />
-      <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("create.title")}</CardTitle>
-            <CardDescription>
-              {estimate
-                ? `${t("create.estimateShots", { shots: estimate.shots })} · ${t("create.estimate")} ${nanoToUsd(estimate.total_nano_usd)}`
-                : null}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+    <>
+      <WorkHeader
+        title={t("create.title")}
+        description={t("create.description")}
+        actions={
+          <>
+            <BalanceChip />
+            <TopUpButton />
+          </>
+        }
+      />
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <aside className="w-full shrink-0 space-y-5 overflow-y-auto border-b p-5 pb-24 lg:w-[360px] lg:border-b-0 lg:border-r lg:pb-5">
+          <div className="space-y-2">
+            <Label htmlFor="topic">{t("create.topic")}</Label>
+            <Textarea
+              id="topic"
+              rows={5}
+              value={topic}
+              placeholder={t("create.topicPlaceholder")}
+              onChange={(event) => setTopic(event.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="style">{t("create.style")}</Label>
+            <Input
+              id="style"
+              value={style}
+              placeholder={t("create.stylePlaceholder")}
+              onChange={(event) => setStyle(event.target.value)}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label htmlFor="topic">{t("create.topic")}</Label>
-              <Textarea
-                id="topic"
-                rows={4}
-                value={topic}
-                placeholder={t("create.topicPlaceholder")}
-                onChange={(event) => setTopic(event.target.value)}
+              <Label htmlFor="voice">{t("create.voice")}</Label>
+              <Select id="voice" value={voice} onChange={(event) => setVoice(event.target.value)}>
+                {VOICES.map((option) => (
+                  <option key={option}>{option}</option>
+                ))}
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="duration">{t("create.duration")}</Label>
+              <Input
+                id="duration"
+                type="number"
+                min={5}
+                max={300}
+                step={5}
+                value={duration}
+                onChange={(event) => setDuration(Number(event.target.value) || 30)}
               />
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="style">{t("create.style")}</Label>
-                <Input
-                  id="style"
-                  value={style}
-                  placeholder={t("create.stylePlaceholder")}
-                  onChange={(event) => setStyle(event.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="voice">{t("create.voice")}</Label>
-                <Select
-                  id="voice"
-                  value={voice}
-                  onChange={(event) => setVoice(event.target.value)}
-                >
-                  {VOICES.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="duration">{t("create.duration")}</Label>
-                <Input
-                  id="duration"
-                  type="number"
-                  min={5}
-                  max={300}
-                  step={5}
-                  value={duration}
-                  onChange={(event) => setDuration(Number(event.target.value) || 30)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="material">{t("create.materialMode")}</Label>
-                <Select
-                  id="material"
-                  value={materialMode}
-                  onChange={(event) => setMaterialMode(event.target.value as "stock" | "ai_image")}
-                >
-                  <option value="stock">{t("create.stock")}</option>
-                  <option value="ai_image">{t("create.aiImage")}</option>
-                </Select>
-              </div>
-            </div>
-            <div className="flex items-center justify-between rounded-md border p-3">
-              <Label htmlFor="subtitle-switch">{t("create.subtitle")}</Label>
-              <Switch
-                id="subtitle-switch"
-                checked={subtitle}
-                onCheckedChange={setSubtitle}
-              />
-            </div>
-            <div className="flex items-center justify-between gap-4 pt-2">
-              <div className="text-sm text-muted-foreground">
-                {estimate ? (
-                  <span className="font-mono">
-                    {t("create.estimate")}: {nanoToUsd(estimate.total_nano_usd)}
-                  </span>
-                ) : (
-                  <Skeleton className="h-4 w-28" />
-                )}
-              </div>
-              <Button variant="primary" onClick={submit} disabled={submitting || (!!runId && !terminal)}>
-                {submitting ? <Loader2 className="animate-spin" /> : <Sparkles />}
-                {submitting ? t("create.submitting") : t("create.submit")}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="material">{t("create.materialMode")}</Label>
+            <Select
+              id="material"
+              value={materialMode}
+              onChange={(event) => setMaterialMode(event.target.value as "stock" | "ai_image")}
+            >
+              <option value="stock">{t("create.stock")}</option>
+              <option value="ai_image">{t("create.aiImage")}</option>
+            </Select>
+          </div>
+          <div className="flex items-center justify-between rounded-md border p-3">
+            <Label htmlFor="subtitle-switch">{t("create.subtitle")}</Label>
+            <Switch id="subtitle-switch" checked={subtitle} onCheckedChange={setSubtitle} />
+          </div>
+          <div className="flex items-center justify-between border-t pt-4">
+            <span className="font-mono text-xs text-muted-foreground">
+              {estimate ? (
+                <>
+                  {t("create.estimateShots", { shots: estimate.shots })} ·{" "}
+                  {nanoToUsd(estimate.total_nano_usd)}
+                </>
+              ) : (
+                <Skeleton className="h-4 w-24" />
+              )}
+            </span>
+            <Button variant="primary" onClick={submit} disabled={submitting || (!!runId && !terminal)}>
+              {submitting ? <Loader2 className="animate-spin" /> : <Sparkles />}
+              {submitting ? t("create.submitting") : t("create.submit")}
+            </Button>
+          </div>
+        </aside>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              {!run
-                ? t("create.title")
-                : terminal
-                  ? run.status === "succeeded"
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-4 overflow-y-auto p-6 pb-20 lg:pb-6">
+          {!run ? (
+            <p className="max-w-sm text-center text-sm text-muted-foreground">
+              {t("create.description")}
+            </p>
+          ) : (
+            <div className="w-full max-w-xl space-y-4">
+              <div className="text-center text-sm font-medium">
+                {!terminal
+                  ? t("create.running")
+                  : run.status === "succeeded"
                     ? t("create.doneTitle")
-                    : t("create.failedTitle")
-                  : t("create.running")}
-            </CardTitle>
-            {run ? (
-              <CardDescription className="font-mono text-xs">
-                {run.id}
-              </CardDescription>
-            ) : null}
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {run ? (
-              <>
+                    : t("create.failedTitle")}
+              </div>
+              <div className="rounded-lg border bg-card px-5 py-3">
                 {stages.map((stage, index) => (
                   <StageRow key={stage.label} index={index} label={stage.label} state={stage.state} />
                 ))}
-                {run.error ? (
-                  <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
-                    {run.error}
-                  </p>
-                ) : null}
-                {terminal && run.status === "succeeded" && run.output ? (
-                  <div className="space-y-3 pt-2">
-                    <video
-                      className="aspect-video w-full rounded-md border bg-muted"
-                      controls
-                      src={assetContentUrl(run.output.asset_id)}
-                    />
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => window.open(assetContentUrl(run.output!.asset_id), "_blank")}>
-                        <Download />
-                        {t("common.download")}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => run.project_id && navigate(`/canvas/${run.project_id}`)}
-                      >
-                        {t("common.openInCanvas")}
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => setRunId(null)}>
-                        {t("create.newFilm")}
-                      </Button>
-                    </div>
+              </div>
+              {run.error ? (
+                <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+                  {run.error}
+                </p>
+              ) : null}
+              {terminal && run.status === "succeeded" && run.output ? (
+                <div className="space-y-3">
+                  <video
+                    className="aspect-video w-full rounded-md border bg-muted"
+                    controls
+                    src={assetContentUrl(run.output.asset_id)}
+                  />
+                  <div className="flex justify-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => window.open(assetContentUrl(run.output!.asset_id), "_blank")}
+                    >
+                      <Download />
+                      {t("common.download")}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => run.project_id && navigate(`/canvas/${run.project_id}`)}
+                    >
+                      {t("common.openInCanvas")}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setRunId(null)}>
+                      {t("create.newFilm")}
+                    </Button>
                   </div>
-                ) : null}
-                {terminal && run.status !== "succeeded" ? (
+                </div>
+              ) : null}
+              {terminal && run.status !== "succeeded" ? (
+                <div className="flex justify-center">
                   <Button variant="outline" size="sm" onClick={() => setRunId(null)}>
                     {t("create.newFilm")}
                   </Button>
-                ) : null}
-              </>
-            ) : (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                {t("create.description")}
-              </p>
-            )}
-          </CardContent>
-        </Card>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </section>
       </div>
-    </PageWrapper>
+    </>
   );
 }

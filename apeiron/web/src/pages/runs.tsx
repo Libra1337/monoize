@@ -5,8 +5,8 @@ import { toast } from "sonner";
 import { ChevronDown, Download, History, XCircle } from "lucide-react";
 import { api, assetContentUrl, type Run, type Step } from "@/lib/api";
 import { useEventStream } from "@/lib/sse";
-import { PageWrapper } from "@/components/ui/motion";
-import { EmptyState, PageHeader, StatusDot } from "@/components/ui/page";
+import { EmptyState, StatusDot } from "@/components/ui/page";
+import { BalanceChip, TopUpButton, WorkHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -43,8 +43,18 @@ export function RunsPage() {
   const runs = data?.runs ?? [];
 
   return (
-    <PageWrapper className="gap-6">
-      <PageHeader title={t("runs.title")} description={t("runs.description")} />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <WorkHeader
+        title={t("runs.title")}
+        description={t("runs.description")}
+        actions={
+          <>
+            <BalanceChip />
+            <TopUpButton />
+          </>
+        }
+      />
+      <div className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
       {isLoading ? (
         <div className="space-y-2">
           {[0, 1, 2].map((index) => (
@@ -148,6 +158,7 @@ export function RunsPage() {
           })}
         </div>
       )}
-    </PageWrapper>
+    </div>
+  </div>
   );
 }
