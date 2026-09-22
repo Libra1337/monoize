@@ -114,7 +114,13 @@
       "documentary": "纪录片",
       "animation": "动画",
       "noir": "黑白"
-    }
+    },
+    "reviewHint": "分镜评审——逐镜编辑后继续生成",
+    "continue": "继续生成",
+    "stageGate": "先评审分镜",
+    "shotDescription": "镜头描述",
+    "shotKeywords": "素材关键词",
+    "noMaterial": "无库存素材,请改关键词"
   },
   "projects": {
     "title": "项目",
@@ -139,7 +145,10 @@
     "hint": "从端口拖出连线。双击节点编辑参数。",
     "versionConflict": "图已在服务端更新,已重新加载最新版本。",
     "runStarted": "运行已启动",
-    "outputs": "输出"
+    "outputs": "输出",
+    "agent": "工作流助手",
+    "agentHint": "告诉它你想要什么:“把剧本拆成 8 个镜头”“视频改为 10 秒”“生成成片”。它会直接替你改图。",
+    "agentPlaceholder": "例如:拆成 8 个镜头,然后运行"
   },
   "templates": {
     "title": "模板",

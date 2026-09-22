@@ -114,7 +114,13 @@
       "documentary": "紀錄片",
       "animation": "動畫",
       "noir": "黑白"
-    }
+    },
+    "reviewHint": "分鏡評審——逐鏡編輯後繼續生成",
+    "continue": "繼續生成",
+    "stageGate": "先評審分鏡",
+    "shotDescription": "鏡頭描述",
+    "shotKeywords": "素材關鍵詞",
+    "noMaterial": "無庫存素材,請改關鍵詞"
   },
   "projects": {
     "title": "專案",
@@ -139,7 +145,10 @@
     "hint": "從埠拖出連線。雙擊節點編輯參數。",
     "versionConflict": "圖已在伺服器更新,已重新載入最新版本。",
     "runStarted": "執行已啟動",
-    "outputs": "輸出"
+    "outputs": "輸出",
+    "agent": "工作流助手",
+    "agentHint": "告訴它你想要什麼:「把劇本拆成 8 個鏡頭」「影片改為 10 秒」「生成成片」。它會直接替你改圖。",
+    "agentPlaceholder": "例如:拆成 8 個鏡頭,然後執行"
   },
   "templates": {
     "title": "範本",

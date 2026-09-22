@@ -353,11 +353,18 @@ that starts the media+assembly stages from the edited shots. (LTX stage
 model.)
 
 AP-AG2. **Conversational graph agent.** `POST /api/projects/{id}/agent`
-runs an LLM tool loop (bounded 12 iterations) with tools `update_script`,
-`create_shots`, `update_shot`, `generate_media`, `run_graph`; every
-mutation is a graph version bump and an SSE `graph_patch`. The canvas gets
-a right-side chat panel. (ComfyUI-R1 direction: natural language compiles
-to the workflow.)
+body `{"message": string}` runs an LLM tool loop (bounded 12 iterations)
+with tools `update_script` `{prompt, system}`, `create_shots`
+`{count}` (adds a storyboard node fed by the script), `update_shot`
+`{index, description?, keywords?}` (writes `shot_overrides` on the
+storyboard node), `set_param` `{node_id, key, value}`, `run_graph` `{}`.
+Every mutation bumps the project version and broadcasts an SSE
+`graph_patch` `{project_id, version}`. The response carries the final
+assistant message and the list of applied tool calls. The canvas gets a
+right-side chat panel that submits messages and reloads the graph on each
+`graph_patch`. Agent LLM steps bill by token usage with the idempotency
+key `apeiron_step_agent_<run uuid>`. (ComfyUI-R1 direction: natural
+language compiles to the workflow.)
 
 AP-AG3. **Material-aware storyboard.** Before finalizing shot keywords the
 storyboard step queries the enabled material provider and records the top

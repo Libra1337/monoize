@@ -28,6 +28,10 @@ pub struct OneclickBody {
     /// "16:9" (default) | "9:16" | "1:1"
     #[serde(default)]
     pub aspect: String,
+    /// AP-AG1: "storyboard" stops the run after script+storyboard for
+    /// per-shot review; absent runs the full pipeline.
+    #[serde(default)]
+    pub stop_after: Option<String>,
 }
 
 fn default_duration() -> u64 {
@@ -107,6 +111,7 @@ pub async fn oneclick(
             "subtitle": body.subtitle,
             "shot_count": shot_count,
             "root": "final",
+            "stop_after": body.stop_after,
         }),
     )
     .await?;
@@ -114,6 +119,31 @@ pub async fn oneclick(
         StatusCode::CREATED,
         Json(json!({ "project_id": project_id, "run": run, "graph": graph })),
     ))
+}
+
+#[derive(Deserialize)]
+pub struct ContinueBody {
+    pub project_id: String,
+}
+
+/// AP-AG1: continue a storyboard-reviewed project — a fresh full-pipeline
+/// run of the project graph (the UI persists shot edits into the graph
+/// before calling this).
+pub async fn continue_run(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(body): Json<ContinueBody>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    let user = crate::auth::current_user(&state, &headers).await?;
+    let _ = sqlx::query("SELECT id FROM projects WHERE id = $1 AND user_id = $2")
+        .bind(&body.project_id)
+        .bind(&user.id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("project"))?;
+    let run = super::projects::create_run(&state, &user.id, Some(&body.project_id), "graph", json!({ "root": "final" })).await?;
+    Ok((StatusCode::CREATED, Json(run)))
 }
 
 #[derive(Deserialize)]

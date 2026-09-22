@@ -114,7 +114,13 @@
       "documentary": "ドキュメンタリー",
       "animation": "アニメ",
       "noir": "ノワール"
-    }
+    },
+    "reviewHint": "絵コンテ確認——各ショットを編集して続行",
+    "continue": "生成を続ける",
+    "stageGate": "先に絵コンテ確認",
+    "shotDescription": "ショット説明",
+    "shotKeywords": "素材キーワード",
+    "noMaterial": "素材なし — キーワードを変更"
   },
   "projects": {
     "title": "プロジェクト",
@@ -139,7 +145,10 @@
     "hint": "ポートからドラッグして接続。ノードをダブルクリックでパラメータ編集。",
     "versionConflict": "グラフがサーバー側で更新されたため、最新版を再読み込みしました。",
     "runStarted": "実行を開始しました",
-    "outputs": "出力"
+    "outputs": "出力",
+    "agent": "ワークフローエージェント",
+    "agentHint": "やりたいことを伝えてください:「脚本を8ショットに分割」「動画を10秒に」「映画を生成」。グラフを直接編集します。",
+    "agentPlaceholder": "例:8ショットに分割して実行"
   },
   "templates": {
     "title": "テンプレート",

@@ -114,7 +114,13 @@
       "documentary": "Documentary",
       "animation": "Animation",
       "noir": "Noir"
-    }
+    },
+    "reviewHint": "Storyboard review — edit each shot, then continue",
+    "continue": "Continue production",
+    "stageGate": "Review storyboard first",
+    "shotDescription": "Shot description",
+    "shotKeywords": "stock keywords",
+    "noMaterial": "no stock match — edit keywords"
   },
   "projects": {
     "title": "Projects",
@@ -139,7 +145,10 @@
     "hint": "Drag from a port to connect. Double-click a node to edit its parameters.",
     "versionConflict": "The graph changed on the server. Reloaded the latest version.",
     "runStarted": "Run started",
-    "outputs": "Outputs"
+    "outputs": "Outputs",
+    "agent": "Workflow agent",
+    "agentHint": "Tell the agent what you want: “split the script into 8 shots”, “set the video to 10 seconds”, “generate the film”. It edits the graph for you.",
+    "agentPlaceholder": "e.g. split into 8 shots, then run"
   },
   "templates": {
     "title": "Templates",

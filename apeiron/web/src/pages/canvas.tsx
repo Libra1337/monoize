@@ -21,7 +21,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowLeft, Loader2, PanelLeft, Play, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, MessageSquare, PanelLeft, Play, Send, Trash2 } from "lucide-react";
 import { api, assetContentUrl, type Graph, type Project, type Run, type Step } from "@/lib/api";
 import { useEventStream, useRun } from "@/lib/sse";
 import { NODE_META } from "@/lib/nodes";
@@ -184,6 +184,10 @@ export function CanvasPage() {
   const [saveState, setSaveState] = useState<"idle" | "pending" | "saved">("idle");
   const [inspectId, setInspectId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
   const [runId, setRunId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const instanceRef = useRef<ReactFlowInstance<FlowNode> | null>(null);
@@ -429,6 +433,39 @@ export function CanvasPage() {
     );
   }
 
+  async function sendAgentMessage() {
+    const message = chatInput.trim();
+    if (!message || !projectId || chatSending) return;
+    setChatMessages((current) => [...current, { role: "user", text: message }]);
+    setChatInput("");
+    setChatSending(true);
+    try {
+      const response = await api.post<{ message: string; applied: Array<Record<string, unknown>> }>(
+        `/projects/${projectId}/agent`,
+        { message },
+      );
+      const applied = (response.applied ?? []).map((call) => String(call.tool ?? "?")).join(", ");
+      setChatMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          text: response.message || (applied ? `✓ ${applied}` : "…"),
+        },
+      ]);
+      if ((response.applied ?? []).length > 0) {
+        loadedRef.current = null;
+        void reloadProject();
+      }
+    } catch (error) {
+      setChatMessages((current) => [
+        ...current,
+        { role: "assistant", text: `⚠ ${String(error)}` },
+      ]);
+    } finally {
+      setChatSending(false);
+    }
+  }
+
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {/* Floating toolbar (ComfyUI-style) over the full-bleed canvas */}
@@ -457,6 +494,15 @@ export function CanvasPage() {
             aria-label={t("canvas.palette")}
           >
             <PanelLeft className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setChatOpen((open) => !open)}
+            aria-label={t("canvas.agent")}
+          >
+            <MessageSquare className="h-4 w-4" />
           </Button>
           <Button variant="primary" size="sm" className="h-7" onClick={runGraph} disabled={running}>
             {running ? <Loader2 className="animate-spin" /> : <Play />}
@@ -520,6 +566,57 @@ export function CanvasPage() {
           </div>
         ) : null}
       </div>
+
+      {/* AP-AG2: conversational graph agent panel */}
+      {chatOpen ? (
+        <aside className="absolute bottom-3 right-3 top-16 z-20 flex w-80 flex-col rounded-lg border bg-card/95 shadow-sm backdrop-blur">
+          <div className="flex items-center justify-between border-b px-3 py-2">
+            <span className="text-xs font-medium">{t("canvas.agent")}</span>
+          </div>
+          <div className="flex-1 space-y-2 overflow-y-auto p-3">
+            {chatMessages.length === 0 ? (
+              <p className="text-[11px] leading-relaxed text-muted-foreground/70">
+                {t("canvas.agentHint")}
+              </p>
+            ) : (
+              chatMessages.map((entry, index) => (
+                <div
+                  key={index}
+                  className={
+                    entry.role === "user"
+                      ? "ml-6 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs"
+                      : "mr-6 rounded-md border px-2.5 py-1.5 text-xs"
+                  }
+                >
+                  {entry.text}
+                </div>
+              ))
+            )}
+            {chatSending ? (
+              <div className="mr-6 flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+              </div>
+            ) : null}
+          </div>
+          <form
+            className="flex gap-1.5 border-t p-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendAgentMessage();
+            }}
+          >
+            <input
+              value={chatInput}
+              onChange={(event) => setChatInput(event.target.value)}
+              placeholder={t("canvas.agentPlaceholder")}
+              className="h-8 w-full rounded-md border bg-transparent px-2 text-xs focus-visible:outline-none"
+            />
+            <Button type="submit" variant="primary" size="sm" className="h-8" disabled={chatSending}>
+              <Send className="h-3.5 w-3.5" />
+            </Button>
+          </form>
+        </aside>
+      ) : null}
 
       <Dialog open={!!inspectId} onOpenChange={(open) => !open && setInspectId(null)}>
         <DialogContent>

@@ -1,6 +1,7 @@
 //! HTTP API surface (AP-H1..H4) and router assembly.
 
 pub mod admin;
+pub mod agent;
 pub mod assets_api;
 pub mod auth_api;
 pub mod misc;
@@ -30,8 +31,10 @@ pub fn router(state: SharedState) -> Router {
         )
         .route("/projects/{id}/graph", put(projects::save_graph))
         .route("/projects/{id}/run", post(projects::start_run))
+        .route("/projects/{id}/agent", post(agent::submit))
         // Runs
         .route("/runs/oneclick", post(runs::oneclick))
+        .route("/runs/continue", post(runs::continue_run))
         .route("/estimate/oneclick", get(runs::estimate_oneclick))
         .route("/runs", get(runs::list))
         .route("/runs/{id}", get(runs::get_run))

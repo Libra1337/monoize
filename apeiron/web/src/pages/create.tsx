@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -81,6 +81,11 @@ export function CreatePage() {
   const [subtitle, setSubtitle] = useState(true);
   const [runId, setRunId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [continuing, setContinuing] = useState(false);
+  // AP-AG1: stage-gated mode — run stops after storyboard for review.
+  const [stageGate, setStageGate] = useState(true);
+  const [reviewProjectId, setReviewProjectId] = useState<string | null>(null);
+  const [editedShots, setEditedShots] = useState<Record<number, { description: string; keywords: string }>>({});
 
   const { data: runData } = useRun(runId);
   const run = runData as Run | undefined;
@@ -92,6 +97,27 @@ export function CreatePage() {
   );
   const shotCount = estimate?.shots ?? Math.ceil(duration / 5);
   const { tiles, done } = shotProgress(run?.steps, shotCount);
+
+  /** Storyboard shots from the run, merged with local edits (AP-AG1). */
+  const boardShots = useMemo(() => {
+    const board = (run?.steps ?? []).find((step) => step.kind === "storyboard");
+    const shots = (board?.result?.shots as Array<Record<string, unknown>>) ?? [];
+    return shots.map((shot, index) => {
+      const edit = editedShots[index];
+      return {
+        index,
+        description: edit?.description ?? String(shot.description ?? ""),
+        keywords: edit?.keywords ?? String(shot.keywords ?? ""),
+        narration: String(shot.narration ?? ""),
+        duration_secs: Number(shot.duration_secs ?? 5),
+        materialCandidates: shot.material_candidates as number | null | undefined,
+      };
+    });
+  }, [run, editedShots]);
+
+  const runStopped =
+    terminal &&
+    (run?.params as Record<string, unknown> | undefined)?.stop_after === "storyboard";
 
   const frameClass =
     aspect === "16:9"
@@ -115,13 +141,48 @@ export function CreatePage() {
         material_mode: materialMode,
         subtitle,
         aspect,
+        stop_after: stageGate ? "storyboard" : null,
       });
+      if (stageGate) setReviewProjectId(created.project_id);
       setRunId(created.run.id);
       toast.success(t("canvas.runStarted"));
     } catch (error) {
       toast.error(String(error));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function continueProduction() {
+    if (!reviewProjectId) return;
+    setContinuing(true);
+    try {
+      const project = await api.get<import("@/lib/api").Project>(
+        `/projects/${reviewProjectId}`,
+      );
+      const graph = { ...project.graph, version: undefined };
+      const board = (graph.nodes ?? []).find((node) => node.id === "board");
+      // Persist per-shot edits into the storyboard node's fan-out payload:
+      // material steps read shot keywords/description at dispatch.
+      if (board) {
+        board.params = {
+          ...(board.params ?? {}),
+          shot_overrides: editedShots,
+        };
+      }
+      await api.put(`/projects/${reviewProjectId}/graph`, {
+        version: project.version + 1,
+        graph,
+      });
+      const started = await api.post<Run>("/runs/continue", {
+        project_id: reviewProjectId,
+      });
+      setRunId(started.id);
+      toast.success(t("canvas.runStarted"));
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setContinuing(false);
     }
   }
 
@@ -247,6 +308,11 @@ export function CreatePage() {
               <Label htmlFor="subtitle-switch" className="text-xs">{t("create.subtitle")}</Label>
               <Switch id="subtitle-switch" checked={subtitle} onCheckedChange={setSubtitle} />
             </div>
+
+            <div className="flex items-center justify-between rounded-md border px-3 py-1.5">
+              <Label htmlFor="gate-switch" className="text-xs">{t("create.stageGate")}</Label>
+              <Switch id="gate-switch" checked={stageGate} onCheckedChange={setStageGate} />
+            </div>
           </div>
 
           <div className="sticky bottom-0 flex items-center justify-between gap-2 border-t bg-background pt-4">
@@ -276,8 +342,66 @@ export function CreatePage() {
                 frameClass,
               )}
             >
-              {/* Finished film plays in the frame */}
-              {terminal && run?.status === "succeeded" && run.output ? (
+              {/* AP-AG1: storyboard review — edit shots before continuing */}
+              {runStopped && boardShots.length > 0 ? (
+                <div className="flex h-full w-full flex-col">
+                  <div className="border-b px-4 py-2 text-xs font-medium text-muted-foreground">
+                    {t("create.reviewHint")}
+                  </div>
+                  <div className="grid flex-1 content-start gap-2 overflow-y-auto p-4 sm:grid-cols-2">
+                    {boardShots.map((shot) => (
+                      <div key={shot.index} className="space-y-1.5 rounded-md border bg-card p-3">
+                        <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+                          <span>{String(shot.index + 1).padStart(2, "0")}</span>
+                          <span>{shot.duration_secs}s</span>
+                        </div>
+                        <input
+                          aria-label={`description-${shot.index}`}
+                          className="w-full rounded border bg-transparent px-2 py-1 text-xs focus-visible:outline-none"
+                          value={shot.description}
+                          placeholder={t("create.shotDescription")}
+                          onChange={(event) =>
+                            setEditedShots((current) => ({
+                              ...current,
+                              [shot.index]: {
+                                description: event.target.value,
+                                keywords: shot.keywords,
+                              },
+                            }))
+                          }
+                        />
+                        <input
+                          aria-label={`keywords-${shot.index}`}
+                          className="w-full rounded border bg-transparent px-2 py-1 font-mono text-[11px] text-muted-foreground focus-visible:outline-none"
+                          value={shot.keywords}
+                          placeholder={t("create.shotKeywords")}
+                          onChange={(event) =>
+                            setEditedShots((current) => ({
+                              ...current,
+                              [shot.index]: {
+                                description: shot.description,
+                                keywords: event.target.value,
+                              },
+                            }))
+                          }
+                        />
+                        <p className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground/80">
+                          {shot.narration}
+                        </p>
+                        {shot.materialCandidates === 0 ? (
+                          <span className="inline-flex items-center rounded border border-warning/50 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning-foreground">
+                            {t("create.noMaterial")}
+                          </span>
+                        ) : typeof shot.materialCandidates === "number" ? (
+                          <span className="font-mono text-[10px] text-muted-foreground/60">
+                            ~{shot.materialCandidates} clips
+                          </span>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : terminal && run?.status === "succeeded" && run.output ? (
                 <video
                   className="h-full w-full"
                   controls
@@ -362,6 +486,21 @@ export function CreatePage() {
                     onClick={() => run.project_id && navigate(`/canvas/${run.project_id}`)}
                   >
                     {t("common.openInCanvas")}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setRunId(null)}>
+                    {t("create.newFilm")}
+                  </Button>
+                </>
+              ) : runStopped ? (
+                <>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={continueProduction}
+                    disabled={continuing}
+                  >
+                    {continuing ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                    {t("create.continue")}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => setRunId(null)}>
                     {t("create.newFilm")}

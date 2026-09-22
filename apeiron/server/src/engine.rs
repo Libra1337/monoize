@@ -375,9 +375,17 @@ async fn process_run(state: &SharedState, run: &RunRow) -> Result<(), String> {
     };
     let root = run.params.get("root").and_then(Value::as_str);
     let reachable = graph::reachable_nodes(&graph, root);
+    // AP-AG1: `stop_after` freezes the pipeline past a stage boundary.
+    // Nodes after the boundary are marked skipped so the run finalizes
+    // instead of dispatching the rest of the graph.
+    let stop_after = run.params.get("stop_after").and_then(Value::as_str);
     let order: Vec<&Node> = graph::topo_order(&graph)
         .into_iter()
         .filter(|node| reachable.contains(&node.id))
+        .filter(|node| match stop_after {
+            Some("storyboard") => !matches!(node.kind.as_str(), "image" | "video" | "material" | "tts" | "subtitle" | "assemble"),
+            _ => true,
+        })
         .collect();
 
     let all_steps = load_run_steps(state, &run.id).await?;
@@ -504,7 +512,7 @@ async fn create_steps_for_node(
     if graph::fan_out_kind(&node.kind) && graph::fed_by_storyboard(graph, node) {
         // AP-E2: one step per shot, created from the storyboard result.
         let source = graph::storyboard_source(graph, node).unwrap_or_default();
-        let shots = by_node
+        let mut shots = by_node
             .get(&source)
             .and_then(|steps| steps.first())
             .and_then(|step| step.result.as_ref())
@@ -512,6 +520,22 @@ async fn create_steps_for_node(
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        // AP-AG1: the storyboard node may carry reviewed per-shot overrides
+        // (persisted by the create page); merge them over the LLM output.
+        if let Some(board) = graph.node(&source) {
+            if let Some(overrides) = board.params.get("shot_overrides").and_then(Value::as_object) {
+                for (index, shot) in shots.iter_mut().enumerate() {
+                    if let Some(edit) = overrides.get(&index.to_string()) {
+                        if let Some(description) = edit.get("description").and_then(Value::as_str) {
+                            shot["description"] = json!(description);
+                        }
+                        if let Some(keywords) = edit.get("keywords").and_then(Value::as_str) {
+                            shot["keywords"] = json!(keywords);
+                        }
+                    }
+                }
+            }
+        }
         for (index, shot) in shots.iter().enumerate() {
             insert_step(
                 state,
@@ -1083,7 +1107,7 @@ async fn run_llm_step(
     let output = crate::upstream::llm_complete(&state, &provider, &system, &prompt, timeout)
         .await
         .map_err(|e| format!("llm upstream: {e}"))?;
-    let result = if step.kind == "storyboard" {
+    let mut result = if step.kind == "storyboard" {
         let count = node
             .params
             .get("count")
@@ -1104,8 +1128,68 @@ async fn run_llm_step(
     {
         return Err(error);
     }
+    // AP-AG3: probe the material bank so review surfaces dead keywords.
+    if step.kind == "storyboard" {
+        if let Some(shots) = result.get_mut("shots").and_then(Value::as_array_mut) {
+            let providers = crate::upstream::list_providers(&state, "material")
+                .await
+                .unwrap_or_default();
+            if let Some(provider) = providers.into_iter().next() {
+                if provider.upstream_kind == "pexels" && !provider.api_key.is_empty() {
+                    for shot in shots.iter_mut().take(24) {
+                        let keywords = shot
+                            .get("keywords")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        if keywords.trim().is_empty() {
+                            continue;
+                        }
+                        let count = pexels_candidate_count(&state, &provider, &keywords).await;
+                        shot["material_candidates"] = json!(count);
+                    }
+                }
+            }
+        }
+    }
     finish_step(&state, step, "succeeded", Some(result), None).await?;
     Ok(())
+}
+
+/// Best-effort Pexels count probe; failures read as `null` (unknown).
+async fn pexels_candidate_count(
+    state: &SharedState,
+    provider: &crate::upstream::Provider,
+    keywords: &str,
+) -> Value {
+    let url = format!(
+        "https://api.pexels.com/videos/search?per_page=1&query={}",
+        keywords
+            .split_whitespace()
+            .next()
+            .unwrap_or("video")
+    );
+    let response = state
+        .http
+        .get(&url)
+        .header("authorization", &provider.api_key)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+    match response {
+        Ok(response) if response.status().is_success() => {
+            match response
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|value| value.get("total_results").and_then(Value::as_i64))
+            {
+                Some(total) => json!(total),
+                None => Value::Null,
+            }
+        }
+        _ => Value::Null,
+    }
 }
 
 async fn run_image_step(
