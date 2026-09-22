@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { SWRConfig } from "swr";
 import { Toaster } from "sonner";
 import { MotionConfig } from "framer-motion";
@@ -31,6 +31,7 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
+    <BrowserRouter>
     <MotionConfig reducedMotion="user">
       <SWRConfig
         value={{
@@ -72,5 +73,6 @@ export default function App() {
         </AuthProvider>
       </SWRConfig>
     </MotionConfig>
+    </BrowserRouter>
   );
 }
