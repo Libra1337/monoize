@@ -1,5 +1,8 @@
 {
-  "brand": { "name": "Apeiron", "tagline": "无界的视频工作台" },
+  "brand": {
+    "name": "Apeiron",
+    "tagline": "无界的视频工作台"
+  },
   "nav": {
     "create": "创作",
     "projects": "项目",
@@ -49,26 +52,29 @@
     "goHome": "进入 Apeiron"
   },
   "landing": {
-    "kicker01": "创作",
-    "heroTitle": "一句话,一部成片。",
-    "heroDescription": "输入主题,Apeiron 自动完成剧本、分镜、镜头素材、配音与字幕;也可以打开节点画布,亲手编排每一个环节。",
-    "ctaPrimary": "开始创作",
-    "ctaCanvas": "打开画布",
+    "anaximander1": "公元前六世纪,阿那克西曼德说,万物生于无限定。",
+    "anaximander2": "两千六百年后,无限终于有了自己的画布。",
+    "promptPlaceholder": "描述你想创作的影片,比如:一段 30 秒的城市夜景驾驶…",
+    "promptCta": "生成成片",
+    "inspiration1": "城市夜景驾驶 30 秒",
+    "inspiration2": "产品发布宣传片",
+    "inspiration3": "希腊哲学入门动画",
+    "pipelineTitle": "从一句话到一部成片",
+    "canvasTitle": "无限画布",
+    "canvasBody": "剧本、分镜、图像、视频、配音、字幕、合成——每个环节都是节点,每条连线都是一条流水线。像 ComfyUI 一样自由,像表单一样简单。",
+    "canvasCta": "打开画布",
     "sectionTemplatesTitle": "从工作流开始",
     "sectionTemplatesDescription": "内置流水线图,直接运行或自由改造。",
     "sectionFeaturesTitle": "是工作台,不是表单",
+    "ctaPrimary": "开始创作",
     "features": {
       "oneclickTitle": "一键成片",
       "oneclickBody": "主题进,成片出:LLM 剧本、分镜、逐镜头素材、TTS 配音、字幕烧录。",
       "canvasTitle": "节点画布",
       "canvasBody": "剧本、分镜、图像、视频、配音与合成节点自由连线,拼出任意流水线。",
       "walletTitle": "平台钱包",
-      "walletBody": "每一步都通过 Monoize 余额结算——预扣费,失败即退款。",
-      "managerTitle": "管理器",
-      "managerBody": "节点包、Provider 与渲染 Worker,一页尽览。"
-    },
-    "sectionCtaTitle": "随时开始",
-    "sectionCtaBody": "打开工作台,今天交付你的第一部片子。"
+      "walletBody": "每一步都通过 Monoize 余额结算——预扣费,失败即退款。"
+    }
   },
   "create": {
     "title": "一键成片",
@@ -169,7 +175,12 @@
   "admin": {
     "title": "管理",
     "description": "管理员界面:Provider、价格、模板、运行。",
-    "tabs": { "providers": "Provider", "prices": "价格", "templates": "模板", "runs": "运行" },
+    "tabs": {
+      "providers": "Provider",
+      "prices": "价格",
+      "templates": "模板",
+      "runs": "运行"
+    },
     "addProvider": "添加 Provider",
     "editProvider": "编辑 Provider",
     "providerName": "名称",

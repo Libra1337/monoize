@@ -1,5 +1,8 @@
 {
-  "brand": { "name": "Apeiron", "tagline": "The boundless video workbench" },
+  "brand": {
+    "name": "Apeiron",
+    "tagline": "The boundless video workbench"
+  },
   "nav": {
     "create": "Create",
     "projects": "Projects",
@@ -49,26 +52,29 @@
     "goHome": "Enter Apeiron"
   },
   "landing": {
-    "kicker01": "CREATE",
-    "heroTitle": "From one sentence to a finished film.",
-    "heroDescription": "Apeiron turns a topic into script, storyboard, shots, voice-over and subtitles — or open the node canvas and wire every step yourself.",
-    "ctaPrimary": "Start creating",
-    "ctaCanvas": "Open the canvas",
+    "anaximander1": "In the sixth century BC, Anaximander taught that all things arise from the boundless.",
+    "anaximander2": "Twenty-six centuries later, the boundless finally has a canvas.",
+    "promptPlaceholder": "Describe the film you want — e.g. a 30s night-drive through the city…",
+    "promptCta": "Create film",
+    "inspiration1": "City night drive, 30s",
+    "inspiration2": "Product launch promo",
+    "inspiration3": "Intro to Greek philosophy",
+    "pipelineTitle": "One sentence to one film",
+    "canvasTitle": "The boundless canvas",
+    "canvasBody": "Script, storyboard, image, video, voice, subtitle, assembly — every step is a node, every connection a pipeline. As free as ComfyUI, as simple as a form.",
+    "canvasCta": "Open the canvas",
     "sectionTemplatesTitle": "Start from a workflow",
-    "sectionTemplatesDescription": "Builtin pipeline graphs, ready to run or remix.",
+    "sectionTemplatesDescription": "Builtin pipeline graphs — run them as-is or remix them.",
     "sectionFeaturesTitle": "A studio, not a form",
+    "ctaPrimary": "Start creating",
     "features": {
       "oneclickTitle": "One-click pipeline",
       "oneclickBody": "Topic in, finished mp4 out: LLM script, storyboard, per-shot media, TTS, burned subtitles.",
       "canvasTitle": "Node canvas",
-      "canvasBody": "Script, storyboard, image, video, voice and assemble nodes connect into any pipeline you can draw.",
+      "canvasBody": "Connect script, storyboard, image, video, voice and assemble nodes into any pipeline you can draw.",
       "walletTitle": "Platform wallet",
-      "walletBody": "Every step settles against your Monoize balance — pre-charged, refunded on failure.",
-      "managerTitle": "Manager",
-      "managerBody": "Node packs, providers and render workers, all observable from one page."
-    },
-    "sectionCtaTitle": "Ready when you are",
-    "sectionCtaBody": "Open the workbench and ship your first film today."
+      "walletBody": "Every step settles against your Monoize balance — pre-charged, refunded on failure."
+    }
   },
   "create": {
     "title": "One-click film",
@@ -169,7 +175,12 @@
   "admin": {
     "title": "Admin",
     "description": "Operator surface: providers, prices, templates, runs.",
-    "tabs": { "providers": "Providers", "prices": "Prices", "templates": "Templates", "runs": "Runs" },
+    "tabs": {
+      "providers": "Providers",
+      "prices": "Prices",
+      "templates": "Templates",
+      "runs": "Runs"
+    },
     "addProvider": "Add provider",
     "editProvider": "Edit provider",
     "providerName": "Name",

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import useSWR from "swr";
 import { CheckCircle2, CircleDashed, Download, Loader2, Sparkles, XCircle } from "lucide-react";
@@ -63,9 +63,10 @@ function StageRow({
 export function CreatePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   useEventStream(true);
 
-  const [topic, setTopic] = useState("");
+  const [topic, setTopic] = useState(() => searchParams.get("topic") ?? "");
   const [style, setStyle] = useState("");
   const [voice, setVoice] = useState("alloy");
   const [duration, setDuration] = useState(30);

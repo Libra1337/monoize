@@ -1,5 +1,8 @@
 {
-  "brand": { "name": "Apeiron", "tagline": "無界的影片工作台" },
+  "brand": {
+    "name": "Apeiron",
+    "tagline": "無界的影片工作台"
+  },
   "nav": {
     "create": "創作",
     "projects": "專案",
@@ -49,26 +52,29 @@
     "goHome": "進入 Apeiron"
   },
   "landing": {
-    "kicker01": "創作",
-    "heroTitle": "一句話,一部成片。",
-    "heroDescription": "輸入主題,Apeiron 自動完成劇本、分鏡、鏡頭素材、配音與字幕;也可以開啟節點畫布,親自編排每個環節。",
-    "ctaPrimary": "開始創作",
-    "ctaCanvas": "開啟畫布",
+    "anaximander1": "公元前六世紀,阿那克西曼德說,萬物生於無限定。",
+    "anaximander2": "兩千六百年後,無限終於有了自己的畫布。",
+    "promptPlaceholder": "描述你想創作的影片,例如:一段 30 秒的城市夜景駕駛…",
+    "promptCta": "產生成片",
+    "inspiration1": "城市夜景駕駛 30 秒",
+    "inspiration2": "產品發布宣傳片",
+    "inspiration3": "希臘哲學入門動畫",
+    "pipelineTitle": "從一句話到一部成片",
+    "canvasTitle": "無限畫布",
+    "canvasBody": "劇本、分鏡、影像、影片、配音、字幕、合成——每個環節都是節點,每條連線都是一條管線。像 ComfyUI 一樣自由,像表單一樣簡單。",
+    "canvasCta": "開啟畫布",
     "sectionTemplatesTitle": "從工作流開始",
     "sectionTemplatesDescription": "內建管線圖,直接執行或自由改造。",
     "sectionFeaturesTitle": "是工作台,不是表單",
+    "ctaPrimary": "開始創作",
     "features": {
       "oneclickTitle": "一鍵成片",
       "oneclickBody": "主題進,成片出:LLM 劇本、分鏡、逐鏡頭素材、TTS 配音、字幕燒錄。",
       "canvasTitle": "節點畫布",
       "canvasBody": "劇本、分鏡、影像、影片、配音與合成節點自由連線,拼出任意管線。",
       "walletTitle": "平台錢包",
-      "walletBody": "每一步都以 Monoize 餘額結算——預扣款,失敗即退款。",
-      "managerTitle": "管理器",
-      "managerBody": "節點包、Provider 與渲染 Worker,一頁盡覽。"
-    },
-    "sectionCtaTitle": "隨時開始",
-    "sectionCtaBody": "開啟工作台,今天交付你的第一部片子。"
+      "walletBody": "每一步都以 Monoize 餘額結算——預扣款,失敗即退款。"
+    }
   },
   "create": {
     "title": "一鍵成片",
@@ -169,7 +175,12 @@
   "admin": {
     "title": "管理",
     "description": "管理員介面:Provider、價格、範本、執行。",
-    "tabs": { "providers": "Provider", "prices": "價格", "templates": "範本", "runs": "執行" },
+    "tabs": {
+      "providers": "Provider",
+      "prices": "價格",
+      "templates": "範本",
+      "runs": "執行"
+    },
     "addProvider": "新增 Provider",
     "editProvider": "編輯 Provider",
     "providerName": "名稱",

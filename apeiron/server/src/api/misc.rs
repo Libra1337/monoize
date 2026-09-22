@@ -8,8 +8,8 @@ use axum::Json;
 use serde_json::{json, Value};
 use sqlx::Row;
 
-pub async fn healthz() -> impl IntoResponse {
-    Json(json!({ "ok": true }))
+pub async fn healthz(State(state): State<SharedState>) -> ApiResult<impl IntoResponse> {
+    Ok(Json(json!({ "ok": true, "platform_url": state.cfg.platform_url })))
 }
 
 pub async fn templates(

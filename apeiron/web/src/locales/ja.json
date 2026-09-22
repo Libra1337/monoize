@@ -1,5 +1,8 @@
 {
-  "brand": { "name": "Apeiron", "tagline": "果てなき動画ワークベンチ" },
+  "brand": {
+    "name": "Apeiron",
+    "tagline": "果てなき動画ワークベンチ"
+  },
   "nav": {
     "create": "作成",
     "projects": "プロジェクト",
@@ -49,26 +52,29 @@
     "goHome": "Apeiron に入る"
   },
   "landing": {
-    "kicker01": "作成",
-    "heroTitle": "一文から、完成映画へ。",
-    "heroDescription": "トピックを入力するだけで、脚本・絵コンテ・ショット素材・ナレーション・字幕を自動生成。ノードキャンバスを開けば、各工程を自分で組み立てることもできます。",
-    "ctaPrimary": "作成を始める",
-    "ctaCanvas": "キャンバスを開く",
+    "anaximander1": "紀元前六世紀、アナクシマンドロスは万物は無限定(アペイロン)から生じると説いた。",
+    "anaximander2": "二千六百年後、無限はついに自分のキャンバスを得た。",
+    "promptPlaceholder": "作りたい映画を説明してください。例:都心の夜景ドライブ 30 秒…",
+    "promptCta": "映画を生成",
+    "inspiration1": "都市の夜景ドライブ 30 秒",
+    "inspiration2": "製品発表プロモ",
+    "inspiration3": "ギリシャ哲学入門アニメ",
+    "pipelineTitle": "一文から一本の映画へ",
+    "canvasTitle": "無限キャンバス",
+    "canvasBody": "脚本・絵コンテ・画像・動画・ナレーション・字幕・合成——すべての工程がノードで、すべての接続がパイプライン。ComfyUI と同じ自由さを、フォームと同じ手軽さで。",
+    "canvasCta": "キャンバスを開く",
     "sectionTemplatesTitle": "ワークフローから始める",
     "sectionTemplatesDescription": "内蔵パイプライン。そのまま実行しても、改造しても。",
     "sectionFeaturesTitle": "フォームではなく、スタジオ",
+    "ctaPrimary": "作成を始める",
     "features": {
       "oneclickTitle": "ワンクリック生成",
       "oneclickBody": "トピックを入れると mp4 が出る:LLM 脚本、絵コンテ、ショット素材、TTS、字幕焼き付け。",
       "canvasTitle": "ノードキャンバス",
       "canvasBody": "脚本・絵コンテ・画像・動画・音声・合成ノードを自由に接続し、任意のパイプラインを構築。",
       "walletTitle": "プラットフォームウォレット",
-      "walletBody": "各ステップは Monoize 残高で精算——事前引き落とし、失敗時は返金。",
-      "managerTitle": "マネージャー",
-      "managerBody": "ノードパック・Provider・レンダーワーカーを一ページで把握。"
-    },
-    "sectionCtaTitle": "いつでもどうぞ",
-    "sectionCtaBody": "ワークベンチを開いて、今日最初の一本を。"
+      "walletBody": "各ステップは Monoize 残高で精算——事前引き落とし、失敗時は返金。"
+    }
   },
   "create": {
     "title": "ワンクリック映画",
@@ -169,7 +175,12 @@
   "admin": {
     "title": "管理",
     "description": "運用画面:Provider・価格・テンプレート・実行。",
-    "tabs": { "providers": "Provider", "prices": "価格", "templates": "テンプレート", "runs": "実行" },
+    "tabs": {
+      "providers": "Provider",
+      "prices": "価格",
+      "templates": "テンプレート",
+      "runs": "実行"
+    },
     "addProvider": "Provider を追加",
     "editProvider": "Provider を編集",
     "providerName": "名前",
