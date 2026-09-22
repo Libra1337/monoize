@@ -326,7 +326,10 @@ function ModelStatusDialog({ group }: { group: PublicStatusGroup }) {
             {t("publicSite.status.noModels")}
           </div>
         ) : (
-          <ul className="divide-y overflow-hidden rounded-lg border">
+          // PST-U4: the modal caps its height, so the model list itself is the
+          // scroll container — overflow-hidden here squeezed the flex child and
+          // clipped rows with no way to scroll them.
+          <ul className="divide-y overflow-y-auto overscroll-contain rounded-lg border">
             {group.models.map((model) => (
                 <li key={model.name} className="grid min-h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3">
                   <StateIcon state={model.state} className={cn("size-4", stateTextClass(model.state))} />

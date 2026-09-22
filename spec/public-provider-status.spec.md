@@ -141,7 +141,10 @@ PST-U3. The page MUST render one section per Group. Each section MUST show Group
 state in that Group.
 
 PST-U4. Activating the Group model action MUST open a modal that lists the Group model
-rows. It MUST NOT expand the Group section in place.
+rows. It MUST NOT expand the Group section in place. The modal MUST cap its height at
+`min(42rem, 100vh - 2rem)`; when the model rows exceed that cap, the model list MUST
+scroll vertically inside the modal (wheel, trackpad, and touch) while the modal header
+stays visible. A list that clips rows without a scrolling container is a defect.
 
 PST-U5. The page MUST provide a Skeleton before initial data is available. It MUST retain
 the previous response during SWR revalidation. It MUST show a fixed public error state when
