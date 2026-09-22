@@ -697,7 +697,7 @@ SB-Q-15C. Repeating a terminal apply with the same token ID and canonical digest
 
 ## 10. Reconciliation, Manual Cases, And Operations
 
-SB-OP-0. The application MUST keep the periodic reconciliation scheduler disabled until it implements every scan class in SB-OP-3 and the corresponding verified Provider query. An isolated fulfillment-recovery run MAY execute in tests before this gate opens.
+SB-OP-0. The periodic reconciliation scheduler gate is OPEN as of 2026-09-22: the application implements every scan class in SB-OP-3 with the corresponding verified Provider query, so the Store Primary MUST run the scheduler under SB-OP-2. The application MUST spawn the scheduler only when both the Store Primary lease and the payment key ring are available; a node without a payment key ring MUST NOT run reconciliation. The scheduler subsumes the previously isolated fulfillment-recovery run, and the application MUST NOT spawn a separate fulfillment-recovery loop while the scheduler is active.
 
 SB-OP-1. Only the Store Primary MUST run reconciliation. The reconciler MUST acquire the `store_reconciler` row in `store_reconciliation_leases`. A lease MUST contain an opaque owner ID, a strictly increasing fencing epoch, and an expiry 90 seconds after acquisition. A second owner MUST NOT process work before expiry. Every reconciled fulfillment transaction MUST lock and validate the exact owner and fencing epoch before it changes financial state.
 

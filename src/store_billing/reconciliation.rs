@@ -55,19 +55,23 @@ struct RefundReconciliationCandidate {
     pending_at: DateTime<Utc>,
 }
 
-/// SB-OP-0 permits an isolated fulfillment-recovery run before the full
-/// scheduler gate opens: `StoreReconciler::new` (no payment queries, no refund
-/// operations) makes `run_once` only open stale-refund cases and fulfill
-/// paid/pending orders. Without this loop a payment callback whose inline
-/// fulfillment failed transiently leaves the order paid/pending forever —
-/// the user has paid but never receives the balance.
-pub fn spawn_fulfillment_recovery_loop(
+/// SB-OP-2: with the SB-OP-0 gate open, the Store Primary runs the full
+/// reconciliation pass once per minute. One pass covers every SB-OP-3 scan
+/// class — expired presented attempts, EPay created/provider_rejected
+/// requery, paid-order fulfillment, refund queries, and retryable provider
+/// cases — so this scheduler subsumes the isolated fulfillment-recovery run
+/// and MUST be the only reconciliation loop spawned.
+pub fn spawn_reconciliation_scheduler(
     db: DbPool,
     lease: crate::store_billing::availability::StorePrimaryLease,
+    payment_queries: PaymentQueryOperations,
+    refund_operations: RefundOperations,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     tokio::spawn(async move {
-        let reconciler = StoreReconciler::new(db.clone());
+        let reconciler = StoreReconciler::new(db)
+            .with_payment_queries(payment_queries)
+            .with_refund_operations(refund_operations);
         // SB-OP-2 cadence: one pass per minute. The first pass runs after a
         // short delay so startup checks finish first.
         loop {
@@ -76,27 +80,38 @@ pub fn spawn_fulfillment_recovery_loop(
                 return;
             }
             if let Err(error) = lease.validate().await {
-                tracing::error!(error = %error, "Fulfillment recovery loop lost the Primary lease");
+                tracing::error!(error = %error, "Reconciliation scheduler lost the Primary lease");
                 return;
             }
             match reconciler
-                .run_once("monoize-fulfillment-recovery", Utc::now())
+                .run_once("monoize-reconciliation", Utc::now())
                 .await
             {
                 Ok(outcome) => {
-                    if outcome.fulfilled > 0 || outcome.failed > 0 {
+                    if outcome.fulfilled > 0
+                        || outcome.payments_applied > 0
+                        || outcome.attempts_expired > 0
+                        || outcome.refunds_terminal > 0
+                        || outcome.query_failures > 0
+                        || outcome.refund_query_failures > 0
+                    {
                         tracing::info!(
+                            scanned = outcome.scanned,
                             fulfilled = outcome.fulfilled,
-                            failed = outcome.failed,
-                            "fulfillment recovery pass completed"
+                            payments_applied = outcome.payments_applied,
+                            attempts_expired = outcome.attempts_expired,
+                            refunds_terminal = outcome.refunds_terminal,
+                            query_failures = outcome.query_failures,
+                            refund_query_failures = outcome.refund_query_failures,
+                            "reconciliation pass completed"
                         );
                     }
                 }
                 Err(ReconciliationError::LeaseLost) => {
-                    tracing::warn!("Fulfillment recovery pass lost its lease; retrying next tick");
+                    tracing::warn!("Reconciliation pass lost its lease; retrying next tick");
                 }
                 Err(error) => {
-                    tracing::error!(error = %error, "Fulfillment recovery pass failed; retrying next tick");
+                    tracing::error!(error = %error, "Reconciliation pass failed; retrying next tick");
                 }
             }
         }

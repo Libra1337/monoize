@@ -1284,6 +1284,62 @@ async fn reconciler_closes_an_expired_attempt_only_after_a_definite_query() {
     }
 }
 
+/// The production scheduler wires the reconciler with BOTH payment queries and
+/// refund operations (SB-OP-0). One pass of that fully-wired configuration
+/// must expire a stuck presented attempt and close its order (SB-OP-3C) while
+/// the idle refund scan contributes no work.
+#[tokio::test]
+async fn fully_wired_scheduler_pass_expires_a_stuck_presented_attempt() {
+    let fixture = expired_presented_order("wired").await;
+    let provider = FixedPaymentQueryProvider::returning(ProviderPaymentState::Unpaid);
+    let refund_provider = FixedRefundProvider::returning(ProviderRefundState::Pending, None);
+    let payment_queries = PaymentQueryOperations::new(
+        fixture.db.clone(),
+        fixture.key_ring.clone(),
+        Arc::new(provider),
+    );
+    let refund_operations = RefundOperations::new(
+        fixture.db.clone(),
+        fixture.key_ring,
+        Arc::new(refund_provider),
+    );
+    let reconciler = StoreReconciler::new(fixture.db.clone())
+        .with_payment_queries(payment_queries)
+        .with_refund_operations(refund_operations);
+    let outcome = reconciler
+        .run_once(
+            "monoize-reconciliation",
+            Utc.with_ymd_and_hms(2026, 8, 27, 0, 1, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome.payment_queries, 1);
+    assert_eq!(outcome.attempts_expired, 1);
+    assert_eq!(outcome.refund_queries, 0);
+
+    let states = fixture
+        .db
+        .read()
+        .query_one(fixture.db.stmt(
+            "SELECT a.state AS attempt_state, o.payment_state
+             FROM store_payment_attempts a
+             JOIN store_orders o ON o.id = a.order_id
+             WHERE a.id = $1",
+            vec![fixture.attempt_id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        states.try_get::<String>("", "attempt_state").unwrap(),
+        "expired"
+    );
+    assert_eq!(
+        states.try_get::<String>("", "payment_state").unwrap(),
+        "closed"
+    );
+}
+
 #[tokio::test]
 async fn reconciler_keeps_an_expired_attempt_open_when_query_is_ambiguous() {
     let fixture = expired_presented_order("ambiguous").await;
