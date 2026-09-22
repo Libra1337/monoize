@@ -45,8 +45,8 @@ TTL bounds exposure.)
 
 SB-6. `GET /studio-entry` — authenticated by dashboard session (cookie
 `monoize_session` or `Authorization: Bearer <session token>`). On success responds
-HTTP 302 with `Location: {MONOIZE_APEIRON_URL}/handoff?token=<handoff_token>`.
-Without a valid session responds HTTP 302 with
+HTTP 303 with `Location: {MONOIZE_APEIRON_URL}/handoff?token=<handoff_token>`.
+Without a valid session responds HTTP 303 with
 `Location: /login?next=%2Fstudio-entry`.
 
 SB-7. `POST /api/studio-bridge/exchange` — service bearer auth. Body
