@@ -150,6 +150,12 @@ PST-U5. The page MUST provide a Skeleton before initial data is available. It MU
 the previous response during SWR revalidation. It MUST show a fixed public error state when
 the endpoint fails.
 
+PST-U6. In the dashboard shell (`/dashboard/status`), the status page MUST NOT impose its
+own content-width cap or horizontal padding; the dashboard layout MUST widen its content
+column to a maximum of 1600px for this route instead of the default 1152px column. The
+public `/status` page MUST keep a 1152px (`max-w-6xl`) content cap with its own horizontal
+padding. Both variants MUST render identical section content.
+
 ## 4. Verification
 
 PST-T1. SQLite tests MUST prove the five PST-P5 boundary states, the PST-S2

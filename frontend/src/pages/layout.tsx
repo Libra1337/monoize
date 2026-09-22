@@ -361,6 +361,7 @@ function Sidebar({
 export function DashboardLayout() {
   const { user, loading } = useAuth();
   const { t } = useTranslation();
+  const location = useLocation();
   const [open, setOpen] = useState(false);
   const [collapsed] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -412,7 +413,13 @@ export function DashboardLayout() {
 
       {/* Main content area */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-6 py-6 pt-16 lg:px-8 lg:pt-6">
-        <main className="mx-auto flex min-h-0 min-w-0 w-full max-w-6xl flex-1 flex-col overflow-y-auto">
+        <main
+          className={cn(
+            "mx-auto flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-y-auto",
+            // PST-U6: the dashboard status page renders dense provider grids; widen its column.
+            location.pathname === "/dashboard/status" ? "max-w-[1600px]" : "max-w-6xl",
+          )}
+        >
           <Outlet />
         </main>
       </div>

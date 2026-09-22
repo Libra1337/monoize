@@ -125,7 +125,14 @@ export function PublicStatusPage({ refreshInterval = 30_000, dashboard = false }
   const locale = i18n.resolvedLanguage || i18n.language;
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14 lg:px-8">
+    <main
+      className={
+        dashboard
+          ? // PST-U6: dashboard shell provides padding and the widened content column.
+            "w-full"
+          : "mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14 lg:px-8"
+      }
+    >
       <header className={dashboard ? "flex items-start justify-between gap-4" : undefined}>
         <div className="min-w-0 max-w-3xl">
         <p className="font-mono text-sm text-primary">SERVICE STATUS</p>
