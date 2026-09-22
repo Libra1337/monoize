@@ -25,6 +25,9 @@ pub struct OneclickBody {
     pub subtitle: bool,
     #[serde(default)]
     pub title: Option<String>,
+    /// "16:9" (default) | "9:16" | "1:1"
+    #[serde(default)]
+    pub aspect: String,
 }
 
 fn default_duration() -> u64 {
@@ -59,6 +62,11 @@ pub async fn oneclick(
     }
     let shot_count = shot_count_for(body.duration_target_secs);
     let voice = if body.voice.is_empty() { "alloy".to_string() } else { body.voice };
+    let resolution = match body.aspect.as_str() {
+        "9:16" => "720x1280",
+        "1:1" => "1080x1080",
+        _ => "1280x720",
+    };
     let graph = crate::seed::build_oneclick_graph(
         topic,
         &body.style,
@@ -66,6 +74,7 @@ pub async fn oneclick(
         shot_count,
         &body.material_mode,
         body.subtitle,
+        resolution,
     );
     let title: String = body
         .title

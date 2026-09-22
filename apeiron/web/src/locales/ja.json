@@ -106,7 +106,15 @@
     },
     "doneTitle": "映画が完成しました",
     "failedTitle": "実行に失敗しました",
-    "newFilm": "もう一本作る"
+    "newFilm": "もう一本作る",
+    "aspect": "アスペクト比",
+    "stageEmpty": "ここで映画がレンダリングされます——絵コンテがこのフレームを順に埋め、完成した映像がフレーム内で再生されます。",
+    "styles": {
+      "cinematic": "シネマ",
+      "documentary": "ドキュメンタリー",
+      "animation": "アニメ",
+      "noir": "ノワール"
+    }
   },
   "projects": {
     "title": "プロジェクト",

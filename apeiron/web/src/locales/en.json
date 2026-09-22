@@ -106,7 +106,15 @@
     },
     "doneTitle": "Your film is ready",
     "failedTitle": "The run failed",
-    "newFilm": "Create another"
+    "newFilm": "Create another",
+    "aspect": "Aspect ratio",
+    "stageEmpty": "Your film renders here — storyboard shots fill this frame one by one, then the finished cut plays in it.",
+    "styles": {
+      "cinematic": "Cinematic",
+      "documentary": "Documentary",
+      "animation": "Animation",
+      "noir": "Noir"
+    }
   },
   "projects": {
     "title": "Projects",

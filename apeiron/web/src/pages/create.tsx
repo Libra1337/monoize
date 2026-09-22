@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import useSWR from "swr";
-import { CheckCircle2, CircleDashed, Download, Loader2, Sparkles, XCircle } from "lucide-react";
-import { api, assetContentUrl, type Run } from "@/lib/api";
+import { CheckCircle2, Download, Film, Loader2, Sparkles, XCircle } from "lucide-react";
+import { api, assetContentUrl, type Run, type Step } from "@/lib/api";
 import { useEventStream, useRun } from "@/lib/sse";
 import { BalanceChip, TopUpButton, WorkHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
@@ -22,40 +22,44 @@ interface Estimate {
 }
 
 const VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"];
+const ASPECTS = ["16:9", "9:16", "1:1"] as const;
+const STYLES = ["cinematic", "documentary", "animation", "noir"] as const;
 
-function StageRow({
-  index,
-  label,
-  state,
-}: {
-  index: number;
-  label: string;
-  state: "done" | "active" | "todo" | "failed";
-}) {
-  return (
-    <div className="flex items-center gap-3 py-2.5">
-      {state === "done" ? (
-        <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
-      ) : state === "active" ? (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
-      ) : state === "failed" ? (
-        <XCircle className="h-4 w-4 shrink-0 text-destructive" />
-      ) : (
-        <CircleDashed className="h-4 w-4 shrink-0 text-muted-foreground/40" />
-      )}
-      <span className="w-6 font-mono text-xs text-muted-foreground">
-        {String(index + 1).padStart(2, "0")}
-      </span>
-      <span className={cn("text-sm", state === "todo" ? "text-muted-foreground/60" : "text-foreground")}>
-        {label}
-      </span>
-    </div>
-  );
+/** Visual ratio glyph: a bordered rectangle in the aspect's proportion. */
+function RatioGlyph({ aspect }: { aspect: string }) {
+  const size =
+    aspect === "16:9"
+      ? "h-3 w-[21px]"
+      : aspect === "9:16"
+        ? "h-[21px] w-3"
+        : "h-[18px] w-[18px]";
+  return <span aria-hidden className={cn("inline-block rounded-[2px] border-2 border-current", size)} />;
+}
+
+function shotProgress(steps: Step[] | undefined, count: number) {
+  const media = (steps ?? [])
+    .filter((step) => step.kind === "material" || step.kind === "image")
+    .sort(
+      (a, b) =>
+        Number(a.payload?.shot_index ?? 0) - Number(b.payload?.shot_index ?? 0),
+    );
+  const tiles = Array.from({ length: count }, (_, index) => {
+    const step = media.find((s) => Number(s.payload?.shot_index) === index);
+    return {
+      index,
+      status: step?.status ?? ("pending" as const),
+      narration: String((step?.payload?.shot as Record<string, unknown> | undefined)?.narration ?? ""),
+      assetId: (step?.result?.asset_id as string) ?? null,
+    };
+  });
+  const done = tiles.filter((tile) => tile.status === "succeeded").length;
+  return { tiles, done };
 }
 
 /**
- * Pro-tool layout (Jimeng creation page pattern): fixed parameter panel on
- * the left, the render stage fills the rest.
+ * Professional creation layout: parameter panel left, a persistent preview
+ * monitor (fixed aspect frame) center — storyboard tiles fill the frame
+ * while rendering, the finished film plays inside it.
  */
 export function CreatePage() {
   const { t } = useTranslation();
@@ -73,6 +77,7 @@ export function CreatePage() {
   const [materialMode, setMaterialMode] = useState<"stock" | "ai_image">(() =>
     searchParams.get("mode") === "ai_image" ? "ai_image" : "stock",
   );
+  const [aspect, setAspect] = useState<(typeof ASPECTS)[number]>("16:9");
   const [subtitle, setSubtitle] = useState(true);
   const [runId, setRunId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -85,27 +90,15 @@ export function CreatePage() {
     ["estimate", duration, materialMode] as const,
     ([, seconds, mode]) => api.get<Estimate>(`/estimate/oneclick?seconds=${seconds}&mode=${mode}`),
   );
+  const shotCount = estimate?.shots ?? Math.ceil(duration / 5);
+  const { tiles, done } = shotProgress(run?.steps, shotCount);
 
-  const stages = useMemo(() => {
-    const steps = run?.steps ?? [];
-    const stateOf = (kind: string, alt?: string) => {
-      const matching = steps.filter((step) => step.kind === kind || (alt && step.kind === alt));
-      if (matching.length === 0) return "todo" as const;
-      if (matching.some((step) => step.status === "running")) return "active" as const;
-      if (matching.every((step) => step.status === "succeeded")) return "done" as const;
-      if (matching.every((step) => ["failed", "canceled", "skipped"].includes(step.status)))
-        return "failed" as const;
-      return "active" as const;
-    };
-    return [
-      { label: t("create.stages.script"), state: stateOf("script") },
-      { label: t("create.stages.storyboard"), state: stateOf("storyboard") },
-      { label: t("create.stages.media"), state: stateOf("material", "image") },
-      { label: t("create.stages.voice"), state: stateOf("tts") },
-      { label: t("create.stages.subtitle"), state: stateOf("subtitle") },
-      { label: t("create.stages.assemble"), state: stateOf("assemble") },
-    ];
-  }, [run, t]);
+  const frameClass =
+    aspect === "16:9"
+      ? "aspect-video"
+      : aspect === "9:16"
+        ? "aspect-[9/16] max-h-full"
+        : "aspect-square max-h-full";
 
   async function submit() {
     if (!topic.trim()) {
@@ -121,6 +114,7 @@ export function CreatePage() {
         duration_target_secs: duration,
         material_mode: materialMode,
         subtitle,
+        aspect,
       });
       setRunId(created.run.id);
       toast.success(t("canvas.runStarted"));
@@ -144,26 +138,68 @@ export function CreatePage() {
         }
       />
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <aside className="w-full shrink-0 space-y-5 overflow-y-auto border-b p-5 pb-24 lg:w-[360px] lg:border-b-0 lg:border-r lg:pb-5">
+        {/* Parameter panel */}
+        <aside className="w-full shrink-0 space-y-6 overflow-y-auto border-b p-5 pb-24 lg:w-[320px] lg:border-b-0 lg:border-r lg:pb-5">
           <div className="space-y-2">
             <Label htmlFor="topic">{t("create.topic")}</Label>
             <Textarea
               id="topic"
-              rows={5}
+              rows={4}
               value={topic}
               placeholder={t("create.topicPlaceholder")}
               onChange={(event) => setTopic(event.target.value)}
             />
           </div>
+
           <div className="space-y-2">
-            <Label htmlFor="style">{t("create.style")}</Label>
+            <Label>{t("create.style")}</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {STYLES.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  aria-pressed={style === preset}
+                  onClick={() => setStyle(style === preset ? "" : preset)}
+                  className={
+                    style === preset
+                      ? "rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-accent-foreground"
+                      : "rounded-md border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                  }
+                >
+                  {t(`create.styles.${preset}`)}
+                </button>
+              ))}
+            </div>
             <Input
-              id="style"
+              aria-label={t("create.style")}
               value={style}
               placeholder={t("create.stylePlaceholder")}
               onChange={(event) => setStyle(event.target.value)}
             />
           </div>
+
+          <div className="space-y-2">
+            <Label>{t("create.aspect")}</Label>
+            <div className="grid grid-cols-3 gap-1.5">
+              {ASPECTS.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-pressed={aspect === option}
+                  onClick={() => setAspect(option)}
+                  className={
+                    aspect === option
+                      ? "flex flex-col items-center gap-1.5 rounded-md border border-primary/60 bg-accent py-2.5 text-xs font-medium text-accent-foreground"
+                      : "flex flex-col items-center gap-1.5 rounded-md border py-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                  }
+                >
+                  <RatioGlyph aspect={option} />
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label htmlFor="voice">{t("create.voice")}</Label>
@@ -174,34 +210,46 @@ export function CreatePage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="duration">{t("create.duration")}</Label>
-              <Input
-                id="duration"
-                type="number"
-                min={5}
-                max={300}
-                step={5}
-                value={duration}
-                onChange={(event) => setDuration(Number(event.target.value) || 30)}
-              />
+              <Label htmlFor="material">{t("create.materialMode")}</Label>
+              <Select
+                id="material"
+                value={materialMode}
+                onChange={(event) => setMaterialMode(event.target.value as "stock" | "ai_image")}
+              >
+                <option value="stock">{t("create.stock")}</option>
+                <option value="ai_image">{t("create.aiImage")}</option>
+              </Select>
             </div>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="material">{t("create.materialMode")}</Label>
-            <Select
-              id="material"
-              value={materialMode}
-              onChange={(event) => setMaterialMode(event.target.value as "stock" | "ai_image")}
-            >
-              <option value="stock">{t("create.stock")}</option>
-              <option value="ai_image">{t("create.aiImage")}</option>
-            </Select>
+
+          <div className="grid grid-cols-2 items-end gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="duration">{t("create.duration")}</Label>
+              <div className="flex gap-1">
+                {[15, 30, 60].map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    aria-pressed={duration === option}
+                    onClick={() => setDuration(option)}
+                    className={
+                      duration === option
+                        ? "h-8 flex-1 rounded-md bg-accent font-mono text-xs font-medium text-accent-foreground"
+                        : "h-8 flex-1 rounded-md border font-mono text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                    }
+                  >
+                    {option}s
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-between rounded-md border px-3 py-1.5">
+              <Label htmlFor="subtitle-switch" className="text-xs">{t("create.subtitle")}</Label>
+              <Switch id="subtitle-switch" checked={subtitle} onCheckedChange={setSubtitle} />
+            </div>
           </div>
-          <div className="flex items-center justify-between rounded-md border p-3">
-            <Label htmlFor="subtitle-switch">{t("create.subtitle")}</Label>
-            <Switch id="subtitle-switch" checked={subtitle} onCheckedChange={setSubtitle} />
-          </div>
-          <div className="flex items-center justify-between border-t pt-4">
+
+          <div className="sticky bottom-0 flex items-center justify-between gap-2 border-t bg-background pt-4">
             <span className="font-mono text-xs text-muted-foreground">
               {estimate ? (
                 <>
@@ -219,68 +267,113 @@ export function CreatePage() {
           </div>
         </aside>
 
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-4 overflow-y-auto p-6 pb-20 lg:pb-6">
-          {!run ? (
-            <p className="max-w-sm text-center text-sm text-muted-foreground">
-              {t("create.description")}
-            </p>
-          ) : (
-            <div className="w-full max-w-xl space-y-4">
-              <div className="text-center text-sm font-medium">
-                {!terminal
-                  ? t("create.running")
-                  : run.status === "succeeded"
-                    ? t("create.doneTitle")
-                    : t("create.failedTitle")}
-              </div>
-              <div className="rounded-lg border bg-card px-5 py-3">
-                {stages.map((stage, index) => (
-                  <StageRow key={stage.label} index={index} label={stage.label} state={stage.state} />
-                ))}
-              </div>
-              {run.error ? (
-                <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+        {/* Preview monitor */}
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col items-center gap-4 overflow-y-auto p-6 pb-24 lg:pb-6">
+          <div className={cn("relative w-full max-w-3xl", aspect === "16:9" ? "" : "self-center")}>
+            <div
+              className={cn(
+                "relative flex w-full items-center justify-center overflow-hidden rounded-lg border bg-muted/30",
+                frameClass,
+              )}
+            >
+              {/* Finished film plays in the frame */}
+              {terminal && run?.status === "succeeded" && run.output ? (
+                <video
+                  className="h-full w-full"
+                  controls
+                  autoPlay
+                  src={assetContentUrl(run.output.asset_id)}
+                />
+              ) : run ? (
+                <div className="flex h-full w-full flex-col">
+                  {/* Render progress bar */}
+                  <div className="h-1 w-full bg-muted">
+                    <div
+                      className="h-full bg-primary transition-all"
+                      style={{ width: `${Math.round((done / Math.max(shotCount, 1)) * 100)}%` }}
+                    />
+                  </div>
+                  {/* Storyboard tiles */}
+                  <div className="grid flex-1 grid-cols-3 content-start gap-2 overflow-y-auto p-4 sm:grid-cols-4">
+                    {tiles.map((tile) => (
+                      <div
+                        key={tile.index}
+                        className="flex aspect-video flex-col items-center justify-center gap-1 rounded-md border bg-card p-1.5 text-center"
+                      >
+                        {tile.status === "succeeded" ? (
+                          tile.assetId ? (
+                            <img
+                              src={assetContentUrl(tile.assetId)}
+                              alt=""
+                              className="h-full w-full rounded object-cover"
+                            />
+                          ) : (
+                            <CheckCircle2 className="h-4 w-4 text-success" />
+                          )
+                        ) : tile.status === "running" ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                        ) : tile.status === "failed" || tile.status === "canceled" ? (
+                          <XCircle className="h-4 w-4 text-destructive" />
+                        ) : (
+                          <span className="font-mono text-xs text-muted-foreground/50">
+                            {String(tile.index + 1).padStart(2, "0")}
+                          </span>
+                        )}
+                        {tile.status !== "succeeded" || !tile.assetId ? (
+                          <span className="line-clamp-2 text-[10px] leading-tight text-muted-foreground/70">
+                            {tile.narration}
+                          </span>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                /* Empty state inside the frame */
+                <div className="flex flex-col items-center gap-3 text-muted-foreground/60">
+                  <Film className="h-8 w-8" />
+                  <p className="max-w-xs px-6 text-center text-xs leading-relaxed">
+                    {t("create.stageEmpty")}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Monitor action row */}
+            <div className="mt-3 flex items-center justify-center gap-2">
+              {run?.error ? (
+                <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
                   {run.error}
                 </p>
               ) : null}
-              {terminal && run.status === "succeeded" && run.output ? (
-                <div className="space-y-3">
-                  <video
-                    className="aspect-video w-full rounded-md border bg-muted"
-                    controls
-                    src={assetContentUrl(run.output.asset_id)}
-                  />
-                  <div className="flex justify-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => window.open(assetContentUrl(run.output!.asset_id), "_blank")}
-                    >
-                      <Download />
-                      {t("common.download")}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => run.project_id && navigate(`/canvas/${run.project_id}`)}
-                    >
-                      {t("common.openInCanvas")}
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setRunId(null)}>
-                      {t("create.newFilm")}
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-              {terminal && run.status !== "succeeded" ? (
-                <div className="flex justify-center">
-                  <Button variant="outline" size="sm" onClick={() => setRunId(null)}>
+              {terminal && run?.status === "succeeded" && run.output ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => window.open(assetContentUrl(run.output!.asset_id), "_blank")}
+                  >
+                    <Download />
+                    {t("common.download")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => run.project_id && navigate(`/canvas/${run.project_id}`)}
+                  >
+                    {t("common.openInCanvas")}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setRunId(null)}>
                     {t("create.newFilm")}
                   </Button>
-                </div>
+                </>
+              ) : terminal ? (
+                <Button variant="outline" size="sm" onClick={() => setRunId(null)}>
+                  {t("create.newFilm")}
+                </Button>
               ) : null}
             </div>
-          )}
+          </div>
         </section>
       </div>
     </>

@@ -221,6 +221,7 @@ pub fn build_oneclick_graph(
     shot_count: usize,
     material_mode: &str,
     subtitle: bool,
+    resolution: &str,
 ) -> Value {
     let style_line = if style.is_empty() {
         String::new()
@@ -239,13 +240,13 @@ pub fn build_oneclick_graph(
             620.0,
             160.0,
             json!({
-                "size": "1280x720",
+                "size": resolution,
                 "style": if style.is_empty() { "cinematic, high detail" } else { style },
             }),
         ),
         node("voice", "tts", 620.0, 460.0, json!({ "voice": voice, "speed": 1.0 })),
         node("final", "assemble", 1180.0, 300.0, json!({
-            "resolution": "1280x720", "fps": 30
+            "resolution": resolution, "fps": 30
         })),
     ];
     let mut edges = vec![

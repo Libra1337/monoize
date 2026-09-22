@@ -106,7 +106,15 @@
     },
     "doneTitle": "影片已就绪",
     "failedTitle": "运行失败",
-    "newFilm": "再创作一部"
+    "newFilm": "再创作一部",
+    "aspect": "画幅",
+    "stageEmpty": "成片将在这里渲染——分镜镜头逐格填满此画框,完成后成片在框内播放。",
+    "styles": {
+      "cinematic": "电影感",
+      "documentary": "纪录片",
+      "animation": "动画",
+      "noir": "黑白"
+    }
   },
   "projects": {
     "title": "项目",
