@@ -22,11 +22,33 @@ use std::collections::HashMap;
 const CHAT_CHOICE_EXTRA_BODY_KEY: &str = "_monoize_chat_choice_extra";
 const CHAT_NATIVE_FINISH_REASON_EXTRA_KEY: &str = "_monoize_chat_native_finish_reason";
 
+/// Top-level usage-object aliases for the cached subset of an inclusive prompt
+/// total (user-billing-and-model-metadata.spec.md C3-i-a), in precedence order.
+/// The first field present with a positive value wins.
+pub(crate) fn chat_usage_top_level_cache_read(extra: &HashMap<String, Value>) -> Option<u64> {
+    [
+        "prompt_cache_hit_tokens",
+        "input_cache_read",
+        "cache_read_input_tokens",
+    ]
+    .into_iter()
+    .find_map(|key| extra.get(key).and_then(super::value_to_u64))
+    .filter(|&value| value > 0)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct OpenAiChatUsage {
-    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "input_tokens"
+    )]
     prompt_tokens: u64,
-    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "output_tokens"
+    )]
     completion_tokens: u64,
     #[serde(default)]
     prompt_tokens_details: Option<OpenAiChatInputDetails>,
@@ -108,30 +130,33 @@ impl From<OpenAiChatUsage> for Usage {
             retain_wire_extra_fields(&mut details.extra);
         }
 
-        let input_details = prompt_tokens_details
-            .as_ref()
-            .or(input_tokens_details.as_ref())
-            .and_then(|details| {
-                let cache_creation_tokens = details
-                    .cache_creation_tokens
-                    .max(details.cache_write_tokens);
-                if details.cached_tokens > 0
-                    || cache_creation_tokens > 0
-                    || details.tool_prompt_tokens > 0
-                {
-                    Some(InputDetails {
-                        standard_tokens: 0,
-                        cache_read_tokens: details.cached_tokens,
-                        cache_read_modality_breakdown: None,
-                        cache_creation_tokens,
-                        cache_creation_5m_tokens: 0,
-                        cache_creation_1h_tokens: 0,
-                        tool_prompt_tokens: details.tool_prompt_tokens,
-                        modality_breakdown: None,
-                    })
-                } else {
-                    None
-                }
+        let wire_input_details = prompt_tokens_details.as_ref().or(input_tokens_details.as_ref());
+        let cache_creation_tokens = wire_input_details
+            .map(|details| details.cache_creation_tokens.max(details.cache_write_tokens))
+            .unwrap_or(0);
+        let tool_prompt_tokens = wire_input_details
+            .map(|details| details.tool_prompt_tokens)
+            .unwrap_or(0);
+        // C3-i-a: a chat-shaped upstream may report the cached subset only in a
+        // top-level usage field; such aliases never adjust `input_tokens`,
+        // which is already the inclusive prompt total for this protocol shape.
+        let cache_read_tokens = wire_input_details
+            .map(|details| details.cached_tokens)
+            .filter(|&value| value > 0)
+            .or_else(|| chat_usage_top_level_cache_read(&extra))
+            .unwrap_or(0);
+        let input_details = (cache_read_tokens > 0
+            || cache_creation_tokens > 0
+            || tool_prompt_tokens > 0)
+            .then(|| InputDetails {
+                standard_tokens: 0,
+                cache_read_tokens,
+                cache_read_modality_breakdown: None,
+                cache_creation_tokens,
+                cache_creation_5m_tokens: 0,
+                cache_creation_1h_tokens: 0,
+                tool_prompt_tokens,
+                modality_breakdown: None,
             });
 
         let output_details = completion_tokens_details
@@ -1200,6 +1225,70 @@ mod tests {
         );
         assert_eq!(usage.extra_body["vendor_usage_counter"], json!(3));
         assert!(!usage.extra_body.contains_key("_monoize_spoofed_usage"));
+    }
+
+    #[test]
+    fn chat_usage_maps_top_level_cache_read_aliases_without_adjusting_input() {
+        // DeepSeek shape: the cached subset rides a top-level usage field and
+        // `prompt_tokens` is already the inclusive total (C3-i-a).
+        let usage = parse_usage_from_chat(
+            json!({
+                "prompt_tokens": 100,
+                "completion_tokens": 5,
+                "prompt_cache_hit_tokens": 60,
+                "prompt_cache_miss_tokens": 40
+            })
+            .as_object()
+            .expect("usage object"),
+        );
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(
+            usage
+                .input_details
+                .as_ref()
+                .expect("input details from alias")
+                .cache_read_tokens,
+            60
+        );
+        assert_eq!(usage.cached_tokens(), Some(60));
+
+        // DashScope shape.
+        let usage = parse_usage_from_chat(
+            json!({
+                "input_tokens": 80,
+                "output_tokens": 4,
+                "input_cache_read": 30
+            })
+            .as_object()
+            .expect("usage object"),
+        );
+        assert_eq!(usage.input_tokens, 80);
+        assert_eq!(
+            usage
+                .input_details
+                .expect("input details from alias")
+                .cache_read_tokens,
+            30
+        );
+
+        // The standard nested field keeps precedence over the top-level aliases.
+        let usage = parse_usage_from_chat(
+            json!({
+                "prompt_tokens": 50,
+                "completion_tokens": 2,
+                "prompt_tokens_details": { "cached_tokens": 7 },
+                "prompt_cache_hit_tokens": 999
+            })
+            .as_object()
+            .expect("usage object"),
+        );
+        assert_eq!(
+            usage
+                .input_details
+                .expect("input details")
+                .cache_read_tokens,
+            7
+        );
     }
 
     #[test]

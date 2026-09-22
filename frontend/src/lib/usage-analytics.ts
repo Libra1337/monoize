@@ -5,6 +5,8 @@ export interface TokenAnalyticsBucket {
   input_tokens_by_model: Record<string, string>;
   cache_read_tokens_by_model: Record<string, string>;
   output_tokens_by_model: Record<string, string>;
+  /** Present in every dashboard analytics response; omitted by legacy fixtures. */
+  calls_by_model?: Record<string, number>;
 }
 
 export interface ExactTokenTotals {
@@ -114,10 +116,17 @@ export function rankModelsByTokens(
     .map(([model, value]) => ({ model, value }));
 }
 
-export type CacheHitGrade = "no_traffic" | "insufficient" | "low" | "partial" | "high";
+export type CacheHitGrade =
+  | "no_traffic"
+  | "no_token_usage"
+  | "insufficient"
+  | "low"
+  | "partial"
+  | "high";
 
 export interface ModelCacheHitRate {
   model: string;
+  calls: bigint;
   input: bigint;
   cacheRead: bigint;
   basisPoints: bigint;
@@ -130,7 +139,14 @@ export const CACHE_HIT_GRADE_MIN_INPUT = 50_000n;
 export const CACHE_HIT_LOW_BASIS_POINTS = 3_000n;
 export const CACHE_HIT_HIGH_BASIS_POINTS = 6_000n;
 
-function gradeCacheHitRate(input: bigint, basisPoints: bigint): CacheHitGrade {
+function gradeCacheHitRate(
+  input: bigint,
+  calls: bigint,
+  basisPoints: bigint,
+): CacheHitGrade {
+  // UA-34: calls without token usage are traffic whose hit rate is undefined,
+  // which is distinct from no traffic at all.
+  if (input <= 0n) return calls > 0n ? "no_token_usage" : "no_traffic";
   if (input < CACHE_HIT_GRADE_MIN_INPUT) return "insufficient";
   if (basisPoints < CACHE_HIT_LOW_BASIS_POINTS) return "low";
   if (basisPoints < CACHE_HIT_HIGH_BASIS_POINTS) return "partial";
@@ -140,67 +156,81 @@ function gradeCacheHitRate(input: bigint, basisPoints: bigint): CacheHitGrade {
 /**
  * UA-32/UA-34 for a pre-aggregated pair of token totals (one user, one model,
  * any scope): basis points under half-away rounding and the matching grade.
+ * `calls` distinguishes rows with traffic that carries no token usage.
  */
 export function cacheHitRateForTotals(
   input: bigint,
   cacheRead: bigint,
+  calls = 0n,
 ): { basisPoints: bigint; grade: CacheHitGrade } {
   if (input <= 0n) {
-    return { basisPoints: 0n, grade: "no_traffic" };
+    return { basisPoints: 0n, grade: gradeCacheHitRate(input, calls, 0n) };
   }
   const basisPoints = (cacheRead * 10_000n + input / 2n) / input;
-  return { basisPoints, grade: gradeCacheHitRate(input, basisPoints) };
+  return { basisPoints, grade: gradeCacheHitRate(input, calls, basisPoints) };
+}
+
+function bucketCalls(bucket: TokenAnalyticsBucket, model: string): bigint {
+  return BigInt(bucket.calls_by_model?.[model] ?? 0);
 }
 
 /**
- * Ranks logical models by input Token volume and reports the prompt-cache hit rate of
- * each one. Input volume drives the ordering because it decides how much a low hit rate
- * actually costs. Rows with a zero input total are omitted: their hit rate is undefined.
+ * Ranks logical models that carried calls by input Token volume and reports the
+ * prompt-cache hit rate of each one. Input volume drives the ordering because it
+ * decides how much a low hit rate actually costs. A model whose rows carry no
+ * token usage stays ranked (it was called, so its hit rate is undefined rather
+ * than absent); a model with neither calls nor input tokens is omitted.
  */
 export function rankModelCacheHitRates(
   buckets: TokenAnalyticsBucket[],
 ): ModelCacheHitRate[] {
-  const totals = new Map<string, { input: bigint; cacheRead: bigint }>();
+  const totals = new Map<string, { input: bigint; cacheRead: bigint; calls: bigint }>();
   for (const bucket of buckets) {
     const models = new Set([
       ...Object.keys(bucket.input_tokens_by_model),
       ...Object.keys(bucket.cache_read_tokens_by_model),
+      ...Object.keys(bucket.calls_by_model ?? {}),
     ]);
     for (const sourceModel of models) {
       const model = sourceModel.trim() || "unknown";
-      const current = totals.get(model) ?? { input: 0n, cacheRead: 0n };
+      const current = totals.get(model) ?? { input: 0n, cacheRead: 0n, calls: 0n };
       totals.set(model, {
         input: current.input + modelMetricValue(bucket, sourceModel, "input"),
         cacheRead: current.cacheRead + modelMetricValue(bucket, sourceModel, "cache_read"),
+        calls: current.calls + bucketCalls(bucket, sourceModel),
       });
     }
   }
   return [...totals.entries()]
-    .filter(([, value]) => value.input > 0n)
+    .filter(([, value]) => value.input > 0n || value.calls > 0n)
     .sort(([leftModel, left], [rightModel, right]) => (
       left.input === right.input
         ? compareUtf8(leftModel, rightModel)
         : left.input > right.input ? -1 : 1
     ))
     .map(([model, value]) => {
-      const basisPoints = (value.cacheRead * 10_000n + value.input / 2n) / value.input;
+      const basisPoints = value.input > 0n
+        ? (value.cacheRead * 10_000n + value.input / 2n) / value.input
+        : 0n;
       return {
         model,
+        calls: value.calls,
         input: value.input,
         cacheRead: value.cacheRead,
         basisPoints,
-        grade: gradeCacheHitRate(value.input, basisPoints),
+        grade: gradeCacheHitRate(value.input, value.calls, basisPoints),
       };
     });
 }
 
 /**
- * Ranks the models that carried traffic, then appends every remaining catalog model so a
- * model with no traffic in the range is still visible. A missing row and a zero-hit row look
- * identical to a reader, so the table has to distinguish them explicitly.
+ * Ranks the models that carried calls, then appends every remaining catalog
+ * model so a model with no traffic in the range is still visible. A missing row
+ * and a zero-hit row look identical to a reader, so the table has to
+ * distinguish them explicitly.
  *
- * `catalog` may contain duplicates and untrimmed names; both are normalized the same way
- * analytics model labels are.
+ * `catalog` may contain duplicates and untrimmed names; both are normalized the
+ * same way analytics model labels are.
  */
 export function cacheHitRateTable(
   buckets: TokenAnalyticsBucket[],
@@ -214,6 +244,7 @@ export function cacheHitRateTable(
     .sort(compareUtf8)
     .map((model) => ({
       model,
+      calls: 0n,
       input: 0n,
       cacheRead: 0n,
       basisPoints: 0n,

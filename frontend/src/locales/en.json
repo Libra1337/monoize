@@ -1038,6 +1038,7 @@
       "description": "Cache-read Tokens divided by input Tokens, ordered by input volume. A low rate on a high-volume model means the client sends a prompt prefix that changes between requests.",
       "grades": {
         "no_traffic": "no traffic",
+        "no_token_usage": "no token usage",
         "insufficient": "too little data",
         "low": "low",
         "partial": "partial",
@@ -1054,6 +1055,7 @@
     "emptyDescription": "No model matches the search in this range.",
     "columns": {
       "model": "Model",
+      "calls": "Calls",
       "assessment": "Assessment",
       "user": "User"
     },

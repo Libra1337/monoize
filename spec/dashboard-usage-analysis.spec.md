@@ -152,11 +152,17 @@ because cache hit rate is a ratio of input Tokens and does not vary by metric.
 
 ### 6.1 Row set
 
-UA-27. For a logical model `m`, let `input(m)` be the sum of `input_tokens_by_model[m]` and
-`cacheRead(m)` the sum of `cache_read_tokens_by_model[m]` across all selected-range buckets.
+UA-27. For a logical model `m`, let `input(m)` be the sum of `input_tokens_by_model[m]`,
+`cacheRead(m)` the sum of `cache_read_tokens_by_model[m]`, and `calls(m)` the sum of
+`calls_by_model[m]` across all selected-range buckets. `calls_by_model` counts every
+non-probe request-log row in the bucket regardless of status, so `calls(m)` is the number
+of recorded calls of `m` in the range and `input(m) > 0` implies `calls(m) > 0`.
 Model-name normalization follows UA-14a.
 
-UA-28. A **measured row** is a row for a model with `input(m) > 0`.
+UA-28. A **measured row** is a row for a model with `calls(m) > 0`. The condition admits
+models whose every request-log row lacks token usage (for example image or video upstreams
+that return no usage object): such a model was called, so its row is measured even though
+`input(m) = 0` and its hit rate is undefined.
 
 UA-29. An **untracked row** is a row for a model that appears in the reader's routable model
 catalog and has no measured row. For an `admin` or `super_admin` session the catalog is the
@@ -179,29 +185,34 @@ UA-32. `hitBasisPoints(m)` equals `(cacheRead(m) * 10000 + input(m) / 2) / input
 `BigInt` integer division, and is `0` when `input(m) = 0`. All quantities MUST be computed as
 `BigInt`. Rounding to a displayed percentage occurs only in the final display formatter.
 
-UA-33. Each row MUST show the model name, `input(m)`, `cacheRead(m)`, the hit rate as a
-percentage with at most one decimal digit, and a localized grade label. An untracked row MUST
-render an em dash for `input(m)`, `cacheRead(m)`, and the hit rate, and MUST NOT render a
-ratio bar.
+UA-33. Each row MUST show the model name, `calls(m)`, `input(m)`, `cacheRead(m)`, the hit
+rate as a percentage with at most one decimal digit, and a localized grade label. An
+untracked row MUST render an em dash for `calls(m)`, `input(m)`, `cacheRead(m)`, and the
+hit rate, and MUST NOT render a ratio bar. A measured row with `input(m) = 0` MUST render
+`calls(m)`, an em dash for `input(m)`, `cacheRead(m)`, and the hit rate, and MUST NOT
+render a ratio bar.
 
 UA-34. Each row MUST carry exactly one grade, assigned by this total function of
-`(input(m), hitBasisPoints(m))`:
+`(calls(m), input(m), hitBasisPoints(m))`:
 
 | Precondition | Grade |
 | --- | --- |
-| `input(m) = 0` | `no_traffic` |
+| `calls(m) = 0` | `no_traffic` |
+| `calls(m) > 0` and `input(m) = 0` | `no_token_usage` |
 | `0 < input(m) < 50000` | `insufficient` |
 | `input(m) >= 50000` and `hitBasisPoints(m) < 3000` | `low` |
 | `input(m) >= 50000` and `3000 <= hitBasisPoints(m) < 6000` | `partial` |
 | `input(m) >= 50000` and `hitBasisPoints(m) >= 6000` | `high` |
 
+The `no_token_usage` grade distinguishes a model that received calls whose rows carry no
+token usage from a model with no traffic at all; its hit rate is undefined, not zero.
 The 50,000-Token floor exists because a hit rate measured over a smaller input total is
 dominated by the unavoidable cache-miss cost of the first request in a conversation.
 
 UA-35. The `low` grade MUST render with the destructive color token, `partial` with the
-warning token, `high` with the success token, and `no_traffic` and `insufficient` with the
-muted-foreground token. A grade MUST also be conveyed by a localized text label, so color is
-not the only carrier of the distinction.
+warning token, `high` with the success token, and `no_traffic`, `insufficient`, and
+`no_token_usage` with the muted-foreground token. A grade MUST also be conveyed by a
+localized text label, so color is not the only carrier of the distinction.
 
 ### 6.3 Summary, filtering, and states
 
@@ -235,15 +246,16 @@ UA-42. The endpoint MUST require role `super_admin`; any other session MUST rece
 with code `forbidden`. It MUST clamp `range_hours` to `1..=720`, MUST apply the DH-18a probe
 exclusion, and MUST aggregate only request-log rows with a resolvable `users` row. The
 response MUST be a JSON object with `range_hours` and a `users` array whose entries contain
-exactly `user_id`, `username`, `input_tokens`, and `cache_read_tokens` as integer strings.
+exactly `user_id`, `username`, `calls`, `input_tokens`, and `cache_read_tokens` as integer
+strings, where `calls` is the count of non-probe request-log rows of that user in the range.
 Entries MUST order by `input_tokens` descending with ties broken by `username` in ascending
 byte order, and the array MUST be capped at 100 entries.
 
-UA-43. Each per-user row MUST show the username, `input_tokens`, `cache_read_tokens`, and the
-hit rate computed and rounded as in UA-32 and UA-33. Rows MUST carry the UA-34 grade assigned
-from `(input_tokens, hitBasisPoints)` and the UA-35 color rules. The UA-37 filter controls
-MUST apply to this table: the substring filter matches the username, and the boolean control
-restricts the table to rows with `input_tokens > 0`.
+UA-43. Each per-user row MUST show the username, `calls`, `input_tokens`, `cache_read_tokens`,
+and the hit rate computed and rounded as in UA-32 and UA-33. Rows MUST carry the UA-34 grade
+assigned from `(calls, input_tokens, hitBasisPoints)` and the UA-35 color rules. The UA-37
+filter controls MUST apply to this table: the substring filter matches the username, and the
+boolean control restricts the table to rows with `calls > 0`.
 
 UA-44. The per-user table MUST follow the UA-38 loading and UA-39 empty/error states with the
 same SWR refresh interval.

@@ -218,6 +218,7 @@ async fn analytics_group_scope_and_per_user_cache_follow_roles() {
     let users = body["users"].as_array().expect("users array");
     assert_eq!(users.len(), 3);
     assert_eq!(users[0]["username"], json!("admin_cache_scope"));
+    assert_eq!(users[0]["calls"], json!("1"));
     assert_eq!(users[0]["input_tokens"], json!("600000"));
     assert_eq!(users[0]["cache_read_tokens"], json!("300000"));
     assert_eq!(users[2]["username"], json!("root_cache_scope"));

@@ -1038,6 +1038,7 @@
       "description": "缓存读取 Token 除以输入 Token，按输入量排序。高输入量模型命中率偏低，说明客户端每次请求发送的提示词前缀都在变化。",
       "grades": {
         "no_traffic": "无流量",
+        "no_token_usage": "无 Token 用量",
         "insufficient": "数据量不足",
         "low": "偏低",
         "partial": "部分命中",
@@ -1054,6 +1055,7 @@
     "emptyDescription": "此时间范围内没有匹配搜索的模型。",
     "columns": {
       "model": "模型",
+      "calls": "调用次数",
       "assessment": "评估",
       "user": "用户"
     },

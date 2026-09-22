@@ -2559,7 +2559,7 @@ impl UserStore {
         let is_sqlite = self.db.is_sqlite();
         let token_columns = token_aggregate_columns(is_sqlite);
         let sql = format!(
-            "SELECT rl.user_id AS user_id, u.username AS username, {token_columns} \
+            "SELECT rl.user_id AS user_id, u.username AS username, COUNT(*) AS call_count, {token_columns} \
              FROM request_logs rl \
              JOIN users u ON u.id = rl.user_id \
              WHERE rl.created_at_unix_ms >= $1 \
@@ -2582,6 +2582,7 @@ impl UserStore {
                 Ok(super::UserCacheHitRow {
                     user_id: row.try_get("", "user_id").map_err(|e| e.to_string())?,
                     username: row.try_get("", "username").map_err(|e| e.to_string())?,
+                    call_count: row.try_get("", "call_count").map_err(|e| e.to_string())?,
                     input_tokens: decode_token_aggregate(&row, "input_tokens")?,
                     cache_read_tokens: decode_token_aggregate(&row, "cache_read_tokens")?,
                 })

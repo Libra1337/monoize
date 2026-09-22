@@ -49,6 +49,7 @@ const CACHE_RANGES: Record<CacheRange, { hours: number; buckets: number }> = {
 
 const GRADE_TEXT: Record<CacheHitGrade, string> = {
   no_traffic: "text-muted-foreground",
+  no_token_usage: "text-muted-foreground",
   insufficient: "text-muted-foreground",
   low: "text-destructive",
   partial: "text-warning",
@@ -57,6 +58,7 @@ const GRADE_TEXT: Record<CacheHitGrade, string> = {
 
 const GRADE_BAR: Record<CacheHitGrade, string> = {
   no_traffic: "bg-transparent",
+  no_token_usage: "bg-transparent",
   insufficient: "bg-muted-foreground/40",
   low: "bg-destructive",
   partial: "bg-warning",
@@ -101,29 +103,31 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
   );
   const visible = useMemo(
     () => rows.filter((row) => (
-      (!trafficOnly || row.input > 0n)
+      (!trafficOnly || row.calls > 0n || row.input > 0n)
       && (!deferredSearch || row.model.toLowerCase().includes(deferredSearch))
     )),
     [rows, trafficOnly, deferredSearch],
   );
-  const trackedCount = rows.filter((row) => row.input > 0n).length;
+  const trackedCount = rows.filter((row) => row.calls > 0n || row.input > 0n).length;
   const userRows = useMemo(
     () => (cacheUsers.data?.users ?? []).map((row) => {
       const input = BigInt(row.input_tokens);
       const cacheRead = BigInt(row.cache_read_tokens);
+      const calls = BigInt(row.calls);
       return {
         user_id: row.user_id,
         username: row.username,
+        calls,
         input,
         cacheRead,
-        ...cacheHitRateForTotals(input, cacheRead),
+        ...cacheHitRateForTotals(input, cacheRead, calls),
       };
     }),
     [cacheUsers.data],
   );
   const visibleUsers = useMemo(
     () => userRows.filter((row) => (
-      (!trafficOnly || row.input > 0n)
+      (!trafficOnly || row.calls > 0n || row.input > 0n)
       && (!deferredSearch || row.username.toLowerCase().includes(deferredSearch))
     )),
     [userRows, trafficOnly, deferredSearch],
@@ -215,6 +219,7 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
           <TableHeader>
             <TableRow>
               <TableHead>{t("usageCache.columns.model")}</TableHead>
+              <TableHead className="text-right">{t("usageCache.columns.calls")}</TableHead>
               <TableHead className="text-right">{t("usageAnalysis.metrics.input")}</TableHead>
               <TableHead className="text-right">{t("usageAnalysis.metrics.cacheRead")}</TableHead>
               <TableHead className="text-right">{t("usageAnalysis.cacheHitRate")}</TableHead>
@@ -224,13 +229,16 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
           <TableBody>
             {analytics.isLoading && !analytics.data ? Array.from({ length: 8 }, (_, index) => (
               <TableRow key={index}>
-                {Array.from({ length: 5 }, (_, cell) => (
+                {Array.from({ length: 6 }, (_, cell) => (
                   <TableCell key={cell}><Skeleton className="h-4 w-full" /></TableCell>
                 ))}
               </TableRow>
             )) : visible.map((row) => (
               <TableRow key={row.model}>
                 <TableCell className="max-w-[22rem] font-medium [overflow-wrap:anywhere]">{row.model}</TableCell>
+                <TableCell className="text-right font-mono text-xs tabular-nums">
+                  {row.calls === 0n ? "—" : formatTokenCount(row.calls, i18n.language)}
+                </TableCell>
                 <TableCell className="text-right font-mono text-xs tabular-nums">
                   {row.input === 0n ? "—" : formatTokenCount(row.input, i18n.language)}
                 </TableCell>
@@ -277,6 +285,7 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("usageCache.columns.user")}</TableHead>
+                  <TableHead className="text-right">{t("usageCache.columns.calls")}</TableHead>
                   <TableHead className="text-right">{t("usageAnalysis.metrics.input")}</TableHead>
                   <TableHead className="text-right">{t("usageAnalysis.metrics.cacheRead")}</TableHead>
                   <TableHead className="text-right">{t("usageAnalysis.cacheHitRate")}</TableHead>
@@ -286,7 +295,7 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
               <TableBody>
                 {cacheUsers.isLoading && !cacheUsers.data ? Array.from({ length: 5 }, (_, index) => (
                   <TableRow key={index}>
-                    {Array.from({ length: 5 }, (_, cell) => (
+                    {Array.from({ length: 6 }, (_, cell) => (
                       <TableCell key={cell}><Skeleton className="h-4 w-full" /></TableCell>
                     ))}
                   </TableRow>
@@ -294,7 +303,10 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
                   <TableRow key={row.user_id}>
                     <TableCell className="max-w-[22rem] font-medium [overflow-wrap:anywhere]">{row.username}</TableCell>
                     <TableCell className="text-right font-mono text-xs tabular-nums">
-                      {formatTokenCount(row.input, i18n.language)}
+                      {row.calls === 0n ? "—" : formatTokenCount(row.calls, i18n.language)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs tabular-nums">
+                      {row.input === 0n ? "—" : formatTokenCount(row.input, i18n.language)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs tabular-nums">
                       {formatTokenCount(row.cacheRead, i18n.language)}

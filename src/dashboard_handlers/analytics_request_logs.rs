@@ -448,6 +448,7 @@ pub async fn get_cache_hit_rate_by_users(
                 json!({
                     "user_id": row.user_id,
                     "username": row.username,
+                    "calls": row.call_count.to_string(),
                     "input_tokens": row.input_tokens.to_string(),
                     "cache_read_tokens": row.cache_read_tokens.to_string(),
                 })

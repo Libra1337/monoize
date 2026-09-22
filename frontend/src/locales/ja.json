@@ -1038,6 +1038,7 @@
       "description": "キャッシュ読み取り Token を入力 Token で割った値です。入力量の多い順に並びます。入力量が多いモデルでヒット率が低い場合、クライアントが送るプロンプト接頭辞がリクエストごとに変化しています。",
       "grades": {
         "no_traffic": "トラフィックなし",
+        "no_token_usage": "Token 使用量なし",
         "insufficient": "データ不足",
         "low": "低い",
         "partial": "部分的",
@@ -1054,6 +1055,7 @@
     "emptyDescription": "この期間に検索条件と一致するモデルはありません。",
     "columns": {
       "model": "モデル",
+      "calls": "呼び出し回数",
       "assessment": "評価",
       "user": "ユーザー"
     },

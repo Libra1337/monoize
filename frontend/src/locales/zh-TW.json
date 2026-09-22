@@ -1038,6 +1038,7 @@
       "description": "快取讀取 Token 除以輸入 Token，依輸入量排序。高輸入量模型命中率偏低，表示用戶端每次請求送出的提示詞前綴都在變化。",
       "grades": {
         "no_traffic": "無流量",
+        "no_token_usage": "無 Token 用量",
         "insufficient": "資料量不足",
         "low": "偏低",
         "partial": "部分命中",
@@ -1054,6 +1055,7 @@
     "emptyDescription": "此時間範圍內沒有符合搜尋的模型。",
     "columns": {
       "model": "模型",
+      "calls": "呼叫次數",
       "assessment": "評估",
       "user": "使用者"
     },

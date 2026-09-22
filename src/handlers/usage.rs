@@ -411,16 +411,24 @@ pub(crate) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
         .get("completion_tokens_details")
         .or_else(|| usage.get("output_tokens_details"))
         .and_then(|v| v.as_object());
-    let cached_tokens = usage
-        .get("prompt_tokens_details")
-        .and_then(|v| v.get("cached_tokens"))
-        .or_else(|| {
-            usage
-                .get("input_tokens_details")
-                .and_then(|v| v.get("cached_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    // C3-i-a: the cached subset of the inclusive prompt total may also arrive
+    // in top-level usage fields of chat-shaped upstreams; the first positive
+    // field in precedence order wins.
+    let cached_tokens = [
+        usage
+            .get("prompt_tokens_details")
+            .and_then(|v| v.get("cached_tokens")),
+        usage
+            .get("input_tokens_details")
+            .and_then(|v| v.get("cached_tokens")),
+        usage.get("prompt_cache_hit_tokens"),
+        usage.get("input_cache_read"),
+        usage.get("cache_read_input_tokens"),
+    ]
+    .into_iter()
+    .find_map(|value| value.and_then(crate::urp::decode::value_to_u64))
+    .filter(|&value| value > 0)
+    .unwrap_or(0);
     let cache_creation_tokens = usage
         .get("prompt_tokens_details")
         .and_then(|v| v.get("cache_write_tokens"))
@@ -806,6 +814,63 @@ mod tests {
         // "hello" (5 bytes) + "拒绝" (6 UTF-8 bytes); reasoning and tool
         // arguments are not visible output.
         assert_eq!(metrics.lock().await.visible_output_bytes, 11);
+    }
+
+    #[test]
+    fn chat_stream_usage_maps_top_level_cache_read_aliases() {
+        // DeepSeek shape: cached subset in a top-level usage field of a
+        // chat-shaped stream chunk; `prompt_tokens` stays the inclusive total.
+        let usage = parse_usage_from_chat_object(&json!({
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 5,
+                "prompt_cache_hit_tokens": 60
+            }
+        }))
+        .expect("usage should decode");
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(
+            usage
+                .input_details
+                .expect("input details from alias")
+                .cache_read_tokens,
+            60
+        );
+
+        // DashScope shape via the input_tokens naming.
+        let usage = parse_usage_from_chat_object(&json!({
+            "usage": {
+                "input_tokens": 80,
+                "output_tokens": 4,
+                "input_cache_read": 30
+            }
+        }))
+        .expect("usage should decode");
+        assert_eq!(
+            usage
+                .input_details
+                .expect("input details from alias")
+                .cache_read_tokens,
+            30
+        );
+
+        // The standard nested field keeps precedence over the top-level aliases.
+        let usage = parse_usage_from_chat_object(&json!({
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 2,
+                "prompt_tokens_details": { "cached_tokens": 7 },
+                "prompt_cache_hit_tokens": 999
+            }
+        }))
+        .expect("usage should decode");
+        assert_eq!(
+            usage
+                .input_details
+                .expect("input details")
+                .cache_read_tokens,
+            7
+        );
     }
 
     #[test]

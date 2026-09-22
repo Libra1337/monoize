@@ -966,6 +966,7 @@ pub struct UserTodayUsage {
 pub struct UserCacheHitRow {
     pub user_id: String,
     pub username: String,
+    pub call_count: i64,
     pub input_tokens: i128,
     pub cache_read_tokens: i128,
 }

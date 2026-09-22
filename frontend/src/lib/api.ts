@@ -1295,6 +1295,7 @@ export interface DashboardAnalyticsBucket {
 export interface CacheHitRateUserRow {
   user_id: string;
   username: string;
+  calls: string;
   input_tokens: string;
   cache_read_tokens: string;
 }

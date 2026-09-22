@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   aggregateTokenTotals,
+  cacheHitRateForTotals,
   cacheHitRateTable,
   formatCacheHitRate,
   rankModelCacheHitRates,
@@ -14,12 +15,14 @@ const buckets = [
     input_tokens_by_model: { alpha: "10", beta: "3" },
     cache_read_tokens_by_model: { alpha: "2", beta: "1" },
     output_tokens_by_model: { alpha: "5", beta: "1" },
+    calls_by_model: { alpha: 4, beta: 1 },
   },
   {
     label: "second",
     input_tokens_by_model: { alpha: "4" },
     cache_read_tokens_by_model: { alpha: "3" },
     output_tokens_by_model: { alpha: "2" },
+    calls_by_model: { alpha: 2 },
   },
 ];
 
@@ -71,9 +74,10 @@ describe("Usage analytics helpers", () => {
       input_tokens_by_model: { busy: "200000", quiet: "60000" },
       cache_read_tokens_by_model: { busy: "20000", quiet: "54000" },
       output_tokens_by_model: {},
+      calls_by_model: { busy: 30, quiet: 8 },
     }])).toEqual([
-      { model: "busy", input: 200_000n, cacheRead: 20_000n, basisPoints: 1_000n, grade: "low" },
-      { model: "quiet", input: 60_000n, cacheRead: 54_000n, basisPoints: 9_000n, grade: "high" },
+      { model: "busy", calls: 30n, input: 200_000n, cacheRead: 20_000n, basisPoints: 1_000n, grade: "low" },
+      { model: "quiet", calls: 8n, input: 60_000n, cacheRead: 54_000n, basisPoints: 9_000n, grade: "high" },
     ]);
   });
 
@@ -83,6 +87,7 @@ describe("Usage analytics helpers", () => {
       input_tokens_by_model: { small: "49999", floor: "50000", middle: "50001" },
       cache_read_tokens_by_model: { small: "0", floor: "14999", middle: "22501" },
       output_tokens_by_model: {},
+      calls_by_model: { small: 1, floor: 1, middle: 1 },
     }]);
     expect(graded.map((row) => [row.model, row.basisPoints, row.grade])).toEqual([
       ["middle", 4_500n, "partial"],
@@ -93,8 +98,8 @@ describe("Usage analytics helpers", () => {
 
   test("omits a model with no input tokens and sums across buckets", () => {
     expect(rankModelCacheHitRates(buckets)).toEqual([
-      { model: "alpha", input: 14n, cacheRead: 5n, basisPoints: 3_571n, grade: "insufficient" },
-      { model: "beta", input: 3n, cacheRead: 1n, basisPoints: 3_333n, grade: "insufficient" },
+      { model: "alpha", calls: 6n, input: 14n, cacheRead: 5n, basisPoints: 3_571n, grade: "insufficient" },
+      { model: "beta", calls: 1n, input: 3n, cacheRead: 1n, basisPoints: 3_333n, grade: "insufficient" },
     ]);
     expect(rankModelCacheHitRates([{
       label: "output-only",
@@ -102,6 +107,26 @@ describe("Usage analytics helpers", () => {
       cache_read_tokens_by_model: {},
       output_tokens_by_model: { gamma: "9" },
     }])).toEqual([]);
+  });
+
+  test("keeps a called model that carries no token usage", () => {
+    // A model whose every request-log row lacks usage (image/video upstreams)
+    // stays ranked: it was called, so its hit rate is undefined, not absent.
+    expect(rankModelCacheHitRates([{
+      label: "usage-less",
+      input_tokens_by_model: {},
+      cache_read_tokens_by_model: {},
+      output_tokens_by_model: {},
+      calls_by_model: { imagen: 12 },
+    }])).toEqual([
+      { model: "imagen", calls: 12n, input: 0n, cacheRead: 0n, basisPoints: 0n, grade: "no_token_usage" },
+    ]);
+  });
+
+  test("distinguishes no-token-usage from no traffic for pre-aggregated totals", () => {
+    expect(cacheHitRateForTotals(0n, 0n, 5n).grade).toBe("no_token_usage");
+    expect(cacheHitRateForTotals(0n, 0n, 0n).grade).toBe("no_traffic");
+    expect(cacheHitRateForTotals(0n, 0n).grade).toBe("no_traffic");
   });
 
   test("lists every catalog model, measured rows first", () => {
@@ -117,6 +142,7 @@ describe("Usage analytics helpers", () => {
     const untracked = table.find((row) => row.model === "zeta");
     expect(untracked).toEqual({
       model: "zeta",
+      calls: 0n,
       input: 0n,
       cacheRead: 0n,
       basisPoints: 0n,
