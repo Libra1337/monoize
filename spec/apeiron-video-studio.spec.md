@@ -311,7 +311,8 @@ surface) capped at `APEIRON_ASSET_MAX_BYTES` (default 209715200).
 |---|---|---|
 | `APEIRON_LISTEN` | `127.0.0.1:8090` | HTTP listen address |
 | `APEIRON_DATABASE_DSN` | `sqlite://./data/apeiron.db` | SQLite DSN (v1: SQLite only) |
-| `APEIRON_PLATFORM_URL` | `http://127.0.0.1:8080` | platform origin for bridge + links |
+| `APEIRON_PLATFORM_URL` | `http://127.0.0.1:8080` | platform origin for user-facing links |
+| `APEIRON_BRIDGE_URL` | = `APEIRON_PLATFORM_URL` | base URL for server-to-server bridge calls (set to the platform loopback when the public origin fronts a CDN) |
 | `APEIRON_BRIDGE_SERVICE_TOKEN` | unset → user runs fail at first billing call | service bearer for bridge |
 | `APEIRON_WORKER_TOKEN` | unset → worker endpoints 404 | worker bearer |
 | `APEIRON_ASSETS_DIR` | `./data/assets` | asset storage root |
@@ -326,10 +327,12 @@ Worker env: `APEIRON_SERVER_URL`, `APEIRON_WORKER_TOKEN`, `FFMPEG_PATH`
 
 ## 12. Deployment
 
-AP-Z1. Apeiron deploys as its own process group (e.g. its own PM2 entries
-`apeiron-server`, `apeiron-worker`) on any host; the worker host requires
-`ffmpeg` + `ffprobe` on PATH (or `FFMPEG_PATH`). The server binary embeds
-`apeiron/web/dist` at release build, same convention as the platform frontend.
+AP-Z1. Apeiron deploys as its own process group — plain processes, PM2
+entries, or containers `apeiron-server` / `apeiron-worker` (the repository
+ships a docker-based `apeiron/deploy.sh`) — on any host; the worker host
+requires `ffmpeg` + `ffprobe` on PATH (or `FFMPEG_PATH`). The server binary
+embeds `apeiron/web/dist` at release build, same convention as the platform
+frontend.
 
 AP-Z2. The platform dashboard nav exposes Apeiron through `/studio-entry`
 (SB-6); Apeiron links back only through `APEIRON_PLATFORM_URL`.

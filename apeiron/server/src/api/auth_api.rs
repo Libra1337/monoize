@@ -32,7 +32,7 @@ pub async fn exchange(
     }
     let bridge = crate::bridge::BridgeClient::new(
         &state.http,
-        &state.cfg.platform_url,
+        &state.cfg.bridge_url,
         state.cfg.bridge_service_token.as_deref(),
     );
     let bridge_user = bridge.exchange(&body.token).await.map_err(|error| {

@@ -5,6 +5,8 @@ pub struct Config {
     pub listen: String,
     pub database_dsn: String,
     pub platform_url: String,
+    /// Base URL for server-to-server bridge calls; defaults to platform_url.
+    pub bridge_url: String,
     pub bridge_service_token: Option<String>,
     pub worker_token: Option<String>,
     pub assets_dir: String,
@@ -35,7 +37,7 @@ fn env_u64(name: &str, default: u64) -> u64 {
 
 impl Config {
     pub fn from_env() -> Self {
-        Self {
+        let mut config = Self {
             listen: env("APEIRON_LISTEN").unwrap_or_else(|| "127.0.0.1:8090".to_string()),
             database_dsn: env("APEIRON_DATABASE_DSN")
                 .unwrap_or_else(|| "sqlite://./data/apeiron.db".to_string()),
@@ -43,6 +45,7 @@ impl Config {
                 .unwrap_or_else(|| "http://127.0.0.1:8080".to_string())
                 .trim_end_matches('/')
                 .to_string(),
+            bridge_url: env("APEIRON_BRIDGE_URL").unwrap_or_default(),
             bridge_service_token: env("APEIRON_BRIDGE_SERVICE_TOKEN"),
             worker_token: env("APEIRON_WORKER_TOKEN"),
             assets_dir: env("APEIRON_ASSETS_DIR").unwrap_or_else(|| "./data/assets".to_string()),
@@ -55,6 +58,10 @@ impl Config {
             material_timeout_ms: env_u64("APEIRON_MATERIAL_TIMEOUT_MS", 300_000),
             assemble_timeout_ms: env_u64("APEIRON_ASSEMBLE_TIMEOUT_MS", 1_800_000),
             sse_max_per_user: env_u64("APEIRON_SSE_MAX_CONNECTIONS_PER_USER", 5) as usize,
+        };
+        if config.bridge_url.is_empty() {
+            config.bridge_url = config.platform_url.clone();
         }
+        config
     }
 }

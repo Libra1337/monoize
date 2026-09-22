@@ -743,7 +743,7 @@ pub async fn charge_step(
     }
     let bridge = crate::bridge::BridgeClient::new(
         &state.http,
-        &state.cfg.platform_url,
+        &state.cfg.bridge_url,
         state.cfg.bridge_service_token.as_deref(),
     );
     let key = format!("apeiron_step_{}", step.id);
@@ -792,7 +792,7 @@ async fn settle_llm_step(
     }
     let bridge = crate::bridge::BridgeClient::new(
         &state.http,
-        &state.cfg.platform_url,
+        &state.cfg.bridge_url,
         state.cfg.bridge_service_token.as_deref(),
     );
     let key = format!("apeiron_step_llm_{}", step.id);
@@ -819,7 +819,7 @@ async fn settle_llm_step(
 pub async fn refresh_mirror_balance(state: &SharedState, user_id: &str) {
     let bridge = crate::bridge::BridgeClient::new(
         &state.http,
-        &state.cfg.platform_url,
+        &state.cfg.bridge_url,
         state.cfg.bridge_service_token.as_deref(),
     );
     if let Ok((balance, unlimited)) = bridge.balance(user_id).await {

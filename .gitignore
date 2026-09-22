@@ -19,3 +19,4 @@ apeiron/server/target/
 apeiron/web/node_modules/
 apeiron/web/dist/
 apeiron/data/
+apeiron/worker-bin/
