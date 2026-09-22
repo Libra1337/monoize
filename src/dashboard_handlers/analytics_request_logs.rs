@@ -691,6 +691,12 @@ pub async fn stream_request_logs(
     let mut initial_pending: Vec<_> = state
         .pending_request_logs
         .iter()
+        // RL-API15: probe rows are synthetic monitoring traffic and MUST NOT
+        // reach the dashboard SSE stream at any role.
+        .filter(|entry| {
+            entry.value().request_kind.as_deref()
+                != Some(crate::app::ACTIVE_PROBE_CONNECTIVITY_KIND)
+        })
         .filter(|entry| is_admin || entry.value().user_id == user_id)
         .map(|entry| entry.value().clone())
         .collect();
@@ -723,12 +729,23 @@ pub async fn stream_request_logs(
             loop {
                 match receiver.recv().await {
                     Ok(batch) => {
+                        // RL-API15 applies to live SSE batches as well.
                         let filtered: Vec<_> = if is_admin {
                             batch
+                                .into_iter()
+                                .filter(|log| {
+                                    log.request_kind.as_deref()
+                                        != Some(crate::app::ACTIVE_PROBE_CONNECTIVITY_KIND)
+                                })
+                                .collect()
                         } else {
                             batch
                                 .into_iter()
-                                .filter(|log| log.user_id == user_id)
+                                .filter(|log| {
+                                    log.user_id == user_id
+                                        && log.request_kind.as_deref()
+                                            != Some(crate::app::ACTIVE_PROBE_CONNECTIVITY_KIND)
+                                })
                                 .collect()
                         };
                         if filtered.is_empty() {

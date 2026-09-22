@@ -68,3 +68,6 @@ mod store_payments;
 
 #[path = "api/identity_redaction.rs"]
 mod identity_redaction;
+
+#[path = "api/request_log_probe_filter.rs"]
+mod request_log_probe_filter;

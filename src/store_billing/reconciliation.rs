@@ -424,6 +424,11 @@ impl StoreReconciler {
     ) -> Result<Vec<String>, ReconciliationError> {
         let recovery_cutoff = now - chrono::Duration::seconds(30);
         let case_retry_cutoff = now - chrono::Duration::seconds(60);
+        // SB-OP-3AB: a presented attempt goes stale 120 seconds after its last
+        // update — a buyer who pays with the checkout page closed cannot wait
+        // for a callback that may never arrive, so the reconciler queries the
+        // provider well before the QR expires.
+        let stale_presented_cutoff = now - chrono::Duration::seconds(120);
         self.db
             .read()
             .query_all(self.db.stmt(
@@ -437,16 +442,20 @@ impl StoreReconciler {
                     (a.state = 'presented' AND a.provider_object_id IS NOT NULL
                      AND a.provider_expires_at IS NOT NULL AND a.provider_expires_at <= $1)
                     OR
+                    (a.state = 'presented' AND a.provider_object_id IS NOT NULL
+                     AND a.updated_at <= $4)
+                    OR
                     (a.adapter_kind = 'epay' AND a.updated_at <= $2
                      AND (a.state = 'created'
                           OR (a.state = 'failed' AND a.failure_kind = 'provider_rejected')))
                  )
                  ORDER BY COALESCE(a.provider_expires_at, a.updated_at) ASC, a.id ASC
-                 LIMIT $4",
+                 LIMIT $5",
                 vec![
                     timestamp(now).into(),
                     timestamp(recovery_cutoff).into(),
                     timestamp(case_retry_cutoff).into(),
+                    timestamp(stale_presented_cutoff).into(),
                     BATCH_SIZE.into(),
                 ],
             ))

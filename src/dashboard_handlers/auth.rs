@@ -262,7 +262,7 @@ pub async fn register(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    let cookie = build_session_cookie(&session.token, session_ttl_days);
+    let cookie = build_session_cookie(&session.token, session_ttl_days, session_cookie_domain(&state).as_deref());
     let user = user_response_from_store(user_store, user)
         .await
         .map_err(map_user_response_error)?;
@@ -366,7 +366,7 @@ pub async fn login(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    let cookie = build_session_cookie(&session.token, session_ttl_days);
+    let cookie = build_session_cookie(&session.token, session_ttl_days, session_cookie_domain(&state).as_deref());
     let user = user_response_from_store(user_store, user)
         .await
         .map_err(map_user_response_error)?;
@@ -408,7 +408,7 @@ pub async fn logout(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    let clear_cookie = clear_session_cookie();
+    let clear_cookie = clear_session_cookie(session_cookie_domain(&state).as_deref());
     Ok((
         [(axum::http::header::SET_COOKIE, clear_cookie)],
         Json(json!({ "success": true })),
@@ -522,7 +522,7 @@ pub async fn change_password(
             }
         })?;
 
-    let cookie = build_session_cookie(&session.token, session_ttl_days);
+    let cookie = build_session_cookie(&session.token, session_ttl_days, session_cookie_domain(&state).as_deref());
     let user = state
         .user_store
         .get_user_by_id(&user.id)
@@ -573,13 +573,39 @@ async fn verify_captcha(state: &AppState, token: &str) -> AppResult<()> {
         })
 }
 
-fn build_session_cookie(token: &str, ttl_days: i64) -> String {
-    let max_age = ttl_days.max(0) * 86400;
-    format!("monoize_session={token}; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age={max_age}")
+/// DSA1: the cookie Domain is the parent (registrable) domain of the
+/// configured public origin, so every subdomain shares one login. A single
+/// label after the leading host part is kept (e.g. `www.lynshen.org` and
+/// `api.lynshen.org` both yield `lynshen.org`); a bare two-label host is
+/// used as-is. Derived per request from the origin so a certificate or
+/// domain change needs no deploy.
+fn session_cookie_domain(state: &AppState) -> Option<String> {
+    let origin = state.payment_public_origin.as_ref()?;
+    let host = origin.host_str()?;
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() < 2 {
+        return None;
+    }
+    let start = labels.len().saturating_sub(2);
+    Some(labels[start..].join("."))
 }
 
-fn clear_session_cookie() -> String {
-    "monoize_session=; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=0".to_string()
+fn build_session_cookie(token: &str, ttl_days: i64, cookie_domain: Option<&str>) -> String {
+    let max_age = ttl_days.max(0) * 86400;
+    // DSA1: the cookie Domain is the public origin's parent domain so every
+    // subdomain shares one login; without a configured public origin the
+    // cookie stays host-only.
+    let domain = cookie_domain
+        .map(|domain| format!("; Domain={domain}"))
+        .unwrap_or_default();
+    format!("monoize_session={token}; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age={max_age}{domain}")
+}
+
+fn clear_session_cookie(cookie_domain: Option<&str>) -> String {
+    let domain = cookie_domain
+        .map(|domain| format!("; Domain={domain}"))
+        .unwrap_or_default();
+    format!("monoize_session=; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=0{domain}")
 }
 
 #[cfg(test)]
@@ -593,5 +619,17 @@ mod tests {
                 .await
                 .expect("fixed password hash must be a valid Argon2 PHC string")
         );
+    }
+
+    #[test]
+    fn session_cookie_carries_the_public_origin_parent_domain() {
+        // DSA1: Domain is derived so subdomains share one login; a host-only
+        // cookie remains when no public origin is configured.
+        assert!(build_session_cookie("t", 7, Some("lynshen.org")).contains("Domain=lynshen.org"));
+        assert!(build_session_cookie("t", 7, None).contains("Max-Age=604800"));
+        assert!(!build_session_cookie("t", 7, None).contains("Domain="));
+        assert!(clear_session_cookie(Some("lynshen.org")).contains("Domain=lynshen.org"));
+        assert!(clear_session_cookie(None).contains("Max-Age=0"));
+        assert!(!clear_session_cookie(None).contains("Domain="));
     }
 }

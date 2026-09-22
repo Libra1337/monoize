@@ -1340,6 +1340,75 @@ async fn fully_wired_scheduler_pass_expires_a_stuck_presented_attempt() {
     );
 }
 
+/// SB-OP-3AB: a presented attempt that is stale (no update for 120 seconds)
+/// but whose QR has NOT expired must be queried early — a buyer who pays with
+/// the checkout page closed cannot wait for the 30-minute expiry sweep. A
+/// verified Unpaid answer must NOT expire or close anything; the attempt
+/// stays presentable and a provider_unpaid case throttles re-scans.
+#[tokio::test]
+async fn reconciler_queries_a_stale_presented_attempt_before_expiry_and_keeps_it_alive() {
+    let fixture = expired_presented_order("stale").await;
+    // Push the attempt into the stale-but-not-expired window: the run happens
+    // at 00:03:00, so the 120-second staleness line is 00:01:00 — an
+    // updated_at of 00:00:00 is stale while the QR runs to 01:00:00.
+    fixture
+        .db
+        .write()
+        .await
+        .execute(fixture.db.stmt(
+            "UPDATE store_payment_attempts
+             SET updated_at = '2026-08-27T00:00:00Z', provider_expires_at = '2026-08-27T01:00:00Z'
+             WHERE id = $1",
+            vec![fixture.attempt_id.clone().into()],
+        ))
+        .await
+        .unwrap();
+    let provider = FixedPaymentQueryProvider::returning(ProviderPaymentState::Unpaid);
+    let operations =
+        PaymentQueryOperations::new(fixture.db.clone(), fixture.key_ring, Arc::new(provider));
+    let reconciler = StoreReconciler::new(fixture.db.clone()).with_payment_queries(operations);
+
+    let outcome = reconciler
+        .run_once("stale-owner", Utc.with_ymd_and_hms(2026, 8, 27, 0, 3, 0).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(outcome.payment_queries, 1, "stale attempt must be queried");
+    assert_eq!(outcome.payments_applied, 0);
+    assert_eq!(outcome.attempts_expired, 0, "unexpired attempt must stay presented");
+
+    let states = fixture
+        .db
+        .read()
+        .query_one(fixture.db.stmt(
+            "SELECT a.state AS attempt_state, o.payment_state
+             FROM store_payment_attempts a
+             JOIN store_orders o ON o.id = a.order_id
+             WHERE a.id = $1",
+            vec![fixture.attempt_id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        states.try_get::<String>("", "attempt_state").unwrap(),
+        "presented"
+    );
+    assert_eq!(
+        states.try_get::<String>("", "payment_state").unwrap(),
+        "unpaid"
+    );
+
+    // The provider_unpaid case throttles the next pass: the case retry cutoff
+    // is 60 seconds, so a run one minute later re-queries, but the state is
+    // still untouched.
+    let second = reconciler
+        .run_once("stale-owner", Utc.with_ymd_and_hms(2026, 8, 27, 0, 4, 0).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(second.payment_queries, 1);
+    assert_eq!(second.attempts_expired, 0);
+}
+
 #[tokio::test]
 async fn reconciler_keeps_an_expired_attempt_open_when_query_is_ambiguous() {
     let fixture = expired_presented_order("ambiguous").await;

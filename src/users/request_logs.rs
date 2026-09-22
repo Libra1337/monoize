@@ -1560,6 +1560,16 @@ fn append_request_log_filters(
 ) -> Result<(), String> {
     if let Some(model) = model {
         validate_request_log_model_filter(Some(model))?;
+    }
+    // RL-API15: active health-probe rows are synthetic monitoring traffic and
+    // MUST NOT appear in dashboard log lists at any role. Appended only after
+    // every parameter validates so a rejected filter leaves the SQL untouched.
+    // every parameter validates so a rejected filter leaves the SQL untouched.
+    sql.push_str(&format!(
+        " AND (rl.request_kind IS NULL OR rl.request_kind <> '{}')",
+        crate::app::ACTIVE_PROBE_CONNECTIVITY_KIND
+    ));
+    if let Some(model) = model {
         let folded_model = ascii_folded_sql_expression("rl.model", is_postgres);
         let models: Vec<&str> = model
             .split(',')
@@ -1594,7 +1604,9 @@ fn append_request_log_filters(
         *idx += 1;
     }
     if let Some(username) = username {
-        sql.push_str(&format!(" AND (rl.user_id IN (SELECT id FROM users WHERE username = ${}) OR rl.request_kind = 'active_probe_connectivity')", *idx));
+        // RL-API15: probe rows are synthetic monitoring traffic; the username
+        // filter matches only the named user's rows.
+        sql.push_str(&format!(" AND rl.user_id IN (SELECT id FROM users WHERE username = ${})", *idx));
         values.push(username.into());
         *idx += 1;
     }

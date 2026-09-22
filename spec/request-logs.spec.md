@@ -311,6 +311,8 @@ Neither internal-source label may be exposed through the API-key management endp
 }
 ```
 
+RL-API15. `GET /api/dashboard/request-logs` and `GET /api/dashboard/request-logs/stream` MUST exclude rows with `request_kind = "active_probe_connectivity"` from list results, the count and charge totals, the SSE initial batch, and every live SSE batch, at every role including super_admin. The `username` filter MUST match only rows of the named user and MUST NOT match active-probe rows. Active-probe rows remain persisted (RL18) and continue to feed Channel health scoring; they are synthetic monitoring traffic, not customer log traffic.
+
 Where `EnrichedRequestLogRow` = `RequestLogRow` + `username` + `api_key_name` + `channel_name` + `provider_name` + `has_capture`.
 
 RL-API14. Every `EnrichedRequestLogRow` MUST include `has_capture: boolean` computed per `request-capture-viewer.spec.md` RCV-L1/RCV-L2: `true` iff at least one `request_capture_records` row matches the row's `(request_id, user_id)`, computed with an indexed `EXISTS` subquery. The list path MUST NOT open, stat, or read dump files. SSE-delivered rows carry `has_capture: false` (RCV-L3).
