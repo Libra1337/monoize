@@ -62,6 +62,7 @@ function NavLink({
   disableLayoutAnimation = false,
   collapsed = false,
   exact = false,
+  external = false,
 }: {
   to: string;
   icon: React.ComponentType<{ className?: string }>;
@@ -71,11 +72,36 @@ function NavLink({
   disableLayoutAnimation?: boolean;
   collapsed?: boolean;
   exact?: boolean;
+  external?: boolean;
 }) {
   const location = useLocation();
-  const isActive = exact
-    ? location.pathname === to
-    : location.pathname === to || location.pathname.startsWith(to + "/");
+  const isActive = !external
+    ? exact
+      ? location.pathname === to
+      : location.pathname === to || location.pathname.startsWith(to + "/")
+    : false;
+
+  if (external) {
+    return (
+      <a
+        href={to}
+        target="_blank"
+        rel="noreferrer"
+        onClick={onClick}
+        className={cn(
+          "relative flex items-center rounded-md text-sm font-medium transition-colors duration-150",
+          collapsed ? "justify-center px-2 py-2" : "gap-3 px-2.5 py-1.5",
+          "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+        )}
+        title={collapsed ? label : undefined}
+      >
+        <span className={cn("relative z-10 flex items-center", collapsed ? "" : "gap-3")}>
+          <Icon className="h-4 w-4 shrink-0" />
+          {!collapsed && label}
+        </span>
+      </a>
+    );
+  }
 
   const link = (
     <Link
@@ -156,7 +182,8 @@ function Sidebar({
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
-    { to: "/dashboard/studio", icon: Clapperboard, label: t("nav.studio") },
+    // SB-6: opens the standalone Apeiron studio in a new tab.
+    { to: "/studio-entry", icon: Clapperboard, label: t("nav.studio"), external: true },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },
     { to: "/dashboard/store", icon: ShoppingBag, label: t("nav.store") },
@@ -191,7 +218,6 @@ function Sidebar({
     { to: "/dashboard/admin/runtime", icon: HeartPulse, label: t("nav.adminRuntime") },
     { to: "/dashboard/admin/revenue", icon: TrendingUp, label: t("nav.adminRevenue") },
     { to: "/dashboard/announcements-admin", icon: Megaphone, label: t("nav.announcements") },
-    { to: "/dashboard/studio-admin", icon: Clapperboard, label: t("nav.studioAdmin") },
     { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
     { to: "/dashboard/models", icon: Database, label: t("nav.models") },
     { to: "/dashboard/plans", icon: CalendarClock, label: t("nav.billingPlans") },

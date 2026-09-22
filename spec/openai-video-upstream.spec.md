@@ -4,7 +4,7 @@
 
 - **Subsystem:** `openai_video` upstream channel type for Sora-2-compatible video generation APIs.
 - **Scope:** `src/studio/video_upstream.rs` (openai_video arm), provider type registration, `ProviderDialog` channel-type option.
-- **Dependency:** `studio-workflow.spec.md` (ST-E2, ST-E3), `monoize-upstream-routing.spec.md` (eligibility), `upstream-error-sanitization.spec.md`.
+- **Dependency:** `apeiron-video-studio.spec.md` (AP-E7 — dispatch now lives in the standalone Apeiron service), `monoize-upstream-routing.spec.md` (eligibility), `upstream-error-sanitization.spec.md`. The platform keeps the channel type registered as a dormant kind (SB-13).
 
 ## 1. Provider type
 

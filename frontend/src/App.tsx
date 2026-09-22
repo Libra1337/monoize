@@ -53,10 +53,6 @@ import { UsageCachePage } from "@/pages/usage-cache";
 import { WalletPage } from "@/pages/wallet";
 import { ModelMarketplacePage } from "@/pages/model-marketplace";
 import { DashboardApiDocsPage } from "@/pages/dashboard-api-docs";
-import { StudioPage } from "@/pages/studio";
-import { StudioProjectPage } from "@/pages/studio/project";
-import { StudioAssetsPage } from "@/pages/studio/assets";
-import { StudioAdminPage } from "@/pages/studio-admin";
 import { useAuth } from "@/hooks/use-auth";
 import { StoreCurrencyProvider } from "@/hooks/use-store-currency";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -126,10 +122,6 @@ function App() {
             <Route path="org" element={<Navigate to="/org" replace />} />
             <Route path="logs" element={<RequestLogsPage />} />
             <Route path="playground" element={<PlaygroundPage />} />
-            <Route path="studio" element={<StudioPage />} />
-            <Route path="studio/assets" element={<StudioAssetsPage />} />
-            <Route path="studio/p/:id" element={<StudioProjectPage />} />
-            <Route path="studio-admin" element={<AdminRoute><StudioAdminPage /></AdminRoute>} />
             <Route path="marketplace" element={<ModelMarketplacePage />} />
             <Route path="api-docs" element={<DashboardApiDocsPage />} />
             <Route path="models" element={<ModelMetadataPage />} />

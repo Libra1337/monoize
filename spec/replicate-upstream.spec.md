@@ -120,7 +120,7 @@ Token-based billing applies if `metrics.input_token_count` and `metrics.output_t
 
 ## 10. Video job surface (studio executor)
 
-Studio video steps (`studio-workflow.spec.md` ST-E2) MAY execute on Replicate channels. This surface is independent of the URP chat codec:
+Video steps in the standalone Apeiron service (`apeiron-video-studio.spec.md` AP-E7) MAY execute on Replicate channels. This surface is independent of the URP chat codec:
 
 - Submit: `POST /v1/predictions` (or the model-key form of §4) with input `{prompt, image?, video_length?/duration?, aspect_ratio?}`. A 2xx prediction with `id` marks acceptance; failure classification follows OV-3 of `openai-video-upstream.spec.md`.
 - Poll: `GET /v1/predictions/{id}` at the ST-S5 cadence. `status` `starting`/`processing` → running; `succeeded` → extract the first media URL from `output` (string or array, video extensions); `failed`/`canceled` → terminal.

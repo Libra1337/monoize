@@ -231,7 +231,7 @@ pub struct AppState {
     pub sse_connections: Arc<DashMap<String, Arc<AtomicUsize>>>,
     pub image_transform_cache: Arc<ImageTransformCache>,
     pub request_capture: RequestCaptureStore,
-    pub studio: std::sync::Arc<crate::studio::StudioState>,
+    pub studio_bridge: crate::studio_bridge::StudioBridgeConfig,
     pub trusted_proxies: TrustedProxyConfig,
 }
 
@@ -243,7 +243,7 @@ impl AppState {
         Self {
             node: Arc::new(node),
             store_billing: self.store_billing.with_read_only(is_replica),
-            studio: self.studio,
+            studio_bridge: self.studio_bridge.clone(),
             metering_token_digest: if is_replica {
                 None
             } else {
@@ -1125,24 +1125,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         );
     }
 
-    let (studio_events, _) = tokio::sync::broadcast::channel(256);
-    let studio_state = std::sync::Arc::new(crate::studio::StudioState {
-        db: db.clone(),
-        user_store: user_store.clone(),
-        monoize_store: monoize_store.clone(),
-        billing_rate_store: billing_rate_store.clone(),
-        settings_store: settings_store.clone(),
-        http_clients: http_clients.clone(),
-        events: studio_events,
-        shutdown: background_shutdown.clone(),
-    });
-    if !is_replica {
-        if let Err(error) = crate::studio::templates::seed_builtin_templates(&studio_state.db).await
-        {
-            tracing::warn!(%error, "failed to seed studio templates");
-        }
-        crate::studio::engine::spawn(studio_state.clone());
-    }
+    let studio_bridge = crate::studio_bridge::StudioBridgeConfig::from_env();
     Ok(AppState {
         runtime: Arc::new(runtime),
         started_at,
@@ -1192,7 +1175,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         image_transform_cache,
         request_capture,
         trusted_proxies,
-        studio: studio_state,
+        studio_bridge,
     })
 }
 
@@ -2220,6 +2203,8 @@ pub fn build_app(state: AppState) -> Router {
             .merge(dashboard_api_router)
             .merge(build_store_callback_router());
         app = app.nest("/api", api_router);
+        // SB-6: browser entry into the standalone Apeiron studio.
+        app = app.route("/studio-entry", get(crate::studio_bridge::studio_entry));
         if let Some(expected_digest) = state.metering_token_digest {
             app = app.merge(crate::replica::admission_http::internal_router(
                 expected_digest,
@@ -2328,32 +2313,6 @@ fn build_v1_router() -> Router<AppState> {
         )
         .route("/v1/completions", post(crate::handlers::create_completions))
         .route("/completions", post(crate::handlers::create_completions))
-        .route(
-            "/v1/videos",
-            post(crate::studio::handlers::create_video_job),
-        )
-        .route("/videos", post(crate::studio::handlers::create_video_job))
-        .route(
-            "/v1/videos/{id}",
-            get(crate::studio::handlers::get_video_job),
-        )
-        .route("/videos/{id}", get(crate::studio::handlers::get_video_job))
-        .route(
-            "/v1/videos/{id}/cancel",
-            post(crate::studio::handlers::cancel_video_job),
-        )
-        .route(
-            "/videos/{id}/cancel",
-            post(crate::studio::handlers::cancel_video_job),
-        )
-        .route(
-            "/v1/videos/{id}/content",
-            get(crate::studio::handlers::get_video_content),
-        )
-        .route(
-            "/videos/{id}/content",
-            get(crate::studio::handlers::get_video_content),
-        )
         .route("/v1/embeddings", post(crate::handlers::create_embeddings))
         .route("/embeddings", post(crate::handlers::create_embeddings))
         .route("/v1/messages", post(crate::handlers::create_messages))
@@ -2576,81 +2535,20 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
 fn build_dashboard_api_router(state: AppState) -> Router<AppState> {
     Router::new()
         .route(
-            "/dashboard/studio/projects",
-            get(crate::studio::handlers::list_projects)
-                .post(crate::studio::handlers::create_project),
+            "/studio-bridge/exchange",
+            post(crate::studio_bridge::bridge_exchange),
         )
         .route(
-            "/dashboard/studio/projects/{id}",
-            get(crate::studio::handlers::get_project)
-                .delete(crate::studio::handlers::delete_project),
+            "/studio-bridge/balance",
+            get(crate::studio_bridge::bridge_balance),
         )
         .route(
-            "/dashboard/studio/projects/{id}/graph",
-            axum::routing::put(crate::studio::handlers::save_project_graph),
+            "/studio-bridge/debit",
+            post(crate::studio_bridge::bridge_debit),
         )
         .route(
-            "/dashboard/studio/projects/{id}/agent",
-            post(crate::studio::handlers::submit_agent),
-        )
-        .route(
-            "/dashboard/studio/runs",
-            get(crate::studio::handlers::list_runs),
-        )
-        .route(
-            "/dashboard/studio/runs/{id}",
-            get(crate::studio::handlers::get_run),
-        )
-        .route(
-            "/dashboard/studio/runs/{id}/cancel",
-            post(crate::studio::handlers::cancel_run),
-        )
-        .route(
-            "/dashboard/studio/work-order",
-            post(crate::studio::handlers::submit_work_order),
-        )
-        .route(
-            "/dashboard/studio/assets",
-            get(crate::studio::handlers::list_assets),
-        )
-        .route(
-            "/dashboard/studio/assets/{id}/content",
-            get(crate::studio::handlers::get_asset_content),
-        )
-        .route(
-            "/dashboard/studio/uploads",
-            post(crate::studio::handlers::upload_reference),
-        )
-        .route(
-            "/dashboard/studio/templates",
-            get(crate::studio::handlers::list_templates),
-        )
-        .route(
-            "/dashboard/studio/events",
-            get(crate::studio::handlers::studio_events),
-        )
-        .route(
-            "/dashboard/admin/studio/templates",
-            get(crate::studio::handlers::admin_list_templates)
-                .post(crate::studio::handlers::admin_create_template),
-        )
-        .route(
-            "/dashboard/admin/studio/templates/{id}",
-            axum::routing::put(crate::studio::handlers::admin_update_template)
-                .delete(crate::studio::handlers::admin_delete_template),
-        )
-        .route(
-            "/dashboard/admin/studio/runs",
-            get(crate::studio::handlers::admin_list_runs),
-        )
-        .route(
-            "/dashboard/admin/studio/runs/{id}/cancel",
-            post(crate::studio::handlers::admin_cancel_run),
-        )
-        .route(
-            "/dashboard/admin/studio/settings",
-            get(crate::studio::handlers::admin_get_settings)
-                .put(crate::studio::handlers::admin_update_settings),
+            "/studio-bridge/refund",
+            post(crate::studio_bridge::bridge_refund),
         )
         .route(
             "/public/site",

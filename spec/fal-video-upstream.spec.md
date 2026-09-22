@@ -4,7 +4,7 @@
 
 - **Subsystem:** `fal_video` upstream channel type for the fal.ai queue API.
 - **Scope:** `src/studio/video_upstream.rs` (fal arm), provider type registration, `ProviderDialog` channel-type option.
-- **Dependency:** `studio-workflow.spec.md` (ST-E2, ST-E3, ST-E5), `upstream-error-sanitization.spec.md`.
+- **Dependency:** `apeiron-video-studio.spec.md` (AP-E7 — dispatch now lives in the standalone Apeiron service), `upstream-error-sanitization.spec.md`. The platform keeps the channel type registered as a dormant kind (SB-13).
 
 ## 1. Provider type
 

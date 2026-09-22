@@ -98,6 +98,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260921_000110_api_key_daily_limit::Migration),
             Box::new(m20260921_000120_drop_api_key_daily_limit::Migration),
             Box::new(m20260922_000121_studio_workflow::Migration),
+            Box::new(m20260922_000122_studio_bridge_ops::Migration),
+            Box::new(m20260922_000123_drop_studio_workflow::Migration),
         ]
     }
 }
@@ -325,6 +327,8 @@ mod m20260919_000109_org_usage_limits;
 mod m20260921_000110_api_key_daily_limit;
 mod m20260921_000120_drop_api_key_daily_limit;
 mod m20260922_000121_studio_workflow;
+mod m20260922_000122_studio_bridge_ops;
+mod m20260922_000123_drop_studio_workflow;
 
 #[cfg(test)]
 mod tests {

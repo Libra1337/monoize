@@ -298,8 +298,7 @@
     "modeSwitch": "スペース切替",
     "orgsAdmin": "組織スペース",
     "announcements": "お知らせ管理",
-    "studio": "Apeiron",
-    "studioAdmin": "スタジオ管理"
+    "studio": "動画制作"
   },
   "wallet": {
     "title": "ウォレット",
@@ -2725,85 +2724,5 @@
     "rateHint": "1 USD = ¥{{rate}}",
     "rateUnavailable": "為替レートを取得できないため、CNY 入力は利用できません。",
     "cnyHint": "CNY 金額は保存時にこのレートで USD に換算されます。保存された上限は USD のままです。"
-  },
-  "studio": {
-    "title": "Apeiron",
-    "description": "紀元前6世紀、アナクシマンドロスは万物は無限定（アペイロン）から生まれると言った。2600年後、無限はついに自分のキャンバスを得た。",
-    "newProject": "新規プロジェクト",
-    "projectTitle": "プロジェクト名",
-    "blankCanvas": "空白キャンバス",
-    "empty": "プロジェクトがありません。テンプレートまたは空白から作成してください。",
-    "updatedAt": "更新 {time}",
-    "versionLabel": "バージョン {version}",
-    "projectMissing": "プロジェクトが見つかりません。",
-    "node": {
-      "script": "脚本",
-      "shot": "カット",
-      "image": "画像",
-      "video": "動画",
-      "note": "メモ",
-      "scriptEmpty": "脚本が空です。エージェントに起草させましょう。"
-    },
-    "stage": {
-      "idle": "待機",
-      "drafted": "起草済み",
-      "split": "分割済み",
-      "synthesized": "プロンプト合成済み",
-      "frames": "フレーム生成",
-      "videos": "動画生成"
-    },
-    "status": {
-      "idle": "待機",
-      "queued": "待機中",
-      "running": "生成中",
-      "succeeded": "完了",
-      "failed": "失敗"
-    },
-    "workOrder": {
-      "image": "画像",
-      "video": "動画",
-      "imagePrompt": "画像プロンプト",
-      "videoPrompt": "動画プロンプト"
-    },
-    "agent": {
-      "hint": "作りたい作品を説明すると、エージェントが脚本・絵コンテ・レンダリングを行います。",
-      "placeholder": "エージェントに作成内容を伝える…"
-    },
-    "toast": {
-      "queued": "キュー投入",
-      "agentQueued": "エージェント実行中。キャンバスが随時更新されます。",
-      "runSucceeded": "完了しました",
-      "runFailed": "失敗しました"
-    },
-    "assets": {
-      "title": "アセット",
-      "description": "全プロジェクトの生成画像と動画。",
-      "all": "すべて",
-      "images": "画像",
-      "videos": "動画",
-      "empty": "アセットはまだありません。"
-    },
-    "admin": {
-      "title": "スタジオ管理",
-      "description": "テンプレート・実行監視・エンジン設定。",
-      "runs": "実行",
-      "templates": "テンプレート",
-      "settings": "設定",
-      "runId": "実行",
-      "kind": "種類",
-      "status": "状態",
-      "createdAt": "作成",
-      "cancel": "キャンセル",
-      "templateId": "テンプレート ID",
-      "templateName": "テンプレート名",
-      "source": "来源",
-      "enabled": "有効",
-      "createTemplate": "作成",
-      "templateCreated": "テンプレートを作成しました",
-      "agentModel": "エージェントモデル",
-      "videoUpstream": "既定の動画上流（openai_video / fal_video / replicate）",
-      "imageModel": "既定の画像モデル",
-      "settingsHint": "入力欄からフォーカスが外れると保存されます。"
-    }
   }
 }

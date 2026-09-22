@@ -15,3 +15,7 @@ tests/e2e/.out/
 __pycache__/
 .worktrees/
 local-test/
+apeiron/server/target/
+apeiron/web/node_modules/
+apeiron/web/dist/
+apeiron/data/

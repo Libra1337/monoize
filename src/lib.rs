@@ -34,7 +34,7 @@ pub mod replica;
 pub mod request_capture;
 pub mod settings;
 pub mod store_billing;
-pub mod studio;
+pub mod studio_bridge;
 pub mod transforms;
 pub mod upstream;
 pub mod urp;

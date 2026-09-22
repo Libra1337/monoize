@@ -298,8 +298,7 @@
     "modeSwitch": "切換空間",
     "orgsAdmin": "組織空間管理",
     "announcements": "公告管理",
-    "studio": "Apeiron",
-    "studioAdmin": "創作管理"
+    "studio": "影片創作"
   },
   "wallet": {
     "title": "錢包",
@@ -2726,85 +2725,5 @@
     "rateHint": "1 USD = ¥{{rate}}",
     "rateUnavailable": "匯率不可用,暫不能按人民幣輸入。",
     "cnyHint": "人民幣金額在儲存時按此匯率換算為美元;儲存限額保持美元。"
-  },
-  "studio": {
-    "title": "Apeiron",
-    "description": "公元前六世紀，阿那克西曼德說，萬物生於無限定。兩千六百年後，無限終於有了自己的畫布。",
-    "newProject": "新建專案",
-    "projectTitle": "專案標題",
-    "blankCanvas": "空白畫布",
-    "empty": "還沒有專案，從範本或空白畫布開始。",
-    "updatedAt": "更新於 {time}",
-    "versionLabel": "版本 {version}",
-    "projectMissing": "專案不存在。",
-    "node": {
-      "script": "劇本",
-      "shot": "分鏡",
-      "image": "圖片",
-      "video": "影片",
-      "note": "備註",
-      "scriptEmpty": "劇本為空——讓智能體先寫一稿。"
-    },
-    "stage": {
-      "idle": "待開始",
-      "drafted": "已出稿",
-      "split": "已拆鏡",
-      "synthesized": "已合成提示詞",
-      "frames": "生成分鏡圖",
-      "videos": "生成影片"
-    },
-    "status": {
-      "idle": "待開始",
-      "queued": "排隊中",
-      "running": "生成中",
-      "succeeded": "已完成",
-      "failed": "失敗"
-    },
-    "workOrder": {
-      "image": "生圖",
-      "video": "生影片",
-      "imagePrompt": "圖片提示詞",
-      "videoPrompt": "影片提示詞"
-    },
-    "agent": {
-      "hint": "描述你想做的片子，智能體會寫劇本、拆分鏡並渲染。",
-      "placeholder": "告訴智能體要創作什麼…"
-    },
-    "toast": {
-      "queued": "已排隊",
-      "agentQueued": "智能體已開始，畫布會隨進度生長。",
-      "runSucceeded": "任務完成",
-      "runFailed": "任務失敗"
-    },
-    "assets": {
-      "title": "資產庫",
-      "description": "所有專案生成的圖片與影片。",
-      "all": "全部",
-      "images": "圖片",
-      "videos": "影片",
-      "empty": "暫無資產。"
-    },
-    "admin": {
-      "title": "創作管理",
-      "description": "範本、任務監控與引擎設定。",
-      "runs": "任務",
-      "templates": "範本",
-      "settings": "設定",
-      "runId": "任務",
-      "kind": "類型",
-      "status": "狀態",
-      "createdAt": "建立時間",
-      "cancel": "取消",
-      "templateId": "範本 ID",
-      "templateName": "範本名稱",
-      "source": "來源",
-      "enabled": "啟用",
-      "createTemplate": "建立",
-      "templateCreated": "範本已建立",
-      "agentModel": "智能體模型",
-      "videoUpstream": "預設影片上游（openai_video / fal_video / replicate）",
-      "imageModel": "預設圖片模型",
-      "settingsHint": "輸入框失焦即儲存。"
-    }
   }
 }

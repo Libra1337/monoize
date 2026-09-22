@@ -44,11 +44,4 @@ RRB-R1. The following process-local limits parse per RRB-C1 with the listed defa
 | `MONOIZE_ACTIVE_PROBE_TICK_SECONDS` | 5 | active-probe scheduler tick |
 | `MONOIZE_HTTP_CLIENT_POOL_IDLE` | 90 | reqwest idle-connection timeout (seconds) |
 | `MONOIZE_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST` | 32 | reqwest idle connections per host |
-| `MONOIZE_STUDIO_USER_ACTIVE_RUNS` | 2 | per-user active studio runs |
-| `MONOIZE_STUDIO_GLOBAL_ACTIVE_RUNS` | 16 | process-wide active studio runs |
-| `MONOIZE_STUDIO_LLM_TIMEOUT_MS` | 60000 | studio llm step timeout |
-| `MONOIZE_STUDIO_IMAGE_TIMEOUT_MS` | 300000 | studio image step timeout |
-| `MONOIZE_STUDIO_VIDEO_TIMEOUT_MS` | 1800000 | studio video step timeout |
-| `MONOIZE_STUDIO_UPLOAD_MAX_BYTES` | 20971520 | reference-image upload cap |
-| `MONOIZE_STUDIO_ASSET_MAX_BYTES` | 209715200 | streamed asset cap |
-| `MONOIZE_STUDIO_SSE_MAX_CONNECTIONS_PER_USER` | 5 | studio SSE per-user cap |
+| `MONOIZE_STUDIO_BRIDGE_*` | — | see `studio-bridge.spec.md` §1 |
