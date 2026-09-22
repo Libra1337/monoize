@@ -78,7 +78,8 @@ pub use orgs::{
     MemberUsageQuery, admin_list_orgs, admin_update_org, create_org, create_org_key, delete_org,
     delete_org_key, deposit_to_org, distribute_from_org, invite_preview, join_org, leave_org,
     list_my_orgs, list_org_keys, org_analytics, org_detail, org_ledger, org_limits,
-    org_member_usage, org_request_logs, regenerate_invite, remove_org_member, update_key_sharing,
+    org_member_usage, org_request_logs, regenerate_invite, remove_org_member,
+    set_org_member_alias, update_key_sharing,
     update_org_key, update_org_key_limits, update_org_limits,
 };
 pub use providers::{

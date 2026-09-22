@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
+import { useAuth } from "@/hooks/use-auth";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import useSWR from "swr";
@@ -39,6 +40,8 @@ function amountToNanoUsd(raw: string, currency: "CNY" | "USD", cnyPerUsd?: strin
 export function OrgMembers() {
   const { orgId } = useParams();
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const myUserId = user?.id;
   const { mutate: reloadOrgs } = useMyOrgs();
   const { currency } = useStoreCurrency();
   const { data: rate } = useStoreExchangeRate();
@@ -92,7 +95,37 @@ export function OrgMembers() {
             <tbody>
               {detail.data.members.map((member) => (
                 <tr key={member.user_id} className="border-b last:border-b-0">
-                  <td className="px-5 py-3 font-medium">{member.username}</td>
+                  <td className="px-5 py-3 font-medium">
+                    {member.username}
+                    {member.alias ? (
+                      <span className="ml-1.5 text-xs text-muted-foreground">({member.alias})</span>
+                    ) : null}
+                    {(isOwner || member.user_id === myUserId) && (
+                      <button
+                        type="button"
+                        className="ml-2 text-xs text-primary underline-offset-2 hover:underline"
+                        onClick={async () => {
+                          const next = window.prompt(
+                            t("org.aliasPrompt", { current: member.alias ?? "" }),
+                            member.alias ?? "",
+                          );
+                          if (next === null) return;
+                          try {
+                            await api.setOrgMemberAlias(
+                              orgId,
+                              member.user_id,
+                              next.trim() === "" ? null : next.trim(),
+                            );
+                            await detail.mutate();
+                          } catch (error) {
+                            toast.error(error instanceof Error ? error.message : t("common.error"));
+                          }
+                        }}
+                      >
+                        {t("org.aliasEdit")}
+                      </button>
+                    )}
+                  </td>
                   <td className="px-5 py-3">
                     <Badge variant={member.role === "owner" ? "default" : "secondary"}>
                       {member.role === "owner" ? t("org.owner") : t("org.member")}

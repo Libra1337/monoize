@@ -2632,6 +2632,8 @@
     "keyDeleted": "Key deleted",
     "deleteKeyConfirm": "Delete this org key? Historical usage logs stay with the organization.",
     "leave": "Leave organization",
+    "aliasPrompt": "Set the display alias for this member (empty clears it). Current: {{current}}",
+    "aliasEdit": "alias",
     "leaveConfirm": "Leave this organization? You lose access to its keys. Your personal wallet and keys are not affected.",
     "left": "You left the organization",
     "removeMemberConfirmKeys": "Remove this member? Keys they created in this space are deleted too. Historical logs stay."

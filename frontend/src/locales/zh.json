@@ -2631,6 +2631,8 @@
     "keyDeleted": "密钥已删除",
     "deleteKeyConfirm": "删除这个组织密钥？历史用量日志仍保留在组织中。",
     "leave": "退出组织",
+    "aliasPrompt": "设置该成员的显示别名(留空清除)。当前:{{current}}",
+    "aliasEdit": "别名",
     "leaveConfirm": "退出该组织？你将失去其密钥的访问权。个人钱包和密钥不受影响。",
     "left": "已退出组织",
     "removeMemberConfirmKeys": "移除该成员?其在本空间创建的密钥也会一并删除。历史日志保留。"

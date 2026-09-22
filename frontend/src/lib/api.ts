@@ -17,6 +17,7 @@ export interface AdminOrgEntry {
   avatar_image?: string | null;
   owner_user_id: string;
   owner_username: string;
+  owner_alias?: string | null;
   owner_org_creation_limit?: number | null;
   member_count: number;
   max_members: number;
@@ -47,6 +48,7 @@ export interface OrgMember {
   username: string;
   role: string;
   joined_at: string;
+  alias?: string | null;
 }
 
 export interface OrgDetail {
@@ -88,6 +90,7 @@ export interface OrgKeyEntry {
   created_at?: string;
   key?: string;
   owner_username?: string;
+  owner_alias?: string | null;
   created_by?: string | null;
   model_limits_enabled?: boolean;
   model_limits?: string[];
@@ -1940,6 +1943,13 @@ class ApiClient {
 
   async leaveOrg(orgId: string) {
     return this.request(`/orgs/${orgId}/leave`, { method: "DELETE" });
+  }
+
+  async setOrgMemberAlias(orgId: string, memberUserId: string, alias: string | null) {
+    return this.request(`/orgs/${orgId}/members/${memberUserId}/alias`, {
+      method: "PUT",
+      body: JSON.stringify({ alias }),
+    });
   }
 
   async deleteOrgKey(orgId: string, keyId: string) {

@@ -56,6 +56,15 @@ function limitsFromDraft(
   };
 }
 
+/** Adapter: the editor re-derivation wants total/hourly/daily keys. */
+function storedNanoForEditor(limits: OrgSpendLimitSet) {
+  return {
+    total: limits.total_nano_usd,
+    hourly: limits.hourly_nano_usd,
+    daily: limits.daily_nano_usd,
+  };
+}
+
 export function OrgLimitsPage() {
   const { orgId } = useParams();
   const { t } = useTranslation();
@@ -137,14 +146,22 @@ export function OrgLimitsPage() {
     setSaving(true);
     setError(null);
     try {
+      // ORGL-10: the owner member row cannot carry member limits; the table
+      // already hides it, so the patch must exclude it too. Submitting the
+      // owner's (empty) draft made the backend reject the whole save.
+      const editableMembers = new Set(
+        data.members.filter((m) => m.role !== "owner").map((m) => m.user_id),
+      );
       await api.updateOrgLimits(
         orgId ?? "",
         limitsFromDraft(spaceDraft, limitCurrency, rate),
         Object.fromEntries(
-          Object.entries(memberDrafts).map(([id, draft]) => [
-            id,
-            limitsFromDraft(draft, limitCurrency, rate),
-          ]),
+          Object.entries(memberDrafts)
+            .filter(([id]) => editableMembers.has(id))
+            .map(([id, draft]) => [
+              id,
+              limitsFromDraft(draft, limitCurrency, rate),
+            ]),
         ),
       );
       const refreshed = await api.getOrgLimits(orgId ?? "");
@@ -206,6 +223,7 @@ export function OrgLimitsPage() {
           onCurrencyChange={rederiveAll}
           onChange={setSpaceDraft}
           cnyPerUsd={cnyPerUsd}
+          storedNano={storedNanoForEditor(data.space.limits)}
         />
       </section>
 
@@ -239,6 +257,7 @@ export function OrgLimitsPage() {
                         onCurrencyChange={rederiveAll}
                         onChange={(next) => setMemberDrafts((prev) => ({ ...prev, [m.user_id]: next }))}
                         cnyPerUsd={cnyPerUsd}
+                        storedNano={storedNanoForEditor(m.limits)}
                       />
                     </TableCell>
                   </TableRow>
@@ -281,6 +300,7 @@ export function OrgLimitsPage() {
                       onCurrencyChange={rederiveAll}
                       onChange={(next) => setKeyDrafts((prev) => ({ ...prev, [k.key_id]: next }))}
                       cnyPerUsd={cnyPerUsd}
+                      storedNano={storedNanoForEditor(k.limits)}
                     />
                   </TableCell>
                   <TableCell>

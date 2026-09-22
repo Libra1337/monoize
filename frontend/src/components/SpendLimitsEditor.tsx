@@ -9,6 +9,29 @@ import {
   type SpendWindowKey,
 } from "@/lib/spend-limits";
 
+/**
+ * Re-derives one draft field for a currency switch. A user edit survives the
+ * switch via old-currency → nano → next-currency conversion; an empty field
+ * falls back to the stored window (empty only when the stored limit is truly
+ * unlimited). When no stored window is available an empty field stays empty.
+ */
+export function rederiveField(
+  raw: string,
+  storedNano: string | null | undefined,
+  next: "USD" | "CNY",
+  current: "USD" | "CNY",
+  cnyPerUsd: string | undefined,
+): string {
+  if (raw.trim() !== "") {
+    const nano = amountToNanoLimit(raw, current, cnyPerUsd);
+    if (nano != null) {
+      return nanoToLimitInput(nano, next, cnyPerUsd);
+    }
+    return raw;
+  }
+  return nanoToLimitInput(storedNano ?? null, next, cnyPerUsd);
+}
+
 const DRAFT_KEYS: Record<SpendWindowKey, keyof SpendLimitDraft> = {
   total_nano_usd: "total",
   hourly_nano_usd: "hourly",
@@ -48,15 +71,17 @@ export function SpendLimitsEditor({
   const handleCurrencyChange = (next: "USD" | "CNY") => {
     if (next === currency) return;
     onCurrencyChange(next);
-    if (storedNano) {
-      onChange({
-        total: nanoToLimitInput(storedNano.total, next, cnyPerUsd),
-        hourly: nanoToLimitInput(storedNano.hourly, next, cnyPerUsd),
-        daily: nanoToLimitInput(storedNano.daily, next, cnyPerUsd),
-      });
-    } else {
-      onChange({ total: "", hourly: "", daily: "" });
-    }
+    // A currency switch must not lose edits or silently reinterpret blanks.
+    // A non-empty input is the user's edit: convert it old-currency → nano →
+    // next-currency and keep it. An empty input means "no explicit value":
+    // fall back to the stored nano window (which renders empty only when the
+    // stored limit is actually unlimited), instead of clearing it to a blank
+    // that a later save would submit as an explicit unlimited.
+    onChange({
+      total: rederiveField(draft.total, storedNano?.total, next, currency, cnyPerUsd),
+      hourly: rederiveField(draft.hourly, storedNano?.hourly, next, currency, cnyPerUsd),
+      daily: rederiveField(draft.daily, storedNano?.daily, next, currency, cnyPerUsd),
+    });
   };
 
   return (
@@ -107,8 +132,7 @@ export function SpendLimitsEditor({
 }
 
 /** ORGL-20 payload build in the chosen currency; see amountToNanoLimit for semantics. */
-export function buildSpendLimitPayloadIn(
-  draft: SpendLimitDraft,
+export function buildSpendLimitPayloadIn(  draft: SpendLimitDraft,
   currency: "USD" | "CNY",
   cnyPerUsd: string | undefined,
   alwaysSubmit: boolean,

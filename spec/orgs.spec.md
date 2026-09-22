@@ -22,8 +22,20 @@ ORG-2. `orgs`: `id` (PK, equals the org wallet user id), `owner_user_id`, `displ
 in preference to the emoji), `invite_token` (unique, 32-char random), `invite_expires_at`
 (NULL = never), `invite_created_at`, `created_at`, `updated_at`.
 
-ORG-3. `org_members`: `(org_id, user_id)` PK, `role` ∈ `owner` | `member`, `joined_at`.
-Exactly one member row with `role = owner` per org.
+ORG-3. `org_members`: `(org_id, user_id)` PK, `role` ∈ `owner` | `member`, `joined_at`,
+`alias` (NULL or 1..32 characters after trimming). Exactly one member row with
+`role = owner` per org.
+
+ORG-3a. The `alias` is a per-membership display nickname. `GET
+/api/dashboard/orgs/{org_id}` member rows and org key rows (creator or sharer
+context) MUST include `alias` alongside `username` for every member. `PUT
+/api/dashboard/orgs/{org_id}/members/{user_id}/alias` with body
+`{"alias": string | null}` (owner only; a member may set their own) sets or
+clears the alias: `null` or a blank string clears it to SQL NULL; a non-null
+value MUST trim to 1..32 characters. The response returns `{user_id, username,
+alias}`. Every member-visible surface that lists members (member list, key
+creator, key share lists, member-usage) MUST render `username (alias)` when an
+alias exists and `username` otherwise.
 
 ORG-4. `api_keys.org_id` (NULL = personal key) marks a key as an org key. An org key
 is owned by the org wallet row: `api_keys.user_id = org_id` and

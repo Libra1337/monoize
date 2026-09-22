@@ -71,3 +71,6 @@ mod identity_redaction;
 
 #[path = "api/request_log_probe_filter.rs"]
 mod request_log_probe_filter;
+
+#[path = "api/org_member_alias.rs"]
+mod org_member_alias;

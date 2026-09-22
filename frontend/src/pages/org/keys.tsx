@@ -358,7 +358,10 @@ export function OrgKeys() {
                 <div className="min-w-0">
                   <p className="truncate font-medium">
                     {key.name}
-                    <span className="ml-2 text-xs text-muted-foreground">@{key.owner_username}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      @{key.owner_username}
+                      {key.owner_alias ? ` (${key.owner_alias})` : ""}
+                    </span>
                   </p>
                   <button
                     type="button"

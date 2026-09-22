@@ -620,6 +620,7 @@ pub struct OrgMemberView {
     pub username: String,
     pub role: String,
     pub joined_at: String,
+    pub alias: Option<String>,
 }
 
 pub async fn org_detail(
@@ -646,7 +647,7 @@ pub async fn org_detail(
     let members = read
         .query_all(Statement::from_sql_and_values(
             backend,
-            "SELECT m.user_id, m.role, m.joined_at, u.username
+            "SELECT m.user_id, m.role, m.joined_at, m.alias, u.username
              FROM org_members m JOIN users u ON u.id = m.user_id
              WHERE m.org_id = $1 ORDER BY m.joined_at ASC",
             [org_id.clone().into()],
@@ -706,6 +707,7 @@ pub async fn org_detail(
                 username: row.try_get("", "username").unwrap_or_default(),
                 role: row.try_get("", "role").unwrap_or_default(),
                 joined_at: row.try_get("", "joined_at").unwrap_or_default(),
+                alias: row.try_get("", "alias").unwrap_or_default(),
             })
             .collect::<Vec<_>>(),
         "max_members": limit_or_default(
@@ -1117,8 +1119,11 @@ pub async fn list_org_keys(
         .query_all(Statement::from_sql_and_values(
             backend,
             "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled,
-                    k.model_limits, k.group_ids, k.created_at, u.username AS owner_username
-             FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+                    k.model_limits, k.group_ids, k.created_at, u.username AS owner_username,
+                    om.alias AS owner_alias
+             FROM api_keys k
+             LEFT JOIN users u ON u.id = k.created_by
+             LEFT JOIN org_members om ON om.org_id = k.org_id AND om.user_id = k.created_by
              WHERE k.org_id = $1 AND k.created_by = $2 ORDER BY k.created_at DESC",
             [org_id.clone().into(), user.id.clone().into()],
         ))
@@ -1130,18 +1135,22 @@ pub async fn list_org_keys(
     // members, so the owner's view is the only surface that can manage them.
     let shared_sql = if caller_role == "owner" {
         "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled,
-                k.model_limits, k.group_ids, u.username AS owner_username, k.created_by
+                k.model_limits, k.group_ids, u.username AS owner_username, k.created_by,
+                om.alias AS owner_alias
          FROM api_keys k
          LEFT JOIN users u ON u.id = k.created_by
+         LEFT JOIN org_members om ON om.org_id = k.org_id AND om.user_id = k.created_by
          WHERE k.org_id = $1 AND k.created_by != $2
            AND (k.created_by IS NULL OR k.created_by IN
                 (SELECT user_id FROM org_members WHERE org_id = $1))
          ORDER BY k.created_at DESC"
     } else {
         "SELECT k.id, k.name, k.key, k.key_prefix, k.org_share_mode, k.model_limits_enabled,
-                k.model_limits, k.group_ids, u.username AS owner_username, k.created_by
+                k.model_limits, k.group_ids, u.username AS owner_username, k.created_by,
+                om.alias AS owner_alias
          FROM api_keys k
          LEFT JOIN users u ON u.id = k.created_by
+         LEFT JOIN org_members om ON om.org_id = k.org_id AND om.user_id = k.created_by
          WHERE k.org_id = $1 AND k.created_by != $2 AND (
                 k.org_share_mode = 'public'
                 OR (k.org_share_mode = 'allow'
@@ -1236,6 +1245,7 @@ pub async fn list_org_keys(
                     &row.try_get::<String>("", "group_ids").unwrap_or_else(|_| "[]".to_string()),
                 ).unwrap_or_default(),
                 "owner_username": row.try_get::<String>("", "owner_username").unwrap_or_default(),
+                "owner_alias": row.try_get::<Option<String>>("", "owner_alias").unwrap_or_default(),
                 "created_by": row.try_get::<Option<String>>("", "created_by").unwrap_or_default(),
             }))
             .collect::<Vec<_>>(),
@@ -1376,6 +1386,70 @@ pub struct RemoveOrgMemberRequest {
 
 fn default_delete_keys() -> bool {
     true
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetOrgMemberAliasRequest {
+    pub alias: Option<String>,
+}
+
+/// ORG-3a: sets or clears a member's display alias. The owner may set any
+/// member's alias; a member may set only their own.
+pub async fn set_org_member_alias(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((org_id, member_id)): Path<(String, String)>,
+    Json(body): Json<SetOrgMemberAliasRequest>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let backend = state.db_pool.read().get_database_backend();
+    let read = state.db_pool.read();
+    let caller_role = member_role(&*read, backend, &org_id, &user.id)
+        .await?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "org not found"))?;
+    if caller_role != "owner" && member_id != user.id {
+        return Err(forbidden("only the owner can set another member's alias"));
+    }
+    let member = read
+        .query_one(Statement::from_sql_and_values(
+            backend,
+            "SELECT m.alias, u.username FROM org_members m JOIN users u ON u.id = m.user_id
+             WHERE m.org_id = $1 AND m.user_id = $2",
+            [org_id.clone().into(), member_id.clone().into()],
+        ))
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "member not found"))?;
+    let username: String = member.try_get("", "username").map_err(storage)?;
+    let alias = body
+        .alias
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            if value.chars().count() > 32 {
+                Err(bad_request("alias must be 1..32 characters"))
+            } else {
+                Ok(value.to_string())
+            }
+        })
+        .transpose()?;
+    state
+        .db_pool
+        .write()
+        .await
+        .execute(Statement::from_sql_and_values(
+            backend,
+            "UPDATE org_members SET alias = $3 WHERE org_id = $1 AND user_id = $2",
+            [org_id.clone().into(), member_id.clone().into(), alias.clone().into()],
+        ))
+        .await
+        .map_err(storage)?;
+    Ok(Json(json!({
+        "user_id": member_id,
+        "username": username,
+        "alias": alias,
+    })))
 }
 
 pub async fn remove_org_member(
