@@ -50,6 +50,7 @@ function shotProgress(steps: Step[] | undefined, count: number) {
       status: step?.status ?? ("pending" as const),
       narration: String((step?.payload?.shot as Record<string, unknown> | undefined)?.narration ?? ""),
       assetId: (step?.result?.asset_id as string) ?? null,
+      mime: (step?.result?.mime_type as string) ?? null,
     };
   });
   const done = tiles.filter((tile) => tile.status === "succeeded").length;
@@ -85,7 +86,9 @@ export function CreatePage() {
   // AP-AG1: stage-gated mode — run stops after storyboard for review.
   const [stageGate, setStageGate] = useState(true);
   const [reviewProjectId, setReviewProjectId] = useState<string | null>(null);
-  const [editedShots, setEditedShots] = useState<Record<number, { description: string; keywords: string }>>({});
+  const [editedShots, setEditedShots] = useState<
+    Record<number, { description: string; keywords: string; duration_secs?: number }>
+  >({});
 
   const { data: runData } = useRun(runId);
   const run = runData as Run | undefined;
@@ -109,7 +112,7 @@ export function CreatePage() {
         description: edit?.description ?? String(shot.description ?? ""),
         keywords: edit?.keywords ?? String(shot.keywords ?? ""),
         narration: String(shot.narration ?? ""),
-        duration_secs: Number(shot.duration_secs ?? 5),
+        duration_secs: edit?.duration_secs ?? Number(shot.duration_secs ?? 5),
         materialCandidates: shot.material_candidates as number | null | undefined,
       };
     });
@@ -353,7 +356,25 @@ export function CreatePage() {
                       <div key={shot.index} className="space-y-1.5 rounded-md border bg-card p-3">
                         <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
                           <span>{String(shot.index + 1).padStart(2, "0")}</span>
-                          <span>{shot.duration_secs}s</span>
+                          <input
+                            aria-label={`duration-${shot.index}`}
+                            type="number"
+                            min={2}
+                            max={30}
+                            value={shot.duration_secs}
+                            onChange={(event) =>
+                              setEditedShots((current) => ({
+                                ...current,
+                                [shot.index]: {
+                                  description: shot.description,
+                                  keywords: shot.keywords,
+                                  duration_secs: Math.max(2, Math.min(30, Number(event.target.value) || 5)),
+                                },
+                              }))
+                            }
+                            className="h-5 w-11 rounded border bg-transparent px-1 font-mono text-[10px] focus-visible:outline-none"
+                          />
+                          <span>s</span>
                         </div>
                         <input
                           aria-label={`description-${shot.index}`}

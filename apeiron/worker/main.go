@@ -54,6 +54,7 @@ func runLoop(ctx context.Context, client *client, cfg *config, slot int) {
 		}
 		log.Printf("[slot %d] job %s kind=%s claimed", slot, job.ID, job.Kind)
 		execCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.JobTimeoutSec)*time.Second)
+		stopHeartbeat := heartbeatLoop(execCtx, client, job.ID)
 		var execErr error
 		switch job.Kind {
 		case "tts":
@@ -68,6 +69,7 @@ func runLoop(ctx context.Context, client *client, cfg *config, slot int) {
 			execErr = failJob(ctx, client, job, "unknown job kind "+job.Kind)
 		}
 		cancel()
+		stopHeartbeat()
 		if execErr != nil {
 			log.Printf("[slot %d] job %s failed: %v", slot, job.ID, execErr)
 			if err := failJob(context.Background(), client, job, execErr.Error()); err != nil {

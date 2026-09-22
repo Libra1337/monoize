@@ -532,6 +532,11 @@ async fn create_steps_for_node(
                         if let Some(keywords) = edit.get("keywords").and_then(Value::as_str) {
                             shot["keywords"] = json!(keywords);
                         }
+                        if let Some(duration) = edit.get("duration_secs").and_then(Value::as_f64) {
+                            if (1.0..=30.0).contains(&duration) {
+                                shot["duration_secs"] = json!(duration);
+                            }
+                        }
                     }
                 }
             }
@@ -649,10 +654,16 @@ async fn resolve_inputs(
                 }
             }
             "image" => {
+                // A6: pick the producer image whose shot index matches this
+                // video step, so per-shot first frames stay aligned.
+                let wanted = step.payload.get("shot_index").and_then(Value::as_i64);
                 inputs.image_asset_id = results
                     .iter()
-                    .filter_map(|r| r.get("asset_id").and_then(Value::as_str))
-                    .next()
+                    .filter(|r| match wanted {
+                        Some(want) => r.get("shot_index").and_then(Value::as_i64) == Some(want),
+                        None => true,
+                    })
+                    .find_map(|r| r.get("asset_id").and_then(Value::as_str))
                     .map(str::to_string);
             }
             "audio" => {
@@ -906,7 +917,7 @@ pub async fn finish_step(
                 if let Some(run) = load_run(state, &step.run_id).await? {
                     let bridge = crate::bridge::BridgeClient::new(
                         &state.http,
-                        &state.cfg.platform_url,
+                        &state.cfg.bridge_url,
                         state.cfg.bridge_service_token.as_deref(),
                     );
                     let key = format!("apeiron_refund_{}", step.id);
@@ -957,8 +968,16 @@ pub async fn finalize_run(state: &SharedState, run_id: &str) {
         return;
     }
     // A run with zero steps finalizes immediately as succeeded.
+    let stage_gated = run
+        .params
+        .get("stop_after")
+        .and_then(Value::as_str)
+        .is_some();
     let final_status = if steps.is_empty() {
         "succeeded"
+    } else if stage_gated && steps.iter().all(|s| s.status == "succeeded") {
+        // AP-AG1: the pipeline stopped at a review boundary on purpose.
+        "partial"
     } else if steps.iter().any(|s| s.status == "canceled") && run.status == "canceled" {
         "canceled"
     } else if steps.iter().any(|s| s.status == "canceled") {

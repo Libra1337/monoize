@@ -142,7 +142,66 @@ pub async fn continue_run(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("project"))?;
-    let run = super::projects::create_run(&state, &user.id, Some(&body.project_id), "graph", json!({ "root": "final" })).await?;
+
+    // Find the reviewed run (the most recent storyboard-gated run of this
+    // project) so its script/storyboard results can be cloned forward.
+    let previous: Option<String> = sqlx::query(
+        "SELECT id FROM runs WHERE project_id = $1 AND user_id = $2 \
+         AND (params_json LIKE '%\"stop_after\":\"storyboard\"%' \
+              OR params_json LIKE '%\"stop_after\": \"storyboard\"%') \
+         AND status IN ('partial', 'succeeded', 'failed') \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&body.project_id)
+    .bind(&user.id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .and_then(|row| row.try_get::<String, _>("id").ok());
+
+    let run = super::projects::create_run(
+        &state,
+        &user.id,
+        Some(&body.project_id),
+        "graph",
+        json!({ "root": "final", "continue_from": previous }),
+    )
+    .await?;
+    let run_id = run.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+
+    // Clone the terminal script/storyboard steps of the reviewed run into
+    // the new run as succeeded steps (same payloads and results) so the
+    // engine skips them: no re-execution, no double LLM billing.
+    if let Some(previous_id) = previous {
+        let rows = sqlx::query(
+            "SELECT node_id, kind, payload_json, result_json, charge_nano_usd              FROM steps WHERE run_id = $1 AND kind IN ('script', 'storyboard')              AND status = 'succeeded'",
+        )
+        .bind(&previous_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+        let now = crate::now_rfc3339();
+        for row in rows {
+            let step_id = uuid::Uuid::new_v4().to_string();
+            let payload: String = row.try_get("payload_json").unwrap_or_default();
+            let result: Option<String> = row.try_get::<Option<String>, _>("result_json").ok().flatten();
+            let charge: Option<String> = row.try_get::<Option<String>, _>("charge_nano_usd").ok().flatten();
+            let _ = sqlx::query(
+                "INSERT INTO steps (id, run_id, node_id, kind, status, payload_json,                  result_json, charge_nano_usd, attempts, created_at, updated_at, finished_at)                  VALUES ($1, $2, $3, $4, 'succeeded', $5, $6, $7, 1, $8, $8, $8)",
+            )
+            .bind(&step_id)
+            .bind(&run_id)
+            .bind(row.try_get::<String, _>("node_id").unwrap_or_default())
+            .bind(row.try_get::<String, _>("kind").unwrap_or_default())
+            .bind(&payload)
+            .bind(&result)
+            .bind(&charge)
+            .bind(&now)
+            .execute(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        }
+    }
     Ok((StatusCode::CREATED, Json(run)))
 }
 
@@ -155,8 +214,10 @@ pub struct EstimateQuery {
 /// AP-U4: `estimate = clip_price × shot_count + tts + assemble (+ subtitle 0)`.
 pub async fn estimate_oneclick(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Query(query): Query<EstimateQuery>,
 ) -> ApiResult<impl IntoResponse> {
+    crate::auth::current_user(&state, &headers).await?;
     let seconds = query.seconds.unwrap_or(30).clamp(5, 300);
     let mode = query.mode.unwrap_or_else(|| "stock".to_string());
     let shots = shot_count_for(seconds) as i128;

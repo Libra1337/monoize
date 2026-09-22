@@ -453,6 +453,7 @@ export function CanvasPage() {
         },
       ]);
       if ((response.applied ?? []).length > 0) {
+        dirtyRef.current = false;
         loadedRef.current = null;
         void reloadProject();
       }
@@ -482,7 +483,7 @@ export function CanvasPage() {
           </Button>
           <span className="truncate text-sm font-medium">{project.title}</span>
           <span className="font-mono text-xs text-muted-foreground">
-            {saveState === "pending" ? t("canvas.savePending") : `v{version}`}
+            {saveState === "pending" ? t("canvas.savePending") : `v${version}`}
           </span>
         </div>
         <div className="pointer-events-auto ml-auto flex items-center gap-1.5 rounded-lg border bg-card/95 px-2 py-1.5 shadow-sm backdrop-blur">

@@ -29,6 +29,11 @@ export function useEventStream(enabled: boolean) {
           if (runId) void globalMutate(["run", runId]);
         } else if (event.kind === "balance_update") {
           void globalMutate("me");
+        } else if (event.kind === "graph_patch") {
+          void globalMutate([
+            "project",
+            (event.payload as { project_id?: string }).project_id,
+          ]);
         }
       } catch {
         // ignore malformed frames

@@ -68,6 +68,8 @@ fn templates() -> Vec<TemplateSeed> {
                     edge("e5", "material", "video", "final", "clips"),
                     edge("e6", "voice", "audio", "final", "audio"),
                     edge("e7", "subs", "subtitle", "final", "subtitle"),
+                    // A7: subtitle cues follow the narration audio timing.
+                    edge("e8", "voice", "audio", "subs", "audio"),
                 ],
             }),
         },
@@ -266,6 +268,8 @@ pub fn build_oneclick_graph(
         nodes.push(node("subs", "subtitle", 900.0, 460.0, json!({})));
         edges.push(edge("e4", "script", "text", "subs", "text"));
         edges.push(edge("e7", "subs", "subtitle", "final", "subtitle"));
+        // A7: cues timed against the narration audio, not flat 3s lines.
+        edges.push(edge("e8", "voice", "audio", "subs", "audio"));
     }
     json!({ "nodes": nodes, "edges": edges })
 }

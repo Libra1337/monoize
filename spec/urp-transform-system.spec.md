@@ -196,6 +196,7 @@ TF-7. Built-ins that MUST exist are exactly:
 - `reasoning_summary_heading`
 - `reasoning_summary_to_raw_cot`
 - `reasoning_to_think_xml`
+- `role_assistant_image_to_user`
 - `role_developer_to_system`
 - `role_merge_consecutive`
 - `role_system_to_developer`
@@ -342,6 +343,24 @@ ROLE-9. Within one maximal run of adjacent ordinary nodes, `role_merge_consecuti
 ROLE-10. If `role_merge_consecutive` merges neighboring ordinary nodes, it MUST preserve node order and MUST preserve all surviving typed fields. If conflicting nested passthrough keys survive on merged ordinary-node state, the earlier surviving node's typed fields remain authoritative and merge policy for residual passthrough keys MUST be deterministic.
 
 ROLE-11. `role_merge_consecutive` MUST NOT merge `ToolResult` into ordinary nodes and MUST NOT cross a control-node boundary.
+
+Motivation for ROLE-12 through ROLE-19: some chat-completion upstreams accept an image part carried on an assistant message at the wire level but silently drop it before the model sees it, so the model answers as if the conversation contained no image. Relocating such images onto a following user message keeps the image visible to the model.
+
+ROLE-12. `role_assistant_image_to_user` is request-phase only and supports the provider, global, and api-key scopes.
+
+ROLE-13. The transform MUST select exactly the `Image` nodes in `request.input` whose ordinary `role = assistant`. It MUST NOT select `Text`, `Audio`, `File`, `ToolCall`, `Reasoning`, `ToolResult`, or control nodes, and MUST NOT select `Image` nodes whose role differs from `assistant`.
+
+ROLE-14. For each selected image node, the transform MUST compute an insertion anchor: the index of the first node in `request.input` that is an ordinary node with `role = user` and whose index is strictly greater than the selected node's index. The anchor search MUST skip nodes of every other kind, including `ToolCall`, `ToolResult`, and control nodes. For this rule, ordinary nodes are exactly the `Text`, `Image`, `Audio`, `File`, and `ProviderItem` node kinds.
+
+ROLE-15. If an anchor exists, the transform MUST remove the selected image node from its original position, set its `role = user`, set its `id` to absent, and insert it immediately before the anchor node. Selected images that share one anchor MUST be inserted at that anchor in their original relative order.
+
+ROLE-16. If no anchor exists for a selected image node, the transform MUST remove the node from its original position, set its `role = user`, set its `id` to absent, and append it at the end of `request.input`. Selected images without an anchor MUST be appended in their original relative order.
+
+ROLE-17. The transform MUST NOT modify the `source` or `extra_body` of a selected node, MUST NOT modify any non-selected node, and MUST NOT reorder non-selected nodes relative to each other.
+
+ROLE-18. The transform MUST be idempotent: applying it to its own output yields the same node sequence.
+
+ROLE-19. `role_assistant_image_to_user` MUST accept an empty config object and MUST reject any config object that contains any key.
 
 ### 4.3 `prompt_append_empty_user`
 

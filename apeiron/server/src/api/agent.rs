@@ -1,6 +1,5 @@
-//! AP-AG2: conversational graph agent — an LLM tool loop that edits the
-//! project graph server-side. Every mutation bumps the version and
-//! broadcasts `graph_patch` so the canvas reloads live.
+//! AP-AG2: conversational graph agent — a real JSON-action tool loop with
+//! conversation history, provider failover, and token billing.
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::SharedState;
@@ -12,96 +11,32 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
 
+#[derive(Deserialize)]
+pub struct AgentBody {
+    pub message: String,
+    /// Prior conversation turns (role user/assistant), client-supplied.
+    #[serde(default)]
+    pub history: Vec<HistoryTurn>,
+}
 
-/// Insert into a node's params object (Value is an object per AP-G3).
+#[derive(Deserialize)]
+pub struct HistoryTurn {
+    pub role: String,
+    pub content: String,
+}
+
+const TOOL_PROTOCOL: &str = "You operate a video-production node graph. Reply with ONLY one JSON \
+object, no markdown fences: {\"action\":\"<tool>|\"reply\", \"args\":{...}, \"message\":\"short \
+user-facing text in the user's language\"}. Tools: update_script(prompt, system?), \
+create_shots(count?), update_shot(index, description?, keywords?), set_param(node_id, key, \
+value), run_graph(). Nodes: script, storyboard, image, video, tts, subtitle, material, assemble. \
+Plan multiple steps by chaining actions across turns; the caller feeds your previous action back. \
+When the request is complete or needs user input, use action \"reply\".";
+
 fn set_param_value(node: &mut crate::graph::Node, key: &str, value: Value) {
     if let Some(map) = node.params.as_object_mut() {
         map.insert(key.to_string(), value);
     }
-}
-
-#[derive(Deserialize)]
-pub struct AgentBody {
-    pub message: String,
-}
-
-const SYSTEM_PROMPT: &str = "You are Apeiron's video workflow agent. You edit a node graph \
-that produces videos. Available nodes: script (LLM text), storyboard (splits text into shots), \
-image (text-to-image), video (text-to-video), tts (voice), subtitle (SRT), material (stock clip), \
-assemble (final film). Use the tools to build or adjust the graph for the user's request. \
-Call run_graph only when the user asks to run/generate. Reply concisely in the user's language.";
-
-#[allow(dead_code)]
-fn tools_schema() -> Value {
-    json!([
-        {
-            "type": "function",
-            "function": {
-                "name": "update_script",
-                "description": "Set the script node's prompt and optional system instruction",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "prompt": { "type": "string" },
-                        "system": { "type": "string" }
-                    },
-                    "required": ["prompt"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "create_shots",
-                "description": "Ensure a storyboard node exists that splits the script into N shots",
-                "parameters": {
-                    "type": "object",
-                    "properties": { "count": { "type": "integer", "minimum": 1, "maximum": 24 } },
-                    "required": []
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "update_shot",
-                "description": "Edit one storyboard shot (applies as a review override)",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "index": { "type": "integer", "minimum": 0 },
-                        "description": { "type": "string" },
-                        "keywords": { "type": "string" }
-                    },
-                    "required": ["index"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "set_param",
-                "description": "Set one parameter on any node (e.g. size, seconds, voice)",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "node_id": { "type": "string" },
-                        "key": { "type": "string" },
-                        "value": {}
-                    },
-                    "required": ["node_id", "key", "value"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "run_graph",
-                "description": "Start a run of the whole graph",
-                "parameters": { "type": "object", "properties": {}, "required": [] }
-            }
-        }
-    ])
 }
 
 async fn load_project(
@@ -124,15 +59,16 @@ async fn load_project(
     Ok((version, graph))
 }
 
+/// CAS save; returns false when the version moved under us.
 async fn save_graph(
     state: &SharedState,
     project_id: &str,
     version: i64,
     graph: &crate::graph::Graph,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let raw = serde_json::to_string(graph).map_err(|e| e.to_string())?;
     let now = crate::now_rfc3339();
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE projects SET graph_json = $1, version = $2, updated_at = $3 \
          WHERE id = $4 AND version = $2 - 1",
     )
@@ -143,7 +79,108 @@ async fn save_graph(
     .execute(&state.db)
     .await
     .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(result.rows_affected() == 1)
+}
+
+struct AgentLlmUsage {
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
+/// One LLM call through the ordered provider list with failover (AP-E7).
+async fn call_llm(
+    state: &SharedState,
+    prompt: &str,
+) -> Result<(String, AgentLlmUsage), String> {
+    let providers = crate::upstream::list_providers(state, "llm").await?;
+    if providers.is_empty() {
+        return Err("no_provider: no enabled llm provider".into());
+    }
+    let timeout = crate::http_timeout("script", &state.cfg);
+    let mut last_error = String::new();
+    for provider in providers.iter().take(2) {
+        match crate::upstream::llm_complete(state, provider, TOOL_PROTOCOL, prompt, timeout).await
+        {
+            Ok(output) => {
+                return Ok((
+                    output.text,
+                    AgentLlmUsage {
+                        input_tokens: output.input_tokens,
+                        output_tokens: output.output_tokens,
+                    },
+                ))
+            }
+            Err(error) => {
+                tracing::warn!(%error, provider = %provider.id, "agent llm attempt failed");
+                last_error = error;
+            }
+        }
+    }
+    Err(last_error)
+}
+
+/// Token-metered bridge settlement for agent turns (AP-AG2 billing).
+async fn bill_agent_turn(
+    state: &SharedState,
+    user_id: &str,
+    key_suffix: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+) {
+    let providers = crate::upstream::list_providers(state, "llm")
+        .await
+        .unwrap_or_default();
+    let Some(provider) = providers.into_iter().next() else {
+        return;
+    };
+    let in_rate = provider
+        .params
+        .get("in_price_nano_per_mtok")
+        .and_then(Value::as_i64)
+        .unwrap_or(0) as i128;
+    let out_rate = provider
+        .params
+        .get("out_price_nano_per_mtok")
+        .and_then(Value::as_i64)
+        .unwrap_or(0) as i128;
+    let raw = input_tokens as i128 * in_rate + output_tokens as i128 * out_rate;
+    let cost = ((raw + 999_999) / 1_000_000).max(0);
+    if cost <= 0 {
+        return;
+    }
+    let bridge = crate::bridge::BridgeClient::new(
+        &state.http,
+        &state.cfg.bridge_url,
+        state.cfg.bridge_service_token.as_deref(),
+    );
+    let key = format!("apeiron_step_agent_{key_suffix}");
+    if bridge
+        .settle("debit", user_id, cost, &key, json!({ "agent": true }))
+        .await
+        .is_ok()
+    {
+        crate::engine::refresh_mirror_balance(state, user_id).await;
+    }
+}
+
+fn parse_action(text: &str) -> Option<Value> {
+    let cleaned = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    let start = cleaned.find('{')?;
+    let end = cleaned.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    let candidate = &cleaned[start..=end];
+    let value: Value = serde_json::from_str(candidate).ok()?;
+    // Only treat objects carrying an "action" field as tool calls; any other
+    // JSON the model emitted is conversational.
+    value.get("action").and_then(Value::as_str)?;
+    Some(value)
 }
 
 pub async fn submit(
@@ -156,72 +193,56 @@ pub async fn submit(
     if body.message.trim().is_empty() {
         return Err(ApiError::bad_request("invalid_params", "message is required"));
     }
-    let providers = crate::upstream::list_providers(&state, "llm")
-        .await
-        .map_err(ApiError::internal)?;
-    let provider = providers
-        .into_iter()
-        .next()
-        .ok_or_else(|| ApiError::bad_request("no_provider", "no enabled llm provider"))?;
-
     let (mut version, mut graph) = load_project(&state, &project_id, &user.id).await?;
     let mut applied: Vec<Value> = Vec::new();
-    let mut messages = vec![
-        json!({ "role": "system", "content": SYSTEM_PROMPT }),
-    ];
-    // Compact graph summary keeps the loop grounded.
-    let summary: Vec<String> = graph
+    let turn_key = uuid::Uuid::new_v4().simple().to_string();
+    let mut total_input: u64 = 0;
+    let mut total_output: u64 = 0;
+
+    // Conversation transcript: system protocol + graph summary + history.
+    let node_summary: Vec<String> = graph
         .nodes
         .iter()
         .map(|node| format!("{}:{}", node.id, node.kind))
         .collect();
-    messages.push(json!({
-        "role": "system",
-        "content": format!("Current graph nodes: [{}]. Edges: {}.", summary.join(", "), graph.edges.len())
-    }));
-    messages.push(json!({ "role": "user", "content": body.message }));
+    let mut transcript = String::new();
+    for turn in body.history.iter().take(20) {
+        transcript.push_str(&format!("{}: {}\n", turn.role, turn.content));
+    }
+    let mut next_input = format!(
+        "{transcript}\nGraph nodes: [{}]; edges {}.\nUser: {}",
+        node_summary.join(", "),
+        graph.edges.len(),
+        body.message
+    );
 
-    let timeout = crate::http_timeout("script", &state.cfg);
     let mut assistant_text = String::new();
+    let mut started_run: Option<Value> = None;
     for _round in 0..12 {
-        let output = crate::upstream::llm_complete(
-            &state,
-            &provider,
-            "",
-            &messages
-                .iter()
-                .map(|message| message.to_string())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            timeout,
-        )
-        .await;
-        // The generic adapter takes a single prompt; tool calling needs the
-        // raw chat format, so fall back to a JSON protocol prompt.
-        let text = match output {
-            Ok(output) => output.text,
-            Err(error) => {
-                // Try the JSON-action protocol instead.
-                let protocol = format!(
-                    "{}\n\nReply with ONLY one JSON object: {{\"action\": \"<tool>|reply\", \"args\": {{...}}, \"message\": \"short user-facing text\"}}. Tools: update_script(prompt, system?), create_shots(count?), update_shot(index, description?, keywords?), set_param(node_id, key, value), run_graph().",
-                    body.message
-                );
-                match crate::upstream::llm_complete(&state, &provider, SYSTEM_PROMPT, &protocol, timeout).await {
-                    Ok(fallback) => fallback.text,
-                    Err(_) => return Err(ApiError::internal(error)),
-                }
-            }
-        };
-        let action = parse_action(&text);
-        let Some(action) = action else {
+        let (text, usage) = call_llm(&state, &next_input)
+            .await
+            .map_err(ApiError::internal)?;
+        total_input += usage.input_tokens;
+        total_output += usage.output_tokens;
+        let Some(action) = parse_action(&text) else {
             assistant_text = text.trim().to_string();
             break;
         };
+        if let Some(message) = action.get("message").and_then(Value::as_str) {
+            assistant_text = message.to_string();
+        }
         let tool = action.get("action").and_then(Value::as_str).unwrap_or("reply");
         let args = action.get("args").cloned().unwrap_or(json!({}));
-        if let Some(text) = action.get("message").and_then(Value::as_str) {
-            assistant_text = text.to_string();
+
+        // Reload the graph before each mutation so concurrent edits (the
+        // user's autosave) are not clobbered.
+        if let Ok((fresh_version, fresh_graph)) =
+            load_project(&state, &project_id, &user.id).await
+        {
+            version = fresh_version;
+            graph = fresh_graph;
         }
+
         match tool {
             "update_script" => {
                 let prompt = args.get("prompt").and_then(Value::as_str).unwrap_or("");
@@ -232,9 +253,12 @@ pub async fn submit(
                         set_param_value(node, "system", json!(system));
                     }
                     version += 1;
-                    save_graph(&state, &project_id, version, &graph).await.map_err(ApiError::internal)?;
-                    applied.push(json!({ "tool": "update_script" }));
-                    state.publish(&user.id, "graph_patch", json!({ "project_id": project_id, "version": version }));
+                    if save_graph(&state, &project_id, version, &graph).await.map_err(ApiError::internal)? {
+                        applied.push(json!({ "tool": "update_script" }));
+                        state.publish(&user.id, "graph_patch", json!({ "project_id": project_id, "version": version }));
+                    } else {
+                        break;
+                    }
                 }
             }
             "create_shots" => {
@@ -242,9 +266,12 @@ pub async fn submit(
                 if let Some(node) = graph.nodes.iter_mut().find(|node| node.kind == "storyboard") {
                     set_param_value(node, "count", json!(count));
                     version += 1;
-                    save_graph(&state, &project_id, version, &graph).await.map_err(ApiError::internal)?;
-                    applied.push(json!({ "tool": "create_shots" }));
-                    state.publish(&user.id, "graph_patch", json!({ "project_id": project_id, "version": version }));
+                    if save_graph(&state, &project_id, version, &graph).await.map_err(ApiError::internal)? {
+                        applied.push(json!({ "tool": "create_shots", "count": count }));
+                        state.publish(&user.id, "graph_patch", json!({ "project_id": project_id, "version": version }));
+                    } else {
+                        break;
+                    }
                 }
             }
             "update_shot" => {
@@ -265,22 +292,29 @@ pub async fn submit(
                         map.insert(index.to_string(), edit);
                     }
                     version += 1;
-                    save_graph(&state, &project_id, version, &graph).await.map_err(ApiError::internal)?;
-                    applied.push(json!({ "tool": "update_shot", "index": index }));
-                    state.publish(&user.id, "graph_patch", json!({ "project_id": project_id, "version": version }));
+                    if save_graph(&state, &project_id, version, &graph).await.map_err(ApiError::internal)? {
+                        applied.push(json!({ "tool": "update_shot", "index": index }));
+                        state.publish(&user.id, "graph_patch", json!({ "project_id": project_id, "version": version }));
+                    } else {
+                        break;
+                    }
                 }
             }
             "set_param" => {
                 let node_id = args.get("node_id").and_then(Value::as_str).unwrap_or("");
                 let key = args.get("key").and_then(Value::as_str).unwrap_or("");
                 let value = args.get("value").cloned().unwrap_or(Value::Null);
-                if !node_id.is_empty() && !key.is_empty() {
-                    if let Some(node) = graph.nodes.iter_mut().find(|node| node.id == node_id) {
-                        set_param_value(node, key, value);
-                        version += 1;
-                        save_graph(&state, &project_id, version, &graph).await.map_err(ApiError::internal)?;
+                if node_id.is_empty() || key.is_empty() {
+                    break;
+                }
+                if let Some(node) = graph.nodes.iter_mut().find(|node| node.id == node_id) {
+                    set_param_value(node, key, value);
+                    version += 1;
+                    if save_graph(&state, &project_id, version, &graph).await.map_err(ApiError::internal)? {
                         applied.push(json!({ "tool": "set_param", "node_id": node_id, "key": key }));
                         state.publish(&user.id, "graph_patch", json!({ "project_id": project_id, "version": version }));
+                    } else {
+                        break;
                     }
                 }
             }
@@ -290,10 +324,11 @@ pub async fn submit(
                     &user.id,
                     Some(&project_id),
                     "graph",
-                    json!({ "root": "final" }),
+                    json!({ "root": "auto" }),
                 )
                 .await?;
                 applied.push(json!({ "tool": "run_graph", "run_id": run.get("id") }));
+                started_run = run.get("id").cloned();
                 break;
             }
             _ => {
@@ -305,22 +340,21 @@ pub async fn submit(
                 break;
             }
         }
-        messages.push(json!({ "role": "assistant", "content": text }));
-        messages.push(json!({
-            "role": "user",
-            "content": "Continue with the next tool call or reply with action \"reply\" when done."
-        }));
+        next_input = format!(
+            "Action applied: {tool}. Continue with the next tool call, or use action \"reply\" \
+             with a short message when done."
+        );
     }
+
+    bill_agent_turn(&state, &user.id, &turn_key, total_input, total_output).await;
 
     Ok((
         StatusCode::OK,
-        Json(json!({ "message": assistant_text, "applied": applied, "version": version })),
+        Json(json!({
+            "message": assistant_text,
+            "applied": applied,
+            "version": version,
+            "run_id": started_run,
+        })),
     ))
-}
-
-fn parse_action(text: &str) -> Option<Value> {
-    let cleaned = text.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
-    let start = cleaned.find('{')?;
-    let end = cleaned.rfind('}')?;
-    serde_json::from_str(&cleaned[start..=end]).ok()
 }
