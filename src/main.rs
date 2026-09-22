@@ -54,34 +54,9 @@ async fn run() -> Result<(), AppError> {
     let state = monoize::app::load_state().await?;
     let is_replica = state.node.is_replica();
     state.user_store.spawn_background_tasks_for_role(is_replica);
-    if let (Some(lease), Some(key_ring)) = (
-        state.store_primary_lease.clone(),
-        state.payment_keys.clone(),
-    ) {
-        monoize::store_billing::retention::spawn_daily_retention_job(
-            state.db_pool.clone(),
-            lease.clone(),
-            state.background_shutdown.clone(),
-        );
-        // SB-OP-0 gate open: the scheduler implements every SB-OP-3 scan class
-        // (expired presented attempts, EPay requery, fulfillment, refunds,
-        // retryable cases) and subsumes the isolated fulfillment-recovery run.
-        monoize::store_billing::reconciliation::spawn_reconciliation_scheduler(
-            state.db_pool.clone(),
-            lease,
-            monoize::store_billing::operations::PaymentQueryOperations::new(
-                state.db_pool.clone(),
-                key_ring.clone(),
-                state.payment_query_provider.clone(),
-            ),
-            monoize::store_billing::refund_operations::RefundOperations::new(
-                state.db_pool.clone(),
-                key_ring,
-                state.refund_provider.clone(),
-            ),
-            state.background_shutdown.clone(),
-        );
-    }
+    // SB-HA-4D-1: on standby boot the lease is not held yet, so this is a
+    // no-op here; the standby acquirer spawns the duties after acquisition.
+    state.spawn_lease_gated_duties().await;
     // AR-6: settle the revenue daily aggregates after every Beijing midnight;
     // replicas defer to the primary's settlement.
     if !is_replica {

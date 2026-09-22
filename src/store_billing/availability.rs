@@ -68,6 +68,29 @@ pub struct StorePrimaryLeaseStatus {
     pub last_failure_kind: Option<String>,
 }
 
+/// Shared handle to the optional Store Primary lease. SB-HA-4D-1 standby boot
+/// acquires the lease after startup, so request handlers and the late duty
+/// spawner must observe the same lease through one shared cell rather than a
+/// copy frozen at construction time.
+#[derive(Debug, Clone, Default)]
+pub struct StorePrimaryLeaseSlot {
+    inner: Arc<tokio::sync::RwLock<Option<StorePrimaryLease>>>,
+}
+
+impl StorePrimaryLeaseSlot {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub async fn get(&self) -> Option<StorePrimaryLease> {
+        self.inner.read().await.clone()
+    }
+
+    pub async fn set(&self, lease: StorePrimaryLease) {
+        *self.inner.write().await = Some(lease);
+    }
+}
+
 #[derive(Debug)]
 struct StoredLease {
     owner_id: String,

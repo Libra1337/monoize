@@ -219,7 +219,7 @@ pub struct AppState {
     pub model_registry_store: ModelRegistryStore,
     pub billing_rate_store: BillingRateStore,
     pub store_billing: StoreBillingStore,
-    pub store_primary_lease: Option<crate::store_billing::availability::StorePrimaryLease>,
+    pub store_primary_lease: crate::store_billing::availability::StorePrimaryLeaseSlot,
     pub exchange_rate_service: ExchangeRateService,
     pub transform_registry: Arc<TransformRegistry>,
     pub cap_verifier: CapVerifier,
@@ -255,7 +255,7 @@ impl AppState {
                 self.admission_service
             },
             store_primary_lease: if is_replica {
-                None
+                crate::store_billing::availability::StorePrimaryLeaseSlot::empty()
             } else {
                 self.store_primary_lease
             },
@@ -267,7 +267,8 @@ impl AppState {
         &self,
     ) -> Result<(), crate::store_billing::availability::StorePrimaryLeaseError> {
         self.store_primary_lease
-            .as_ref()
+            .get()
+            .await
             .ok_or(crate::store_billing::availability::StorePrimaryLeaseError::Missing)?
             .validate()
             .await
@@ -280,7 +281,7 @@ impl AppState {
         if self.node.is_replica() {
             return Err(crate::store_billing::availability::StorePrimaryLeaseError::Unavailable);
         }
-        if self.store_primary_lease.is_some() {
+        if self.store_primary_lease.get().await.is_some() {
             return Err(crate::store_billing::availability::StorePrimaryLeaseError::Unavailable);
         }
         let lease = crate::store_billing::availability::StorePrimaryLease::acquire(
@@ -289,8 +290,50 @@ impl AppState {
         )
         .await?;
         lease.spawn_renewal(self.background_shutdown.clone());
-        self.store_primary_lease = Some(lease);
+        self.store_primary_lease.set(lease).await;
         Ok(())
+    }
+
+    /// Spawns every lease-gated background duty: the unconfirmed-admission
+    /// reaper, daily retention, and the SB-OP-0 reconciliation scheduler.
+    /// No-op without a held lease (standby boot or replica view); the
+    /// reconciliation scheduler additionally requires the payment key ring
+    /// (SB-OP-0). Callers must invoke this at most once per held lease: either
+    /// at startup or from the standby acquirer after its first acquisition.
+    pub async fn spawn_lease_gated_duties(&self) {
+        let Some(lease) = self.store_primary_lease.get().await else {
+            return;
+        };
+        if let Some(service) = self.admission_service.clone() {
+            crate::replica::admission_http::spawn_unconfirmed_reaper(
+                service,
+                lease.clone(),
+                self.background_shutdown.clone(),
+            );
+        }
+        let Some(key_ring) = self.payment_keys.clone() else {
+            return;
+        };
+        crate::store_billing::retention::spawn_daily_retention_job(
+            self.db_pool.clone(),
+            lease.clone(),
+            self.background_shutdown.clone(),
+        );
+        crate::store_billing::reconciliation::spawn_reconciliation_scheduler(
+            self.db_pool.clone(),
+            lease,
+            crate::store_billing::operations::PaymentQueryOperations::new(
+                self.db_pool.clone(),
+                key_ring.clone(),
+                self.payment_query_provider.clone(),
+            ),
+            crate::store_billing::refund_operations::RefundOperations::new(
+                self.db_pool.clone(),
+                key_ring,
+                self.refund_provider.clone(),
+            ),
+            self.background_shutdown.clone(),
+        );
     }
 }
 
@@ -1099,34 +1142,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             })?,
         ))
     };
-    let store_primary_lease = if is_replica {
-        None
-    } else {
-        let lease = crate::store_billing::availability::StorePrimaryLease::acquire(
-            db.clone(),
-            uuid::Uuid::new_v4().to_string(),
-        )
-        .await
-        .map_err(|error| {
-            AppError::new(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "store_primary_unavailable",
-                error.to_string(),
-            )
-        })?;
-        lease.spawn_renewal(background_shutdown.clone());
-        Some(lease)
-    };
-    if let (Some(service), Some(lease)) = (admission_service.clone(), store_primary_lease.clone()) {
-        crate::replica::admission_http::spawn_unconfirmed_reaper(
-            service,
-            lease,
-            background_shutdown.clone(),
-        );
-    }
-
     let studio_bridge = crate::studio_bridge::StudioBridgeConfig::from_env();
-    Ok(AppState {
+    let state = AppState {
         runtime: Arc::new(runtime),
         started_at,
         auth,
@@ -1162,7 +1179,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         model_registry_store,
         billing_rate_store,
         store_billing,
-        store_primary_lease,
+        store_primary_lease: crate::store_billing::availability::StorePrimaryLeaseSlot::empty(),
         exchange_rate_service,
         transform_registry,
         cap_verifier,
@@ -1176,7 +1193,97 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         request_capture,
         trusted_proxies,
         studio_bridge,
-    })
+    };
+    acquire_startup_store_primary_lease(state, is_replica).await
+}
+
+/// SB-HA-4D: acquire `store_primary` after migrations and start the renewal
+/// task before the state is returned. SB-HA-4D-1: with
+/// `MONOIZE_BOOT_STANDBY_LEASE=1`, an acquisition blocked by a live foreign
+/// holder enters standby instead of failing startup; the retry task takes
+/// over the lease after it expires and then spawns the lease-gated duties.
+async fn acquire_startup_store_primary_lease(
+    state: AppState,
+    is_replica: bool,
+) -> AppResult<AppState> {
+    if is_replica {
+        return Ok(state);
+    }
+    let owner_id = uuid::Uuid::new_v4().to_string();
+    match crate::store_billing::availability::StorePrimaryLease::acquire(
+        state.db_pool.clone(),
+        owner_id.clone(),
+    )
+    .await
+    {
+        Ok(lease) => {
+            lease.spawn_renewal(state.background_shutdown.clone());
+            state.store_primary_lease.set(lease).await;
+            Ok(state)
+        }
+        Err(error) => {
+            let standby_boot = std::env::var("MONOIZE_BOOT_STANDBY_LEASE")
+                .ok()
+                .filter(|raw| raw == "1")
+                .is_some()
+                && matches!(
+                    error,
+                    crate::store_billing::availability::StorePrimaryLeaseError::Unavailable
+                        | crate::store_billing::availability::StorePrimaryLeaseError::Storage(_)
+                );
+            if !standby_boot {
+                return Err(AppError::new(
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    "store_primary_unavailable",
+                    error.to_string(),
+                ));
+            }
+            tracing::warn!(
+                error = %error,
+                "store primary lease is held by another owner; entering standby boot (SB-HA-4D-1)"
+            );
+            spawn_standby_lease_acquirer(state.clone(), owner_id);
+            Ok(state)
+        }
+    }
+}
+
+fn spawn_standby_lease_acquirer(state: AppState, owner_id: String) {
+    let shutdown = state.background_shutdown.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            tick.tick().await;
+            match crate::store_billing::availability::StorePrimaryLease::acquire(
+                state.db_pool.clone(),
+                owner_id.clone(),
+            )
+            .await
+            {
+                Ok(lease) => {
+                    lease.spawn_renewal(state.background_shutdown.clone());
+                    state.store_primary_lease.set(lease).await;
+                    tracing::info!(
+                        "store primary lease acquired after standby; starting lease-gated duties"
+                    );
+                    state.spawn_lease_gated_duties().await;
+                    break;
+                }
+                Err(crate::store_billing::availability::StorePrimaryLeaseError::Unavailable) => {}
+                Err(crate::store_billing::availability::StorePrimaryLeaseError::Storage(error)) => {
+                    tracing::warn!(%error, "standby lease acquisition storage error; retrying");
+                }
+                Err(error) => {
+                    // SB-HA-4D-1 keeps non-recoverable acquisition failures fatal.
+                    eprintln!("error: store primary lease acquisition failed: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    });
 }
 
 fn payment_public_origin_from_raw(raw: Option<&str>) -> Result<Option<url::Url>, String> {

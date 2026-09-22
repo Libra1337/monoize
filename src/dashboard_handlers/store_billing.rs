@@ -1363,7 +1363,7 @@ pub async fn get_store_primary_status_admin(
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
-    let status = match state.store_primary_lease.as_ref() {
+    let status = match state.store_primary_lease.get().await {
         Some(lease) => lease.status_at(Utc::now()).await.map_err(|error| {
             AppError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1372,8 +1372,15 @@ pub async fn get_store_primary_status_admin(
             )
             .with_internal_message(error.to_string())
         })?,
+        // SB-HA-4G: a replica reports `replica`; a standby Primary (no lease
+        // acquired yet, SB-HA-4D-1) reports `lease_lost`.
         None => crate::store_billing::availability::StorePrimaryLeaseStatus {
-            state: "replica".to_string(),
+            state: if state.node.is_replica() {
+                "replica"
+            } else {
+                "lease_lost"
+            }
+            .to_string(),
             owner_id: None,
             epoch: None,
             expires_at: None,
@@ -1395,7 +1402,8 @@ pub async fn run_store_retention_admin(
     require_store_reauth_scope(&headers, &state, &admin.id, "retention_operation").await?;
     let owner_id = state
         .store_primary_lease
-        .as_ref()
+        .get()
+        .await
         .ok_or_else(|| {
             AppError::new(
                 StatusCode::SERVICE_UNAVAILABLE,

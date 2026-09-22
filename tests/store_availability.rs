@@ -262,7 +262,7 @@ async fn primary_state(token: Option<&str>) -> (TempDir, AppState) {
     })
     .await
     .expect("primary state");
-    assert!(state.store_primary_lease.is_some());
+    assert!(state.store_primary_lease.get().await.is_some());
     (temp, state)
 }
 
@@ -288,12 +288,82 @@ async fn app_builder_can_explicitly_acquire_a_real_primary_lease() {
     assert_eq!(
         state
             .store_primary_lease
-            .as_ref()
+            .get()
+            .await
             .expect("lease handle")
             .owner_id(),
         "fixture-owner"
     );
     state.validate_store_primary_lease().await.unwrap();
+}
+
+async fn state_db_with_live_foreign_lease() -> (TempDir, String) {
+    let temp = TempDir::new().expect("temporary directory");
+    let dsn = format!("sqlite://{}", temp.path().join("monoize.db").display());
+    let db = DbPool::connect(&dsn).await.expect("database");
+    Migrator::up(&*db.write().await, None)
+        .await
+        .expect("migrations");
+    db.write()
+        .await
+        .execute(db.stmt(
+            "INSERT INTO store_primary_leases
+                (name, owner_id, epoch, expires_at, updated_at)
+             VALUES ('store_primary', 'foreign-owner', 7, $1, $1)",
+            vec![timestamp(Utc::now() + Duration::seconds(10)).into()],
+        ))
+        .await
+        .unwrap();
+    (temp, dsn)
+}
+
+fn runtime_for(dsn: &str) -> RuntimeConfig {
+    RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: dsn.to_string(),
+        request_log_spool_dir: None,
+        node: NodeSettings::primary_default(),
+    }
+}
+
+// Both boot-mode tests mutate MONOIZE_BOOT_STANDBY_LEASE; the guard keeps the
+// env change invisible to any other load_state call in this suite.
+static BOOT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+// The guard is deliberately held across the load_state await: the env change
+// must stay visible for the whole boot.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn standby_boot_serves_without_lease_while_foreign_holder_is_live() {
+    let _guard = BOOT_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_temp, dsn) = state_db_with_live_foreign_lease().await;
+    unsafe { std::env::set_var("MONOIZE_BOOT_STANDBY_LEASE", "1") };
+    let state = load_state_with_runtime(runtime_for(&dsn)).await;
+    unsafe { std::env::remove_var("MONOIZE_BOOT_STANDBY_LEASE") };
+    let state = state.expect("standby boot must serve without the lease");
+    assert!(state.store_primary_lease.get().await.is_none());
+    assert_eq!(
+        state.validate_store_primary_lease().await.unwrap_err(),
+        StorePrimaryLeaseError::Missing
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn default_boot_fails_fast_while_foreign_holder_is_live() {
+    let _guard = BOOT_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_temp, dsn) = state_db_with_live_foreign_lease().await;
+    unsafe { std::env::remove_var("MONOIZE_BOOT_STANDBY_LEASE") };
+    let error = match load_state_with_runtime(runtime_for(&dsn)).await {
+        Err(error) => error,
+        Ok(_) => panic!("default boot must fail fast"),
+    };
+    assert!(error.message.contains("lease"));
 }
 
 async fn response_json(response: axum::response::Response) -> Value {
@@ -371,7 +441,12 @@ async fn payment_callback_fails_closed_when_lease_is_expired() {
 #[tokio::test]
 async fn internal_plan_admission_fails_closed_after_lease_takeover() {
     let (_temp, state) = primary_state(Some(REPLICA_TOKEN)).await;
-    let current_epoch = state.store_primary_lease.as_ref().expect("lease").epoch();
+    let current_epoch = state
+        .store_primary_lease
+        .get()
+        .await
+        .expect("lease")
+        .epoch();
     state
         .db_pool
         .write()
