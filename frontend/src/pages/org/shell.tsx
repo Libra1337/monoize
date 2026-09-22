@@ -13,6 +13,7 @@ import {
   Menu,
   Plus,
   ScrollText,
+  Store,
   UsersRound,
 } from "lucide-react";
 import {
@@ -57,6 +58,7 @@ export function OrgShell() {
         ]
       : []),
     { to: "logs", icon: ScrollText, label: t("nav.logs") },
+    { to: "marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "members", icon: UsersRound, label: t("org.navMembers") },
     { to: "keys", icon: KeyRound, label: t("org.navKeys") },
     { to: "wallet", icon: Coins, label: t("org.navWallet") },

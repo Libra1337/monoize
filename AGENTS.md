@@ -194,3 +194,30 @@ that the documentation describes.
 - `cd docs && bun install && bun run build` must pass before a docs change merges.
 - Update README links when documentation URLs change.
 - Follow the visual identity in `DESIGN_SYSTEM.md` for any docs-site UI work.
+
+---
+
+## 6. Production Continuity (zero user-visible disruption)
+
+Users run long-lived streaming tasks (some run all day) against production
+(`64.90.22.212`, `lynshen.org`). An update that interrupts an in-flight request
+breaks their work. This section binds EVERY deployment, in every session, by
+any agent or model.
+
+- Every production update MUST deploy through the blue-green swap script
+  (`/opt/monoize/blue-green-swap.sh <rev>`), never by stopping the running
+  container first. The script implements the ordering of
+  `spec/deployment-docker.spec.md` (BG1..BG12).
+- The swap MUST NOT stop the previous container while it still serves upstream
+  connections: BG11 hands the `store_primary` lease over via SIGHUP, and BG12
+  drains connections (default bound `MONOIZE_SWAP_DRAIN_MAX_SECONDS=14400`)
+  before the stop. Do not "speed up" a swap by skipping the drain.
+- Prefer deploying during low-traffic windows (roughly 01:00–07:00 UTC+8) when
+  the change is not urgent; long streams that outlast the drain bound are only
+  protected by choosing a quiet window.
+- Never restart the platform container (`docker restart`, `docker stop`) as a
+  debugging or config-refresh shortcut. If a restart seems necessary, first
+  check whether a blue-green swap achieves the same result.
+- API and routing behavior changes must follow the channel-stability rule
+  TM-CH-7 of `spec/api-token-management.spec.md`: adding a channel must never
+  re-route or break existing keys mid-task.

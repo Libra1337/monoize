@@ -126,6 +126,9 @@ struct MarketplaceOffer {
     public_provider_name: String,
     public_channel_name: String,
     api_type: String,
+    /// MM-O6: the per-offer billing multiplier applied on top of the displayed
+    /// rates, so marketplace consumers can quote base price and markup apart.
+    multiplier: String,
     rates: Vec<PublicRate>,
 }
 
@@ -933,6 +936,7 @@ pub async fn marketplace_offers(
                 public_provider_name: public_names.provider.clone(),
                 public_channel_name: public_names.channel.clone(),
                 api_type: provider_type.as_str().to_string(),
+                multiplier: multiplier.to_string(),
                 rates,
             });
         }

@@ -1945,7 +1945,8 @@
     "unavailable": "暫時無法使用",
     "currencyUnavailable": "人民幣匯率暫時無法使用。請選擇美元或稍後重試。",
     "noModels": "尚無可用模型",
-    "noModelsDesc": "請調整篩選條件，或請管理員發佈已定價的模型。"
+    "noModelsDesc": "請調整篩選條件，或請管理員發佈已定價的模型。",
+    "multiplier": "在所示價格基礎上生效的計費倍率。"
   },
   "firewall": {
     "title": "內容防火牆",
@@ -2632,7 +2633,11 @@
     "aliasEdit": "別名",
     "leaveConfirm": "退出該組織？你將失去其金鑰的存取權。個人錢包和金鑰不受影響。",
     "left": "已退出組織",
-    "removeMemberConfirmKeys": "移除該成員?其在本空間建立的金鑰也會一併刪除。歷史日誌保留。"
+    "removeMemberConfirmKeys": "移除該成員?其在本空間建立的金鑰也會一併刪除。歷史日誌保留。",
+    "kindUsage": "成員用量扣費",
+    "detailFrom": "由 {{name}} 儲值",
+    "detailTo": "分發至 {{name}}",
+    "detailModel": "模型 {{model}}"
   },
   "adminOrgs": {
     "title": "組織空間管理",

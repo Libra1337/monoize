@@ -114,6 +114,7 @@ describe("authenticated Model Marketplace", () => {
         "currency",
         "inputPrice",
         "outputPrice",
+        "multiplier",
         "offerCount",
         "detailsDescription",
         "provider",

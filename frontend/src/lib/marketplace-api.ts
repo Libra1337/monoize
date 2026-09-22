@@ -38,6 +38,8 @@ export interface MarketplaceOffer {
   public_provider_name: string;
   public_channel_name: string;
   api_type: string;
+  /** MM-O6: billing multiplier applied on top of the displayed rates. */
+  multiplier: string;
   rates: MarketplaceOfferRate[];
 }
 

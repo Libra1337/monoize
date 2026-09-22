@@ -101,6 +101,21 @@ such a conflict would demand a Channel choice for a Group the caller cannot reac
 block creation of every key. The Channel options in a returned conflict belong to Groups of
 the caller's class only.
 
+TM-CH-7. When a Provider create, wholesale create, or update mutation turns a previously
+unambiguous `(group_id, model)` scope into a conflict (the scope had exactly one eligible
+Channel before the mutation and at least two after), the system MUST pin every existing
+API key that is in scope for it — empty `group_ids` or the Group listed; model limits
+disabled, empty, or listing the model; the key owner's account class equal to the Group's
+class (TM-CH-6) — and holds no binding for that scope, by appending the binding
+`{group_id, model, channel_id}` where `channel_id` is the scope's unique pre-existing
+Channel. Keys already holding a binding for the scope and keys at the 256-binding cap
+(TM-CH-1) are skipped. Pinning MUST run after the mutation succeeds and before the request
+returns; a pinning failure MUST NOT fail the mutation but MUST be logged. Introducing a
+Channel MUST therefore never change the routed Channel or produce
+`channel_selection_required` for any key that existed before the mutation. Scopes that
+were already conflicts before the mutation remain governed by TM-CH-4/TM-CH-5, and keys
+created after the mutation follow TM-CH-4 unchanged.
+
 ### 1.4 Cross-Group model selection
 
 TM-MB-1. `ApiKeyModelBinding` has exactly `model` and `group_id` string fields. Both fields

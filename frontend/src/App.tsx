@@ -149,6 +149,7 @@ function App() {
               <Route path="member-usage" element={<OrgMemberUsagePage />} />
               <Route path="limits" element={<OrgLimitsPage />} />
               <Route path="logs" element={<OrgLogsPage />} />
+              <Route path="marketplace" element={<ModelMarketplacePage />} />
               <Route path="members" element={<OrgMembers />} />
               <Route path="keys" element={<OrgKeys />} />
               <Route path="wallet" element={<OrgWallet />} />

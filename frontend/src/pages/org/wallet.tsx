@@ -5,7 +5,13 @@ import { Coins } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageWrapper } from "@/components/ui/motion";
-import { api, type OrgDetail, type OrgLedgerEntry } from "@/lib/api";
+import {
+  api,
+  type OrgDetail,
+  type OrgLedgerActor,
+  type OrgLedgerEntry,
+  type OrgLedgerResponse,
+} from "@/lib/api";
 import { useStoreCurrency } from "@/hooks/use-store-currency";
 import { useStoreExchangeRate } from "@/hooks/use-store-exchange-rate";
 import { formatCoinFromNanoUsdForCurrency } from "@/lib/store-money";
@@ -17,7 +23,47 @@ const KIND_LABELS: Record<string, string> = {
   org_delete_refund: "org.kindDeleteRefund",
   org_delete_receive: "org.kindDeleteReceive",
   store_recharge: "org.kindRecharge",
+  request_charge: "org.kindUsage",
+  api_key_charge: "org.kindUsage",
 };
+
+/** ORG-22a: human detail line under the kind label — who moved the money and
+ * what a usage charge billed. Returns null when the kind carries no detail. */
+function ledgerDetail(
+  entry: OrgLedgerEntry,
+  actors: Record<string, OrgLedgerActor>,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string | null {
+  const meta = entry.meta ?? {};
+  const actorName = (id: unknown): string | null => {
+    if (typeof id !== "string" || !id) return null;
+    const actor = actors[id];
+    if (!actor?.username) return null;
+    return actor.alias ? `${actor.username} (${actor.alias})` : actor.username;
+  };
+  switch (entry.kind) {
+    case "org_deposit_receive": {
+      const name = actorName(meta.from_user_id);
+      return name ? t("org.detailFrom", { name }) : null;
+    }
+    case "org_grant":
+    case "org_delete_refund": {
+      const name = actorName(meta.to_user_id);
+      return name ? t("org.detailTo", { name }) : null;
+    }
+    case "request_charge":
+    case "api_key_charge": {
+      const model = typeof meta.logical_model === "string" ? meta.logical_model : null;
+      return model ? t("org.detailModel", { model }) : null;
+    }
+    case "store_recharge": {
+      const order = typeof meta.order_id === "string" ? meta.order_id : null;
+      return order ? `#${order}` : null;
+    }
+    default:
+      return null;
+  }
+}
 
 export function OrgWallet() {
   const { orgId } = useParams();
@@ -31,9 +77,12 @@ export function OrgWallet() {
   const detail = useSWR<OrgDetail>(orgId ? `/api/dashboard/orgs/${orgId}` : null, () =>
     api.getOrgDetail(orgId!),
   );
-  const ledger = useSWR<OrgLedgerEntry[]>(orgId ? `/api/dashboard/orgs/${orgId}/ledger` : null, () =>
-    api.getOrgLedger(orgId!),
+  const ledger = useSWR<OrgLedgerResponse>(
+    orgId ? `/api/dashboard/orgs/${orgId}/ledger` : null,
+    () => api.getOrgLedger(orgId!),
   );
+  const entries = ledger.data?.entries ?? [];
+  const actors = ledger.data?.actors ?? {};
 
   if (!orgId) return null;
 
@@ -61,7 +110,7 @@ export function OrgWallet() {
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
             </div>
-          ) : !ledger.data || ledger.data.length === 0 ? (
+          ) : entries.length === 0 ? (
             <p className="p-8 text-center text-sm text-muted-foreground">{t("org.noLedger")}</p>
           ) : (
             <table className="w-full text-sm">
@@ -74,26 +123,32 @@ export function OrgWallet() {
                 </tr>
               </thead>
               <tbody>
-                {ledger.data.map((entry) => (
-                  <tr key={entry.id} className="border-b last:border-b-0">
-                    <td className="px-5 py-2.5">
-                      {t(KIND_LABELS[entry.kind] ?? "org.kindOther")}
-                    </td>
-                    <td
-                      className={`px-5 py-2.5 tabular-nums ${
-                        entry.delta_nano_usd.startsWith("-") ? "text-red-500" : "text-emerald-600"
-                      }`}
-                    >
-                      {money(entry.delta_nano_usd)}
-                    </td>
-                    <td className="px-5 py-2.5 tabular-nums">
-                      {money(entry.balance_after_nano_usd)}
-                    </td>
-                    <td className="px-5 py-2.5 text-muted-foreground">
-                      {new Date(entry.created_at).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
+                {entries.map((entry) => {
+                  const detailLine = ledgerDetail(entry, actors, t);
+                  return (
+                    <tr key={entry.id} className="border-b last:border-b-0">
+                      <td className="px-5 py-2.5">
+                        {t(KIND_LABELS[entry.kind] ?? "org.kindOther")}
+                        {detailLine ? (
+                          <span className="block text-xs text-muted-foreground">{detailLine}</span>
+                        ) : null}
+                      </td>
+                      <td
+                        className={`px-5 py-2.5 tabular-nums ${
+                          entry.delta_nano_usd.startsWith("-") ? "text-red-500" : "text-emerald-600"
+                        }`}
+                      >
+                        {money(entry.delta_nano_usd)}
+                      </td>
+                      <td className="px-5 py-2.5 tabular-nums">
+                        {money(entry.balance_after_nano_usd)}
+                      </td>
+                      <td className="px-5 py-2.5 text-muted-foreground">
+                        {new Date(entry.created_at).toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}

@@ -102,6 +102,29 @@ the Caddyfile (`127.0.0.1:8080` / `127.0.0.1:8081`) may appear only inside
 `reverse_proxy` directives; the S7 port rewrite applies to every such
 occurrence.
 
+BG11. Store-lease handover on SIGHUP. The platform MUST install a SIGHUP
+handler whose first delivery sets a handover flag. The `store_primary` lease
+renewal loop MUST check the flag each tick: when set, the holder MUST delete
+its own lease row (`DELETE ... WHERE name AND owner_id AND epoch` match its own
+values), mark renewal as failed, stop renewing, and the process MUST keep
+serving established requests (SIGHUP MUST NOT trigger process shutdown or the
+HTTP drain). The swap script MUST send SIGHUP to the previous container only
+after BG3.6 holds and only after proving the runtime supports BG11 (the
+running binary contains the handover log marker; a pre-BG11 runtime MUST NOT
+be signaled, because default SIGHUP disposition would kill it), then MUST poll
+the lease owner until it differs from the pre-swap owner, for at most 60
+seconds.
+
+BG12. Bounded connection drain before stop. After the BG11 handover (or the
+BG3.6 verification when the previous runtime predates BG11), the swap script
+MUST poll established TCP connections whose local or peer port equals the old
+active port every 15 seconds and MUST NOT stop the previous container until
+the count reaches zero or `MONOIZE_SWAP_DRAIN_MAX_SECONDS` (default 14400)
+elapse from the reload. The drain bound MUST be logged with the remaining
+connection count. In-flight requests therefore survive a swap unless they
+outlast the bound; the previous container is stopped with the BG8 grace only
+after the drain.
+
 ## 3. Swap procedure (normative sequence)
 
 S1. Preconditions: `monoize:<rev>` image exists (built from
@@ -133,18 +156,19 @@ then reload Caddy.
 
 S8. Post-reload verification per BG3.6.
 
-S9. `docker stop monoize-prev && docker rm monoize-prev`, then
-`docker rename monoize-next monoize`.
+S9. Store-lease handover per BG11: capability probe, SIGHUP to `monoize-prev`,
+poll the lease owner change (at most 60 seconds). Skipped with a log line when
+the previous runtime predates BG11.
 
-S10. Final verification per BG7 and print the new active port.
+S10. Connection drain per BG12: poll established connections on the old active
+port until zero or the drain bound.
 
-S11. Lease handover check. The script MUST read the `store_primary_leases`
-owner through a read-only SQLite connection before the swap and MUST poll it
-after the serving container stops until the owner differs from the pre-swap
-owner, for at most 60 seconds. Success of the swap MUST NOT depend on this
-check (traffic is already on the new container), but a timeout MUST be
-reported as a warning that Store surfaces return `store_primary_unavailable`
-until the standby loop acquires the lease.
+S11. `docker stop monoize-prev && docker rm monoize-prev`, then
+`docker rename monoize-next monoize`. When S9 could not hand over (pre-BG11
+runtime or handover timeout), poll the lease owner change for at most 60
+seconds after the stop and warn per BG9 on timeout.
+
+S12. Final verification per BG7 and print the new active port.
 
 ## 4. Verification of zero downtime
 

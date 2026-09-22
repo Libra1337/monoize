@@ -2980,6 +2980,115 @@ impl UserStore {
         })
     }
 
+    /// TM-CH-7: pin every in-scope API key that lacks a binding for a newly
+    /// ambiguous (Group, model) scope to that scope's unique pre-existing
+    /// Channel, so introducing a Channel never re-routes or blocks an
+    /// existing key. `pins` carries (group_id, model, channel_id) triples.
+    /// A key is in scope when its Group list is empty or names the Group, its
+    /// model limits (when enabled and non-empty) name the model, and the key
+    /// owner's account class matches the Group's class. Keys already holding a
+    /// binding for the scope, and keys at the 256-binding cap, are skipped.
+    /// Returns the number of keys that gained a binding.
+    pub async fn pin_channel_bindings_for_new_conflicts(
+        &self,
+        pins: &[(String, String, String)],
+        group_classes: &std::collections::BTreeMap<String, crate::users::AccountClass>,
+    ) -> Result<usize, String> {
+        if pins.is_empty() {
+            return Ok(0);
+        }
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT k.id, k.group_ids, k.model_limits_enabled, k.model_limits, k.channel_bindings, u.account_class
+                 FROM api_keys k JOIN users u ON u.id = k.user_id",
+                vec![],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut pinned = 0usize;
+        for row in &rows {
+            let key_id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
+            let key_groups: Vec<String> = serde_json::from_str(
+                &row.try_get::<String>("", "group_ids").unwrap_or_default(),
+            )
+            .unwrap_or_default();
+            let model_limits_enabled = row
+                .try_get::<i64>("", "model_limits_enabled")
+                .map(|v| v != 0)
+                .or_else(|_| {
+                    row.try_get::<i32>("", "model_limits_enabled").map(|v| v != 0)
+                })
+                .unwrap_or(false);
+            let key_models: Vec<String> = serde_json::from_str(
+                &row.try_get::<String>("", "model_limits").unwrap_or_default(),
+            )
+            .unwrap_or_default();
+            let owner_class = crate::users::AccountClass::from_str(
+                &row
+                    .try_get::<Option<String>>("", "account_class")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "standard".to_string()),
+            )
+            .unwrap_or_default();
+            let mut bindings: Vec<crate::users::ApiKeyChannelBinding> = serde_json::from_str(
+                &row.try_get::<String>("", "channel_bindings").unwrap_or_default(),
+            )
+            .unwrap_or_default();
+            let mut changed = false;
+            for (group_id, model, channel_id) in pins {
+                let class_matches = group_classes
+                    .get(group_id)
+                    .map(|class| class == &owner_class)
+                    .unwrap_or(false);
+                if !class_matches {
+                    continue;
+                }
+                let in_group =
+                    key_groups.is_empty() || key_groups.iter().any(|g| g == group_id);
+                let in_models = !model_limits_enabled
+                    || key_models.is_empty()
+                    || key_models.iter().any(|m| m == model);
+                if !in_group || !in_models {
+                    continue;
+                }
+                if bindings
+                    .iter()
+                    .any(|b| &b.group_id == group_id && &b.model == model)
+                {
+                    continue;
+                }
+                if bindings.len() >= crate::users::MAX_API_KEY_CHANNEL_BINDINGS {
+                    continue;
+                }
+                bindings.push(crate::users::ApiKeyChannelBinding {
+                    group_id: group_id.clone(),
+                    model: model.clone(),
+                    channel_id: channel_id.clone(),
+                });
+                changed = true;
+            }
+            if !changed {
+                continue;
+            }
+            let serialized = serialize_channel_bindings_json(&bindings)?;
+            self.db
+                .write()
+                .await
+                .execute(self.db.stmt(
+                    "UPDATE api_keys SET channel_bindings = $2 WHERE id = $1",
+                    vec![key_id.clone().into(), serialized.into()],
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            self.api_key_cache.invalidate_by_key_id(&key_id);
+            pinned += 1;
+        }
+        Ok(pinned)
+    }
+
     /// Update an existing API key with new fields
     pub async fn update_api_key(
         &self,

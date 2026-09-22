@@ -1948,7 +1948,8 @@
     "unavailable": "暂不可用",
     "currencyUnavailable": "人民币汇率暂不可用。请选择美元或稍后重试。",
     "noModels": "暂无可用模型",
-    "noModelsDesc": "请调整筛选条件，或让管理员发布已定价的模型。"
+    "noModelsDesc": "请调整筛选条件，或让管理员发布已定价的模型。",
+    "multiplier": "在所示价格基础上生效的计费倍率。"
   },
   "firewall": {
     "title": "内容防火墙",
@@ -2635,7 +2636,11 @@
     "aliasEdit": "别名",
     "leaveConfirm": "退出该组织？你将失去其密钥的访问权。个人钱包和密钥不受影响。",
     "left": "已退出组织",
-    "removeMemberConfirmKeys": "移除该成员?其在本空间创建的密钥也会一并删除。历史日志保留。"
+    "removeMemberConfirmKeys": "移除该成员?其在本空间创建的密钥也会一并删除。历史日志保留。",
+    "kindUsage": "成员用量扣费",
+    "detailFrom": "由 {{name}} 充值",
+    "detailTo": "分发至 {{name}}",
+    "detailModel": "模型 {{model}}"
   },
   "adminOrgs": {
     "title": "组织空间管理",

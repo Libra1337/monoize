@@ -85,6 +85,7 @@ offers: Array<{
   public_provider_name: string,
   public_channel_name: string,
   api_type: responses | chat_completion | messages | gemini | openai_image | replicate,
+  multiplier: plain decimal string (MM-O5),
   rates: Array<{
     usage_class: string,
     unit: string,
@@ -102,11 +103,12 @@ public-name key. Name comparisons use exact UTF-8 byte order.
 
 MM-O5. The response MUST NOT contain Billing Profile names, rate row IDs,
 internal IDs or names, Base URLs, API keys, proxy URLs, custom headers, or internal errors.
-The one multiplier a list item exposes is `input_rate_multiplier`: the effective model
-multiplier (plain decimal string, e.g. `"1.5"` or `"0.8"`) of the offer that yields the
+Every offer carries `multiplier`: the offer's effective model multiplier as a plain decimal
+string (e.g. `"1.5"` or `"0.8"`). The one multiplier a list item exposes is
+`input_rate_multiplier`: the effective model multiplier of the offer that yields the
 item's minimum `input_uncached` display rate; it is null when the item has no input rate.
-Offer multipliers other than that minimum's, and per-rate multiplier rows, remain internal.
-The homepage live-price strip renders it beside the Group name as `x<multiplier>`.
+Per-rate multiplier rows remain internal. The homepage live-price strip renders
+`input_rate_multiplier` beside the Group name as `x<multiplier>`.
 
 MM-O6. A Marketplace source read or response serialization failure MUST return HTTP `503`
 with code `marketplace_source_invalid` and a fixed public message. The server MUST log the
@@ -315,8 +317,10 @@ shell.
 
 MM-UA2. The page MUST use the public Marketplace allow-list response or an authenticated
 response with the same field allow-list. It MUST NOT expose internal Provider names,
-Channel names, IDs, Base URLs, API keys, proxy URLs, custom headers, multipliers, Profile
-names, or internal errors.
+Channel names, IDs, Base URLs, API keys, proxy URLs, custom headers, Profile
+names, or internal errors. It MUST render the multiplier: list rows show
+`input_rate_multiplier` and each offer in the modal shows its own `multiplier`, both as a
+`x<multiplier>` secondary badge with a localized tooltip.
 
 MM-UA3. The page MUST render Group sections explicitly. A model in two Groups MUST render
 once in each Group. Two Groups MUST NOT share one combined price range.
@@ -343,6 +347,11 @@ Provider, Channel, API type, capability, and human-price values.
 
 MM-UA9. The page MUST use SWR, show shape-matched initial Skeletons, retain the prior result
 during filter changes, and expose inline retry for a failed request.
+
+MM-UA10. The org workspace MUST expose the same authenticated Marketplace page at
+`/org/{org_id}/marketplace`, listed in the org navigation for every member. It renders the
+same component as `/dashboard/marketplace` and differs in no data or behavior except the
+surrounding org shell.
 
 ## 7.1 Authenticated Account-Class Catalog
 

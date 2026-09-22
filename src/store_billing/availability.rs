@@ -322,7 +322,7 @@ impl StorePrimaryLease {
         Ok(())
     }
 
-    pub fn spawn_renewal(&self, shutdown: Arc<AtomicBool>) {
+    pub fn spawn_renewal(&self, shutdown: Arc<AtomicBool>, handover: Arc<AtomicBool>) {
         let lease = self.clone();
         tokio::spawn(async move {
             let mut interval =
@@ -334,6 +334,18 @@ impl StorePrimaryLease {
                 if shutdown.load(Ordering::Acquire) {
                     break;
                 }
+                if handover.load(Ordering::Acquire) {
+                    match lease.release().await {
+                        Ok(()) => tracing::info!(
+                            "Store Primary lease released for handover (BG11); process keeps serving in-flight requests"
+                        ),
+                        Err(error) => tracing::warn!(
+                            error = %error,
+                            "Store Primary lease release failed; it expires by TTL instead"
+                        ),
+                    }
+                    break;
+                }
                 if let Err(error) = renew_with_retry(&lease, &shutdown).await {
                     request_shutdown_after_renewal_failure(&lease.renewal_failed, &shutdown);
                     tracing::error!(error = %error, "Store Primary lease renewal failed; lease marked lost");
@@ -341,6 +353,32 @@ impl StorePrimaryLease {
                 }
             }
         });
+    }
+
+    /// BG11: voluntarily deletes this holder's lease row so a standby takes
+    /// over immediately, while the process keeps serving already-established
+    /// requests. Idempotent: a row already owned by another holder (or gone)
+    /// is not resurrected or deleted. Marks renewal as failed so no racing
+    /// renewal can re-assert ownership after the delete.
+    pub async fn release(&self) -> Result<(), StorePrimaryLeaseError> {
+        if self.renewal_failed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let owner_id = self.owner_id.to_string();
+        let epoch = self.epoch;
+        let tx = self.db.begin_write().await?;
+        tx.execute(self.db.stmt(
+            "DELETE FROM store_primary_leases WHERE name = $1 AND owner_id = $2 AND epoch = $3",
+            vec![
+                STORE_PRIMARY_LEASE_NAME.into(),
+                owner_id.into(),
+                epoch.into(),
+            ],
+        ))
+        .await?;
+        tx.commit().await?;
+        self.renewal_failed.store(true, Ordering::Release);
+        Ok(())
     }
 }
 

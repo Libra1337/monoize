@@ -390,6 +390,7 @@ pub async fn member_usage(
     let sql = format!(
         "SELECT COALESCE(k.created_by, o.owner_user_id) AS member_id,
                 u.username AS member_username,
+                MAX(om.alias) AS member_alias,
                 CASE WHEN COUNT(om.user_id) > 0 THEN 1 ELSE 0 END AS is_member,
                 {sum} AS total_charge,
                 COUNT(*) AS calls,
@@ -419,6 +420,7 @@ pub async fn member_usage(
     #[derive(Default)]
     struct MemberAgg {
         username: String,
+        alias: Option<String>,
         is_member: bool,
         charge: i128,
         calls: i64,
@@ -446,6 +448,13 @@ pub async fn member_usage(
             .unwrap_or_default();
         if entry.username.is_empty() {
             entry.username = "(removed member)".to_string();
+        }
+        // bucket rows repeat the alias; keep the first non-null value seen
+        if entry.alias.is_none() {
+            entry.alias = row
+                .try_get::<Option<String>>("", "member_alias")
+                .ok()
+                .flatten();
         }
         entry.is_member = row
             .try_get::<i64>("", "is_member")
@@ -540,6 +549,7 @@ pub async fn member_usage(
         let entry = json!({
             "user_id": member_id,
             "username": agg.username,
+            "alias": agg.alias,
             "total_charge_nano_usd": agg.charge.to_string(),
             "calls": agg.calls,
             "input_tokens": agg.input_tokens,

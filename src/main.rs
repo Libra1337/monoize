@@ -103,6 +103,25 @@ async fn run() -> Result<(), AppError> {
     })?;
     tracing::info!("listening on {}", addr);
 
+    // BG11: SIGHUP hands the store_primary lease to a standby (blue-green
+    // swap) without stopping the process — in-flight requests keep streaming
+    // until the supervisor later sends SIGTERM after the drain window.
+    #[cfg(unix)]
+    {
+        let handover = state.store_lease_handover.clone();
+        tokio::spawn(async move {
+            let mut stream = tokio::signal::unix::signal(
+                tokio::signal::unix::SignalKind::hangup(),
+            )
+            .expect("failed to install SIGHUP handler");
+            stream.recv().await;
+            handover.store(true, Ordering::Release);
+            tracing::info!(
+                "SIGHUP received; handing over the store_primary lease (BG11) while continuing to serve"
+            );
+        });
+    }
+
     let serve = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),

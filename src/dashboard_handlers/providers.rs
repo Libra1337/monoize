@@ -306,6 +306,103 @@ fn advance_routing_config_revision(state: &AppState) {
     state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
 }
 
+/// TM-CH-7: snapshot of every (Group, model) scope and its eligible Channel
+/// ids, using the same eligibility rule as channel-conflicts (TM-CH-2):
+/// enabled Provider, enabled Channel, and a complete billable rate matrix.
+async fn eligible_channel_scopes(
+    state: &AppState,
+) -> Result<
+    std::collections::BTreeMap<(String, String), std::collections::BTreeSet<String>>,
+    String,
+> {
+    let providers = state.monoize_store.list_providers().await?;
+    let mut scopes: std::collections::BTreeMap<
+        (String, String),
+        std::collections::BTreeSet<String>,
+    > = std::collections::BTreeMap::new();
+    for provider in providers {
+        if !provider.enabled || !provider.channel.enabled {
+            continue;
+        }
+        let unpriced_models = provider_pricing_warnings(state, &provider)
+            .await
+            .map_err(|error| error.message)?
+            .into_iter()
+            .map(|warning| warning.logical_model)
+            .collect::<std::collections::BTreeSet<_>>();
+        for model in provider.channel.models.keys() {
+            if unpriced_models.contains(model) {
+                continue;
+            }
+            scopes
+                .entry((provider.group_id.clone(), model.clone()))
+                .or_default()
+                .insert(provider.channel.id.clone());
+        }
+    }
+    Ok(scopes)
+}
+
+/// TM-CH-7: after a Provider mutation, pin every in-scope key that lacks a
+/// binding for a scope the mutation just made ambiguous to that scope's unique
+/// pre-existing Channel. `before` is the [`eligible_channel_scopes`] snapshot
+/// taken before the mutation. A pinning failure never fails the mutation
+/// itself; it is logged for operator follow-up.
+async fn pin_keys_for_newly_ambiguous_scopes(
+    state: &AppState,
+    before: &std::collections::BTreeMap<
+        (String, String),
+        std::collections::BTreeSet<String>,
+    >,
+) {
+    let outcome = async {
+        let after = eligible_channel_scopes(state).await?;
+        let mut pins = Vec::new();
+        for ((group_id, model), channels) in &after {
+            if channels.len() < 2 {
+                continue;
+            }
+            if let Some(before_channels) = before.get(&(group_id.clone(), model.clone())) {
+                if before_channels.len() == 1 {
+                    if let Some(channel_id) = before_channels.iter().next() {
+                        pins.push((group_id.clone(), model.clone(), channel_id.clone()));
+                    }
+                }
+            }
+        }
+        if pins.is_empty() {
+            return Ok(0);
+        }
+        let group_classes = state
+            .user_store
+            .list_groups()
+            .await?
+            .into_iter()
+            .map(|group| (group.id, group.account_class))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        state
+            .user_store
+            .pin_channel_bindings_for_new_conflicts(&pins, &group_classes)
+            .await
+    }
+    .await;
+    match outcome {
+        Ok(count) if count > 0 => {
+            tracing::info!(
+                pinned_keys = count,
+                "TM-CH-7: pinned existing keys to their pre-existing Channel"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "TM-CH-7: pinning keys for newly ambiguous scopes failed"
+            );
+        }
+    }
+}
+
 pub(super) fn provider_pricing_model<'a>(
     logical_model: &'a str,
     model_entry: &'a crate::monoize_routing::MonoizeModelEntry,
@@ -864,6 +961,9 @@ pub async fn create_provider(
     )
     .await?;
 
+    // TM-CH-7: capture the pre-mutation scope snapshot for key pinning.
+    let scopes_before = eligible_channel_scopes(&state).await.ok();
+
     let provider = state
         .monoize_store
         .create_provider(body)
@@ -871,6 +971,9 @@ pub async fn create_provider(
         .map_err(map_provider_write_error)?;
 
     advance_routing_config_revision(&state);
+    if let Some(before) = scopes_before.as_ref() {
+        pin_keys_for_newly_ambiguous_scopes(&state, before).await;
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -1040,6 +1143,9 @@ pub async fn create_wholesale_provider(
     )
     .await?;
 
+    // TM-CH-7: capture the pre-mutation scope snapshot for key pinning.
+    let scopes_before = eligible_channel_scopes(&state).await.ok();
+
     let provider = state
         .monoize_store
         .create_provider(input)
@@ -1047,6 +1153,9 @@ pub async fn create_wholesale_provider(
         .map_err(map_provider_write_error)?;
 
     advance_routing_config_revision(&state);
+    if let Some(before) = scopes_before.as_ref() {
+        pin_keys_for_newly_ambiguous_scopes(&state, before).await;
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -1109,6 +1218,9 @@ pub async fn update_provider(
     )
     .await?;
 
+    // TM-CH-7: capture the pre-mutation scope snapshot for key pinning.
+    let scopes_before = eligible_channel_scopes(&state).await.ok();
+
     let provider = state
         .monoize_store
         .update_provider(&provider_id, body)
@@ -1124,6 +1236,9 @@ pub async fn update_provider(
     .into_iter()
     .collect();
     advance_routing_config_revision(&state);
+    if let Some(before) = scopes_before.as_ref() {
+        pin_keys_for_newly_ambiguous_scopes(&state, before).await;
+    }
     prune_provider_channel_health(&state, &affected_channel_ids).await;
     prune_provider_channel_affinity(&state, &affected_channel_ids).await;
 
@@ -2446,5 +2561,171 @@ mod tests {
         validate_pricing_profiles(&state, reached_pricing_profiles(Some("openai"), None))
             .await
             .expect("agent reachability must not conflict a standard write (PP-W8)");
+    }
+
+    /// TM-CH-7: adding a second Channel to a (Group, model) scope pins every
+    /// in-scope existing key to the scope's pre-existing Channel instead of
+    /// failing it with `channel_selection_required`.
+    #[tokio::test]
+    async fn creating_a_second_channel_pins_existing_keys_to_the_pre_existing_channel() {
+        use crate::users::{AccountClass, CreateGroupInput};
+
+        let state = load_state_with_runtime(RuntimeConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_path: "/metrics".to_string(),
+            database_dsn: "sqlite::memory:".to_string(),
+            request_log_spool_dir: None,
+            node: crate::node_config::NodeSettings::primary_default(),
+        })
+        .await
+        .expect("state loads");
+
+        for usage_class in ["input_uncached", "output"] {
+            state
+                .billing_rate_store
+                .upsert_billing_rate(
+                    &format!("test:tmch7:{usage_class}"),
+                    crate::billing_rate_store::UpsertBillingRateInput {
+                        source: Some("test".to_string()),
+                        pricing_profile: Some("default".to_string()),
+                        model_pattern: Some(None),
+                        provider_type: Some(None),
+                        rate_kind: Some("token".to_string()),
+                        usage_class: Some(usage_class.to_string()),
+                        unit: Some("token".to_string()),
+                        unit_price_nano: Some("1000".to_string()),
+                        unit_price_currency: Some("USD".to_string()),
+                        peak_unit_price_nano: None,
+                        context_tier: Some(None),
+                        service_tier: Some(None),
+                        modality: Some(None),
+                        cache_ttl: Some(None),
+                        match_json: Some(serde_json::json!({})),
+                        priority: Some(100),
+                        enabled: Some(true),
+                        raw_json: None,
+                    },
+                )
+                .await
+                .expect("seed rate");
+        }
+
+        let group = state
+            .user_store
+            .create_group(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "tmch7-group".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 0,
+                account_class: AccountClass::Standard,
+            })
+            .await
+            .expect("group creates");
+
+        let tenant = state
+            .user_store
+            .create_user("tmch7_tenant", "password123", UserRole::User, None)
+            .await
+            .expect("tenant creates");
+        let (key, _token) = state
+            .user_store
+            .create_api_key(&tenant.id, "tmch7-key", None)
+            .await
+            .expect("key creates");
+        let key_id = key.id;
+
+        let admin = state
+            .user_store
+            .create_user("tmch7_admin", "password123", UserRole::Admin, None)
+            .await
+            .expect("admin creates");
+        let session = state
+            .user_store
+            .create_session(&admin.id, 7)
+            .await
+            .expect("session creates");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {}", session.token)).expect("auth header"),
+        );
+
+        let model = "gpt-tmch7-pin";
+        let provider_input = |name: &str| {
+            let mut input = test_provider_input("http://127.0.0.1:9".to_string());
+            input.name = name.to_string();
+            input.pricing_profile = Some("default".to_string());
+            input.group_id = group.id.clone();
+            input.channel.name = format!("{name}-channel");
+            input.channel.models = HashMap::from([(
+                model.to_string(),
+                MonoizeModelEntry {
+                    redirect: None,
+                    pricing_profile_mode: Default::default(),
+                    pricing_profile_override: None,
+                    multiplier_override: Some(Multiplier::ONE),
+                },
+            )]);
+            input
+        };
+
+        // The handler's SSRF guard rejects loopback upstreams; this test never
+        // sends requests, so lift it like the other provider tests do.
+        crate::monoize_routing::test_set_allow_private_upstream(true);
+        let _first = create_provider(State(state.clone()), headers.clone(), Json(provider_input("tmch7-first")))
+            .await
+            .expect("first provider creates");
+        let first_channel_id = state
+            .monoize_store
+            .list_providers()
+            .await
+            .expect("providers list")
+            .into_iter()
+            .find(|provider| provider.name == "tmch7-first")
+            .expect("first provider exists")
+            .channel
+            .id;
+
+        let key_after_first = state
+            .user_store
+            .get_api_key_by_id(&key_id)
+            .await
+            .expect("key reads")
+            .expect("key exists");
+        assert!(
+            key_after_first.channel_bindings.is_empty(),
+            "an unambiguous scope must not pin bindings"
+        );
+
+        let _second = create_provider(State(state.clone()), headers.clone(), Json(provider_input("tmch7-second")))
+            .await
+            .expect("second provider creates");
+        crate::monoize_routing::test_set_allow_private_upstream(false);
+
+        let key_after_second = state
+            .user_store
+            .get_api_key_by_id(&key_id)
+            .await
+            .expect("key reads")
+            .expect("key exists");
+        assert_eq!(
+            key_after_second.channel_bindings,
+            vec![crate::users::ApiKeyChannelBinding {
+                group_id: group.id.clone(),
+                model: model.to_string(),
+                channel_id: first_channel_id,
+            }],
+            "TM-CH-7: the existing key must stay on its pre-existing Channel"
+        );
+
+        // A key created AFTER the conflict still follows TM-CH-4: it is born
+        // unbound and the store rejects a conflicting-scope update without a
+        // binding, so the 409 path stays intact for new keys.
+        let (_later, _later_token) = state
+            .user_store
+            .create_api_key(&tenant.id, "tmch7-later", None)
+            .await
+            .expect("later key creates");
     }
 }

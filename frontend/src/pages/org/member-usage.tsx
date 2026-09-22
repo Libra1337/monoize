@@ -167,6 +167,7 @@ export function OrgMemberUsagePage() {
                     >
                       <TableCell className="font-medium">
                         {m.username || m.user_id}
+                        {m.alias ? <span className="ml-1.5 text-xs text-muted-foreground">({m.alias})</span> : null}
                         {isRemoved && (
                           <span className="ml-2 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                             {t("orgUsage.removed")}

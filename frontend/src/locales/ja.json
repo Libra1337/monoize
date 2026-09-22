@@ -1944,7 +1944,8 @@
     "unavailable": "利用不可",
     "currencyUnavailable": "CNY 為替レートを取得できません。USD を選択するか、後で再試行してください。",
     "noModels": "利用可能なモデルがありません",
-    "noModelsDesc": "フィルターを変更するか、管理者に料金設定済みモデルの公開を依頼してください。"
+    "noModelsDesc": "フィルターを変更するか、管理者に料金設定済みモデルの公開を依頼してください。",
+    "multiplier": "表示価格に適用される課金倍率。"
   },
   "firewall": {
     "title": "コンテンツファイアウォール",
@@ -2631,7 +2632,11 @@
     "aliasEdit": "別名",
     "leaveConfirm": "この組織を脱退しますか？キーへのアクセスを失います。個人ウォレットとキーには影響しません。",
     "left": "組織を脱退しました",
-    "removeMemberConfirmKeys": "このメンバーを削除しますか?このスペースで作成したキーも一緒に削除されます。履歴ログは残ります。"
+    "removeMemberConfirmKeys": "このメンバーを削除しますか?このスペースで作成したキーも一緒に削除されます。履歴ログは残ります。",
+    "kindUsage": "メンバー利用扣費",
+    "detailFrom": "{{name}} がチャージ",
+    "detailTo": "{{name}} へ配分",
+    "detailModel": "モデル {{model}}"
   },
   "adminOrgs": {
     "title": "組織スペース管理",

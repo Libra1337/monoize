@@ -246,7 +246,10 @@ export function OrgLimitsPage() {
                 .filter((m) => m.role !== "owner")
                 .map((m) => (
                   <TableRow key={m.user_id}>
-                    <TableCell className="font-medium">{m.username ?? m.user_id}</TableCell>
+                    <TableCell className="font-medium">
+                      {m.username ?? m.user_id}
+                      {m.alias ? <span className="ml-1.5 text-xs text-muted-foreground">({m.alias})</span> : null}
+                    </TableCell>
                     <TableCell>{spentCell(m.spent.total_nano_usd)}</TableCell>
                     <TableCell>
                       <SpendLimitsEditor
@@ -287,9 +290,10 @@ export function OrgLimitsPage() {
               {data.keys.map((k) => (
                 <TableRow key={k.key_id}>
                   <TableCell className="font-medium">{k.name}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {k.creator_username ?? k.created_by ?? "-"}
-                  </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {k.creator_username ?? k.created_by ?? "-"}
+                        {k.creator_alias ? ` (${k.creator_alias})` : ""}
+                      </TableCell>
                   <TableCell>{spentCell(k.spent.total_nano_usd)}</TableCell>
                   <TableCell>
                     <SpendLimitsEditor

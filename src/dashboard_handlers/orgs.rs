@@ -1354,13 +1354,20 @@ pub async fn org_ledger(
             "SELECT id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at, account_scope
              FROM billing_ledger WHERE user_id = $1
              ORDER BY created_at DESC, id DESC LIMIT 200",
-            [org_id.into()],
+            [org_id.clone().into()],
         ))
         .await
         .map_err(storage)?;
-    Ok(Json(json!(
-        rows.iter()
-            .map(|row| json!({
+    let entries: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let meta: serde_json::Value = row
+                .try_get::<Option<String>>("", "meta_json")
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or(serde_json::Value::Null);
+            json!({
                 "id": row.try_get::<String>("", "id").unwrap_or_default(),
                 "kind": row.try_get::<String>("", "kind").unwrap_or_default(),
                 "delta_nano_usd": row.try_get::<String>("", "delta_nano_usd").unwrap_or_default(),
@@ -1368,9 +1375,55 @@ pub async fn org_ledger(
                     .try_get::<String>("", "balance_after_nano_usd")
                     .unwrap_or_default(),
                 "created_at": row.try_get::<String>("", "created_at").unwrap_or_default(),
-            }))
+                "meta": meta,
+            })
+        })
+        .collect();
+    // ORG-22a: resolve the from/to actor ids the move rows carry so the UI can
+    // say who recharged and who received a distribution, even for ex-members.
+    let mut actor_ids: Vec<String> = Vec::new();
+    for entry in &entries {
+        for key in ["from_user_id", "to_user_id"] {
+            if let Some(id) = entry["meta"][key].as_str() {
+                if !actor_ids.iter().any(|existing| existing == id) {
+                    actor_ids.push(id.to_string());
+                }
+            }
+        }
+    }
+    let mut actors = serde_json::Map::new();
+    if !actor_ids.is_empty() {
+        let placeholders = actor_ids
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("${}", index + 2))
             .collect::<Vec<_>>()
-    )))
+            .join(", ");
+        let sql = format!(
+            "SELECT u.id, u.username, om.alias
+             FROM users u
+             LEFT JOIN org_members om ON om.org_id = $1 AND om.user_id = u.id
+             WHERE u.id IN ({placeholders})"
+        );
+        let params: Vec<sea_orm::Value> = std::iter::once(org_id.into())
+            .chain(actor_ids.iter().map(|id| id.clone().into()))
+            .collect();
+        if let Ok(actor_rows) = read
+            .query_all(Statement::from_sql_and_values(backend, &sql, params))
+            .await
+        {
+            for row in &actor_rows {
+                actors.insert(
+                    row.try_get::<String>("", "id").unwrap_or_default(),
+                    json!({
+                        "username": row.try_get::<Option<String>>("", "username").ok().flatten(),
+                        "alias": row.try_get::<Option<String>>("", "alias").ok().flatten(),
+                    }),
+                );
+            }
+        }
+    }
+    Ok(Json(json!({ "entries": entries, "actors": actors })))
 }
 
 /// ORG-17: removal deletes membership and share rows. Org keys stay owned by the org
@@ -2149,7 +2202,7 @@ pub async fn org_limits(
     let member_rows = read
         .query_all(Statement::from_sql_and_values(
             backend,
-            "SELECT m.user_id, u.username, m.role,
+            "SELECT m.user_id, u.username, m.role, m.alias,
                     m.spend_limit_total_nano_usd, m.spend_limit_hourly_nano_usd, m.spend_limit_daily_nano_usd
              FROM org_members m LEFT JOIN users u ON u.id = m.user_id
              WHERE m.org_id = $1 ORDER BY m.joined_at",
@@ -2171,6 +2224,7 @@ pub async fn org_limits(
         members.push(serde_json::json!({
             "user_id": member_id,
             "username": row.try_get::<Option<String>>("", "username").ok().flatten(),
+            "alias": row.try_get::<Option<String>>("", "alias").ok().flatten(),
             "role": row.try_get::<String>("", "role").map_err(storage)?,
             "limits": {
                 "total_nano_usd": row.try_get::<Option<String>>("", "spend_limit_total_nano_usd").ok().flatten().filter(|v| !v.is_empty()),
@@ -2188,9 +2242,10 @@ pub async fn org_limits(
     let key_rows = read
         .query_all(Statement::from_sql_and_values(
             backend,
-            "SELECT k.id, k.name, k.created_by, u.username AS creator_username,
+            "SELECT k.id, k.name, k.created_by, u.username AS creator_username, om.alias AS creator_alias,
                     k.spend_limit_total_nano_usd, k.spend_limit_hourly_nano_usd, k.spend_limit_daily_nano_usd
              FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+             LEFT JOIN org_members om ON om.org_id = k.org_id AND om.user_id = k.created_by
              WHERE k.org_id = $1
                AND (k.created_by IS NULL OR k.created_by IN
                     (SELECT user_id FROM org_members WHERE org_id = $1))
@@ -2215,6 +2270,7 @@ pub async fn org_limits(
             "name": row.try_get::<String>("", "name").map_err(storage)?,
             "created_by": row.try_get::<Option<String>>("", "created_by").ok().flatten(),
             "creator_username": row.try_get::<Option<String>>("", "creator_username").ok().flatten(),
+            "creator_alias": row.try_get::<Option<String>>("", "creator_alias").ok().flatten(),
             "limits": {
                 "total_nano_usd": row.try_get::<Option<String>>("", "spend_limit_total_nano_usd").ok().flatten().filter(|v| !v.is_empty()),
                 "hourly_nano_usd": row.try_get::<Option<String>>("", "spend_limit_hourly_nano_usd").ok().flatten().filter(|v| !v.is_empty()),
@@ -2333,8 +2389,8 @@ pub async fn org_member_usage(
 #[cfg(test)]
 mod tests {
     use super::{
-        CreateOrgKeyRequest, create_org, create_org_key, join_org, leave_org, list_org_keys,
-        org_detail,
+        CreateOrgKeyRequest, create_org, create_org_key, deposit_to_org, distribute_from_org,
+        join_org, leave_org, list_org_keys, org_detail, org_ledger, set_org_member_alias,
     };
     use crate::app::{AppState, RuntimeConfig, load_state_with_runtime};
     use crate::users::{AccountClass, CreateGroupInput, UserRole};
@@ -2667,5 +2723,164 @@ mod tests {
         .map(|_| ())
         .expect_err("cross-class group must fail validation");
         assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    }
+
+    /// ORG-22a: the org ledger carries per-entry meta and an actors map so the
+    /// wallet UI can name who recharged and who received a distribution.
+    #[tokio::test]
+    async fn org_ledger_resolves_move_actors_with_aliases() {
+        let state = make_state().await;
+        let admin_headers = session_headers(&state, "ledger_admin", UserRole::Admin).await;
+
+        let (_, Json(enterprise_group)) = crate::dashboard_handlers::create_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Json(CreateGroupInput {
+                confirm_public_exposure: true,
+                name: "ent-ledger".to_string(),
+                description: String::new(),
+                user_selectable: true,
+                sort_order: 5,
+                account_class: AccountClass::Enterprise,
+            }),
+        )
+        .await
+        .expect("enterprise group created");
+
+        let owner_headers =
+            session_headers_in_group(&state, "ledger_owner", &enterprise_group.id).await;
+        let created = body_json(
+            create_org(
+                State(state.clone()),
+                owner_headers.clone(),
+                Json(super::CreateOrgRequest {
+                    display_name: "Ledger Flow".to_string(),
+                    avatar_emoji: None,
+                    avatar_color: None,
+                    avatar_image: None,
+                    invite_expiry: "never".to_string(),
+                }),
+            )
+            .await
+            .expect("org created")
+            .into_response(),
+        )
+        .await;
+        let org_id: String = created["id"].as_str().expect("org id").to_string();
+        let invite_token: String = created["invite_token"]
+            .as_str()
+            .expect("invite token")
+            .to_string();
+
+        let member_headers =
+            session_headers_in_group(&state, "ledger_member", &enterprise_group.id).await;
+        join_org(
+            State(state.clone()),
+            member_headers.clone(),
+            Json(super::JoinOrgRequest {
+                token: invite_token,
+            }),
+        )
+        .await
+        .expect("member joined");
+
+        let member_id = body_json(
+            org_detail(State(state.clone()), owner_headers.clone(), Path(org_id.clone()))
+                .await
+                .expect("org detail")
+                .into_response(),
+        )
+        .await;
+        let members = member_id["members"].as_array().expect("members array");
+        let member_user_id = members
+            .iter()
+            .find(|entry| entry["username"].as_str() == Some("ledger_member"))
+            .expect("member listed")
+            ["user_id"]
+            .as_str()
+            .expect("member id")
+            .to_string();
+
+        set_org_member_alias(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path((org_id.clone(), member_user_id.clone())),
+            Json(super::SetOrgMemberAliasRequest {
+                alias: Some("ledger-nickname".to_string()),
+            }),
+        )
+        .await
+        .expect("alias set");
+
+        // Fund the member so they can recharge the org wallet (ORG-12).
+        state
+            .user_store
+            .update_user(
+                &member_user_id,
+                None,
+                None,
+                None,
+                None,
+                Some("1000000000"),
+                Some(true),
+                None,
+                None,
+            )
+            .await
+            .expect("member funded");
+
+        deposit_to_org(
+            State(state.clone()),
+            member_headers.clone(),
+            Path(org_id.clone()),
+            Json(super::WalletMoveRequest {
+                amount_nano_usd: "500000000".to_string(),
+            }),
+        )
+        .await
+        .expect("member deposits");
+
+        distribute_from_org(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path(org_id.clone()),
+            Json(super::DistributeRequest {
+                member_user_id: member_user_id.clone(),
+                amount_nano_usd: "200000000".to_string(),
+            }),
+        )
+        .await
+        .expect("owner distributes");
+
+        let ledger = body_json(
+            org_ledger(State(state.clone()), owner_headers.clone(), Path(org_id.clone()))
+                .await
+                .expect("ledger reads")
+                .into_response(),
+        )
+        .await;
+
+        let entries = ledger["entries"].as_array().expect("entries array");
+        assert_eq!(entries.len(), 2, "one receive row and one grant row");
+        let receive = entries
+            .iter()
+            .find(|entry| entry["kind"].as_str() == Some("org_deposit_receive"))
+            .expect("receive entry");
+        let grant = entries
+            .iter()
+            .find(|entry| entry["kind"].as_str() == Some("org_grant"))
+            .expect("grant entry");
+        assert_eq!(
+            receive["meta"]["from_user_id"].as_str(),
+            Some(member_user_id.as_str())
+        );
+        assert_eq!(
+            grant["meta"]["to_user_id"].as_str(),
+            Some(member_user_id.as_str())
+        );
+
+        let actor = &ledger["actors"][&member_user_id];
+        assert_eq!(actor["username"].as_str(), Some("ledger_member"));
+        assert_eq!(actor["alias"].as_str(), Some("ledger-nickname"));
     }
 }

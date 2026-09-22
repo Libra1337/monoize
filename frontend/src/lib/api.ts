@@ -112,6 +112,7 @@ export interface OrgLimitSpent {
 export interface OrgMemberLimitEntry {
   user_id: string;
   username?: string | null;
+  alias?: string | null;
   role: string;
   limits: OrgSpendLimitSet;
   spent: OrgLimitSpent;
@@ -122,6 +123,7 @@ export interface OrgKeyLimitEntry {
   name: string;
   created_by?: string | null;
   creator_username?: string | null;
+  creator_alias?: string | null;
   limits: OrgSpendLimitSet;
   spent: OrgLimitSpent;
 }
@@ -147,6 +149,7 @@ export interface OrgMemberUsageBucket {
 export interface OrgMemberUsageEntry {
   user_id: string;
   username: string;
+  alias?: string | null;
   total_charge_nano_usd: string;
   calls: number;
   input_tokens: number;
@@ -169,6 +172,21 @@ export interface OrgLedgerEntry {
   delta_nano_usd: string;
   balance_after_nano_usd: string;
   created_at: string;
+  /** ORG-22a: raw ledger metadata (from_user_id / to_user_id / order_id /
+   * logical_model / api_key_id, depending on kind). */
+  meta?: Record<string, unknown> | null;
+}
+
+export interface OrgLedgerActor {
+  username?: string | null;
+  alias?: string | null;
+}
+
+export interface OrgLedgerResponse {
+  entries: OrgLedgerEntry[];
+  /** ORG-22a: user_id -> display identity for every from/to actor referenced
+   * by the returned entries (includes ex-members). */
+  actors: Record<string, OrgLedgerActor>;
 }
 
 export interface OrgKeysResponse {
@@ -1868,7 +1886,7 @@ class ApiClient {
     });
   }
 
-  async getOrgLedger(orgId: string): Promise<OrgLedgerEntry[]> {
+  async getOrgLedger(orgId: string): Promise<OrgLedgerResponse> {
     return this.request(`/orgs/${orgId}/ledger`);
   }
 

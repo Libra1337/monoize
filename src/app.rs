@@ -228,6 +228,11 @@ pub struct AppState {
     pub request_log_admissions: Arc<DashMap<String, Arc<RequestLogLifecycle>>>,
     pub request_log_tasks: RequestLogTaskTracker,
     pub background_shutdown: Arc<AtomicBool>,
+    /// BG11: set by the SIGHUP handler; the lease renewal loop responds by
+    /// releasing the `store_primary` row and stopping, without shutting the
+    /// process down, so a blue-green swap hands the lease over while the old
+    /// container keeps serving its in-flight requests.
+    pub store_lease_handover: Arc<AtomicBool>,
     pub sse_connections: Arc<DashMap<String, Arc<AtomicUsize>>>,
     pub image_transform_cache: Arc<ImageTransformCache>,
     pub request_capture: RequestCaptureStore,
@@ -289,7 +294,7 @@ impl AppState {
             owner_id,
         )
         .await?;
-        lease.spawn_renewal(self.background_shutdown.clone());
+        lease.spawn_renewal(self.background_shutdown.clone(), self.store_lease_handover.clone());
         self.store_primary_lease.set(lease).await;
         Ok(())
     }
@@ -613,6 +618,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     };
     let request_log_tasks = RequestLogTaskTracker::default();
     let background_shutdown = Arc::new(AtomicBool::new(false));
+    let store_lease_handover = Arc::new(AtomicBool::new(false));
     {
         let affinity = channel_affinity.clone();
         let shutdown = background_shutdown.clone();
@@ -1188,6 +1194,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         request_log_admissions: Arc::new(DashMap::new()),
         request_log_tasks,
         background_shutdown,
+        store_lease_handover,
         sse_connections: Arc::new(DashMap::new()),
         image_transform_cache,
         request_capture,
@@ -1217,7 +1224,7 @@ async fn acquire_startup_store_primary_lease(
     .await
     {
         Ok(lease) => {
-            lease.spawn_renewal(state.background_shutdown.clone());
+            lease.spawn_renewal(state.background_shutdown.clone(), state.store_lease_handover.clone());
             state.store_primary_lease.set(lease).await;
             Ok(state)
         }
@@ -1264,7 +1271,7 @@ fn spawn_standby_lease_acquirer(state: AppState, owner_id: String) {
             .await
             {
                 Ok(lease) => {
-                    lease.spawn_renewal(state.background_shutdown.clone());
+                    lease.spawn_renewal(state.background_shutdown.clone(), state.store_lease_handover.clone());
                     state.store_primary_lease.set(lease).await;
                     tracing::info!(
                         "store primary lease acquired after standby; starting lease-gated duties"

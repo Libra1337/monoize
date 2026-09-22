@@ -34,8 +34,12 @@ context) MUST include `alias` alongside `username` for every member. `PUT
 clears the alias: `null` or a blank string clears it to SQL NULL; a non-null
 value MUST trim to 1..32 characters. The response returns `{user_id, username,
 alias}`. Every member-visible surface that lists members (member list, key
-creator, key share lists, member-usage) MUST render `username (alias)` when an
-alias exists and `username` otherwise.
+creator, key share lists, member-usage, limits-page member rows and key-creator
+cells) MUST render `username (alias)` when an
+alias exists and `username` otherwise. The limits payload
+(`GET /api/dashboard/orgs/{org_id}/limits`) member rows MUST include `alias`
+and key rows MUST include `creator_alias`; the member-usage payload member
+entries MUST include `alias`.
 
 ORG-4. `api_keys.org_id` (NULL = personal key) marks a key as an org key. An org key
 is owned by the org wallet row: `api_keys.user_id = org_id` and
@@ -215,6 +219,17 @@ every org entry for these roles.
 
 ORG-22. `GET /api/dashboard/orgs/{org_id}/ledger` (any member) returns the org wallet's
 `billing_ledger` rows, newest first, at most 200.
+
+ORG-22a. The ledger response body is `{"entries": [...], "actors": {...}}`. Each entry
+MUST include `id`, `kind`, `delta_nano_usd`, `balance_after_nano_usd`, `created_at`, and
+`meta` (the parsed `meta_json` object, or null). `actors` MUST map every
+`meta.from_user_id` / `meta.to_user_id` referenced by the returned entries to
+`{"username": string | null, "alias": string | null}`, where `alias` is the membership
+alias when the user is still a member (ex-members resolve with `alias: null`). The UI
+MUST label usage kinds (`request_charge`, `api_key_charge`) as a member usage charge —
+not as "Other" — and MUST render a detail line: recharge receive rows show the
+recharging member, distribution (`org_grant`) and deletion-refund rows show the
+receiving member, and usage rows show the logical model.
 
 ## 9. Space analytics and logs
 

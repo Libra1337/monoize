@@ -96,7 +96,18 @@ function ModelRow({
         </div>
       </div>
       <div>
-        <div className="text-xs text-muted-foreground">{t("modelMarketplace.inputPrice")}</div>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          {t("modelMarketplace.inputPrice")}
+          {item.input_rate_multiplier ? (
+            <Badge
+              variant="secondary"
+              className="h-4 px-1 text-[10px] tabular-nums"
+              title={t("modelMarketplace.multiplier")}
+            >
+              x{item.input_rate_multiplier}
+            </Badge>
+          ) : null}
+        </div>
         <div className="mt-1 font-mono text-xs font-medium tabular-nums">{item.input_rate_range ? <CoinAmount value={price(item.input_rate_range)} /> : price(item.input_rate_range)}</div>
       </div>
       <div>
@@ -340,7 +351,16 @@ export function ModelMarketplacePage() {
                       <div className="text-sm font-semibold">{offer.public_provider_name}</div>
                       <div className="mt-1 text-xs text-muted-foreground">{offer.public_channel_name}</div>
                     </div>
-                    <Badge variant="outline">{offer.api_type}</Badge>
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant="outline">{offer.api_type}</Badge>
+                      <Badge
+                        variant="secondary"
+                        className="tabular-nums"
+                        title={t("modelMarketplace.multiplier")}
+                      >
+                        x{offer.multiplier}
+                      </Badge>
+                    </div>
                   </div>
                   <dl className="divide-y">
                     {offer.rates.map((rate, index) => (
