@@ -17,15 +17,17 @@ import { AdminPage } from "@/pages/admin";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { me } = useAuth();
-  // `undefined` means the /me probe is still in flight; `null` is signed out.
+  // undefined = the /me probe is still in flight; null = signed out.
+  if (me === undefined) return null;
   if (me === null) return <Navigate to="/handoff" replace />;
   return <>{children}</>;
 }
 
 function RequireAdmin({ children }: { children: React.ReactNode }) {
   const { me, isAdmin } = useAuth();
+  if (me === undefined) return null;
   if (me === null) return <Navigate to="/handoff" replace />;
-  if (me && !isAdmin) return <Navigate to="/" replace />;
+  if (!isAdmin) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 

@@ -74,7 +74,8 @@
       "canvasBody": "Connect script, storyboard, image, video, voice and assemble nodes into any pipeline you can draw.",
       "walletTitle": "Platform wallet",
       "walletBody": "Every step settles against your Monoize balance — pre-charged, refunded on failure."
-    }
+    },
+    "canvasAlt": "Apeiron node canvas workbench: script, storyboard, image, video, voice, subtitle and assemble nodes connected on a dotted infinite canvas"
   },
   "create": {
     "title": "One-click film",

@@ -5,6 +5,7 @@ import { Layers } from "lucide-react";
 import { api, type Template } from "@/lib/api";
 import { ScrollReveal, SectionKicker } from "@/components/ui/motion";
 import { Skeleton } from "@/components/ui/badge";
+import { GraphPreview } from "@/components/landing/graph-preview";
 
 /** Template feed — data-driven cards, no fake thumbnails. */
 export function TemplateFeed() {
@@ -39,14 +40,17 @@ export function TemplateFeed() {
                       });
                       navigate(`/canvas/${created.id}`);
                     }}
-                    className="flex h-36 flex-col rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/50"
+                    className="flex h-44 flex-col rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/50"
                   >
                     <span className="flex size-8 items-center justify-center rounded-md bg-muted">
                       <Layers className="h-4 w-4 text-muted-foreground" />
                     </span>
                     <span className="mt-3 text-sm font-medium">{template.name}</span>
-                    <span className="mt-1 line-clamp-2 flex-1 text-xs leading-relaxed text-muted-foreground">
+                    <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                       {template.description}
+                    </span>
+                    <span className="mt-auto pt-2">
+                      <GraphPreview graph={template.graph} />
                     </span>
                     <span className="font-mono text-[10px] text-muted-foreground/70">
                       {template.graph?.nodes?.length ?? 0} nodes ·{" "}

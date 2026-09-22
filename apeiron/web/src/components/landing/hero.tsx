@@ -24,6 +24,8 @@ export function Hero() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [topic, setTopic] = React.useState("");
+  const [mode, setMode] = React.useState<"stock" | "ai_image">("stock");
+  const [seconds, setSeconds] = React.useState("30");
 
   const inspirations = [t("landing.inspiration1"), t("landing.inspiration2"), t("landing.inspiration3")];
 
@@ -35,7 +37,9 @@ export function Hero() {
       return;
     }
     const trimmed = value.trim();
-    navigate(trimmed ? `/create?topic=${encodeURIComponent(trimmed)}` : "/create");
+    const query = new URLSearchParams({ mode, seconds });
+    if (trimmed) query.set("topic", trimmed);
+    navigate(`/create?${query.toString()}`);
   }
 
   return (
@@ -81,7 +85,41 @@ export function Hero() {
           </Button>
         </motion.form>
 
-        <motion.div {...rise(0.6)} className="flex flex-wrap items-center justify-center gap-2">
+        <motion.div {...rise(0.55)} className="flex flex-wrap items-center justify-center gap-1.5">
+          {(["stock", "ai_image"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setMode(option)}
+              aria-pressed={mode === option}
+              className={
+                mode === option
+                  ? "rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground"
+                  : "rounded-md px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+              }
+            >
+              {option === "stock" ? t("create.stock") : t("create.aiImage")}
+            </button>
+          ))}
+          <span aria-hidden className="mx-1 text-muted-foreground/50">|</span>
+          {["15", "30", "60"].map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setSeconds(option)}
+              aria-pressed={seconds === option}
+              className={
+                seconds === option
+                  ? "rounded-md bg-accent px-3 py-1.5 font-mono text-xs font-medium text-accent-foreground"
+                  : "rounded-md px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+              }
+            >
+              {option}s
+            </button>
+          ))}
+        </motion.div>
+
+        <motion.div {...rise(0.65)} className="flex flex-wrap items-center justify-center gap-2">
           {inspirations.map((idea) => (
             <button
               key={idea}

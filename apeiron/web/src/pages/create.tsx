@@ -69,8 +69,13 @@ export function CreatePage() {
   const [topic, setTopic] = useState(() => searchParams.get("topic") ?? "");
   const [style, setStyle] = useState("");
   const [voice, setVoice] = useState("alloy");
-  const [duration, setDuration] = useState(30);
-  const [materialMode, setMaterialMode] = useState<"stock" | "ai_image">("stock");
+  const [duration, setDuration] = useState(() => {
+    const raw = Number(searchParams.get("seconds"));
+    return raw >= 5 && raw <= 300 ? raw : 30;
+  });
+  const [materialMode, setMaterialMode] = useState<"stock" | "ai_image">(() =>
+    searchParams.get("mode") === "ai_image" ? "ai_image" : "stock",
+  );
   const [subtitle, setSubtitle] = useState(true);
   const [runId, setRunId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);

@@ -7,7 +7,9 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  Handle,
   MiniMap,
+  Position,
   ReactFlow,
   addEdge,
   useEdgesState,
@@ -111,8 +113,27 @@ function CanvasNodeCard({ data, selected }: NodeProps<FlowNode>) {
     );
   }
   const step = nodeData.step;
+  const inputPorts = meta.inputPorts;
   return (
-    <Card className={cn("w-64 p-3", statusBorder(step?.status), selected && "ring-1 ring-ring")}>
+    <Card
+      className={cn(
+        "relative w-64 p-3",
+        statusBorder(step?.status),
+        selected && "ring-1 ring-ring",
+      )}
+    >
+      {inputPorts.map((port, index) => (
+        <Handle
+          key={port}
+          type="target"
+          position={Position.Left}
+          id={port}
+          style={{ top: `${((index + 1) * 100) / (inputPorts.length + 1)}%` }}
+        />
+      ))}
+      {meta.outputPort ? (
+        <Handle type="source" position={Position.Right} id={meta.outputPort} />
+      ) : null}
       <div className="flex items-center gap-2">
         <span className="flex size-6 items-center justify-center rounded-md bg-muted">
           <Icon className="h-3.5 w-3.5 text-muted-foreground" />
