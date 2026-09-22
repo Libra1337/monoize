@@ -526,7 +526,7 @@ async fn cookie_store_secret_mutations_require_the_configured_origin() {
         "scope":"credential_update"
     });
 
-    for origin in [None, Some("https://attacker.example")] {
+    for origin in [Some("https://attacker.example"), Some("https://sub.lynshen.org")] {
         let (status, body) = cookie_json_request(
             &ctx,
             Method::POST,
@@ -540,6 +540,21 @@ async fn cookie_store_secret_mutations_require_the_configured_origin() {
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
         assert_eq!(body["error"]["code"], "store_origin_invalid");
     }
+
+    // SB-S-2: an absent Origin passes the gate — the session cookie is
+    // SameSite=Strict, and in-app webview browsers omit Origin on
+    // same-origin POSTs.
+    let (status, grant) = cookie_json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/store/admin/reauth",
+        session_token,
+        None,
+        None,
+        reauth_body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{grant}");
 
     let (status, grant) = cookie_json_request(
         &ctx,
@@ -570,8 +585,8 @@ async fn cookie_store_secret_mutations_require_the_configured_origin() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], "store_origin_invalid");
+    // SB-S-2: absent Origin passes the gate, so the mutation itself succeeds.
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     let response = raw_store_mutation(
         &ctx.router,
@@ -813,23 +828,38 @@ async fn every_cookie_store_mutation_requires_exact_origin_and_bearer_bypasses_o
     ctx.router = monoize::app::build_app(ctx.state.clone());
 
     for (method, path) in store_json_mutations() {
-        for origin in [None, Some("https://attacker.example")] {
-            let (status, body) = cookie_json_request(
-                &ctx,
-                method.clone(),
-                path,
-                session_token,
-                origin,
-                None,
-                json!({}),
-            )
-            .await;
-            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {body}");
-            assert_eq!(
-                body["error"]["code"], "store_origin_invalid",
-                "{method} {path}: {body}"
-            );
-        }
+        let (status, body) = cookie_json_request(
+            &ctx,
+            method.clone(),
+            path,
+            session_token,
+            Some("https://attacker.example"),
+            None,
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {body}");
+        assert_eq!(
+            body["error"]["code"], "store_origin_invalid",
+            "{method} {path}: {body}"
+        );
+
+        // SB-S-2: an absent Origin passes the gate (SameSite=Strict session
+        // cookie; in-app webviews omit Origin on same-origin POSTs).
+        let (_, absent_origin) = cookie_json_request(
+            &ctx,
+            method.clone(),
+            path,
+            session_token,
+            None,
+            None,
+            json!({}),
+        )
+        .await;
+        assert_ne!(
+            absent_origin["error"]["code"], "store_origin_invalid",
+            "absent Origin must reach the handler for {method} {path}"
+        );
 
         let (_, legal_origin) = cookie_json_request(
             &ctx,
@@ -854,13 +884,24 @@ async fn every_cookie_store_mutation_requires_exact_origin_and_bearer_bypasses_o
         );
     }
 
-    for origin in [None, Some("https://attacker.example")] {
-        let response = store_icon_mutation(&ctx.router, Some(session_token), None, origin).await;
-        let status = response.status();
-        let body = response_json(response).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "icon: {body}");
-        assert_eq!(body["error"]["code"], "store_origin_invalid", "{body}");
-    }
+    let response = store_icon_mutation(
+        &ctx.router,
+        Some(session_token),
+        None,
+        Some("https://attacker.example"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN, "icon attacker");
+    let body = response_json(response).await;
+    assert_eq!(body["error"]["code"], "store_origin_invalid", "icon attacker");
+
+    // SB-S-2: absent Origin passes the gate for the multipart icon mutation too.
+    assert_eq!(
+        store_icon_mutation(&ctx.router, Some(session_token), None, None)
+            .await
+            .status(),
+        StatusCode::CREATED
+    );
     assert_eq!(
         store_icon_mutation(
             &ctx.router,

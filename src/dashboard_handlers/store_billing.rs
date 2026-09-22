@@ -284,14 +284,23 @@ async fn require_store_mutation(headers: &HeaderMap, state: &AppState) -> AppRes
             .payment_public_origin
             .as_ref()
             .map(|origin| origin.origin().ascii_serialization());
-        let actual = headers.get(ORIGIN).and_then(|value| value.to_str().ok());
-        if !matches!((expected.as_deref(), actual), (Some(expected), Some(actual)) if expected == actual)
-        {
-            return Err(AppError::new(
-                StatusCode::FORBIDDEN,
-                "store_origin_invalid",
-                "Store mutation origin is invalid",
-            ));
+        // SB-S-2: an absent Origin is accepted because the session cookie is
+        // SameSite=Strict — a cross-site request cannot carry it, and in-app
+        // webview browsers omit Origin on same-origin POSTs. A present Origin
+        // (including one that fails header parsing) must still match exactly.
+        if let Some(origin) = headers.get(ORIGIN) {
+            let matches = origin
+                .to_str()
+                .ok()
+                .and_then(|actual| expected.as_deref().map(|e| e == actual))
+                .unwrap_or(false);
+            if !matches {
+                return Err(AppError::new(
+                    StatusCode::FORBIDDEN,
+                    "store_origin_invalid",
+                    "Store mutation origin is invalid",
+                ));
+            }
         }
     }
     state
