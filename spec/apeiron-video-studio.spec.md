@@ -337,8 +337,42 @@ frontend.
 AP-Z2. The platform dashboard nav exposes Apeiron through `/studio-entry`
 (SB-6); Apeiron links back only through `APEIRON_PLATFORM_URL`.
 
-## 13. Future work (non-normative)
+## 13. Agent roadmap (researched direction, non-normative)
 
-Timeline/BGM node kinds, canvas multiplayer, third-party node packs as signed
-WASM, Pexels alternatives, key-window spend limits, Postgres DSN, short-link
-share pages for published videos.
+Grounded in the 2026 landscape: LTX Studio's linear stage workspace
+(script → storyboard → generation → timeline), VideoAgent's material-aware
+Storyboard Agent, MoneyPrinterTurbo's topic-to-film pipeline (implemented
+here as the one-click flow), and ComfyUI-R1-style agents whose output IS
+the workflow graph.
+
+AP-AG1. **Stage-gated one-click.** `POST /runs/oneclick` gains
+`stop_after: "storyboard" | null`. When set, the run terminal state is
+`partial` after script+storyboard; the create page exposes per-shot editing
+(description/keywords/duration, re-roll one shot) and a continue action
+that starts the media+assembly stages from the edited shots. (LTX stage
+model.)
+
+AP-AG2. **Conversational graph agent.** `POST /api/projects/{id}/agent`
+runs an LLM tool loop (bounded 12 iterations) with tools `update_script`,
+`create_shots`, `update_shot`, `generate_media`, `run_graph`; every
+mutation is a graph version bump and an SSE `graph_patch`. The canvas gets
+a right-side chat panel. (ComfyUI-R1 direction: natural language compiles
+to the workflow.)
+
+AP-AG3. **Material-aware storyboard.** Before finalizing shot keywords the
+storyboard step queries the enabled material provider and records the top
+candidate count per keyword in the shot payload; the create page surfaces a
+candidate re-roll per shot when a keyword yields no candidates. (VideoAgent:
+plan against the available asset bank.)
+
+AP-AG4. **Timeline strip.** The create page renders a bottom timeline of
+shot durations (from storyboard) + narration audio blocks; shots reorder by
+drag and the order persists into assembly. (LTX timeline editor, minimal
+form.)
+
+AP-AG5. **BGM node.** `bgm` node kind: worker mixes a user-selected or
+stock audio track under the narration at a configured gain in the assemble
+pass.
+
+Later: canvas multiplayer, signed third-party node packs, Postgres DSN,
+publish + share pages.

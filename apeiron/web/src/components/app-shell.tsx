@@ -22,6 +22,40 @@ import { cycleLanguage } from "@/i18n";
 import { nanoToUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+/** Rail item: icon over a 10px label (Jimeng / libtv rail pattern). */
+function RailItem({
+  to,
+  icon: Icon,
+  label,
+  active,
+}: {
+  to?: string;
+  icon: typeof Sparkles;
+  label: string;
+  active?: boolean;
+}) {
+  const body = (
+    <>
+      <Icon className="h-[18px] w-[18px]" />
+      <span className="text-[10px] leading-none">{label}</span>
+    </>
+  );
+  const className = cn(
+    "flex w-14 flex-col items-center gap-1 rounded-md py-2 transition-colors",
+    active
+      ? "bg-accent text-foreground [&_svg]:text-primary"
+      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+  );
+  if (to) {
+    return (
+      <NavLink to={to} className={({ isActive }) => cn(className, isActive && "bg-accent text-foreground [&_svg]:text-primary")}>
+        {body}
+      </NavLink>
+    );
+  }
+  return <button className={className}>{body}</button>;
+}
+
 function useTheme() {
   const [dark, setDark] = React.useState(() =>
     document.documentElement.classList.contains("dark"),
@@ -60,31 +94,51 @@ export function AppShell() {
     nav.push({ to: "/admin", icon: ShieldCheck, label: t("nav.admin") });
   }
 
-  const railButton =
-    "flex size-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground";
+  const operatorNav = nav.filter((item) => item.to === "/admin");
+  const mainNav = nav.filter((item) => item.to !== "/admin" && item.to !== "/manager");
+  const workNav = nav.filter((item) => item.to === "/manager");
 
   return (
     <TooltipProvider delayDuration={0}>
       <div className="flex h-dvh overflow-hidden bg-background">
-        {/* Desktop icon rail */}
-        <aside className="hidden w-[60px] shrink-0 flex-col items-center gap-1 border-r py-3 md:flex">
-          <NavLink to="/" className="mb-2 flex size-10 items-center justify-center rounded-lg bg-foreground text-background">
+        {/* Desktop icon rail with labels (Jimeng smart-canvas / libtv pattern) */}
+        <aside className="hidden w-[72px] shrink-0 flex-col items-center gap-2 border-r py-3 md:flex">
+          <NavLink
+            to="/"
+            className="mb-1 flex size-10 items-center justify-center rounded-lg bg-foreground text-background"
+            aria-label="Apeiron"
+          >
             <ApeironLogo className="h-5 w-5" />
           </NavLink>
-          {nav.map((item) => (
-            <Tooltip key={item.to}>
-              <TooltipTrigger asChild>
-                <NavLink to={item.to} className={({ isActive }) => cn(railButton, isActive && "bg-accent text-foreground")}>
-                  <item.icon className="h-[18px] w-[18px]" />
-                </NavLink>
-              </TooltipTrigger>
-              <TooltipContent side="right">{item.label}</TooltipContent>
-            </Tooltip>
+          {mainNav.map((item) => (
+            <RailItem key={item.to} to={item.to} icon={item.icon} label={item.label} />
           ))}
+          {workNav.length > 0 ? (
+            <div className="mt-2 w-14 border-t pt-2">
+              {workNav.map((item) => (
+                <div key={item.to} className="mb-2">
+                  <RailItem to={item.to} icon={item.icon} label={item.label} />
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {operatorNav.length > 0 ? (
+            <div className="mt-2 w-14 border-t pt-2">
+              {operatorNav.map((item) => (
+                <div key={item.to} className="mb-2">
+                  <RailItem to={item.to} icon={item.icon} label={item.label} />
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="mt-auto flex flex-col items-center gap-1">
             <Tooltip>
               <TooltipTrigger asChild>
-                <button className={railButton} onClick={cycleLanguage} aria-label={t("common.language")}>
+                <button
+                  className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                  onClick={cycleLanguage}
+                  aria-label={t("common.language")}
+                >
                   <Languages className="h-[18px] w-[18px]" />
                 </button>
               </TooltipTrigger>
@@ -92,7 +146,11 @@ export function AppShell() {
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button className={railButton} onClick={toggle} aria-label={t("common.theme")}>
+                <button
+                  className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                  onClick={toggle}
+                  aria-label={t("common.theme")}
+                >
                   {dark ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
                 </button>
               </TooltipTrigger>
@@ -101,7 +159,7 @@ export function AppShell() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
-                  className={railButton}
+                  className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
                   aria-label={t("nav.logout")}
                   onClick={async () => {
                     await logout();
