@@ -1,5 +1,5 @@
 #[tokio::test]
-async fn responses_upstream_requests_include_encrypted_reasoning_content() {
+async fn responses_upstream_preserves_explicit_include_without_injection() {
     let ctx = setup().await;
     let (status, body) = json_post(
         &ctx,
@@ -13,24 +13,20 @@ async fn responses_upstream_requests_include_encrypted_reasoning_content() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
+    // PR4c.2: include is preserved verbatim — order and duplicates included —
+    // and reasoning.encrypted_content is never synthesized or appended.
     let upstream = last_captured_body(&ctx, "responses");
     let include = upstream["include"].as_array().expect("include array");
-    assert!(
-        include
-            .iter()
-            .any(|value| value.as_str() == Some("usage.input_tokens_details"))
-    );
-    assert!(
-        include
-            .iter()
-            .any(|value| value.as_str() == Some("reasoning.encrypted_content"))
-    );
     assert_eq!(
-        include
+        include,
+        &vec![json!("usage.input_tokens_details")],
+        "{upstream}"
+    );
+    assert!(
+        !include
             .iter()
-            .filter(|value| value.as_str() == Some("reasoning.encrypted_content"))
-            .count(),
-        1
+            .any(|value| value.as_str() == Some("reasoning.encrypted_content")),
+        "{upstream}"
     );
 }
 

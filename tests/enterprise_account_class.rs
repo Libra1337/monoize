@@ -456,23 +456,35 @@ async fn group_visibility_never_crosses_account_class() {
 }
 
 #[tokio::test]
-async fn create_user_rejects_a_group_from_the_other_account_class() {
+async fn create_user_binds_any_group_and_follows_its_class() {
     let (_db, store) = migrated_store().await;
     let enterprise_group_id = create_enterprise_group(&store, "Enterprise Pricing").await;
 
-    // A new user is always Standard, so binding an Enterprise Group here would
-    // store a cross-class reference that every later access check rejects.
-    let rejected = store
+    // A2a (user-billing-and-model-metadata.spec.md): any group is accepted and
+    // the new user's account_class follows the chosen group.
+    let enterprise_bound = store
         .create_user(
             "cross-class",
             "password-cross-class",
             UserRole::User,
             Some(&enterprise_group_id),
         )
+        .await
+        .expect("an Enterprise Group binds and lifts the user into that class");
+    assert_eq!(enterprise_bound.account_class, AccountClass::Enterprise);
+    assert_eq!(enterprise_bound.group_id, enterprise_group_id);
+
+    let unknown = store
+        .create_user(
+            "unknown-group",
+            "password-unknown-group",
+            UserRole::User,
+            Some("00000000-0000-0000-0000-000000000099"),
+        )
         .await;
     assert!(
-        rejected.is_err(),
-        "an Enterprise Group must not bind to a Standard user at creation"
+        unknown.is_err(),
+        "an unknown group id must be rejected at creation"
     );
 
     let accepted = store

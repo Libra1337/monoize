@@ -122,7 +122,7 @@ describe("Enterprise navigation", () => {
 
     // DL-UM4: the summary counts the visible grouping.
     expect(usersSource).toContain("for (const user of scopedUsers)");
-    expect(usersSource).toContain("data={scopedUsers}");
+    expect(usersSource).toContain("data={visibleUsers}");
   });
 
   test("labels every user grouping in all locales", () => {

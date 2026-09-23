@@ -5,6 +5,7 @@ import {
   LogRowCells,
   RequestLogModelTooltipDetails,
 } from "../src/pages/request-logs/log-row-cells";
+import { StoreCurrencyProvider } from "../src/hooks/use-store-currency";
 
 function requestLog(): RequestLog {
   return {
@@ -27,31 +28,35 @@ function requestLog(): RequestLog {
 
 function renderRow(isAdmin: boolean): string {
   return renderToStaticMarkup(
-    <table>
-      <tbody>
-        <tr>
-          <LogRowCells
-            affinityTargetNames={new Map()}
-            log={requestLog()}
-            isAdmin={isAdmin}
-            showIp={false}
-            t={(key) => key}
-            onOpenCapture={() => {}}
-            onTooltipOpenChange={() => {}}
-          />
-        </tr>
-      </tbody>
-    </table>,
+    <StoreCurrencyProvider>
+      <table>
+        <tbody>
+          <tr>
+            <LogRowCells
+              affinityTargetNames={new Map()}
+              log={requestLog()}
+              isAdmin={isAdmin}
+              showIp={false}
+              t={(key) => key}
+              onOpenCapture={() => {}}
+              onTooltipOpenChange={() => {}}
+            />
+          </tr>
+        </tbody>
+      </table>
+    </StoreCurrencyProvider>,
   );
 }
 
 function renderModelTooltip(isAdmin: boolean): string {
   return renderToStaticMarkup(
-    <RequestLogModelTooltipDetails
-      log={requestLog()}
-      isAdmin={isAdmin}
-      t={(key) => key}
-    />,
+    <StoreCurrencyProvider>
+      <RequestLogModelTooltipDetails
+        log={requestLog()}
+        isAdmin={isAdmin}
+        t={(key) => key}
+      />
+    </StoreCurrencyProvider>,
   );
 }
 

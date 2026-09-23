@@ -24,7 +24,8 @@ describe("API Key analytics dialog", () => {
   test("keeps stale values while changing all four ranges", () => {
     expect(swrSource).toContain("useApiKeyAnalytics");
     expect(swrSource).toContain("keepPreviousData: true");
-    for (const range of ["24h", "7d", "30d", "all"]) {
+    // TM-AN1: the four analytics ranges are today, 7d, 30d, and all.
+    for (const range of ["today", "7d", "30d", "all"]) {
       expect(componentSource).toContain(`value="${range}"`);
     }
     expect(componentSource).toContain("isValidating");

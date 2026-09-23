@@ -201,6 +201,9 @@ function Sidebar({
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/usage", icon: ChartNoAxesCombined, label: t("nav.usage") },
     { to: "/dashboard/usage/cache", icon: DatabaseZap, label: t("nav.cacheHitRate") },
+    // DL5c: the Org Spaces entry is part of the Enterprise main navigation (the
+    // showOrgEntries filter below hides it for users in no organization).
+    { to: "/org", icon: Building2, label: t("nav.orgSpace") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
     { to: "/dashboard/api-docs", icon: BookOpenText, label: t("nav.apiDocs") },

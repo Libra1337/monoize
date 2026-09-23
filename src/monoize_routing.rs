@@ -2610,7 +2610,11 @@ fn validate_channel_base_url(base_url: &str) -> Result<(), String> {
 
     // A literal IP is checked directly; a hostname is resolved so a private address
     // hidden behind a name (including a DNS rebind target) is caught at write time.
-    let addresses: Vec<IpAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
+    // `Url::host_str` keeps IPv6 brackets ("[::1]"), which neither IpAddr::parse nor
+    // ToSocketAddrs accept — strip them or every bracketed literal would fall
+    // through to the unresolvable-name allowance.
+    let bare_host = host.trim_start_matches('[').trim_end_matches(']');
+    let addresses: Vec<IpAddr> = if let Ok(ip) = bare_host.parse::<IpAddr>() {
         vec![ip]
     } else {
         // The host may carry an explicit port; `ToSocketAddrs` requires a service.
@@ -2669,6 +2673,11 @@ pub fn is_private_or_local_ip(address: IpAddr) -> bool {
                 || octets[0] == 0
         }
         IpAddr::V6(v6) => {
+            // An IPv4-mapped address (::ffff:a.b.c.d) is checked as the IPv4 it
+            // carries, so the mapped form cannot bypass the V4 range checks.
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_private_or_local_ip(IpAddr::V4(mapped));
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()

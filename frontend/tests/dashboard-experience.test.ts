@@ -48,9 +48,9 @@ describe("authenticated Dashboard route ownership", () => {
 });
 
 describe("Public usage ranking", () => {
-  test("offers 24-hour 7-day and 30-day anonymous rankings", () => {
+  test("offers today 7-day and 30-day anonymous rankings", () => {
     expect(appSource).toContain('path={PUBLIC_PATHS.usageRanking} element={<PublicUsageRankingPage />}');
-    expect(publicUsageRankingSource).toContain('"24h"');
+    expect(publicUsageRankingSource).toContain('"today"');
     expect(publicUsageRankingSource).toContain('"7d"');
     expect(publicUsageRankingSource).toContain('"30d"');
     expect(publicUsageRankingSource).not.toContain("RankingTokenBreakdown");
@@ -114,7 +114,7 @@ describe("Dashboard navigation", () => {
   });
 
   test("supports selected ranges for authenticated rankings and a dedicated wallet page", () => {
-    expect(apiSource).toContain("getAdminUsageRanking(range: UsageRankingRange = \"24h\")");
+    expect(apiSource).toContain("getAdminUsageRanking(range: UsageRankingRange = \"today\")");
     expect(apiSource).toContain("range=${encodeURIComponent(range)}");
     expect(layoutSourceForWallet).toContain('to: "/dashboard/wallet"');
     expect(appSource).toContain('path="wallet"');
@@ -261,15 +261,15 @@ describe("Dashboard page boundaries", () => {
   });
 
   test("supports the approved Dashboard and Usage Analysis ranges", () => {
-    expect(dashboardSource).toContain('"24h"');
+    expect(dashboardSource).toContain('"today"');
     expect(dashboardSource).toContain('"week"');
     expect(dashboardSource).toContain('"month"');
-    expect(usageSource).toContain('"24h"');
+    expect(usageSource).toContain('"today"');
     expect(usageSource).toContain('"7d"');
     expect(usageSource).toContain('"30d"');
-    expect(usageSource).toContain("useDashboardAnalytics(");
-    expect(usageSource).toContain('"self"');
-    expect(usageSource).toContain("refreshInterval: 2000");
+    // The page rides the unified workspace-analytics hook (personal + org)
+    // instead of the dashboard-only SWR hook.
+    expect(usageSource).toContain("useUsageAnalytics(");
   });
 
   test("provides separate Usage Analysis and Dashboard API Docs pages", () => {

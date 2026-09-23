@@ -1215,7 +1215,13 @@ pub(super) fn encode_request_for_provider(
     if !stateful_same_responses {
         strip_orphaned_tool_calls(req);
     }
-    if attempt.provider_type == ProviderType::Messages {
+    // Schema custom tools convert to function tools only CROSS-family: a native
+    // /v1/messages caller's `{"type":"custom", "input_schema":...}` descriptor
+    // is already valid Messages wire format — rewriting it would strip the
+    // meaningful `type` field for a same-family upstream.
+    if attempt.provider_type == ProviderType::Messages
+        && !matches!(downstream, DownstreamProtocol::AnthropicMessages)
+    {
         urp::encode::anthropic::prepare_schema_custom_tools(req).map_err(|message| {
             AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
         })?;

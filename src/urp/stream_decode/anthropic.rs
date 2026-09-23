@@ -420,7 +420,16 @@ pub(crate) async fn stream_messages_to_urp_events(
         let cumulative_usage = state.usage.merge_event(&data_val);
         record_cumulative_stream_usage_snapshot(&runtime_metrics, cumulative_usage).await;
 
-        match data_val.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+        let event_type = data_val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        // Once the terminal delta was seen, only further usage corrections
+        // (merged above) and message_stop matter; a chatty upstream cannot
+        // append content or errors past the terminal.
+        if state.saw_terminal_delta
+            && !matches!(event_type, "message_stop" | "message_delta")
+        {
+            continue;
+        }
+        match event_type {
             "error" => {
                 let (code, message, extra_body, terminal_error) =
                     messages_stream_error_parts(&data_val);
@@ -506,8 +515,10 @@ pub(crate) async fn stream_messages_to_urp_events(
             "message_delta" => {
                 merge_message_delta_state(&mut state, &data_val);
                 if state.saw_terminal_delta {
+                    // Do not break: providers may send usage-only deltas after
+                    // the stop_reason delta; the loop ends at message_stop (or
+                    // stream end) while merge_event keeps the final counts.
                     explicit_terminal_event = Some("message_delta.stop_reason");
-                    break;
                 }
             }
             "ping" => {

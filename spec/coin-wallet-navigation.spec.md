@@ -16,7 +16,7 @@ CN-5. Payment orders retain `CNY` or `USD` as the settlement currency and persis
 
 ## Usage ranking
 
-CN-6. Authenticated usage ranking requests accept `range=24h`, `range=7d`, or `range=30d`. Missing range selects `24h`; any other value returns HTTP 400.
+CN-6. Authenticated usage ranking requests accept `range=today`, `range=7d`, or `range=30d` (UR-3 of `admin-usage-runtime.spec.md`). Missing range selects `today`; any other value returns HTTP 400.
 
 CN-7. User and model rankings, totals, calls, costs, and current rank MUST be computed from the same selected time window and refreshed together.
 
