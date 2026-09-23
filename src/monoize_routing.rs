@@ -516,7 +516,7 @@ impl Default for MonoizeRuntimeConfig {
             request_timeout_ms: 30_000,
             stream_idle_timeout_ms: 120_000,
             enable_estimated_billing: true,
-            passive_failure_count_threshold: 3,
+            passive_failure_count_threshold: 100,
             passive_cooldown_seconds: 60,
             passive_window_seconds: 30,
             passive_rate_limit_cooldown_seconds: 15,

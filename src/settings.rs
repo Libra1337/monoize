@@ -205,7 +205,7 @@ impl Default for SystemSettings {
             monoize_active_probe_interval_seconds: 30,
             monoize_active_probe_success_threshold: 1,
             monoize_active_probe_model: None,
-            monoize_passive_failure_threshold: 3,
+            monoize_passive_failure_threshold: 100,
             monoize_passive_cooldown_seconds: 60,
             monoize_passive_window_seconds: 30,
             monoize_passive_min_samples: 20,
@@ -757,7 +757,7 @@ impl SettingsStore {
                     };
                 }
                 "monoize_passive_failure_threshold" => {
-                    settings.monoize_passive_failure_threshold = row.value.parse().unwrap_or(3);
+                    settings.monoize_passive_failure_threshold = row.value.parse().unwrap_or(100);
                 }
                 "monoize_passive_cooldown_seconds" => {
                     settings.monoize_passive_cooldown_seconds = row.value.parse().unwrap_or(60);

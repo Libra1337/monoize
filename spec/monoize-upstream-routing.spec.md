@@ -124,7 +124,7 @@ The router subsystem MUST support:
 - `request_timeout_ms` default `30000`
 - health-check config with passive and active sections
 - global passive breaker defaults:
-  - `passive_failure_count_threshold` default `3`
+  - `passive_failure_count_threshold` default `100`
   - `passive_window_seconds` default `30`
   - `passive_cooldown_seconds` default `60`
   - `passive_rate_limit_cooldown_seconds` default `15`
@@ -451,7 +451,7 @@ HSK-7a. Every rejection caused by capacity — an eligibility evaluation that tr
 
 ### 6.2 Passive
 
-- `failure_count_threshold` default `3`
+- `failure_count_threshold` default `100`
 - `window_seconds` default `30`
 - `cooldown_seconds` default `60`
 - `rate_limit_cooldown_seconds` default `15`
