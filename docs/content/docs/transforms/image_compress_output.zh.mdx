@@ -3,6 +3,8 @@ title: "图像：压缩响应图片"
 description: 对响应和流中 assistant 输出的图片重新编码并可选缩放。
 ---
 
+变换根据图片字节识别 JPEG、PNG 和 WebP。`output_format = original` 使用检测到的格式。压缩后保留原始字节时，变换会纠正不匹配的 MIME 类型。无效图片保持不变。
+
 ## 行为
 
 此变换对响应或流中 assistant 输出的图片重新编码并可选缩放。选项与 `image_compress_input` 相同。

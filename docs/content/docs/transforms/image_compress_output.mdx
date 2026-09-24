@@ -3,6 +3,8 @@ title: "Image: compress response images"
 description: Re-encode and optionally resize assistant output images in responses and streams.
 ---
 
+The transform detects JPEG, PNG, and WebP from the image bytes. With `output_format = original`, it uses the detected format. When compression keeps the original bytes, it corrects a mismatched MIME type. Invalid images remain unchanged.
+
 ## What it does
 
 This transform re-encodes assistant output images in the response or stream and optionally resizes them. The options match `image_compress_input`.

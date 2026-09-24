@@ -3,6 +3,8 @@ title: "图像：压缩请求图片"
 description: 在上游编码之前，对 user 消息中的 base64 图片重新编码并可选缩放。
 ---
 
+变换根据图片字节识别 JPEG、PNG 和 WebP。`output_format = original` 使用检测到的格式。压缩后保留原始字节时，变换会纠正不匹配的 MIME 类型。无效图片保持不变。
+
 ## 行为
 
 此变换对 user 消息中的 base64 图片重新编码，并可选缩放到 `max_edge_px`。更小的报文上传更快，还可以降低图像 token 成本。

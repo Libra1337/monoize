@@ -58,6 +58,7 @@ Notes:
 
 - Monoize supports `previous_response_id` chains when the upstream provides server-side state. Enable session affinity so follow-up requests reach the same Channel. See [Routing and Reliability](/en/docs/routing).
 - `GET /v1/responses` upgrades to a WebSocket transport for clients that use it.
+- `GET /v1/codex/responses` uses the same WebSocket handler as `GET /v1/responses`. `POST /v1/codex/responses` uses the same HTTP handler as `POST /v1/responses`. Both paths also have `/api` aliases.
 - `POST /v1/responses/compact` compacts a conversation.
 
 For Responses upstreams, Monoize preserves explicit `include` and `reasoning.summary` values. It does not add `reasoning.encrypted_content` or a default summary setting.

@@ -58,6 +58,7 @@ curl http://localhost:8080/v1/responses \
 
 - 上流がサーバー側状態を提供する場合、Monoize は `previous_response_id` チェーンをサポートします。セッションアフィニティを有効にすると、後続リクエストが同じ Channel に到達します。[ルーティングと信頼性](/ja/docs/routing)を参照してください。
 - `GET /v1/responses` は WebSocket トランスポートにアップグレードされます。
+- `GET /v1/codex/responses` は `GET /v1/responses` と同じ WebSocket ハンドラーを使います。`POST /v1/codex/responses` は `POST /v1/responses` と同じ HTTP ハンドラーを使います。両方のパスには `/api` エイリアスもあります。
 - `POST /v1/responses/compact` は会話をコンパクト化します。
 
 Responses 上流へのリクエストでは、Monoize は明示された `include` と `reasoning.summary` の値を保持します。`reasoning.encrypted_content` や既定の要約設定は自動で追加しません。

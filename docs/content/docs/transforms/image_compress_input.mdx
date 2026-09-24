@@ -3,6 +3,8 @@ title: "Image: compress request images"
 description: Re-encode and optionally resize base64 user images before upstream encoding.
 ---
 
+The transform detects JPEG, PNG, and WebP from the image bytes. With `output_format = original`, it uses the detected format. When compression keeps the original bytes, it corrects a mismatched MIME type. Invalid images remain unchanged.
+
 ## What it does
 
 This transform re-encodes base64 images in user messages and optionally resizes them to `max_edge_px`. Smaller payloads upload faster and can reduce image token cost.

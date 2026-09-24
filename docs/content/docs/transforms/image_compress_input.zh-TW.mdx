@@ -3,6 +3,8 @@ title: "圖像：壓縮請求圖片"
 description: 在上游編碼之前，對 user 訊息中的 base64 圖片重新編碼並可選縮放。
 ---
 
+變換根據圖片位元組識別 JPEG、PNG 和 WebP。`output_format = original` 使用偵測到的格式。壓縮後保留原始位元組時，變換會修正不符的 MIME 類型。無效圖片保持不變。
+
 ## 行為
 
 此變換對 user 訊息中的 base64 圖片重新編碼，並可選縮放到 `max_edge_px`。更小的封包上傳更快，還可以降低圖像 token 成本。

@@ -19,7 +19,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::io::Cursor;
 
-const TRANSFORM_VERSION: &str = "compress_user_message_images:v5";
+const TRANSFORM_VERSION: &str = "compress_user_message_images:v5:detected-mime-v1";
 
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
@@ -583,7 +583,14 @@ async fn compress_base64_image(
     if original.len() > limits.max_encoded_bytes {
         return Ok(None);
     }
-    let cache_key = build_cache_key(&media_type, &cfg, &original);
+    let source_media_type = detected_media_type(&original).unwrap_or(media_type.as_str());
+    let corrected_source = || {
+        (source_media_type != media_type).then(|| ImageSource::Base64 {
+            media_type: source_media_type.to_string(),
+            data: base64_data.clone(),
+        })
+    };
+    let cache_key = build_cache_key(source_media_type, &cfg, &original);
     if let Some(hit) = context
         .image_transform_cache
         .read_if_fresh(&cache_key)
@@ -602,7 +609,7 @@ async fn compress_base64_image(
         .acquire_transform_permit()
         .await
         .map_err(TransformError::Apply)?;
-    let media_type_for_task = media_type.clone();
+    let media_type_for_task = source_media_type.to_string();
     let cfg_for_task = cfg.clone();
     let original_for_task = original.clone();
     let max_pixels = limits.max_pixels;
@@ -622,7 +629,7 @@ async fn compress_base64_image(
     };
 
     if cfg.skip_if_smaller && transformed.bytes.len() >= original_len {
-        return Ok(None);
+        return Ok(corrected_source());
     }
 
     let payload = CachedImagePayload {
@@ -647,6 +654,15 @@ fn is_supported_media_type(media_type: &str) -> bool {
         media_type,
         "image/jpeg" | "image/jpg" | "image/png" | "image/webp"
     )
+}
+
+fn detected_media_type(bytes: &[u8]) -> Option<&'static str> {
+    match image::guess_format(bytes).ok()? {
+        image::ImageFormat::Jpeg => Some("image/jpeg"),
+        image::ImageFormat::Png => Some("image/png"),
+        image::ImageFormat::WebP => Some("image/webp"),
+        _ => None,
+    }
 }
 
 fn build_cache_key(media_type: &str, cfg: &Config, original: &[u8]) -> String {
@@ -1132,6 +1148,108 @@ inventory::submit!(TransformEntry {
 inventory::submit!(TransformEntry {
     factory: || Box::new(ImageCompressOutputTransform),
 });
+
+#[cfg(test)]
+mod mime_regression_tests {
+    use super::*;
+    use crate::image_transform_cache::ImageTransformCache;
+
+    async fn context(path: &std::path::Path) -> TransformRuntimeContext {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        TransformRuntimeContext {
+            image_transform_cache: std::sync::Arc::new(
+                ImageTransformCache::new(path.to_path_buf(), std::time::Duration::from_secs(3600))
+                    .await
+                    .expect("cache"),
+            ),
+            http_client: reqwest::Client::new(),
+            upstream_provider_type: None,
+        }
+    }
+
+    fn png_fixture() -> String {
+        let image = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            1,
+            1,
+            image::Rgb([30, 100, 200]),
+        ));
+        STANDARD.encode(encode_image_as_png(&image).expect("PNG fixture"))
+    }
+
+    #[tokio::test]
+    async fn retained_image_corrects_mime_without_changing_bytes_or_representation() {
+        let temp = tempfile::TempDir::new().expect("temp directory");
+        let context = context(temp.path()).await;
+        let data = png_fixture();
+        let cfg: Config = serde_json::from_value(json!({"output_format": "jpg"})).unwrap();
+        for source in [
+            ImageSource::Base64 {
+                media_type: "image/jpeg".to_string(),
+                data: data.clone(),
+            },
+            ImageSource::Url {
+                url: format!("data:image/jpeg;base64,{data}"),
+                detail: Some("high".to_string()),
+            },
+        ] {
+            let result = compress_image_source(&context, &cfg, &source)
+                .await
+                .expect("compression")
+                .expect("incorrect MIME must be corrected even when keeping original bytes");
+            match result {
+                ImageSource::Base64 {
+                    media_type,
+                    data: actual,
+                } => {
+                    assert!(matches!(source, ImageSource::Base64 { .. }));
+                    assert_eq!(media_type, "image/png");
+                    assert_eq!(actual, data);
+                }
+                ImageSource::Url { url, detail } => {
+                    assert!(matches!(source, ImageSource::Url { .. }));
+                    assert_eq!(url, format!("data:image/png;base64,{data}"));
+                    assert_eq!(detail.as_deref(), Some("high"));
+                }
+                _ => panic!("source representation changed"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn original_output_format_uses_bytes_instead_of_declared_mime() {
+        let temp = tempfile::TempDir::new().expect("temp directory");
+        let context = context(temp.path()).await;
+        let cfg: Config = serde_json::from_value(json!({"skip_if_smaller": false})).unwrap();
+        let output = compress_base64_image(&context, cfg, "image/jpeg".to_string(), png_fixture())
+            .await
+            .expect("compression")
+            .expect("re-encoded image");
+        let ImageSource::Base64 { media_type, data } = output else {
+            panic!("expected base64 source");
+        };
+        assert_eq!(media_type, "image/png");
+        assert_eq!(
+            image::guess_format(&STANDARD.decode(data).unwrap()).unwrap(),
+            image::ImageFormat::Png
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_image_with_recognizable_header_keeps_original_mime() {
+        let temp = tempfile::TempDir::new().expect("temp directory");
+        let context = context(temp.path()).await;
+        let cfg: Config = serde_json::from_value(json!({})).unwrap();
+        let output = compress_base64_image(
+            &context,
+            cfg,
+            "image/jpeg".to_string(),
+            STANDARD.encode(b"\x89PNG\r\n\x1a\n"),
+        )
+        .await
+        .expect("invalid source is skipped");
+        assert!(output.is_none());
+    }
+}
 
 #[cfg(test)]
 mod tests {

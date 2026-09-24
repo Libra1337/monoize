@@ -3,6 +3,8 @@ title: "圖像：壓縮回應圖片"
 description: 對回應和串流中 assistant 輸出的圖片重新編碼並可選縮放。
 ---
 
+變換根據圖片位元組識別 JPEG、PNG 和 WebP。`output_format = original` 使用偵測到的格式。壓縮後保留原始位元組時，變換會修正不符的 MIME 類型。無效圖片保持不變。
+
 ## 行為
 
 此變換對回應或串流中 assistant 輸出的圖片重新編碼並可選縮放。選項與 `image_compress_input` 相同。
