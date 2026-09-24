@@ -4,6 +4,7 @@ import { MotionConfig } from "framer-motion";
 import { AuthProvider } from "@/hooks/use-auth";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { Toaster } from "@/components/ui/sonner";
+import { SiteTitle } from "@/components/site-title";
 import { LoginPage } from "@/pages/login";
 import { DashboardLayout } from "@/pages/layout";
 import { DashboardPage } from "@/pages/dashboard";
@@ -94,6 +95,7 @@ function App() {
         }}
       >
         <AuthProvider>
+        <SiteTitle />
         <Routes>
           <Route path={PUBLIC_PATHS.login} element={<LoginPage />} />
           <Route element={<PublicLayout />}>

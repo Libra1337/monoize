@@ -193,7 +193,7 @@ impl Default for SystemSettings {
             default_user_role: "user".to_string(),
             session_ttl_days: 7,
             api_key_max_per_user: 1000,
-            site_name: "LynShen Console".to_string(),
+            site_name: "LingShenAI Console".to_string(),
             site_description: "Unified Responses Proxy".to_string(),
             api_base_url: String::new(),
             global_transforms: Vec::new(),
@@ -502,20 +502,24 @@ impl SettingsStore {
     async fn migrate_builtin_site_name(&self) -> Result<(), String> {
         let now = Utc::now().to_rfc3339();
         let _write_guard = self.db.write().await;
-        system_settings::Entity::update_many()
-            .col_expr(
-                system_settings::Column::Value,
-                sea_orm::sea_query::Expr::value("LynShen Console"),
-            )
-            .col_expr(
-                system_settings::Column::UpdatedAt,
-                sea_orm::sea_query::Expr::value(now),
-            )
-            .filter(system_settings::Column::Key.eq("site_name"))
-            .filter(system_settings::Column::Value.eq("Monoize Dashboard"))
-            .exec(&*_write_guard)
-            .await
-            .map_err(|error| error.to_string())?;
+        // PS-L5: only superseded built-in defaults are replaced; an
+        // administrator-edited site_name is never overwritten.
+        for superseded in ["Monoize Dashboard", "LynShen Console"] {
+            system_settings::Entity::update_many()
+                .col_expr(
+                    system_settings::Column::Value,
+                    sea_orm::sea_query::Expr::value("LingShenAI Console"),
+                )
+                .col_expr(
+                    system_settings::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::value(&now),
+                )
+                .filter(system_settings::Column::Key.eq("site_name"))
+                .filter(system_settings::Column::Value.eq(superseded))
+                .exec(&*_write_guard)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
         Ok(())
     }
 

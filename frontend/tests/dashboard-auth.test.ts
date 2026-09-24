@@ -68,7 +68,7 @@ describe("public site transport", () => {
     globalThis.fetch = (async (input) => {
       requestedUrl = String(input);
       return Response.json({
-        site_name: "LynShen Console",
+        site_name: "LingShenAI Console",
         site_description: "API service",
         api_base_url: "https://lynshen.org/v1",
       });
