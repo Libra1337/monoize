@@ -56,6 +56,37 @@ async fn responses_downstream_reaches_a_native_responses_upstream() {
     );
 }
 
+/// WS1a: /v1/codex/responses and its /api alias answer exactly like
+/// /v1/responses (same handler, same pipeline).
+#[tokio::test]
+async fn codex_responses_alias_matches_the_canonical_endpoint() {
+    let ctx = setup().await;
+
+    for uri in ["/v1/codex/responses", "/api/v1/codex/responses"] {
+        let req = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, ctx.auth_header.clone())
+            .body(Body::from(
+                json!({
+                    "model": "gpt-5-mini",
+                    "input": "codex alias",
+                    "stream": true
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let resp = ctx.router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        let text = String::from_utf8_lossy(
+            &resp.into_body().collect().await.unwrap().to_bytes(),
+        )
+        .to_string();
+        assert!(text.contains("event: response.completed"), "{uri}: {text}");
+    }
+}
+
 #[tokio::test]
 async fn responses_downstream_reaches_a_chat_upstream_through_the_compatible_override() {
     let ctx = setup().await;
