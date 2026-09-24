@@ -118,6 +118,8 @@ Monoize 在转发热路径上的运行效率显著高于常见 API 转发器。
 | `GET` | `/v1/models` | OpenAI 兼容模型列表 |
 | `POST` | `/v1/responses` | OpenAI Responses，流式或非流式 |
 | `GET` | `/v1/responses` | OpenAI Responses WebSocket 传输 |
+| `POST` | `/v1/codex/responses` | Responses HTTP 端点别名 |
+| `GET` | `/v1/codex/responses` | Responses WebSocket 端点别名 |
 | `POST` | `/v1/responses/compact` | Responses 压缩上下文 |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
