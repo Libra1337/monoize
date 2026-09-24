@@ -33,6 +33,16 @@ Monoize 先尝试所选 Provider 的 Channel，再前进到同一 Group 中的�
 
 第一个响应字节到达客户端时，回退即结束。在此之前，Monoize 可以自由切换 Channel 和 Provider。在此之后，Monoize 绝不切换。因此可见的流始终来自同一次生成。
 
+## 流式超时
+
+使用 `monoize_stream_idle_timeout_ms` 限制两次上游流事件之间的等待时间。默认值为 `120000` 毫秒。
+
+Monoize 等待响应头的时限为有效 `request_timeout_ms` 的十倍，且不低于 `600000` 毫秒。
+读取上游 HTTP 错误响应体时共用此时限。
+收到成功响应头后，持续输出的流没有总时长限制。
+此规则也适用于图像流，以及收集后转为非流式响应的上游流。
+非流式上游请求仍受总请求超时限制。
+
 ## 熔断器
 
 每个 Provider 有 `circuit_breaker_enabled` 开关。启用时：

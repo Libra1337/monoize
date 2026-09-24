@@ -1,3 +1,5 @@
+import { parseRate } from "@/lib/store-money";
+
 /**
  * ORGL-3/18: the three spend-limit windows shared by org keys and personal
  * keys. Inputs are USD amounts; storage is canonical nano-USD strings where
@@ -64,13 +66,12 @@ export function amountToNanoLimit(
   const nano = parseAmountToNano(trimmed);
   if (nano === null) return undefined;
   if (currency === "USD") return nano.toString();
-  const rate = Number(cnyPerUsd);
-  if (!Number.isFinite(rate) || rate <= 0) return undefined;
-  const scaledRate = BigInt(Math.round(rate * 1e9));
-  const numerator = nano * 1_000_000_000n;
-  const quotient = numerator / scaledRate;
-  const remainder = numerator % scaledRate;
-  const roundUp = remainder * 2n >= scaledRate;
+  const rate = parseSpendLimitRate(cnyPerUsd);
+  if (!rate) return undefined;
+  const numerator = nano * rate.denominator;
+  const quotient = numerator / rate.numerator;
+  const remainder = numerator % rate.numerator;
+  const roundUp = remainder * 2n >= rate.numerator;
   return (roundUp ? quotient + 1n : quotient).toString();
 }
 
@@ -88,11 +89,76 @@ export function nanoToLimitInput(
     return "";
   }
   if (currency === "USD") {
-    return String(Number(value) / 1_000_000_000);
+    return formatNanoAmount(value);
   }
-  const rate = Number(cnyPerUsd);
-  if (!Number.isFinite(rate) || rate <= 0) return "";
-  const scaledRate = BigInt(Math.round(rate * 1e9));
-  const cnyNano = (value * scaledRate + 500_000_000n) / 1_000_000_000n;
+  const rate = parseSpendLimitRate(cnyPerUsd);
+  if (!rate) return "";
+  const numerator = value * rate.numerator;
+  const quotient = numerator / rate.denominator;
+  const remainder = numerator % rate.denominator;
+  const cnyNano = remainder * 2n >= rate.denominator ? quotient + 1n : quotient;
   return formatNanoAmount(cnyNano);
+}
+
+/** Returns the exact positive rate, or undefined when the snapshot is unusable. */
+export function parseSpendLimitRate(value: string | undefined): ReturnType<typeof parseRate> | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return parseRate(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Re-derives one draft field for a currency switch. A user edit survives the
+ * switch via old-currency → nano → next-currency conversion; an empty field
+ * falls back to the stored window (empty only when the stored limit is truly
+ * unlimited). When no stored window is available an empty field stays empty.
+ */
+export function rederiveField(
+  raw: string,
+  storedNano: string | null | undefined,
+  next: "USD" | "CNY",
+  current: "USD" | "CNY",
+  cnyPerUsd: string | undefined,
+): string {
+  if (raw.trim() !== "") {
+    const nano = amountToNanoLimit(raw, current, cnyPerUsd);
+    if (nano != null) {
+      return nanoToLimitInput(nano, next, cnyPerUsd);
+    }
+    return raw;
+  }
+  return nanoToLimitInput(storedNano ?? null, next, cnyPerUsd);
+}
+
+/** ORGL-20 payload build in the chosen currency; see amountToNanoLimit for semantics. */
+export function buildSpendLimitPayloadIn(
+  draft: SpendLimitDraft,
+  currency: "USD" | "CNY",
+  cnyPerUsd: string | undefined,
+  alwaysSubmit: boolean,
+): Pick<
+  import("@/lib/api").CreateApiKeyInput,
+  "spend_limit_total_nano_usd" | "spend_limit_hourly_nano_usd" | "spend_limit_daily_nano_usd"
+> {
+  const payload: Record<string, string> = {};
+  for (const window of ["total", "hourly", "daily"] as const) {
+    const nano = amountToNanoLimit(draft[window], currency, cnyPerUsd);
+    if (nano === undefined) {
+      throw new Error(tLimitError(window));
+    }
+    if (nano !== null || alwaysSubmit) {
+      payload[`spend_limit_${window}_nano_usd`] = nano ?? "";
+    }
+  }
+  return payload as Pick<
+    import("@/lib/api").CreateApiKeyInput,
+    "spend_limit_total_nano_usd" | "spend_limit_hourly_nano_usd" | "spend_limit_daily_nano_usd"
+  >;
+}
+
+function tLimitError(window: string): string {
+  return `Spend limit (${window}) must be a non-negative amount`;
 }

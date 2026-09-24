@@ -33,6 +33,16 @@ Monoize 先嘗試所選 Provider 的 Channel，再前進到同一 Group 中的�
 
 第一個回應位元組到達用戶端時，備援即結束。在此之前，Monoize 可以自由切換 Channel 和 Provider。在此之後，Monoize 絕不切換。因此可見的串流始終來自同一次生成。
 
+## 串流逾時
+
+使用 `monoize_stream_idle_timeout_ms` 限制兩次上游串流事件之間的等待時間。預設值為 `120000` 毫秒。
+
+Monoize 等待回應標頭的時限為有效 `request_timeout_ms` 的十倍，且不低於 `600000` 毫秒。
+讀取上游 HTTP 錯誤回應本文時共用此時限。
+收到成功回應標頭後，持續輸出的串流沒有總時長限制。
+此規則也適用於影像串流，以及收集後轉為非串流回應的上游串流。
+非串流上游請求仍受總請求逾時限制。
+
 ## 斷路器
 
 每個 Provider 有 `circuit_breaker_enabled` 開關。啟用時：

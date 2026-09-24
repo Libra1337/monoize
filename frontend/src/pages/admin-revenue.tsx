@@ -229,8 +229,8 @@ export function AdminRevenuePage() {
     }
   };
 
-  const excludedIds = new Set((exclusions.data?.exclusions ?? []).map((row) => row.user_id));
   const userMatches = useMemo(() => {
+    const excludedIds = new Set((exclusions.data?.exclusions ?? []).map((row) => row.user_id));
     const query = userQuery.trim().toLowerCase();
     if (!query) return [];
     return users
@@ -241,7 +241,7 @@ export function AdminRevenuePage() {
             user.id.toLowerCase().includes(query))
       )
       .slice(0, 8);
-  }, [userQuery, users, excludedIds]);
+  }, [userQuery, users, exclusions.data]);
 
   const addExclusion = async (user: User) => {
     setExclusionError(null);

@@ -737,7 +737,7 @@ async fn execute_stream_collected_image_typed(
                 let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
                 let http = client_http_for_attempt(state, &attempt)?;
                 mark_plan_routed_before_dispatch(&funding_scope).await?;
-                let call = upstream::call_upstream_raw_with_timeout_and_headers(
+                let call = upstream::call_upstream_stream_with_timeout_and_headers(
                     &http,
                     &provider,
                     &attempt.api_key,

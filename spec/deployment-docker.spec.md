@@ -115,6 +115,11 @@ be signaled, because default SIGHUP disposition would kill it), then MUST poll
 the lease owner until it differs from the pre-swap owner, for at most 60
 seconds.
 
+BG11a. If the handover flag becomes true during a lease renewal retry round, the
+renewal loop MUST process handover before reacting to that round's failure. That
+failure MUST NOT set the application shutdown flag. The previous process MUST keep
+serving established requests while its lease is released or expires.
+
 BG12. Bounded connection drain before stop. After the BG11 handover (or the
 BG3.6 verification when the previous runtime predates BG11), the swap script
 MUST poll established TCP connections whose local or peer port equals the old

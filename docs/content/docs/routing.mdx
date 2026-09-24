@@ -33,6 +33,16 @@ Monoize tries the selected Provider's Channel, then falls forward to the next Pr
 
 Fallback ends when the first response byte reaches the client. Before that byte, Monoize can switch Channels and Providers freely. After that byte, Monoize never switches. A visible stream therefore always comes from one generation.
 
+## Streaming timeouts
+
+Use `monoize_stream_idle_timeout_ms` to limit waiting between upstream stream events. The default is `120000` milliseconds.
+
+Monoize limits the wait for response headers to ten times the effective `request_timeout_ms`, with a minimum of `600000` milliseconds.
+An upstream HTTP error body shares that deadline.
+After successful headers, an active stream has no total lifetime limit.
+This rule also covers image streams and upstream streams collected into a non-streaming response.
+Non-streaming upstream requests retain their total request timeout.
+
 ## Circuit breaker
 
 Each Provider has `circuit_breaker_enabled`. When enabled:

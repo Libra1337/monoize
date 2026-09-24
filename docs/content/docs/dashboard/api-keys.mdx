@@ -48,6 +48,9 @@ input; a CNY amount converts through the current exchange rate when you save.
 Legacy keys that still hold an independent balance keep settling against it
 until the balance reaches zero or the key is deleted.
 
+Enter amounts with up to nine decimal places. Conversion preserves exact decimal values and rounds once to the nearest nano-USD; ties round up.
+Monoize disables CNY input and shows a warning when the exchange rate is missing or invalid.
+
 ## Model limits
 
 Model limit entries are exact logical model names. A request whose model equals no entry receives HTTP `403` with code `model_not_allowed`.

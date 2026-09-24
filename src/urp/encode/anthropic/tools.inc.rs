@@ -106,7 +106,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn schema_custom_tools_convert_with_history_and_choice() {
         let mut req = UrpRequest {
             model: "claude-sonnet".to_string(),
@@ -245,6 +244,7 @@ mod tests {
         assert!(error.contains("complete JSON object"), "{error}");
     }
 
+    #[test]
     fn anthropic_function_tool_preserves_extras_and_strict() {
         let mut function_extra = HashMap::new();
         function_extra.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));

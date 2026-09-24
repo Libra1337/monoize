@@ -15,7 +15,6 @@ const dashboardApiDocsSource = source("../src/pages/dashboard-api-docs.tsx");
 const tokenSummarySource = source("../src/components/usage/token-summary.tsx");
 const usageTrendSource = source("../src/components/usage/usage-trend-chart.tsx");
 const modelDistributionSource = source("../src/components/usage/model-distribution.tsx");
-const selectionDatasetSource = source("../src/hooks/use-selection-dataset.ts");
 const publicStatusSource = source("../src/pages/public-status.tsx");
 const apiKeysSource = source("../src/pages/api-keys.tsx");
 const adminUsageSource = source("../src/pages/admin-usage.tsx");
@@ -212,9 +211,6 @@ describe("Dashboard page boundaries", () => {
   });
 
   test("animates chart geometry only for explicit selections", () => {
-    expect(selectionDatasetSource).toContain("useSelectionDataset");
-    expect(selectionDatasetSource).toContain("selectionKey");
-    expect(selectionDatasetSource).toContain("pendingSelectionRef");
     expect(usageTrendSource).toContain("selectionKey");
     expect(usageTrendSource).toContain("useSelectionDataset");
     expect(usageTrendSource).toContain("isAnimationActive={animate}");

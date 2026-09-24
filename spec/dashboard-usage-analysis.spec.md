@@ -127,7 +127,9 @@ UA-22c. A selection animation MUST start after data for the selected query
 resolves. While that query is pending, the last resolved chart data MUST remain
 visible. A polling response for an unchanged selection MUST update the chart
 without starting a selection animation. Reduced-motion mode MUST render the
-selected chart data without Line, sector, or progress-bar interpolation.
+selected chart data without Line, sector, or progress-bar interpolation. Dataset
+and animation state MUST reflect resolved input changes before chart children
+render; they MUST NOT require a post-render effect to copy the selected data.
 
 UA-23. Every visible string MUST use an i18n key present in `en`, `zh`, `zh-TW`, and `ja`.
 

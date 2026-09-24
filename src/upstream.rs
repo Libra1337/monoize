@@ -282,6 +282,60 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
     timeout_ms: u64,
     extra_headers: &[(String, String)],
 ) -> Result<reqwest::Response, UpstreamCallError> {
+    let req =
+        prepare_upstream_request(client, provider, auth_value, path, body, extra_headers).await?;
+    send_upstream_request(req.timeout(std::time::Duration::from_millis(timeout_ms))).await
+}
+
+pub async fn call_upstream_stream_with_timeout_and_headers(
+    client: &reqwest::Client,
+    provider: &ProviderConfig,
+    auth_value: &str,
+    path: &str,
+    body: &Value,
+    timeout_ms: u64,
+    extra_headers: &[(String, String)],
+) -> Result<reqwest::Response, UpstreamCallError> {
+    let req =
+        prepare_upstream_request(client, provider, auth_value, path, body, extra_headers).await?;
+    // A reqwest request timeout survives successful headers and would truncate an
+    // active stream. The decoder owns the idle deadline once this future returns.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    let resp = tokio::time::timeout_at(deadline, req.send())
+        .await
+        .map_err(|_| {
+            UpstreamCallError::new(
+                UpstreamErrorKind::Network,
+                None,
+                "upstream response headers timed out".to_string(),
+            )
+        })?
+        .map_err(|err| UpstreamCallError::new(UpstreamErrorKind::Network, None, err.to_string()))?;
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(resp);
+    }
+    let error = tokio::time::timeout_at(deadline, non_success_upstream_error(resp, status))
+        .await
+        .unwrap_or_else(|_| {
+            UpstreamCallError::new(
+                UpstreamErrorKind::Http,
+                Some(status),
+                "upstream returned an empty error body".to_string(),
+            )
+            .with_source(UpstreamErrorSource::EmptyBody)
+        });
+    Err(error)
+}
+
+async fn prepare_upstream_request(
+    client: &reqwest::Client,
+    provider: &ProviderConfig,
+    auth_value: &str,
+    path: &str,
+    body: &Value,
+    extra_headers: &[(String, String)],
+) -> Result<reqwest::RequestBuilder, UpstreamCallError> {
     let base = provider.base_url.as_ref().ok_or_else(|| {
         UpstreamCallError::new(
             UpstreamErrorKind::Http,
@@ -293,10 +347,7 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
     guard_upstream_address(&url)
         .await
         .map_err(|message| UpstreamCallError::new(UpstreamErrorKind::Http, None, message))?;
-    let mut req = client
-        .post(url)
-        .timeout(std::time::Duration::from_millis(timeout_ms))
-        .json(body);
+    let mut req = client.post(url).json(body);
     let auth = provider.auth.as_ref().ok_or_else(|| {
         UpstreamCallError::new(UpstreamErrorKind::Http, None, "missing auth".to_string())
     })?;
@@ -305,6 +356,12 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
     for (k, v) in extra_headers {
         req = req.header(k, v);
     }
+    Ok(req)
+}
+
+async fn send_upstream_request(
+    req: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, UpstreamCallError> {
     let resp = req
         .send()
         .await
@@ -499,6 +556,142 @@ fn json_scalar_string(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn timeout_test_upstream(
+        status: StatusCode,
+        stall_headers: bool,
+    ) -> (ProviderConfig, tokio::task::JoinHandle<()>) {
+        use axum::{Router, body::Body, routing::post};
+        use futures_util::stream;
+        crate::monoize_routing::test_set_allow_private_upstream(true);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/v1/responses",
+            post(move || async move {
+                if stall_headers {
+                    std::future::pending::<()>().await;
+                }
+                let body = Body::from_stream(stream::once(async {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    Ok::<_, std::convert::Infallible>("data: [DONE]\n\n")
+                }));
+                (status, body)
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = serde_json::from_value(serde_json::json!({
+            "id": "timeout-test",
+            "type": "responses",
+            "base_url": format!("http://{address}"),
+            "auth": { "type": "bearer", "value": "test-key" }
+        }))
+        .unwrap();
+        (provider, server)
+    }
+
+    fn timeout_test_client() -> reqwest::Client {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        reqwest::Client::builder().no_proxy().build().unwrap()
+    }
+
+    #[tokio::test]
+    async fn streaming_body_survives_the_response_header_deadline() {
+        let (provider, server) = timeout_test_upstream(StatusCode::OK, false).await;
+        let response = call_upstream_stream_with_timeout_and_headers(
+            &timeout_test_client(),
+            &provider,
+            "test-key",
+            "/v1/responses",
+            &serde_json::json!({"stream": true}),
+            200,
+            &[],
+        )
+        .await
+        .expect("successful response headers");
+        let body = tokio::time::timeout(std::time::Duration::from_secs(3), response.text())
+            .await
+            .expect("body completion")
+            .expect("active stream must outlive header deadline");
+        assert_eq!(body, "data: [DONE]\n\n");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn streaming_header_wait_remains_bounded() {
+        let (provider, server) = timeout_test_upstream(StatusCode::OK, true).await;
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            call_upstream_stream_with_timeout_and_headers(
+                &timeout_test_client(),
+                &provider,
+                "test-key",
+                "/v1/responses",
+                &serde_json::json!({"stream": true}),
+                200,
+                &[],
+            ),
+        )
+        .await
+        .expect("dispatch deadline")
+        .unwrap_err();
+        assert!(matches!(error.kind, UpstreamErrorKind::Network));
+        assert!(error.message.contains("timed out"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn streaming_error_body_deadline_preserves_http_status() {
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let (provider, server) = timeout_test_upstream(status, false).await;
+            let error = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                call_upstream_stream_with_timeout_and_headers(
+                    &timeout_test_client(),
+                    &provider,
+                    "test-key",
+                    "/v1/responses",
+                    &serde_json::json!({"stream": true}),
+                    200,
+                    &[],
+                ),
+            )
+            .await
+            .expect("error body deadline")
+            .unwrap_err();
+            assert_eq!(
+                error.status,
+                Some(status),
+                "body timeout must retain received status"
+            );
+            assert!(matches!(error.kind, UpstreamErrorKind::Http));
+            assert_eq!(error.source, UpstreamErrorSource::EmptyBody);
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn nonstreaming_body_keeps_its_total_deadline() {
+        let (provider, server) = timeout_test_upstream(StatusCode::OK, false).await;
+        let response = call_upstream_raw_with_timeout_and_headers(
+            &timeout_test_client(),
+            &provider,
+            "test-key",
+            "/v1/responses",
+            &serde_json::json!({"stream": false}),
+            200,
+            &[],
+        )
+        .await
+        .expect("successful response headers");
+        assert!(response.text().await.unwrap_err().is_timeout());
+        server.abort();
+    }
 
     #[test]
     fn openrouter_error_info_accepts_numeric_code_and_metadata_fallbacks() {

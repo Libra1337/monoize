@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { mutate } from "swr";
 import { Bell, CheckCheck, Pin, X } from "lucide-react";
@@ -57,19 +57,16 @@ export function NotificationBell({ collapsed }: { collapsed?: boolean }) {
   const { t } = useTranslation();
   const { data } = useAnnouncements();
   const [open, setOpen] = useState(false);
-  const autoPopupChecked = useRef(false);
+  const [autoPopupChecked, setAutoPopupChecked] = useState(false);
 
   const unread = data?.unread_count ?? 0;
 
   // AN-13: auto-open once per dashboard mount when unread work exists and the
   // user has not snoozed today.
-  useEffect(() => {
-    if (autoPopupChecked.current || !data) return;
-    autoPopupChecked.current = true;
-    if (data.unread_count > 0 && !snoozedToday()) {
-      setOpen(true);
-    }
-  }, [data]);
+  if (!autoPopupChecked && data) {
+    setAutoPopupChecked(true);
+    if (data.unread_count > 0 && !snoozedToday()) setOpen(true);
+  }
 
   // AN-12: opening the dialog marks every listed announcement read.
   useEffect(() => {

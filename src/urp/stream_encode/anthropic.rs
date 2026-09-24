@@ -2104,6 +2104,7 @@ mod provider_item_wire_tests {
         );
     }
 
+    #[tokio::test]
     async fn messages_stream_quota_error_uses_generic_text() {
         let (event_tx, event_rx) = mpsc::channel(8);
         let (sse_tx, mut sse_rx) = mpsc::channel(8);

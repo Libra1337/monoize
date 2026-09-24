@@ -88,6 +88,7 @@ function StatTile({
 
 export function FirewallPage() {
   const { t } = useTranslation();
+  const [filterTime, setFilterTime] = useState(() => Date.now());
   const [range, setRange] = useState<RangeValue>("7d");
   const [actionFilter, setActionFilter] = useState<(typeof ACTION_OPTIONS)[number]>("all");
   const [termFilter, setTermFilter] = useState("");
@@ -102,9 +103,9 @@ export function FirewallPage() {
     return {
       term: termFilter || undefined,
       action: actionFilter === "all" ? undefined : actionFilter,
-      since_ms: option?.hours ? Date.now() - option.hours * 60 * 60 * 1000 : undefined,
+      since_ms: option?.hours ? filterTime - option.hours * 60 * 60 * 1000 : undefined,
     } as const;
-  }, [range, termFilter, actionFilter]);
+  }, [range, termFilter, actionFilter, filterTime]);
 
   const { data: events, isLoading: eventsLoading, mutate: mutateEvents } = useFirewallEvents(
     PAGE_SIZE,
@@ -121,6 +122,7 @@ export function FirewallPage() {
   } satisfies ChartConfig;
 
   const applyTermFilter = () => {
+    setFilterTime(Date.now());
     setTermFilter(termInput.trim());
     setPageOffset(0);
     void mutateEvents();
@@ -220,6 +222,7 @@ export function FirewallPage() {
                     className="min-w-0 truncate font-mono text-sm hover:underline"
                     onClick={() => {
                       setTermInput(item.term);
+                      setFilterTime(Date.now());
                       setTermFilter(item.term);
                       setPageOffset(0);
                     }}
@@ -257,6 +260,7 @@ export function FirewallPage() {
           <Select
             value={actionFilter}
             onValueChange={(value) => {
+              setFilterTime(Date.now());
               setActionFilter(value as (typeof ACTION_OPTIONS)[number]);
               setPageOffset(0);
             }}
@@ -275,6 +279,7 @@ export function FirewallPage() {
           <Select
             value={range}
             onValueChange={(value) => {
+              setFilterTime(Date.now());
               setRange(value as RangeValue);
               setPageOffset(0);
             }}

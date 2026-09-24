@@ -343,6 +343,18 @@ STRM-2. Provider/channel fallback is allowed only before the first downstream pr
 
 STRM-3. A streaming request MUST write or refresh affinity only after the upstream stream completes without terminal error.
 
+STRM-3a. After address validation and request preparation, an upstream streaming
+dispatch MUST bound the wait for response headers by
+`max(saturating_mul(request_timeout_ms, 10), 600000)` milliseconds. For a non-success
+HTTP response, reading its error body MUST share that deadline. Expiry while reading
+an error body MUST preserve the received HTTP status and its retry/health classification.
+After successful headers,
+the HTTP client MUST impose no total response lifetime limit. Stream decoding MUST
+continue to enforce `monoize_stream_idle_timeout_ms` between upstream events. These rules
+MUST apply to downstream streaming, image streaming, and upstream streams collected into
+non-streaming responses. Non-streaming upstream requests MUST retain their existing total
+request timeout.
+
 STRM-4. If a partial stream later fails with a breaker-relevant terminal failure — an in-stream terminal error event classified by RTA-5a, RTA-5b, or RTA-6, or a stream adapter failure whose error code starts with `upstream_` (idle timeout, stream decode failure, protocol error, missing stream terminal) — Monoize MUST record exactly one passive health failure for the serving Channel using the attempt's health key. HTTP `429` and RTA-5b rate-limit signals have the RateLimited class. An RTA-5a signal has the Persistent class and MUST trip immediately. Other qualifying events and adapter failures have the Transient class. A mid-stream failure MUST NOT trigger a shared-origin blast and MUST NOT mark peer Channels. An event outside these classifications MUST NOT update health. An adapter failure whose error code does not start with `upstream_` (internal transform or encode failure) MUST NOT update health and MUST NOT clear the affinity binding.
 
 STRM-4a. After recording the STRM-4 sample, Monoize MUST clear the request's affinity binding if and only if the serving attempt is the request's affinity-hit target (`affinity_hit == true`) and the Channel health state for the attempt's health key is unhealthy after the sample (AFF-9 conditions 1 and 3). In every other case the binding MUST remain stored.

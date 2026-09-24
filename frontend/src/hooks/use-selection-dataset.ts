@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 export function useSelectionDataset<T>({
   selectionKey,
@@ -13,43 +13,39 @@ export function useSelectionDataset<T>({
   animationDurationMs: number;
   enabled?: boolean;
 }) {
-  const [displayedDataset, setDisplayedDataset] = useState(dataset);
-  const [animate, setAnimate] = useState(false);
-  const selectionKeyRef = useRef(selectionKey);
-  const pendingSelectionRef = useRef(false);
-  const animationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [state, setState] = useState({
+    selectionKey,
+    loading,
+    inputDataset: dataset,
+    enabled,
+    displayedDataset: dataset,
+    pendingSelection: false,
+    animate: false,
+  });
+
+  if (
+    state.selectionKey !== selectionKey || state.loading !== loading ||
+    !Object.is(state.inputDataset, dataset) || state.enabled !== enabled
+  ) {
+    const pendingSelection = state.pendingSelection || state.selectionKey !== selectionKey;
+    setState({
+      selectionKey,
+      loading,
+      inputDataset: dataset,
+      enabled,
+      displayedDataset: loading ? state.displayedDataset : dataset,
+      pendingSelection: loading && pendingSelection,
+      animate: !loading && pendingSelection && enabled,
+    });
+  }
 
   useEffect(() => {
-    if (selectionKeyRef.current !== selectionKey) {
-      selectionKeyRef.current = selectionKey;
-      pendingSelectionRef.current = true;
-      setAnimate(false);
-    }
+    if (!state.animate) return;
+    const timer = setTimeout(() => {
+      setState((current) => ({ ...current, animate: false }));
+    }, animationDurationMs);
+    return () => clearTimeout(timer);
+  }, [animationDurationMs, state.animate, state.displayedDataset, state.selectionKey]);
 
-    if (pendingSelectionRef.current) {
-      if (loading) return;
-      pendingSelectionRef.current = false;
-      setDisplayedDataset(dataset);
-      setAnimate(enabled);
-      if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
-      if (enabled) {
-        animationTimerRef.current = setTimeout(() => {
-          setAnimate(false);
-          animationTimerRef.current = null;
-        }, animationDurationMs);
-      }
-      return;
-    }
-
-    if (!loading) {
-      setAnimate(false);
-      setDisplayedDataset(dataset);
-    }
-  }, [animationDurationMs, dataset, enabled, loading, selectionKey]);
-
-  useEffect(() => () => {
-    if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
-  }, []);
-
-  return { dataset: displayedDataset, animate };
+  return { dataset: state.displayedDataset, animate: state.animate };
 }

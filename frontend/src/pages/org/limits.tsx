@@ -6,8 +6,9 @@ import { Gauge } from "lucide-react";
 import { api, type OrgLimitsResponse, type OrgSpendLimitSet } from "@/lib/api";
 import {
   SPEND_WINDOWS,
-  amountToNanoLimit,
+  buildSpendLimitPayloadIn,
   nanoToLimitInput,
+  rederiveField,
   type SpendLimitDraft,
 } from "@/lib/spend-limits";
 import { SpendLimitsEditor } from "@/components/SpendLimitsEditor";
@@ -48,11 +49,11 @@ function limitsFromDraft(
   currency: "USD" | "CNY",
   cnyPerUsd: string | undefined,
 ): OrgSpendLimitSet {
-  const convert = (raw: string) => amountToNanoLimit(raw, currency, cnyPerUsd) ?? null;
+  const payload = buildSpendLimitPayloadIn(draft, currency, cnyPerUsd, true);
   return {
-    total_nano_usd: convert(draft.total),
-    hourly_nano_usd: convert(draft.hourly),
-    daily_nano_usd: convert(draft.daily),
+    total_nano_usd: payload.spend_limit_total_nano_usd || null,
+    hourly_nano_usd: payload.spend_limit_hourly_nano_usd || null,
+    daily_nano_usd: payload.spend_limit_daily_nano_usd || null,
   };
 }
 
@@ -124,7 +125,7 @@ export function OrgLimitsPage() {
       </div>
     );
   }
-  if (error || !data) {
+  if (!data) {
     return <div className="p-4 text-sm text-destructive sm:p-6">{error ?? t("orgLimits.loadFailed")}</div>;
   }
 
@@ -132,13 +133,18 @@ export function OrgLimitsPage() {
     t(WINDOWS.find((w) => w.key === key)?.labelKey ?? "");
 
   const rederiveAll = (nextCurrency: "USD" | "CNY") => {
+    const rederiveDraft = (draft: SpendLimitDraft | undefined, stored: OrgSpendLimitSet): SpendLimitDraft => ({
+      total: rederiveField(draft?.total ?? "", stored.total_nano_usd, nextCurrency, limitCurrency, rate),
+      hourly: rederiveField(draft?.hourly ?? "", stored.hourly_nano_usd, nextCurrency, limitCurrency, rate),
+      daily: rederiveField(draft?.daily ?? "", stored.daily_nano_usd, nextCurrency, limitCurrency, rate),
+    });
     setLimitCurrency(nextCurrency);
-    setSpaceDraft(draftFromLimits(data.space.limits, nextCurrency, rate));
+    setSpaceDraft(rederiveDraft(spaceDraft, data.space.limits));
     const md: Record<string, SpendLimitDraft> = {};
-    for (const m of data.members) md[m.user_id] = draftFromLimits(m.limits, nextCurrency, rate);
+    for (const m of data.members) md[m.user_id] = rederiveDraft(memberDrafts[m.user_id], m.limits);
     setMemberDrafts(md);
     const kd: Record<string, SpendLimitDraft> = {};
-    for (const k of data.keys) kd[k.key_id] = draftFromLimits(k.limits, nextCurrency, rate);
+    for (const k of data.keys) kd[k.key_id] = rederiveDraft(keyDrafts[k.key_id], k.limits);
     setKeyDrafts(kd);
   };
 
@@ -176,6 +182,7 @@ export function OrgLimitsPage() {
 
   const saveKeyLimits = async (keyId: string) => {
     setSaving(true);
+    setError(null);
     try {
       await api.updateOrgKeyLimits(
         orgId ?? "",

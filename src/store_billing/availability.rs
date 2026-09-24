@@ -334,6 +334,13 @@ impl StorePrimaryLease {
                 if shutdown.load(Ordering::Acquire) {
                     break;
                 }
+                let renewal = if handover.load(Ordering::Acquire) {
+                    Ok(())
+                } else {
+                    renew_with_retry(&lease, &shutdown).await
+                };
+                // SIGHUP can arrive while a retry round is waiting on the writer.
+                // Its failure must not turn a voluntary handover into HTTP shutdown.
                 if handover.load(Ordering::Acquire) {
                     match lease.release().await {
                         Ok(()) => tracing::info!(
@@ -346,7 +353,7 @@ impl StorePrimaryLease {
                     }
                     break;
                 }
-                if let Err(error) = renew_with_retry(&lease, &shutdown).await {
+                if let Err(error) = renewal {
                     request_shutdown_after_renewal_failure(&lease.renewal_failed, &shutdown);
                     tracing::error!(error = %error, "Store Primary lease renewal failed; lease marked lost");
                     break;
@@ -711,5 +718,47 @@ mod tests {
         .expect("renewal round must have its own timeout");
 
         assert_eq!(result.unwrap_err(), StorePrimaryLeaseError::RenewalFailed);
+    }
+
+    #[tokio::test]
+    async fn handover_during_a_failed_renewal_keeps_existing_requests_alive() {
+        let db = DbPool::connect("sqlite::memory:").await.expect("database");
+        Migrator::up(&*db.write().await, None)
+            .await
+            .expect("migrations");
+        let lease = StorePrimaryLease::acquire(db.clone(), "owner-a")
+            .await
+            .expect("lease");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let handover = Arc::new(AtomicBool::new(false));
+        let blocked_writer = db.begin_write().await.expect("blocking transaction");
+        lease.spawn_renewal(shutdown.clone(), handover.clone());
+
+        // The first renewal starts after five seconds and its blocked writer
+        // times out two seconds later. Deliver handover inside that round.
+        tokio::time::sleep(StdDuration::from_millis(5_500)).await;
+        handover.store(true, Ordering::Release);
+        tokio::time::sleep(StdDuration::from_secs(2)).await;
+        blocked_writer.rollback().await.expect("unblock writer");
+
+        tokio::time::timeout(StdDuration::from_secs(2), async {
+            while !lease.renewal_failed.load(Ordering::Acquire) {
+                tokio::time::sleep(StdDuration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("handover must release the lease");
+        assert!(
+            !shutdown.load(Ordering::Acquire),
+            "handover must not start HTTP shutdown"
+        );
+        let replacement = StorePrimaryLease::acquire(db, "owner-b")
+            .await
+            .expect("standby takeover");
+        replacement
+            .validate()
+            .await
+            .expect("replacement owns the lease");
+        assert!(lease.validate().await.is_err(), "old holder must be fenced");
     }
 }

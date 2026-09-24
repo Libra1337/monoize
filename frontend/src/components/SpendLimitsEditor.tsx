@@ -3,34 +3,11 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   SPEND_WINDOWS,
-  amountToNanoLimit,
-  nanoToLimitInput,
+  parseSpendLimitRate,
+  rederiveField,
   type SpendLimitDraft,
   type SpendWindowKey,
 } from "@/lib/spend-limits";
-
-/**
- * Re-derives one draft field for a currency switch. A user edit survives the
- * switch via old-currency → nano → next-currency conversion; an empty field
- * falls back to the stored window (empty only when the stored limit is truly
- * unlimited). When no stored window is available an empty field stays empty.
- */
-export function rederiveField(
-  raw: string,
-  storedNano: string | null | undefined,
-  next: "USD" | "CNY",
-  current: "USD" | "CNY",
-  cnyPerUsd: string | undefined,
-): string {
-  if (raw.trim() !== "") {
-    const nano = amountToNanoLimit(raw, current, cnyPerUsd);
-    if (nano != null) {
-      return nanoToLimitInput(nano, next, cnyPerUsd);
-    }
-    return raw;
-  }
-  return nanoToLimitInput(storedNano ?? null, next, cnyPerUsd);
-}
 
 const DRAFT_KEYS: Record<SpendWindowKey, keyof SpendLimitDraft> = {
   total_nano_usd: "total",
@@ -66,7 +43,7 @@ export function SpendLimitsEditor({
   compact?: boolean;
 }) {
   const { t } = useTranslation();
-  const rateAvailable = currency === "USD" || (cnyPerUsd != null && Number(cnyPerUsd) > 0);
+  const rateAvailable = parseSpendLimitRate(cnyPerUsd) !== undefined;
 
   const handleCurrencyChange = (next: "USD" | "CNY") => {
     if (next === currency) return;
@@ -94,18 +71,18 @@ export function SpendLimitsEditor({
             <TabsTrigger
               value="CNY"
               className="px-2.5 py-0 text-xs"
-              disabled={!rateAvailable && currency !== "CNY"}
+              disabled={!rateAvailable}
             >
               CNY
             </TabsTrigger>
           </TabsList>
         </Tabs>
-        {currency === "CNY" && cnyPerUsd && (
+        {currency === "CNY" && rateAvailable && (
           <span className="text-xs text-muted-foreground">
             {t("spendLimitsEditor.rateHint", { rate: cnyPerUsd })}
           </span>
         )}
-        {currency === "CNY" && !cnyPerUsd && (
+        {!rateAvailable && (
           <span className="text-xs text-warning">{t("spendLimitsEditor.rateUnavailable")}</span>
         )}
       </div>
@@ -129,33 +106,4 @@ export function SpendLimitsEditor({
       </p>
     </div>
   );
-}
-
-/** ORGL-20 payload build in the chosen currency; see amountToNanoLimit for semantics. */
-export function buildSpendLimitPayloadIn(  draft: SpendLimitDraft,
-  currency: "USD" | "CNY",
-  cnyPerUsd: string | undefined,
-  alwaysSubmit: boolean,
-): Pick<
-  import("@/lib/api").CreateApiKeyInput,
-  "spend_limit_total_nano_usd" | "spend_limit_hourly_nano_usd" | "spend_limit_daily_nano_usd"
-> {
-  const payload: Record<string, string> = {};
-  for (const window of ["total", "hourly", "daily"] as const) {
-    const nano = amountToNanoLimit(draft[window], currency, cnyPerUsd);
-    if (nano === undefined) {
-      throw new Error(tLimitError(window));
-    }
-    if (nano !== null || alwaysSubmit) {
-      payload[`spend_limit_${window}_nano_usd`] = nano ?? "";
-    }
-  }
-  return payload as Pick<
-    import("@/lib/api").CreateApiKeyInput,
-    "spend_limit_total_nano_usd" | "spend_limit_hourly_nano_usd" | "spend_limit_daily_nano_usd"
-  >;
-}
-
-function tLimitError(window: string): string {
-  return `Spend limit (${window}) must be a non-negative amount`;
 }

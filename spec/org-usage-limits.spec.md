@@ -142,6 +142,12 @@ ORGL-14. `/org/{org_id}` gains a "Member usage" view (owner only) rendering ORGL
 a range selector (1h/24h/7d/30d) and a per-member bar series, plus a "Limits" management
 view rendering ORGL-12 with editable forms for ORGL-10/11.
 
+ORGL-14a. Member usage MUST use an SWR cache key containing the organization ID,
+range hours, and bucket count. It MUST issue no usage request until the current
+user is known to own that organization. While ownership or the selected usage
+query loads, it MUST show a skeleton. Responses from a previous organization or
+range MUST NOT replace the current query result.
+
 ## 5. Invariants
 
 ORGL-15. Limits never rewrite history: consumption is computed from durable
@@ -163,10 +169,30 @@ Drafts hold display strings in the chosen currency; conversion to the canonical
 nano-USD storage happens once, at save time: a USD amount maps directly, a CNY amount
 divides by the live `cny_per_usd` snapshot (the same exact-decimal contract as the
 wallet CNY top-up) and the editor shows the rate it will use. Stored windows remain
-nano-USD; enforcement (ORGL-5..7, ORGL-19) is unchanged. Switching the toggle
-re-derives the displayed drafts from the stored nano values through the current rate.
-When no rate snapshot is available the CNY option is disabled with an explanatory
-message.
+nano-USD; enforcement (ORGL-5..7, ORGL-19) is unchanged.
+
+- Input amounts accept non-negative decimal integers and non-negative decimals with
+  one through nine fractional digits. Whitespace surrounding the amount is ignored.
+  An empty input means unlimited.
+- A usable rate is a positive decimal string matching
+  `^(0|[1-9][0-9]*)(\.[0-9]+)?$`. Preserve every fractional rate digit.
+  Conversion MUST NOT pass through binary floating-point numbers.
+- CNY input converts to nano-USD by dividing its nano-CNY integer by the exact rate.
+  Round the result to the nearest integer, with ties rounded upward.
+- USD display preserves every stored nano-USD digit and uses decimal notation with at
+  most nine fractional digits. CNY display multiplies the stored nano-USD integer by
+  the exact rate, rounds to nano-CNY with ties upward, and uses the same notation.
+- Switching currency converts a valid nonempty draft through nano-USD. An invalid
+  nonempty draft remains verbatim. An empty draft uses its stored window; if that
+  window is unlimited or absent, the draft remains empty. On the organization Limits
+  page, this rule applies to every space, member, and key draft when any row changes
+  the shared currency.
+- When the rate is absent or invalid, disable the CNY option and show the unavailable
+  rate message regardless of the selected currency. USD remains selectable. A
+  nonempty CNY input cannot be saved until a usable rate is available.
+- Any invalid nonempty amount aborts its Save action before an API mutation. Show
+  the validation error and retain the drafts for correction. This applies to space,
+  member, and key limits. Only empty inputs produce unlimited values.
 
 ## 7. Personal keys
 

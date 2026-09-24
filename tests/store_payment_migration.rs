@@ -2,18 +2,25 @@ use monoize::migration::Migrator;
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement, TryGetable};
 use sea_orm_migration::MigratorTrait;
 
-/// Steps needed to roll back `name` and every migration above it.
-///
-/// Derived from the migration list rather than hardcoded: a shallower count leaves the target
-/// migration applied, which makes the re-execution assertions pass without testing anything,
-/// so adding a migration must not silently change the depth.
-fn rollback_steps_through(name: &str) -> u32 {
-    let migrations = Migrator::migrations();
-    let position = migrations
+// Build the historical schema directly because later migrations can be irreversible.
+async fn database_before_migration(name: &str) -> DatabaseConnection {
+    let position = Migrator::migrations()
         .iter()
         .position(|migration| migration.name() == name)
         .expect("migration is registered");
-    u32::try_from(migrations.len() - position).expect("rollback step count")
+    let db = Database::connect("sqlite::memory:")
+        .await
+        .expect("connect SQLite");
+    db.execute_unprepared("PRAGMA foreign_keys = ON")
+        .await
+        .expect("enable foreign keys");
+    Migrator::up(
+        &db,
+        Some(u32::try_from(position).expect("migration step count")),
+    )
+    .await
+    .expect("run preceding migrations");
+    db
 }
 
 const PAYMENT_TABLES: &[&str] = &[
@@ -512,15 +519,7 @@ async fn migration_059_repairs_released_entitlements_and_order_expiry() {
 
 #[tokio::test]
 async fn migration_059_preserves_complete_current_entitlement_schema() {
-    let db = migrated_database().await;
-    Migrator::down(
-        &db,
-        Some(rollback_steps_through(
-            "m20260829_000059_store_released_schema_repair",
-        )),
-    )
-    .await
-    .unwrap();
+    let db = database_before_migration("m20260829_000059_store_released_schema_repair").await;
 
     let group = db
         .query_one(Statement::from_string(
@@ -586,16 +585,7 @@ async fn migration_059_preserves_complete_current_entitlement_schema() {
 
 #[tokio::test]
 async fn migration_059_rejects_partial_or_mixed_entitlement_schema() {
-    let db = migrated_database().await;
-    // Later migrations follow 059, so each must be rolled back before 059 can be re-executed.
-    Migrator::down(
-        &db,
-        Some(rollback_steps_through(
-            "m20260829_000059_store_released_schema_repair",
-        )),
-    )
-    .await
-    .unwrap();
+    let db = database_before_migration("m20260829_000059_store_released_schema_repair").await;
     db.execute_unprepared("DROP TABLE store_plan_entitlement_current")
         .await
         .unwrap();

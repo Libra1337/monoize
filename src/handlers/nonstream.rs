@@ -445,7 +445,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     attempt.session_affinity_value =
                         resolve_session_affinity_value(&attempt, &upstream_body);
                     mark_plan_routed_before_dispatch(&funding_scope).await?;
-                    let call = upstream::call_upstream_raw_with_timeout_and_headers(
+                    let call = upstream::call_upstream_stream_with_timeout_and_headers(
                         &http,
                         &provider,
                         &attempt.api_key,

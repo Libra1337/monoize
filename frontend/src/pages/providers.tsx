@@ -39,7 +39,7 @@ const ACCOUNT_CLASSES = ['standard', 'enterprise', 'private', 'agent'] as const
 export function ProvidersPage() {
 	const { t } = useTranslation()
 	const { data: providersData, error: providersError, isLoading, mutate: reloadProviders } = useProviders()
-	const providers = providersData ?? []
+	const providers = useMemo(() => providersData ?? [], [providersData])
 	const { data: groups = [] } = useDashboardGroups()
 	const [accountClass, setAccountClass] = useState<AccountClass>("standard")
 	const groupById = useMemo(() => new Map(groups.map(group => [group.id, group])), [groups])

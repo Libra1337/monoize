@@ -85,19 +85,16 @@ async fn migration_058_down_up_round_trip_recreates_retained_table_indexes() {
     let db = DbPool::connect("sqlite::memory:")
         .await
         .expect("connect SQLite");
-    Migrator::up(&*db.write().await, None)
-        .await
-        .expect("run migrations");
-    // Every migration above 058 must be rolled back with it. The step count is derived from
-    // the migration list rather than hardcoded, so adding a migration cannot silently turn
-    // this into a shallower rollback that leaves 058 applied and the assertions vacuous.
-    let migrations = Migrator::migrations();
-    let position = migrations
+    // Later migrations can be irreversible; isolate the 058 down/up round trip.
+    let position = Migrator::migrations()
         .iter()
         .position(|migration| migration.name() == "m20260828_000058_store_retention_runtime")
         .expect("migration 058 is registered");
-    let steps = u32::try_from(migrations.len() - position).expect("rollback step count");
-    Migrator::down(&*db.write().await, Some(steps))
+    let steps = u32::try_from(position + 1).expect("migration step count");
+    Migrator::up(&*db.write().await, Some(steps))
+        .await
+        .expect("run migrations through 058");
+    Migrator::down(&*db.write().await, Some(1))
         .await
         .expect("roll back migration 058");
 

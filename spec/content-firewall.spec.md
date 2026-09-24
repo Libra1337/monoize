@@ -219,6 +219,11 @@ and a time-range selector (`24h`, `7d`, `30d`, all), paginated through
 Every data region has a skeleton loading state and an empty state; navigation
 and data fetching follow SWR per `dashboard-ui-layout.spec.md`.
 
+CF-26a. The events query MUST capture its time-range reference timestamp on page
+mount and when the user changes an applied term, action, or range filter. Pagination
+and unrelated renders MUST retain that timestamp. The query MUST omit `since_ms`
+for the all-time range.
+
 CF-27. The page and both APIs expose no mutation surface: firewall
 configuration changes only through the CF-19 settings category.
 

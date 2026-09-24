@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { Fragment, useState } from "react";
+import useSWR from "swr";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { UsersRound } from "lucide-react";
-import { api, type OrgMemberUsageResponse } from "@/lib/api";
+import { api } from "@/lib/api";
 import { formatCost } from "../request-logs/utils";
 import { useMyOrgs } from "./shared";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -55,34 +56,22 @@ function t_calls(series: { charge_nano_usd: string; calls: number }[]): string {
 export function OrgMemberUsagePage() {
   const { orgId } = useParams();
   const { t } = useTranslation();
-  const { data: overview } = useMyOrgs();
+  const { data: overview, isLoading: ownershipLoading } = useMyOrgs();
   const [rangeHours, setRangeHours] = useState(24);
-  const [data, setData] = useState<OrgMemberUsageResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const role = overview?.orgs?.find((o) => o.id === orgId)?.role;
   const isOwner = role === "owner";
 
-  useEffect(() => {
-    if (!isOwner) return;
-    let cancelled = false;
-    setLoading(true);
-    const buckets = Math.min(48, Math.max(6, Math.round(rangeHours / 2)));
-    api
-      .getOrgMemberUsage(orgId ?? "", rangeHours, buckets)
-      .then((res) => {
-        if (cancelled) return;
-        setData(res);
-        setError(null);
-      })
-      .catch((e) => !cancelled && setError(String(e?.message ?? e)))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [orgId, rangeHours, isOwner]);
+  const buckets = Math.min(48, Math.max(6, Math.round(rangeHours / 2)));
+  const { data, isLoading: loading, error } = useSWR(
+    isOwner && orgId ? ["org-member-usage", orgId, rangeHours, buckets] as const : null,
+    ([, id, hours, bucketCount]) => api.getOrgMemberUsage(id, hours, bucketCount),
+  );
+
+  if (ownershipLoading) {
+    return <div className="p-4 sm:p-6"><Skeleton className="h-40 w-full" /></div>;
+  }
 
   if (!isOwner) {
     return (
@@ -128,7 +117,7 @@ export function OrgMemberUsagePage() {
       )}
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error}
+          {String(error?.message ?? error)}
         </div>
       )}
       {!loading && !error && members.length === 0 && (
@@ -159,7 +148,7 @@ export function OrgMemberUsagePage() {
                 );
                 const isOpen = expanded === m.user_id;
                 return (
-                  <>
+                  <Fragment key={m.user_id}>
                     <TableRow
                       key={m.user_id}
                       className="cursor-pointer"
@@ -194,7 +183,7 @@ export function OrgMemberUsagePage() {
                             {t("orgUsage.byModel")}
                           </div>
                           <div className="mt-2 space-y-1">
-                            {m.by_model
+                            {[...m.by_model]
                               .sort(
                                 (a, b) => Number(b.charge_nano_usd) - Number(a.charge_nano_usd),
                               )
@@ -219,7 +208,7 @@ export function OrgMemberUsagePage() {
                         </TableCell>
                       </TableRow>
                     )}
-                  </>
+                  </Fragment>
                 );
               })}
             </TableBody>

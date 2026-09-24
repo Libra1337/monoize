@@ -51,7 +51,7 @@ export function OrgLogsPage() {
   );
   const { data, isLoading } = useSWR(
     orgId ? [`/api/dashboard/orgs/${orgId}/request-logs`, limit, query] : null,
-    ([_path, pageLimit, pageQuery]: [string, number, string]) =>
+    ([, pageLimit, pageQuery]: [string, number, string]) =>
       api.listOrgRequestLogs(orgId!, pageLimit, 0, JSON.parse(pageQuery)),
     { keepPreviousData: true },
   );
