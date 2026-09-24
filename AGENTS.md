@@ -210,11 +210,11 @@ any agent or model.
   `spec/deployment-docker.spec.md` (BG1..BG12).
 - The swap MUST NOT stop the previous container while it still serves upstream
   connections: BG11 hands the `store_primary` lease over via SIGHUP, and BG12
-  drains connections (default bound `MONOIZE_SWAP_DRAIN_MAX_SECONDS=14400`)
-  before the stop. Do not "speed up" a swap by skipping the drain.
+  drains connections before the stop. `MONOIZE_SWAP_DRAIN_MAX_SECONDS=14400`
+  is an alert threshold, never a force-stop deadline. Do not skip the drain.
 - Prefer deploying during low-traffic windows (roughly 01:00–07:00 UTC+8) when
-  the change is not urgent; long streams that outlast the drain bound are only
-  protected by choosing a quiet window.
+  the change is not urgent. The first update from a runtime with the handover
+  renewal race must wait for existing connections to finish before cutover.
 - Never restart the platform container (`docker restart`, `docker stop`) as a
   debugging or config-refresh shortcut. If a restart seems necessary, first
   check whether a blue-green swap achieves the same result.

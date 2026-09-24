@@ -23,7 +23,7 @@
 - **Candidate port** `P_candidate`: the single element of `{8080, 8081}` that is
   not `P_active`.
 - **Swap script**: `/opt/monoize/blue-green-swap.sh` on the production host,
-  invoked as `blue-green-swap.sh <rev>` where `monoize:<rev>` is the runtime
+  maintained in `scripts/blue-green-swap.sh` and invoked as `blue-green-swap.sh <rev>` where `monoize:<rev>` is the runtime
   image to activate.
 
 ## 2. Invariants
@@ -65,10 +65,10 @@ build, backup, candidate start, readiness timeout), the script MUST:
 1. stop and remove the candidate container (if any);
 2. leave the serving container and the Caddyfile unmodified;
 3. exit nonzero.
-If the reload succeeded but the post-reload verification (BG3.6) fails, the
-script MUST restore the pre-edit Caddyfile, reload Caddy again, verify
-`/readyz` 200 through the restored upstream, stop and remove the candidate,
-and exit nonzero.
+After attempting Caddy reload, a reload or post-reload verification failure MUST
+retain both containers and exit nonzero. Do not automatically reload a second
+time: the first attempt may have admitted upgraded connections. Inspect the
+active proxy configuration before any manual rollback.
 
 BG7. Final state. After a successful swap the host MUST satisfy all of:
 
@@ -80,9 +80,8 @@ BG7. Final state. After a successful swap the host MUST satisfy all of:
 4. `GET /readyz` through Caddy returns HTTP 200.
 
 BG8. Graceful stop. The serving container MUST be stopped with
-`docker stop` (SIGTERM). The platform drains in-flight requests on SIGTERM;
-the stop grace period MUST be at least the platform drain bound (default
-Docker grace of 10 seconds satisfies this).
+`docker stop` (SIGTERM). The stop grace period MUST be at least 15 seconds. The connection count
+MUST already be zero before SIGTERM.
 
 BG9. Lease overlap via standby boot. The swap script MUST run the candidate
 with `MONOIZE_BOOT_STANDBY_LEASE=1` so a startup `store_primary` acquisition
@@ -112,30 +111,48 @@ HTTP drain). The swap script MUST send SIGHUP to the previous container only
 after BG3.6 holds and only after proving the runtime supports BG11 (the
 running binary contains the handover log marker; a pre-BG11 runtime MUST NOT
 be signaled, because default SIGHUP disposition would kill it), then MUST poll
-the lease owner until it differs from the pre-swap owner, for at most 60
-seconds.
+the lease owner until it differs from the pre-swap owner, for at most 60 polls with a one-second interval.
 
 BG11a. If the handover flag becomes true during a lease renewal retry round, the
 renewal loop MUST process handover before reacting to that round's failure. That
 failure MUST NOT set the application shutdown flag. The previous process MUST keep
 serving established requests while its lease is released or expires.
 
-BG12. Bounded connection drain before stop. After the BG11 handover (or the
-BG3.6 verification when the previous runtime predates BG11), the swap script
-MUST poll established TCP connections whose local or peer port equals the old
-active port every 15 seconds and MUST NOT stop the previous container until
-the count reaches zero or `MONOIZE_SWAP_DRAIN_MAX_SECONDS` (default 14400)
-elapse from the reload. The drain bound MUST be logged with the remaining
-connection count. In-flight requests therefore survive a swap unless they
-outlast the bound; the previous container is stopped with the BG8 grace only
-after the drain.
+BG12. Unbounded connection drain. The swap script MUST count established TCP
+sockets whose local port equals the previous instance's listening port every
+15 seconds. It MUST NOT send SIGHUP or stop the previous container while that
+count is nonzero. `MONOIZE_SWAP_DRAIN_MAX_SECONDS` (default 14400) is an alert
+threshold only. Crossing it MUST log the remaining connection count and continue
+waiting without a stop signal. A failed socket query MUST retain both containers.
+
+BG13. The swap MUST hold an exclusive `/opt/monoize/blue-green-swap.lock`.
+Reject overlapping swaps and preexisting `monoize-next` or `monoize-prev`
+containers without stopping or removing them. Run the script in a host supervisor
+that survives SSH disconnection. After any attempted Caddy reload, failure MUST
+retain both containers until their respective connections have drained.
+
+BG14. Before candidate startup, require identical migration source trees for the
+serving and candidate revisions. A difference requires a separate compatibility
+assessment. Verify the online backup with `PRAGMA quick_check` before continuing.
+
+BG15. After candidate readiness, wait without a deadline for zero accepted
+connections on the previous instance before changing the Caddyfile. During this
+wait all production traffic MUST continue to use the previous instance. The
+candidate MUST remain in standby mode. Check candidate readiness again after
+waiting. After reload, wait again for zero previous connections before SIGHUP.
+This protects an old runtime that does not contain the BG11a renewal-race fix.
+
+BG16. Before Caddy reload, query its goroutine profile and wait while
+`reverseproxy.(*Handler).handleUpgradeResponse` is present. An unavailable or
+unrecognized profile MUST abort before reload. This is a preflight observation,
+not an atomic exclusion against an upgrade arriving between the check and reload.
 
 ## 3. Swap procedure (normative sequence)
 
 S1. Preconditions: `monoize:<rev>` image exists (built from
 `/opt/monoize/build-<rev>/image-out`); serving container `monoize` is running
-and healthy; no leftover `monoize-next` container exists (remove a leftover
-from an aborted run before proceeding).
+and healthy; neither `monoize-next` nor `monoize-prev` exists; and the exclusive swap lock
+is held. Validate migration source identity per BG14.
 
 S2. SQLite online backup per BG4.
 
@@ -149,10 +166,11 @@ S4. Start candidate: `docker run -d --name monoize-next --network host
 --restart unless-stopped monoize:<rev>`, with a `--health-cmd` override that
 probes `/healthz` on the candidate port (the image default hardcodes 8080).
 
-S5. Readiness gate: poll `http://127.0.0.1:<P_candidate>/readyz` until HTTP 200
-with a timeout of 120 seconds (migrations run at candidate start).
+S5. Readiness gate: poll `http://127.0.0.1:<P_candidate>/readyz` at most 120 times,
+with a three-second request timeout and a one-second interval. Require HTTP 200.
 
-S6. Rename `docker rename monoize monoize-prev` (does not disturb its socket).
+S6. Wait for BG15 and BG16. Rename `docker rename monoize monoize-prev`
+(does not disturb its socket).
 
 S7. Edit `/etc/caddy/Caddyfile`: replace every upstream occurrence of
 `127.0.0.1:<P_active>` with `127.0.0.1:<P_candidate>`. Keep a timestamped
@@ -161,23 +179,27 @@ then reload Caddy.
 
 S8. Post-reload verification per BG3.6.
 
-S9. Store-lease handover per BG11: capability probe, SIGHUP to `monoize-prev`,
+S9. Wait for zero old accepted connections per BG12, then perform store-lease
+handover per BG11: capability probe, SIGHUP to `monoize-prev`,
 poll the lease owner change (at most 60 seconds). Skipped with a log line when
 the previous runtime predates BG11.
 
 S10. Connection drain per BG12: poll established connections on the old active
-port until zero or the drain bound.
+port until zero. The alert threshold MUST NOT stop the previous container.
 
 S11. `docker stop monoize-prev && docker rm monoize-prev`, then
-`docker rename monoize-next monoize`. When S9 could not hand over (pre-BG11
-runtime or handover timeout), poll the lease owner change for at most 60
-seconds after the stop and warn per BG9 on timeout.
+`docker rename monoize-next monoize`. S9 MUST already have confirmed that the
+candidate owns the lease before the previous container is stopped.
 
 S12. Final verification per BG7 and print the new active port.
 
 ## 4. Verification of zero downtime
 
-V1. During steps S4 through S10 of a swap run, an external probe issuing
+V1. After the idle gate opens and through final verification, an origin HTTPS
+probe issuing
 `GET https://www.lynshen.org/` (or the origin-direct equivalent with
 `--resolve www.lynshen.org:443:64.90.22.212`) at an interval of at most 500 ms
-MUST observe zero non-2xx responses and zero connection failures.
+MUST observe zero non-2xx responses and zero connection failures. Start it before
+Caddy reload and require its first sample to succeed. Record every HTTP status
+and connection exit code. The pre-cutover idle wait MUST NOT continuously probe
+the previous HTTP port because that can keep idle upstream connections alive.
