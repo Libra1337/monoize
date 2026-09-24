@@ -282,6 +282,9 @@ mod tests {
     use tempfile::TempDir;
 
     async fn context(provider_type: Option<ProviderType>) -> TransformRuntimeContext {
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
         let temp_dir = TempDir::new().expect("temp dir");
         let cache = ImageTransformCache::new(
             temp_dir.path().join("cache"),

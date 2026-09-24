@@ -1452,6 +1452,38 @@ async fn admin_order_operation_routes_enforce_auth_origin_primary_and_no_manual_
         assert_eq!(body["error"]["code"], "store_origin_invalid");
     }
 
+    // SB-S-2: an absent Origin passes the gate (the session cookie is
+    // SameSite=Strict, and in-app webviews omit Origin on same-origin POSTs).
+    // The request still fails JSON parsing, proving the origin gate itself
+    // let it through instead of answering 403.
+    for suffix in ["query", "close"] {
+        let response = ctx
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/api/dashboard/store/admin/orders/missing/{suffix}"
+                    ))
+                    .header("cookie", format!("monoize_session={session_token}"))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("not-json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_ne!(
+            body["error"]["code"].as_str(),
+            Some("store_origin_invalid"),
+            "{suffix}: absent Origin must pass the origin gate"
+        );
+        assert_ne!(status, StatusCode::FORBIDDEN, "{suffix}: {body}");
+    }
+
     let replica = monoize::app::build_app(
         ctx.state
             .clone()

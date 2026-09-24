@@ -38,6 +38,7 @@ pub mod reasoning_strip_output;
 pub mod reasoning_summary_heading;
 pub mod reasoning_summary_to_raw_cot;
 pub mod reasoning_to_think_xml;
+pub mod role_assistant_image_to_user;
 pub mod role_developer_to_system;
 pub mod role_merge_consecutive;
 pub mod role_system_to_developer;
@@ -295,6 +296,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(reasoning_summary_heading::ReasoningSummaryHeadingTransform),
         Box::new(reasoning_summary_to_raw_cot::ReasoningSummaryToRawCotTransform),
         Box::new(reasoning_to_think_xml::ReasoningToThinkXmlTransform),
+        Box::new(role_assistant_image_to_user::RoleAssistantImageToUserTransform),
         Box::new(role_developer_to_system::RoleDeveloperToSystemTransform),
         Box::new(role_merge_consecutive::RoleMergeConsecutiveTransform),
         Box::new(role_system_to_developer::RoleSystemToDeveloperTransform),
@@ -617,6 +619,7 @@ mod registry_tests {
         "reasoning_summary_heading",
         "reasoning_summary_to_raw_cot",
         "reasoning_to_think_xml",
+        "role_assistant_image_to_user",
         "role_developer_to_system",
         "role_merge_consecutive",
         "role_system_to_developer",
