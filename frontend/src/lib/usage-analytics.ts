@@ -7,6 +7,10 @@ export interface TokenAnalyticsBucket {
   output_tokens_by_model: Record<string, string>;
   /** Present in every dashboard analytics response; omitted by legacy fixtures. */
   calls_by_model?: Record<string, number>;
+  /** UA-27a: Group-dimension maps keyed "<group>\u2063<model>". */
+  calls_by_model_and_group?: Record<string, number>;
+  input_tokens_by_model_and_group?: Record<string, string>;
+  cache_read_tokens_by_model_and_group?: Record<string, string>;
 }
 
 export interface ExactTokenTotals {
@@ -133,6 +137,25 @@ export interface ModelCacheHitRate {
   grade: CacheHitGrade;
 }
 
+/** The key separator of the UA-27a Group-dimension maps. */
+export const MODEL_GROUP_SEPARATOR = "\u2063";
+
+export interface GroupedModelCacheHitRate {
+  group: string;
+  model: string;
+  calls: bigint;
+  input: bigint;
+  cacheRead: bigint;
+  basisPoints: bigint;
+  grade: CacheHitGrade;
+}
+
+function splitGroupedKey(key: string): { group: string; model: string } {
+  const at = key.indexOf(MODEL_GROUP_SEPARATOR);
+  if (at < 0) return { group: "unknown", model: key };
+  return { group: key.slice(0, at), model: key.slice(at + MODEL_GROUP_SEPARATOR.length) };
+}
+
 /// A hit rate measured over a smaller input total is dominated by the unavoidable
 /// cache-miss cost of the first request in a conversation, so it carries no grade.
 export const CACHE_HIT_GRADE_MIN_INPUT = 50_000n;
@@ -214,6 +237,55 @@ export function rankModelCacheHitRates(
         : 0n;
       return {
         model,
+        calls: value.calls,
+        input: value.input,
+        cacheRead: value.cacheRead,
+        basisPoints,
+        grade: gradeCacheHitRate(value.input, value.calls, basisPoints),
+      };
+    });
+}
+
+/**
+ * UA-27b: ranks (Group, model) pairs that carried calls, so the same model in
+ * two Groups renders two rows instead of merging into one diluted rate. Sorting
+ * matches the model ranker: input descending, then Group and model in UTF-8
+ * byte order.
+ */
+export function rankGroupedModelCacheHitRates(
+  buckets: TokenAnalyticsBucket[],
+): GroupedModelCacheHitRate[] {
+  const totals = new Map<string, { group: string; model: string; input: bigint; cacheRead: bigint; calls: bigint }>();
+  for (const bucket of buckets) {
+    const keys = new Set([
+      ...Object.keys(bucket.input_tokens_by_model_and_group ?? {}),
+      ...Object.keys(bucket.cache_read_tokens_by_model_and_group ?? {}),
+      ...Object.keys(bucket.calls_by_model_and_group ?? {}),
+    ]);
+    for (const key of keys) {
+      const { group, model } = splitGroupedKey(key);
+      const current = totals.get(key) ?? { group, model, input: 0n, cacheRead: 0n, calls: 0n };
+      current.input += parseTokenCount(bucket.input_tokens_by_model_and_group?.[key] ?? "0");
+      current.cacheRead += parseTokenCount(bucket.cache_read_tokens_by_model_and_group?.[key] ?? "0");
+      current.calls += BigInt(bucket.calls_by_model_and_group?.[key] ?? 0);
+      totals.set(key, current);
+    }
+  }
+  return [...totals.values()]
+    .filter((value) => value.input > 0n || value.calls > 0n)
+    .sort((left, right) => {
+      if (left.input !== right.input) return left.input > right.input ? -1 : 1;
+      const byGroup = compareUtf8(left.group, right.group);
+      if (byGroup !== 0) return byGroup;
+      return compareUtf8(left.model, right.model);
+    })
+    .map((value) => {
+      const basisPoints = value.input > 0n
+        ? (value.cacheRead * 10_000n + value.input / 2n) / value.input
+        : 0n;
+      return {
+        group: value.group,
+        model: value.model,
         calls: value.calls,
         input: value.input,
         cacheRead: value.cacheRead,

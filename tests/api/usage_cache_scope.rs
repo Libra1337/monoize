@@ -173,6 +173,22 @@ async fn analytics_group_scope_and_per_user_cache_follow_roles() {
     assert_eq!(body["total_input_tokens"], json!("800000"));
     assert_eq!(body["total_cache_read_tokens"], json!("400000"));
 
+    // UA-27a: the Group-dimension maps ride along; rows without a provider
+    // resolve to the literal Group name `unknown`.
+    let grouped_key = format!("unknown\u{2063}gpt-cache-test");
+    assert_eq!(
+        body["buckets"][0]["calls_by_model_and_group"][&grouped_key],
+        json!(2)
+    );
+    assert_eq!(
+        body["buckets"][0]["input_tokens_by_model_and_group"][&grouped_key],
+        json!("800000")
+    );
+    assert_eq!(
+        body["buckets"][0]["cache_read_tokens_by_model_and_group"][&grouped_key],
+        json!("400000")
+    );
+
     // DH-16: a member sending scope=group is rejected with 400.
     let resp = router
         .clone()

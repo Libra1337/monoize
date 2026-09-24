@@ -25,6 +25,7 @@ import {
   aggregateTokenTotals,
   cacheHitRateForTotals,
   cacheHitRateTable,
+  rankGroupedModelCacheHitRates,
   formatCacheHitRate,
   formatTokenCount,
   type CacheHitGrade,
@@ -45,6 +46,18 @@ const CACHE_RANGES: Record<CacheRange, { hours: number; buckets: number }> = {
   "today": { hours: beijingElapsedHours(), buckets: 24 },
   "7d": { hours: 168, buckets: 28 },
   "30d": { hours: 720, buckets: 30 },
+};
+
+/** One measured (Group, model) row, or an untracked model-level row when the
+ * backend predates the Group dimension or the model has no traffic. */
+type CacheRow = {
+  model: string;
+  group?: string;
+  calls: bigint;
+  input: bigint;
+  cacheRead: bigint;
+  basisPoints: bigint;
+  grade: CacheHitGrade;
 };
 
 const GRADE_TEXT: Record<CacheHitGrade, string> = {
@@ -93,10 +106,35 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
     () => (providers.data ?? []).flatMap((provider) => Object.keys(provider.channel.models)),
     [providers.data],
   );
-  const rows = useMemo(
+  const modelRows = useMemo(
     () => analytics.data ? cacheHitRateTable(analytics.data.buckets, catalog) : [],
     [analytics.data, catalog],
   );
+  // UA-27b: when the backend carries the Group dimension, split measured traffic
+  // into (Group, model) rows so the same model in two Groups stops diluting one
+  // merged rate. Untracked catalog rows stay model-level.
+  const groupedMeasured = useMemo(
+    () => analytics.data ? rankGroupedModelCacheHitRates(analytics.data.buckets) : [],
+    [analytics.data],
+  );
+  const hasGroupedData = groupedMeasured.length > 0;
+  const rows = useMemo<CacheRow[]>(() => {
+    if (!hasGroupedData) return modelRows;
+    const seen = new Set(groupedMeasured.map((row) => row.model));
+    const untracked = modelRows.filter((row) => !seen.has(row.model));
+    return [
+      ...groupedMeasured.map((row) => ({
+        model: row.model,
+        group: row.group,
+        calls: row.calls,
+        input: row.input,
+        cacheRead: row.cacheRead,
+        basisPoints: row.basisPoints,
+        grade: row.grade,
+      })),
+      ...untracked,
+    ];
+  }, [hasGroupedData, groupedMeasured, modelRows]);
   const totals = useMemo(
     () => analytics.data ? aggregateTokenTotals(analytics.data.buckets) : undefined,
     [analytics.data],
@@ -104,7 +142,9 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
   const visible = useMemo(
     () => rows.filter((row) => (
       (!trafficOnly || row.calls > 0n || row.input > 0n)
-      && (!deferredSearch || row.model.toLowerCase().includes(deferredSearch))
+      && (!deferredSearch
+        || row.model.toLowerCase().includes(deferredSearch)
+        || (row.group ?? "").toLowerCase().includes(deferredSearch))
     )),
     [rows, trafficOnly, deferredSearch],
   );
@@ -234,8 +274,15 @@ export function UsageCachePage({ orgId }: { orgId?: string } = {}) {
                 ))}
               </TableRow>
             )) : visible.map((row) => (
-              <TableRow key={row.model}>
-                <TableCell className="max-w-[22rem] font-medium [overflow-wrap:anywhere]">{row.model}</TableCell>
+              <TableRow key={row.group ? `${row.group}\u2063${row.model}` : row.model}>
+                <TableCell className="max-w-[22rem] font-medium [overflow-wrap:anywhere]">
+                  {row.model}
+                  {row.group ? (
+                    <span className="ml-1.5 text-xs text-muted-foreground" title={t("usageCache.columns.group")}>
+                      @{row.group}
+                    </span>
+                  ) : null}
+                </TableCell>
                 <TableCell className="text-right font-mono text-xs tabular-nums">
                   {row.calls === 0n ? "—" : formatTokenCount(row.calls, i18n.language)}
                 </TableCell>

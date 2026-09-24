@@ -929,6 +929,8 @@ impl InsertRequestLog {
 pub struct AnalyticsModelBucketRow {
     pub bucket_idx: i64,
     pub model: String,
+    /// UA-27a: Group public name (or fallback) of the serving Provider.
+    pub group_name: String,
     pub cost_nano: i128,
     pub call_count: i64,
     pub input_tokens: i128,

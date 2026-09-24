@@ -1311,6 +1311,11 @@ export interface DashboardAnalyticsBucket {
   input_tokens_by_model: Record<string, string>;
   cache_read_tokens_by_model: Record<string, string>;
   output_tokens_by_model: Record<string, string>;
+  /** UA-27a: same aggregates keyed `"<group>\\u2063<model>"`. */
+  calls_by_model_and_group?: Record<string, number>;
+  input_tokens_by_model_and_group?: Record<string, string>;
+  cache_read_tokens_by_model_and_group?: Record<string, string>;
+  output_tokens_by_model_and_group?: Record<string, string>;
 }
 
 export interface CacheHitRateUserRow {

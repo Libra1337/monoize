@@ -159,6 +159,24 @@ non-probe request-log row in the bucket regardless of status, so `calls(m)` is t
 of recorded calls of `m` in the range and `input(m) > 0` implies `calls(m) > 0`.
 Model-name normalization follows UA-14a.
 
+UA-27a. The analytics response MUST additionally carry, for every bucket, the maps
+`input_tokens_by_model_and_group`, `cache_read_tokens_by_model_and_group`, and
+`calls_by_model_and_group`. Each map key is the Group public name (the Group of the
+Provider that served the request-log row, resolved through `request_logs.provider_id`;
+NULL or missing providers resolve to the literal Group name `unknown`, and a Provider
+whose Group row no longer exists resolves to the Provider's stored `group_id` string)
+followed by the one-character separator U+2063 (INVISIBLE SEPARATOR) followed by the
+normalized model name. A key MUST NOT be ambiguous: `group + U+2063 + model` is unique
+per (Group, model) pair.
+
+UA-27b. On the cache hit-rate sub-page, a **grouped row** is a row for one (Group, model)
+pair, computed from the UA-27a maps exactly as UA-27 computes a model row. The per-model
+table MUST render one grouped row per (Group, model) pair that has `calls > 0`, and MUST
+render the Group name in a secondary position on the row (the same model in two Groups
+renders two rows). The untracked-row rules of UA-29/UA-30 continue to apply at the model
+level only. Rows with `calls > 0` MUST sort by `input` descending, equal values by Group
+name then model name in ascending byte order.
+
 UA-28. A **measured row** is a row for a model with `calls(m) > 0`. The condition admits
 models whose every request-log row lacks token usage (for example image or video upstreams
 that return no usage object): such a model was called, so its row is measured even though
@@ -186,7 +204,8 @@ UA-32. `hitBasisPoints(m)` equals `(cacheRead(m) * 10000 + input(m) / 2) / input
 `BigInt`. Rounding to a displayed percentage occurs only in the final display formatter.
 
 UA-33. Each row MUST show the model name, `calls(m)`, `input(m)`, `cacheRead(m)`, the hit
-rate as a percentage with at most one decimal digit, and a localized grade label. An
+rate as a percentage with at most one decimal digit, and a localized grade label. A
+grouped row MUST additionally show its Group name (UA-27b). An
 untracked row MUST render an em dash for `calls(m)`, `input(m)`, `cacheRead(m)`, and the
 hit rate, and MUST NOT render a ratio bar. A measured row with `input(m) = 0` MUST render
 `calls(m)`, an em dash for `input(m)`, `cacheRead(m)`, and the hit rate, and MUST NOT

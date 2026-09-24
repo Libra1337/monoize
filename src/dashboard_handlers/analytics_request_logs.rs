@@ -492,6 +492,15 @@ pub(crate) fn render_analytics_json(
         (0..buckets).map(|_| BTreeMap::new()).collect();
     let mut output_tokens_by_model_buckets: Vec<BTreeMap<String, i128>> =
         (0..buckets).map(|_| BTreeMap::new()).collect();
+    // UA-27a: Group-dimension twins of the by-model maps.
+    let mut calls_by_model_and_group_buckets: Vec<BTreeMap<String, i64>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
+    let mut input_tokens_by_model_and_group_buckets: Vec<BTreeMap<String, i128>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
+    let mut cache_read_tokens_by_model_and_group_buckets: Vec<BTreeMap<String, i128>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
+    let mut output_tokens_by_model_and_group_buckets: Vec<BTreeMap<String, i128>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
 
     for row in &raw.model_buckets {
         let idx = row.bucket_idx.clamp(0, buckets - 1) as usize;
@@ -509,6 +518,18 @@ pub(crate) fn render_analytics_json(
             .entry(row.model.clone())
             .or_insert(0);
         *calls = calls.checked_add(row.call_count).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "analytics call count overflow",
+            )
+        })?;
+        // UA-27a: the same aggregates keyed by Group + U+2063 + model.
+        let grouped_key = format!("{}\u{2063}{}", row.group_name, row.model);
+        let grouped_calls = calls_by_model_and_group_buckets[idx]
+            .entry(grouped_key.clone())
+            .or_insert(0);
+        *grouped_calls = grouped_calls.checked_add(row.call_count).ok_or_else(|| {
             AppError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -533,6 +554,32 @@ pub(crate) fn render_analytics_json(
             ),
         ] {
             let total = target[idx].entry(row.model.clone()).or_insert(0);
+            *total = total.checked_add(value).ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("analytics {label} token aggregate overflow"),
+                )
+            })?;
+        }
+        for (target, value, label) in [
+            (
+                &mut input_tokens_by_model_and_group_buckets,
+                row.input_tokens,
+                "input",
+            ),
+            (
+                &mut cache_read_tokens_by_model_and_group_buckets,
+                row.cache_read_tokens,
+                "cache-read",
+            ),
+            (
+                &mut output_tokens_by_model_and_group_buckets,
+                row.output_tokens,
+                "output",
+            ),
+        ] {
+            let total = target[idx].entry(grouped_key.clone()).or_insert(0);
             *total = total.checked_add(value).ok_or_else(|| {
                 AppError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -578,6 +625,20 @@ pub(crate) fn render_analytics_json(
                 "output_tokens_by_model": output_tokens_by_model_buckets[i]
                     .iter()
                     .map(|(model, value)| (model.clone(), exact_integer_json(*value)))
+                    .collect::<serde_json::Map<String, Value>>(),
+                "calls_by_model_and_group": calls_by_model_and_group_buckets[i],
+                "input_tokens_by_model_and_group": input_tokens_by_model_and_group_buckets[i]
+                    .iter()
+                    .map(|(key, value)| (key.clone(), exact_integer_json(*value)))
+                    .collect::<serde_json::Map<String, Value>>(),
+                "cache_read_tokens_by_model_and_group":
+                    cache_read_tokens_by_model_and_group_buckets[i]
+                        .iter()
+                        .map(|(key, value)| (key.clone(), exact_integer_json(*value)))
+                        .collect::<serde_json::Map<String, Value>>(),
+                "output_tokens_by_model_and_group": output_tokens_by_model_and_group_buckets[i]
+                    .iter()
+                    .map(|(key, value)| (key.clone(), exact_integer_json(*value)))
                     .collect::<serde_json::Map<String, Value>>(),
             })
         })

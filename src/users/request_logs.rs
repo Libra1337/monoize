@@ -361,6 +361,10 @@ fn analytics_model_bucket_sql(
     let bucket_expr = analytics_bucket_expr(is_sqlite, bucketing);
     let model_expr =
         "COALESCE(NULLIF(TRIM(rl.model), ''), NULLIF(TRIM(rl.upstream_model), ''), 'unknown')";
+    // UA-27a: the Group public name of the Provider that served the row. A row with no
+    // Provider (or a Provider whose Group row is gone) falls back per spec so the key
+    // stays unique and never null.
+    let group_expr = "COALESCE(mg.name, mp.group_id, 'unknown')";
     let charge_columns = charge_aggregate_columns(!is_sqlite);
     let user_filter = if user_scoped {
         " AND rl.user_id = $6"
@@ -394,11 +398,13 @@ fn analytics_model_bucket_sql(
     let token_columns = token_aggregate_columns(is_sqlite);
     let probe_filter = analytics_probe_exclusion();
     format!(
-        "SELECT {bucket_expr} AS bucket_idx, {model_expr} AS model, {charge_columns}, {token_columns}, COUNT(*) AS call_count \
+        "SELECT {bucket_expr} AS bucket_idx, {model_expr} AS model, {group_expr} AS group_name, {charge_columns}, {token_columns}, COUNT(*) AS call_count \
          FROM request_logs rl \
+         LEFT JOIN monoize_providers mp ON mp.id = rl.provider_id \
+         LEFT JOIN monoize_groups mg ON mg.id = mp.group_id \
          WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter}{api_key_filter}{org_filter}{group_filter}{probe_filter} \
-         GROUP BY bucket_idx, {model_expr} \
-         ORDER BY bucket_idx, model"
+         GROUP BY bucket_idx, {model_expr}, {group_expr} \
+         ORDER BY bucket_idx, model, group_name"
     )
 }
 
@@ -891,10 +897,22 @@ mod tests {
         db.write()
             .await
             .execute_unprepared(
-                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER, request_kind TEXT)",
+                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER, request_kind TEXT, provider_id TEXT)",
             )
             .await
             .unwrap();
+        // The bucket query joins the Provider and Group tables for the UA-27a
+        // Group dimension; empty stubs keep this minimal-schema fixture running.
+        for table in [
+            "CREATE TABLE monoize_providers (id TEXT PRIMARY KEY, group_id TEXT)",
+            "CREATE TABLE monoize_groups (id TEXT PRIMARY KEY, name TEXT)",
+        ] {
+            db.write()
+                .await
+                .execute_unprepared(table)
+                .await
+                .unwrap();
+        }
 
         let at = |value: &str| {
             chrono::DateTime::parse_from_rfc3339(value)
@@ -984,10 +1002,22 @@ mod tests {
         db.write()
             .await
             .execute_unprepared(
-                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER, request_kind TEXT)",
+                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, upstream_model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT, input_tokens INTEGER, cache_read_tokens INTEGER, output_tokens INTEGER, request_kind TEXT, provider_id TEXT)",
             )
             .await
             .unwrap();
+        // The bucket query joins the Provider and Group tables for the UA-27a
+        // Group dimension; empty stubs keep this minimal-schema fixture running.
+        for table in [
+            "CREATE TABLE monoize_providers (id TEXT PRIMARY KEY, group_id TEXT)",
+            "CREATE TABLE monoize_groups (id TEXT PRIMARY KEY, name TEXT)",
+        ] {
+            db.write()
+                .await
+                .execute_unprepared(table)
+                .await
+                .unwrap();
+        }
         for (
             created_at_unix_ms,
             model,
@@ -2434,6 +2464,11 @@ impl UserStore {
             .map(|row| {
                 let bucket_idx: i64 = row.try_get("", "bucket_idx").map_err(|e| e.to_string())?;
                 let model = row.try_get("", "model").map_err(|e| e.to_string())?;
+                let group_name = row
+                    .try_get::<Option<String>>("", "group_name")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "unknown".to_string());
                 let cost_nano = decode_charge_aggregate(&row, !is_sqlite)?
                     .parse::<i128>()
                     .map_err(|_| "request log charge aggregate overflow".to_string())?;
@@ -2444,6 +2479,7 @@ impl UserStore {
                 Ok(AnalyticsModelBucketRow {
                     bucket_idx: bucket_idx.clamp(0, bucket_count - 1),
                     model,
+                    group_name,
                     cost_nano,
                     call_count,
                     input_tokens,

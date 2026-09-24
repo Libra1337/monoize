@@ -4,6 +4,7 @@ import {
   cacheHitRateForTotals,
   cacheHitRateTable,
   formatCacheHitRate,
+  rankGroupedModelCacheHitRates,
   rankModelCacheHitRates,
   rankModelsByTokens,
   tokenMetricForBucket,
@@ -167,5 +168,57 @@ describe("Usage analytics helpers", () => {
       cache_read_tokens_by_model: {},
       output_tokens_by_model: { alpha: "1" },
     }]).total).toBe(9_007_199_254_740_994n);
+  });
+
+  test("splits the same model across groups instead of diluting one rate (UA-27b)", () => {
+    const sep = "\u2063";
+    const buckets = [{
+      label: "b",
+      input_tokens_by_model: { glm: "200000" },
+      cache_read_tokens_by_model: { glm: "100000" },
+      output_tokens_by_model: {},
+      calls_by_model: { glm: 10 },
+      input_tokens_by_model_and_group: {
+        [`low-group${sep}glm`]: "100000",
+        [`high-group${sep}glm`]: "100000",
+      },
+      cache_read_tokens_by_model_and_group: {
+        [`low-group${sep}glm`]: "1000",
+        [`high-group${sep}glm`]: "99000",
+      },
+      calls_by_model_and_group: {
+        [`low-group${sep}glm`]: 5,
+        [`high-group${sep}glm`]: 5,
+      },
+    }];
+    const rows = rankGroupedModelCacheHitRates(buckets);
+    expect(rows).toHaveLength(2);
+    const high = rows.find((row) => row.group === "high-group")!;
+    const low = rows.find((row) => row.group === "low-group")!;
+    // The merged model rate would be 50%, but the split rows carry 99% and 1%.
+    expect(Number(high.basisPoints)).toBe(9900);
+    expect(Number(low.basisPoints)).toBe(100);
+    // Equal input sorts by Group name in byte order.
+    expect(rows[0].group).toBe("high-group");
+    expect(rows.map((row) => row.group)).toEqual(["high-group", "low-group"]);
+  });
+
+  test("falls back to unknown for keys without the separator", () => {
+    const rows = rankGroupedModelCacheHitRates([{
+      label: "b",
+      input_tokens_by_model: {},
+      cache_read_tokens_by_model: {},
+      output_tokens_by_model: {},
+      calls_by_model_and_group: { "legacy-key": 3 },
+    }]);
+    expect(rows).toEqual([{
+      group: "unknown",
+      model: "legacy-key",
+      calls: 3n,
+      input: 0n,
+      cacheRead: 0n,
+      basisPoints: 0n,
+      grade: "no_token_usage",
+    }]);
   });
 });
