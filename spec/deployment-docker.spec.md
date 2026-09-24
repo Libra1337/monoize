@@ -60,6 +60,12 @@ environment captured from the serving container via
 `--network host --user 1000:1000 -v /opt/monoize/data:/app/data` run flags and
 restart policy as the serving container.
 
+BG5a. Previous deployments may have captured duplicate environment entries.
+Read the final `MONOIZE_LISTEN` entry for the serving-port check. Remove all
+`MONOIZE_LISTEN` and `MONOIZE_BOOT_STANDBY_LEASE` entries from the captured
+env file before supplying the candidate's explicit overrides. The candidate
+MUST have exactly one entry for each overridden variable.
+
 BG6. Failure containment. If any step before the Caddy reload fails (image
 build, backup, candidate start, readiness timeout), the script MUST:
 1. stop and remove the candidate container (if any);

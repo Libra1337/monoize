@@ -51,7 +51,7 @@ for name in monoize-next monoize-prev; do
   fi
 done
 [ "$(docker inspect monoize --format '{{.State.Status}}')" = running ] || die "serving container not running"
-SERVING_PORT=$(docker inspect monoize --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^MONOIZE_LISTEN=127\.0\.0\.1://p')
+SERVING_PORT=$(docker inspect monoize --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^MONOIZE_LISTEN=127\.0\.0\.1://p' | tail -n 1)
 [ "$SERVING_PORT" = "$ACTIVE" ] || die "serving port disagrees with Caddy"
 [ "$(ss -ltnH "sport = :$CAND" | wc -l)" -eq 0 ] || die "candidate port occupied"
 curl -fsS --max-time 5 "http://127.0.0.1:$ACTIVE/readyz" >/dev/null || die "serving container not ready"
@@ -100,7 +100,7 @@ log "sqlite backup -> $BACKUP ($(du -h "$BACKUP" | cut -f1))"
 
 # -------------------------------------------------------------- S3 env capture
 ENV_FILE=/opt/monoize/monoize-env-$REV.txt
-(umask 077; docker inspect monoize --format '{{range .Config.Env}}{{println .}}{{end}}' > "$ENV_FILE")
+(umask 077; docker inspect monoize --format '{{range .Config.Env}}{{println .}}{{end}}' | sed '/^MONOIZE_LISTEN=/d; /^MONOIZE_BOOT_STANDBY_LEASE=/d' > "$ENV_FILE")
 chmod 600 "$ENV_FILE"
 log "captured $(wc -l < "$ENV_FILE") env entries"
 
