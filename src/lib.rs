@@ -11,6 +11,7 @@ pub mod content_firewall;
 pub mod dashboard_handlers;
 pub mod db;
 pub mod db_cache;
+pub mod deployment_handover;
 pub mod entity;
 pub mod error;
 pub mod error_sanitize;

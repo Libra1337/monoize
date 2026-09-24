@@ -732,7 +732,11 @@ pub async fn recompute_persisted_days(db: &DbPool, now: DateTime<Utc>) -> Result
 
 /// AR-6: after every Asia/Shanghai midnight, settle the just-elapsed day. The
 /// first tick also runs immediately so a restart settles any missed days.
-pub fn spawn_revenue_daily_settlement(db: DbPool, shutdown: std::sync::Arc<AtomicBool>) {
+pub fn spawn_revenue_daily_settlement(
+    db: DbPool,
+    shutdown: std::sync::Arc<AtomicBool>,
+    guard: crate::app::PrimaryDutyGuard,
+) {
     tokio::spawn(async move {
         let mut first = true;
         loop {
@@ -750,6 +754,9 @@ pub fn spawn_revenue_daily_settlement(db: DbPool, shutdown: std::sync::Arc<Atomi
             if shutdown.load(Ordering::Acquire) {
                 return;
             }
+            if !guard.may_run().await {
+                return;
+            }
             match settle_elapsed_days(&db, Utc::now()).await {
                 Ok(0) => {}
                 Ok(count) => {
@@ -761,6 +768,9 @@ pub fn spawn_revenue_daily_settlement(db: DbPool, shutdown: std::sync::Arc<Atomi
                     // failure does not lose a day.
                     tokio::time::sleep(StdDuration::from_secs(300)).await;
                     if shutdown.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if !guard.may_run().await {
                         return;
                     }
                     if let Err(retry_error) = settle_elapsed_days(&db, Utc::now()).await {

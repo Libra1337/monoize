@@ -91,6 +91,8 @@ DB11. `DbPool` MUST expose the following public interface:
 
 DB12. `DbPool` MUST implement `Clone` (all connections are `Arc`-backed internally by Sea ORM).
 
+DB12a. `with_immediate_write` MUST require an initialized `seaql_migrations` table and acquire the SQLite database write lock before it invokes its operation or reads application state. It MUST hold one bound transaction connection through commit or rollback. A no-op `UPDATE seaql_migrations SET version = version WHERE 0` as the first transaction statement MAY acquire this lock when the ORM cannot begin an immediate transaction. This statement MUST change no migration row. Independent pools connected to the same file MUST serialize these operations through the SQLite write lock, including during blue-green overlap. The operation MUST NOT run when lock acquisition fails. Transaction rollback, including cancellation, MUST release the lock.
+
 ## 5. SQL Placeholder Conversion
 
 DB13. All application SQL MUST be written with PostgreSQL-style `$1, $2, ...` placeholders.

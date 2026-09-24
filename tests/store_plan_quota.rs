@@ -776,6 +776,152 @@ async fn concurrent_reservations_never_exceed_quota_or_partially_write() {
 }
 
 #[tokio::test]
+async fn independent_sqlite_pools_admit_one_plan_and_apply_terminal_replays_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let dsn = format!(
+        "sqlite://{}",
+        directory.path().join("shared-quota.db").display()
+    );
+    let primary_db = DbPool::connect(&dsn).await.unwrap();
+    Migrator::up(&*primary_db.write().await, None)
+        .await
+        .unwrap();
+    insert_user(&primary_db, "quota-user").await;
+    let environment = QuotaGateStore::new(primary_db.clone())
+        .live_environment()
+        .await
+        .unwrap();
+    pass_gate(&primary_db, &environment, "primary-app").await;
+    let candidate_db = DbPool::connect(&dsn).await.unwrap();
+    let primary = QuotaStore::new(primary_db.clone());
+    let candidate = QuotaStore::new(candidate_db.clone());
+    let now = Utc.with_ymd_and_hms(2026, 8, 28, 5, 30, 0).unwrap();
+    primary
+        .replace_entitlement(generation_input(
+            None,
+            "order-shared-quota",
+            now,
+            now + chrono::Duration::days(1),
+            vec![
+                quota("day-shared", WindowKind::Day, 86_400, "6", 0),
+                quota("rolling-shared", WindowKind::FiveHours, 18_000, "6", 1),
+            ],
+        ))
+        .await
+        .unwrap();
+    let lease = monoize::store_billing::availability::StorePrimaryLease::acquire(
+        primary_db.clone(),
+        "primary-process",
+    )
+    .await
+    .unwrap();
+    assert!(
+        monoize::store_billing::availability::StorePrimaryLease::acquire(
+            candidate_db.clone(),
+            "standby-process",
+        )
+        .await
+        .is_err()
+    );
+    let funding = |request_id: &str, maximum_nano_usd| PlanFundingInput {
+        user_id: "quota-user".to_string(),
+        request_id: request_id.to_string(),
+        effective_groups: vec![],
+        maximum_nano_usd: Some(maximum_nano_usd),
+        pricing_revision: "pricing-v1".to_string(),
+        now,
+        replica: false,
+    };
+    let (a, b) = tokio::join!(
+        primary.admit_funding(funding("primary-request", 10_000_000)),
+        candidate.admit_funding(funding("candidate-request", 10_000_000)),
+    );
+    let admitted = match (a, b) {
+        (Ok(PlanFundingAdmission::Plan(reservation)), Err(error))
+        | (Err(error), Ok(PlanFundingAdmission::Plan(reservation))) => {
+            assert_eq!(error.code(), "plan_quota_exhausted");
+            reservation
+        }
+        outcomes => panic!("exactly one independent pool must admit the plan: {outcomes:?}"),
+    };
+    assert_eq!(admitted.bucket_count, 2);
+    assert_shared_quota_counters(&primary_db, 1, "0", "6").await;
+
+    let (a, b) = tokio::join!(
+        primary.settle(&admitted.id, 5_000_000, now),
+        candidate.settle(&admitted.id, 5_000_000, now),
+    );
+    let settled = a.unwrap();
+    assert_eq!(settled, b.unwrap());
+    assert_eq!(settled.state, QuotaTerminalState::Settled);
+    assert_shared_quota_counters(&candidate_db, 1, "3", "0").await;
+
+    let (a, b) = tokio::join!(
+        primary.admit_funding(funding("primary-remaining", 5_000_000)),
+        candidate.admit_funding(funding("candidate-remaining", 5_000_000)),
+    );
+    let remaining = match (a, b) {
+        (Ok(PlanFundingAdmission::Plan(reservation)), Err(error))
+        | (Err(error), Ok(PlanFundingAdmission::Plan(reservation))) => {
+            assert_eq!(error.code(), "plan_quota_exhausted");
+            reservation
+        }
+        outcomes => panic!("settled quota must constrain both independent pools: {outcomes:?}"),
+    };
+    assert_shared_quota_counters(&primary_db, 2, "3", "3").await;
+    let (a, b) = tokio::join!(
+        primary.release(&remaining.id, now),
+        candidate.release(&remaining.id, now),
+    );
+    assert_eq!(a.unwrap(), b.unwrap());
+    assert_shared_quota_counters(&candidate_db, 2, "3", "0").await;
+    lease.validate().await.unwrap();
+}
+
+async fn assert_shared_quota_counters(
+    db: &DbPool,
+    reservations: i64,
+    settled: &str,
+    reserved: &str,
+) {
+    let row = db
+        .read()
+        .query_one(db.stmt(
+            "SELECT
+                (SELECT COUNT(*) FROM store_quota_reservations) AS reservations,
+                (SELECT COUNT(*) FROM store_quota_reservation_buckets) AS links",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.try_get::<i64>("", "reservations").unwrap(),
+        reservations
+    );
+    assert_eq!(row.try_get::<i64>("", "links").unwrap(), reservations * 2);
+    let buckets = db
+        .read()
+        .query_all(db.stmt(
+            "SELECT settled_fen_cny, reserved_fen_cny FROM store_quota_buckets ORDER BY id",
+            vec![],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(buckets.len(), 2);
+    for bucket in buckets {
+        assert_eq!(
+            bucket.try_get::<String>("", "settled_fen_cny").unwrap(),
+            settled
+        );
+        assert_eq!(
+            bucket.try_get::<String>("", "reserved_fen_cny").unwrap(),
+            reserved
+        );
+    }
+}
+
+#[tokio::test]
 async fn entitlement_source_replay_is_idempotent_and_conflicts_on_changed_snapshot() {
     let (_, store, _) = setup().await;
     let now = Utc.with_ymd_and_hms(2026, 8, 28, 6, 0, 0).unwrap();

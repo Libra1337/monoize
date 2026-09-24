@@ -272,7 +272,16 @@ impl DbPool {
             txn: Some(txn),
             _guard: Some(Box::new(guard)),
         };
-        let outcome = operation(&*transaction).await;
+        // SeaORM begins deferred SQLite transactions. Acquire the database-wide
+        // writer lock before the callback reads a snapshot; a process-local mutex
+        // alone cannot serialize blue-green processes. No migration row changes.
+        let outcome = match transaction
+            .execute_unprepared("UPDATE seaql_migrations SET version = version WHERE 0")
+            .await
+        {
+            Ok(_) => operation(&*transaction).await,
+            Err(error) => Err(E::from(error)),
+        };
         match outcome {
             Ok(value) => {
                 let result = transaction.commit().await;
@@ -606,6 +615,13 @@ mod tests {
         let db = DbPool::connect("sqlite::memory:").await.unwrap();
         db.write()
             .await
+            .execute_unprepared(
+                "CREATE TABLE seaql_migrations (version TEXT PRIMARY KEY, applied_at BIGINT NOT NULL)",
+            )
+            .await
+            .unwrap();
+        db.write()
+            .await
             .execute_unprepared("CREATE TABLE immediate_probe (value INTEGER NOT NULL)")
             .await
             .unwrap();
@@ -653,6 +669,107 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(busy.try_get::<i64>("", "timeout").unwrap(), 15_000);
+    }
+
+    #[tokio::test]
+    async fn independent_sqlite_writer_waits_before_reading_application_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let dsn = format!("sqlite://{}", directory.path().join("writers.db").display());
+        let primary = DbPool::connect(&dsn).await.unwrap();
+        primary
+            .write()
+            .await
+            .execute_unprepared(
+                "CREATE TABLE seaql_migrations (version TEXT PRIMARY KEY, applied_at BIGINT NOT NULL);
+                 CREATE TABLE writer_probe (value INTEGER NOT NULL);
+                 INSERT INTO writer_probe VALUES (0)",
+            )
+            .await
+            .unwrap();
+        let candidate = DbPool::connect(&dsn).await.unwrap();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let holder = tokio::spawn(async move {
+            primary
+                .with_immediate_write::<_, DbErr, _>(move |connection| {
+                    Box::pin(async move {
+                        entered_tx.send(()).unwrap();
+                        release_rx.await.unwrap();
+                        connection
+                            .execute_unprepared("UPDATE writer_probe SET value = 1")
+                            .await?;
+                        Ok(())
+                    })
+                })
+                .await
+        });
+        entered_rx.await.unwrap();
+        let (observed_tx, mut observed_rx) = tokio::sync::oneshot::channel();
+        let candidate_db = candidate.clone();
+        let contender = tokio::spawn(async move {
+            candidate
+                .with_immediate_write::<_, DbErr, _>(move |connection| {
+                    Box::pin(async move {
+                        let row = connection
+                            .query_one(candidate_db.stmt("SELECT value FROM writer_probe", vec![]))
+                            .await?
+                            .unwrap();
+                        observed_tx.send(row.try_get::<i64>("", "value")?).unwrap();
+                        Ok(())
+                    })
+                })
+                .await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut observed_rx)
+                .await
+                .is_err(),
+            "a second pool must wait for the writer before reading its snapshot"
+        );
+        release_tx.send(()).unwrap();
+        holder.await.unwrap().unwrap();
+        contender.await.unwrap().unwrap();
+        assert_eq!(observed_rx.await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_immediate_write_releases_the_shared_database_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let dsn = format!("sqlite://{}", directory.path().join("cancel.db").display());
+        let primary = DbPool::connect(&dsn).await.unwrap();
+        primary
+            .write()
+            .await
+            .execute_unprepared(
+                "CREATE TABLE seaql_migrations (version TEXT PRIMARY KEY, applied_at BIGINT NOT NULL)",
+            )
+            .await
+            .unwrap();
+        let candidate = DbPool::connect(&dsn).await.unwrap();
+        let held_db = primary.clone();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let holder = tokio::spawn(async move {
+            held_db
+                .with_immediate_write::<(), DbErr, _>(move |_connection| {
+                    Box::pin(async move {
+                        entered_tx.send(()).unwrap();
+                        std::future::pending().await
+                    })
+                })
+                .await
+        });
+        entered_rx.await.unwrap();
+        holder.abort();
+        assert!(holder.await.unwrap_err().is_cancelled());
+        for db in [&primary, &candidate] {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                db.with_immediate_write::<(), DbErr, _>(|_| Box::pin(async { Ok(()) })),
+            )
+            .await
+            .expect("cancelled writer must release the connection and database lock")
+            .unwrap();
+        }
     }
 
     #[tokio::test]

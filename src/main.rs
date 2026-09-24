@@ -53,33 +53,10 @@ async fn run_main() {
 async fn run() -> Result<(), AppError> {
     let state = monoize::app::load_state().await?;
     let is_replica = state.node.is_replica();
-    state.user_store.spawn_background_tasks_for_role(is_replica);
-    // SB-HA-4D-1: on standby boot the lease is not held yet, so this is a
-    // no-op here; the standby acquirer spawns the duties after acquisition.
+    state
+        .user_store
+        .spawn_process_background_tasks_for_role(is_replica);
     state.spawn_lease_gated_duties().await;
-    // AR-6: settle the revenue daily aggregates after every Beijing midnight;
-    // replicas defer to the primary's settlement.
-    if !is_replica {
-        monoize::users::spawn_revenue_daily_settlement(
-            state.db_pool.clone(),
-            state.background_shutdown.clone(),
-        );
-    }
-
-    if !is_replica {
-        // PRP11: retention/pending-log deletion is a primary responsibility.
-        match state.user_store.cleanup_pending_request_logs().await {
-            Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up stale pending request logs"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("failed to cleanup pending request logs: {e}"),
-        }
-
-        match state.user_store.cleanup_expired_request_logs().await {
-            Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up expired request logs"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("failed to cleanup expired request logs: {e}"),
-        }
-    }
 
     let app = monoize::app::build_app(state.clone());
     let addr: std::net::SocketAddr =
@@ -110,10 +87,8 @@ async fn run() -> Result<(), AppError> {
     {
         let handover = state.store_lease_handover.clone();
         tokio::spawn(async move {
-            let mut stream = tokio::signal::unix::signal(
-                tokio::signal::unix::SignalKind::hangup(),
-            )
-            .expect("failed to install SIGHUP handler");
+            let mut stream = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                .expect("failed to install SIGHUP handler");
             stream.recv().await;
             handover.store(true, Ordering::Release);
             tracing::info!(
@@ -180,7 +155,10 @@ async fn run() -> Result<(), AppError> {
         state.user_store.flush_all_batchers().await;
     }
 
-    if !is_replica {
+    if !is_replica
+        && std::env::var("MONOIZE_BOOT_STANDBY_LEASE").as_deref() != Ok("1")
+        && state.validate_store_primary_lease().await.is_ok()
+    {
         match state.user_store.cleanup_pending_request_logs().await {
             Ok(n) if n > 0 => {
                 tracing::info!(count = n, "finalized pending request logs on shutdown")

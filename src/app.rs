@@ -220,6 +220,8 @@ pub struct AppState {
     pub billing_rate_store: BillingRateStore,
     pub store_billing: StoreBillingStore,
     pub store_primary_lease: crate::store_billing::availability::StorePrimaryLeaseSlot,
+    pub deployment_handover: Option<Arc<crate::deployment_handover::DeploymentHandover>>,
+    lease_duties_started: Arc<AtomicBool>,
     pub exchange_rate_service: ExchangeRateService,
     pub transform_registry: Arc<TransformRegistry>,
     pub cap_verifier: CapVerifier,
@@ -240,6 +242,69 @@ pub struct AppState {
     pub trusted_proxies: TrustedProxyConfig,
 }
 
+#[derive(Clone)]
+pub struct PrimaryDutyGuard {
+    lease: crate::store_billing::availability::StorePrimaryLease,
+    shutdown: Arc<AtomicBool>,
+    handover: Arc<AtomicBool>,
+}
+
+impl PrimaryDutyGuard {
+    pub async fn may_run(&self) -> bool {
+        if self.shutdown.load(Ordering::Acquire) || self.handover.load(Ordering::Acquire) {
+            return false;
+        }
+        self.lease.validate().await.is_ok()
+            && !self.shutdown.load(Ordering::Acquire)
+            && !self.handover.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+mod primary_duty_guard_tests {
+    use super::*;
+    use crate::migration::Migrator;
+    use crate::store_billing::availability::StorePrimaryLease;
+    use sea_orm_migration::MigratorTrait;
+
+    #[tokio::test]
+    async fn singleton_ticks_stop_for_handover_shutdown_and_committed_lease_loss() {
+        let db = DbPool::connect("sqlite::memory:").await.unwrap();
+        Migrator::up(&*db.write().await, None).await.unwrap();
+        let lease = StorePrimaryLease::acquire(db.clone(), "duty-owner")
+            .await
+            .unwrap();
+        let guard = PrimaryDutyGuard {
+            lease: lease.clone(),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            handover: Arc::new(AtomicBool::new(false)),
+        };
+        assert!(guard.may_run().await);
+        guard.handover.store(true, Ordering::Release);
+        assert!(lease.validate().await.is_ok());
+        assert!(
+            !guard.may_run().await,
+            "handover stops ticks before lease release"
+        );
+        guard.handover.store(false, Ordering::Release);
+        guard.shutdown.store(true, Ordering::Release);
+        assert!(
+            !guard.may_run().await,
+            "shutdown stops ticks while lease remains valid"
+        );
+        guard.shutdown.store(false, Ordering::Release);
+        lease.release().await.unwrap();
+        let replacement = StorePrimaryLease::acquire(db, "replacement-owner")
+            .await
+            .unwrap();
+        assert!(replacement.validate().await.is_ok());
+        assert!(
+            !guard.may_run().await,
+            "committed takeover fences the old worker"
+        );
+    }
+}
+
 impl AppState {
     pub fn with_node_role(self, role: NodeRole) -> Self {
         let mut node = (*self.node).clone();
@@ -247,6 +312,11 @@ impl AppState {
         let is_replica = role == NodeRole::Replica;
         Self {
             node: Arc::new(node),
+            deployment_handover: if is_replica {
+                None
+            } else {
+                self.deployment_handover
+            },
             store_billing: self.store_billing.with_read_only(is_replica),
             studio_bridge: self.studio_bridge.clone(),
             metering_token_digest: if is_replica {
@@ -294,21 +364,54 @@ impl AppState {
             owner_id,
         )
         .await?;
-        lease.spawn_renewal(self.background_shutdown.clone(), self.store_lease_handover.clone());
+        lease.spawn_renewal(
+            self.background_shutdown.clone(),
+            self.store_lease_handover.clone(),
+        );
         self.store_primary_lease.set(lease).await;
+        if let Some(deployment) = self.deployment_handover.as_ref() {
+            deployment.activate_local().await;
+        }
         Ok(())
     }
 
-    /// Spawns every lease-gated background duty: the unconfirmed-admission
-    /// reaper, daily retention, and the SB-OP-0 reconciliation scheduler.
-    /// No-op without a held lease (standby boot or replica view); the
-    /// reconciliation scheduler additionally requires the payment key ring
-    /// (SB-OP-0). Callers must invoke this at most once per held lease: either
-    /// at startup or from the standby acquirer after its first acquisition.
+    /// Starts singleton duties once after acquiring the Store lease. Standby
+    /// acquisition and normal startup may invoke this concurrently.
     pub async fn spawn_lease_gated_duties(&self) {
         let Some(lease) = self.store_primary_lease.get().await else {
             return;
         };
+        if lease.validate().await.is_err() || self.lease_duties_started.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        if std::env::var("MONOIZE_BOOT_STANDBY_LEASE").as_deref() != Ok("1") {
+            match self.user_store.cleanup_pending_request_logs().await {
+                Ok(n) if n > 0 => {
+                    tracing::info!(count = n, "cleaned up stale pending request logs")
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "failed to cleanup pending request logs"),
+            }
+        }
+        let duty_guard = PrimaryDutyGuard {
+            lease: lease.clone(),
+            shutdown: self.background_shutdown.clone(),
+            handover: self.store_lease_handover.clone(),
+        };
+        if !duty_guard.may_run().await {
+            return;
+        }
+        if let Err(error) = self.user_store.cleanup_expired_request_logs().await {
+            tracing::warn!(%error, "failed to cleanup expired request logs");
+        }
+        self.user_store
+            .spawn_primary_background_tasks(duty_guard.clone());
+        crate::users::spawn_revenue_daily_settlement(
+            self.db_pool.clone(),
+            self.background_shutdown.clone(),
+            duty_guard,
+        );
         if let Some(service) = self.admission_service.clone() {
             crate::replica::admission_http::spawn_unconfirmed_reaper(
                 service,
@@ -416,6 +519,16 @@ pub async fn load_state() -> AppResult<AppState> {
 pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppState> {
     let auth = AuthState::new();
     let is_replica = runtime.node.is_replica();
+    let deployment_handover =
+        crate::deployment_handover::DeploymentHandover::from_env(!is_replica, &runtime.listen)
+            .map_err(|error| {
+                AppError::new(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "deployment_config_invalid",
+                    error,
+                )
+            })?
+            .map(Arc::new);
     runtime
         .node
         .validate_for_dsn(&runtime.database_dsn)
@@ -1186,6 +1299,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         billing_rate_store,
         store_billing,
         store_primary_lease: crate::store_billing::availability::StorePrimaryLeaseSlot::empty(),
+        deployment_handover,
+        lease_duties_started: Arc::new(AtomicBool::new(false)),
         exchange_rate_service,
         transform_registry,
         cap_verifier,
@@ -1224,8 +1339,14 @@ async fn acquire_startup_store_primary_lease(
     .await
     {
         Ok(lease) => {
-            lease.spawn_renewal(state.background_shutdown.clone(), state.store_lease_handover.clone());
+            lease.spawn_renewal(
+                state.background_shutdown.clone(),
+                state.store_lease_handover.clone(),
+            );
             state.store_primary_lease.set(lease).await;
+            if let Some(deployment) = state.deployment_handover.as_ref() {
+                deployment.activate_local().await;
+            }
             Ok(state)
         }
         Err(error) => {
@@ -1271,8 +1392,14 @@ fn spawn_standby_lease_acquirer(state: AppState, owner_id: String) {
             .await
             {
                 Ok(lease) => {
-                    lease.spawn_renewal(state.background_shutdown.clone(), state.store_lease_handover.clone());
+                    lease.spawn_renewal(
+                        state.background_shutdown.clone(),
+                        state.store_lease_handover.clone(),
+                    );
                     state.store_primary_lease.set(lease).await;
+                    if let Some(deployment) = state.deployment_handover.as_ref() {
+                        deployment.activate_local().await;
+                    }
                     tracing::info!(
                         "store primary lease acquired after standby; starting lease-gated duties"
                     );
@@ -2315,16 +2442,24 @@ pub fn build_app(state: AppState) -> Router {
         let api_router = root_api_router
             .clone()
             .merge(dashboard_api_router)
-            .merge(build_store_callback_router());
+            .merge(build_store_callback_router(state.clone()));
         app = app.nest("/api", api_router);
         // SB-6: browser entry into the standalone Apeiron studio.
         app = app.route("/studio-entry", get(crate::studio_bridge::studio_entry));
         if let Some(expected_digest) = state.metering_token_digest {
-            app = app.merge(crate::replica::admission_http::internal_router(
-                expected_digest,
-            ));
+            app = app.merge(
+                crate::replica::admission_http::internal_router(expected_digest).layer(
+                    axum::middleware::from_fn_with_state(
+                        state.clone(),
+                        crate::deployment_handover::forwarding_middleware,
+                    ),
+                ),
+            );
         }
         app = app.fallback(crate::frontend::frontend_fallback);
+    }
+    if state.deployment_handover.is_some() {
+        app = app.merge(crate::deployment_handover::control_router());
     }
     app.with_state(state)
         .layer(axum::middleware::from_fn_with_state(
@@ -2479,13 +2614,18 @@ fn build_balance_compatibility_router() -> Router<AppState> {
         .layer(CorsLayer::permissive())
 }
 
-fn build_store_callback_router() -> Router<AppState> {
+fn build_store_callback_router(state: AppState) -> Router<AppState> {
     // Stripe posts a signed JSON body; EPay sends a signed GET query string.
-    Router::new().route(
-        "/store/callbacks/{channel_id}",
-        post(crate::store_billing::webhooks::store_payment_callback)
-            .get(crate::store_billing::webhooks::store_payment_callback),
-    )
+    Router::new()
+        .route(
+            "/store/callbacks/{channel_id}",
+            post(crate::store_billing::webhooks::store_payment_callback)
+                .get(crate::store_billing::webhooks::store_payment_callback),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::deployment_handover::forwarding_middleware,
+        ))
 }
 
 fn build_store_mutation_router(state: AppState) -> Router<AppState> {
@@ -2645,8 +2785,12 @@ fn build_store_mutation_router(state: AppState) -> Router<AppState> {
             put(crate::dashboard_handlers::update_store_settings_admin),
         )
         .route_layer(axum::middleware::from_fn_with_state(
-            state,
+            state.clone(),
             crate::dashboard_handlers::store_mutation_guard,
+        ))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::deployment_handover::forwarding_middleware,
         ))
 }
 

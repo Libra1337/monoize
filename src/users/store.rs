@@ -538,13 +538,7 @@ impl UserStore {
         tx.commit().await.map_err(|e| e.to_string())
     }
 
-    pub fn spawn_background_tasks(&self) {
-        self.spawn_background_tasks_for_role(false);
-    }
-
-    /// On a replica the DB flush loops, session cleanup, and log retention loops are
-    /// replaced by the shipment pipeline (`primary-replica-deployment.spec.md` PRP12).
-    pub fn spawn_background_tasks_for_role(&self, is_replica: bool) {
+    pub fn spawn_process_background_tasks_for_role(&self, is_replica: bool) {
         if !is_replica {
             self.last_used_batcher
                 .clone()
@@ -559,18 +553,23 @@ impl UserStore {
         self.balance_cache
             .clone()
             .spawn_eviction_task(std::time::Duration::from_secs(30));
-        if is_replica {
-            return;
-        }
+    }
+
+    pub fn spawn_primary_background_tasks(&self, guard: crate::app::PrimaryDutyGuard) {
+        let session_guard = guard.clone();
         let store = self.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(session_cleanup_interval()).await;
+                if !session_guard.may_run().await {
+                    return;
+                }
                 if let Err(error) = store.cleanup_expired_sessions().await {
                     tracing::warn!(%error, "failed to cleanup expired sessions");
                 }
             }
         });
+        let retention_guard = guard.clone();
         let store = self.clone();
         tokio::spawn(async move {
             loop {
@@ -578,12 +577,15 @@ impl UserStore {
                     super::request_logs::REQUEST_LOG_RETENTION_INTERVAL_SECS,
                 ))
                 .await;
+                if !retention_guard.may_run().await {
+                    return;
+                }
                 if let Err(e) = store.cleanup_expired_request_logs().await {
                     tracing::warn!("failed to cleanup expired request logs: {e}");
                 }
             }
         });
-        self.spawn_plan_grant_scheduler();
+        self.spawn_plan_grant_scheduler(guard);
     }
 
     /// Replica shipment pipeline access (PRP12/M4).

@@ -207,14 +207,18 @@ any agent or model.
 - Every production update MUST deploy through the blue-green swap script
   (`/opt/monoize/blue-green-swap.sh <rev>`), never by stopping the running
   container first. The script implements the ordering of
-  `spec/deployment-docker.spec.md` (BG1..BG12).
+  `spec/deployment-docker.spec.md` (BG1..BG17).
 - The swap MUST NOT stop the previous container while it still serves upstream
   connections: BG11 hands the `store_primary` lease over via SIGHUP, and BG12
   drains connections before the stop. `MONOIZE_SWAP_DRAIN_MAX_SECONDS=14400`
   is an alert threshold, never a force-stop deadline. Do not skip the drain.
+- Do not reload Caddy during a swap. Use the UID- and SYN-restricted routing
+  helper to select new upstream connections while retaining all existing mappings.
+  Use a distinct persistent request-log spool for every overlapping instance.
 - Prefer deploying during low-traffic windows (roughly 01:00–07:00 UTC+8) when
   the change is not urgent. The first update from a runtime with the handover
-  renewal race must wait for existing connections to finish before cutover.
+  renewal race must wait for old connections to finish before lease handover;
+  new connections may switch as soon as the candidate is ready.
 - Never restart the platform container (`docker restart`, `docker stop`) as a
   debugging or config-refresh shortcut. If a restart seems necessary, first
   check whether a blue-green swap achieves the same result.

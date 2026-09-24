@@ -427,10 +427,13 @@ impl UserStore {
         Ok(row.is_some())
     }
 
-    pub fn spawn_plan_grant_scheduler(&self) {
+    pub fn spawn_plan_grant_scheduler(&self, guard: crate::app::PrimaryDutyGuard) {
         let store = self.clone();
         tokio::spawn(async move {
             loop {
+                if !guard.may_run().await {
+                    return;
+                }
                 if let Err(error) = store.run_plan_grant_tick().await {
                     tracing::warn!(%error, "billing plan grant tick failed");
                 }

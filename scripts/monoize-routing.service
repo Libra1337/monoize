@@ -1,0 +1,16 @@
+[Unit]
+Description=Restore Monoize blue-green loopback routing
+After=network.target docker.service
+Before=caddy.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/opt/monoize/blue-green-route.sh
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=15
+
+[Install]
+WantedBy=multi-user.target
